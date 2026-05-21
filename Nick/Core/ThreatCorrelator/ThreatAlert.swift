@@ -1,0 +1,61 @@
+// MARK: - Nick
+// Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
+// Licensed under AGPL-3.0. See LICENSE for details.
+
+import Foundation
+
+// MARK: - ThreatAlert
+
+/// A correlated, high-confidence threat event produced by `ThreatCorrelator`.
+///
+/// An alert is synthesised from one or more raw `ThreatSignal` values that
+/// collectively satisfy a `CorrelationRule`. The `score` (0–1) reflects the
+/// confidence of the rule that fired.
+struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
+
+    /// Stable UUID assigned at creation time.
+    let id: UUID
+
+    /// Normalised confidence score in the range [0, 1]. 1.0 = certainty.
+    let score: Double
+
+    /// Short human-readable title describing the threat scenario.
+    let title: String
+
+    /// Detailed explanation of why this alert was raised.
+    let description: String
+
+    /// The most severe signal's severity, promoted where the rule demands it.
+    let severity: SignalSeverity
+
+    /// Raw signals that contributed to this alert.
+    let contributingSignals: [ThreatSignal]
+
+    /// When the correlation was computed.
+    let timestamp: Date
+
+    /// Suggested remediation step for the user.
+    let recommendedAction: String
+
+    // MARK: - Init
+
+    init(
+        id: UUID = UUID(),
+        score: Double,
+        title: String,
+        description: String,
+        severity: SignalSeverity,
+        contributingSignals: [ThreatSignal],
+        timestamp: Date = Date(),
+        recommendedAction: String
+    ) {
+        self.id = id
+        self.score = max(0, min(1, score)) // clamp to [0, 1]
+        self.title = title
+        self.description = description
+        self.severity = severity
+        self.contributingSignals = contributingSignals
+        self.timestamp = timestamp
+        self.recommendedAction = recommendedAction
+    }
+}

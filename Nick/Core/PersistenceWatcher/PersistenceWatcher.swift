@@ -1,47 +1,264 @@
+// MARK: - Nick
+// Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
+// Licensed under AGPL-3.0. See LICENSE for details.
+
 import Foundation
+import Observation
+import os
 
-/// Watches all known macOS persistence locations for additions or changes.
+// MARK: - PersistenceWatcherError
+
+/// Errors thrown by `PersistenceWatcher`.
+enum PersistenceWatcherError: LocalizedError {
+
+    /// A required directory could not be read (permissions, not found, etc.).
+    case directoryUnreadable(path: String, underlying: Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .directoryUnreadable(let path, let err):
+            return "Cannot enumerate persistence directory \(path): \(err.localizedDescription)"
+        }
+    }
+}
+
+// MARK: - PersistenceWatcher
+
+/// Enumerates all macOS persistence mechanisms and produces `PersistenceItem` snapshots.
+///
+/// Phase 1 is snapshot-only: `start()` performs a one-shot enumeration of every
+/// known persistence location and stores the results. FSEvents-based real-time
+/// monitoring is added in Phase 2.
+///
+/// Persistence items with unsigned or missing executables are converted to
+/// `ThreatSignal` events that the `ThreatCorrelator` can act on.
+@Observable
 @MainActor
-final class PersistenceWatcher: ObservableObject {
+final class PersistenceWatcher: MonitorProtocol {
 
-    @Published private(set) var isRunning = false
-    @Published private(set) var watchedPaths: [String] = []
+    // MARK: - MonitorProtocol
 
-    weak var correlator: ThreatCorrelator?
+    let monitorType: MonitorType = .persistence
+    private(set) var isRunning = false
 
-    private static let persistencePaths: [String] = [
-        "/Library/LaunchDaemons",
-        "/Library/LaunchAgents",
-        NSString("~/Library/LaunchAgents").expandingTildeInPath,
-        "/Library/StartupItems",
-        "/System/Library/LaunchDaemons",
-        "/System/Library/LaunchAgents"
+    // MARK: - Published State
+
+    /// All persistence items found during the last snapshot.
+    private(set) var items: [PersistenceItem] = []
+
+    // MARK: - Private
+
+    private var pendingSignals: [ThreatSignal] = []
+    private let parser = PlistParser()
+
+    private static let logger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "PersistenceWatcher"
+    )
+
+    /// Known directories to scan, with associated metadata.
+    private static let scanLocations: [(path: String, type: PersistenceType, scope: PersistenceScope)] = [
+        ("/Library/LaunchDaemons",              .launchDaemon, .system),
+        ("/Library/LaunchAgents",               .launchAgent,  .system),
+        (NSString("~/Library/LaunchAgents").expandingTildeInPath, .launchAgent, .user),
+        ("/Library/StartupItems",               .startupItem,  .system),
+        ("/etc/periodic/daily",                 .periodicScript, .system),
+        ("/etc/periodic/weekly",                .periodicScript, .system),
+        ("/etc/periodic/monthly",               .periodicScript, .system),
+        ("/Library/SystemExtensions",           .systemExtension, .system)
     ]
 
-    // MARK: - Lifecycle
+    // MARK: - MonitorProtocol
 
-    func start() {
+    /// Performs a full snapshot scan of all persistence locations.
+    func start() async throws {
         guard !isRunning else { return }
-        watchedPaths = Self.persistencePaths
         isRunning = true
-        // TODO: Wire up FSEventStream for each path
+        defer { isRunning = false }
+        let found = try await snapshot()
+        items = found
+        pendingSignals = found.compactMap { makeSignal(from: $0) }
+        Self.logger.info("Persistence snapshot: \(found.count) items, \(self.pendingSignals.count) signals")
     }
 
-    func stop() {
+    func stop() async {
         isRunning = false
-        // TODO: Invalidate FSEventStream
     }
 
-    // MARK: - Event handling (stub)
+    func latestSignals() async -> [ThreatSignal] {
+        let signals = pendingSignals
+        pendingSignals = []
+        return signals
+    }
 
-    private func handleChange(at path: String) {
-        let signal = ThreatSignal(
-            source: .persistenceWatch,
-            severity: .high,
-            title: "Persistence location changed",
-            detail: "Change detected at \(path)",
-            resource: path
+    // MARK: - Public API
+
+    /// Scans all known persistence locations and returns the complete item list.
+    ///
+    /// - Returns: All `PersistenceItem` values found across all monitored paths.
+    /// - Throws: `PersistenceWatcherError` if a directory cannot be read.
+    func snapshot() async throws -> [PersistenceItem] {
+        var all: [PersistenceItem] = []
+        for location in Self.scanLocations {
+            let found = await scanDirectory(
+                at: location.path,
+                type: location.type,
+                scope: location.scope
+            )
+            all.append(contentsOf: found)
+        }
+        all.append(contentsOf: await scanCrontabs())
+        return all
+    }
+
+    // MARK: - Private Scanning
+
+    private func scanDirectory(
+        at path: String,
+        type: PersistenceType,
+        scope: PersistenceScope
+    ) async -> [PersistenceItem] {
+        guard FileManager.default.fileExists(atPath: path) else { return [] }
+
+        let urls: [URL]
+        do {
+            urls = try FileManager.default.contentsOfDirectory(
+                at: URL(fileURLWithPath: path),
+                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            Self.logger.error("Cannot read directory \(path): \(error.localizedDescription)")
+            return []
+        }
+
+        var items: [PersistenceItem] = []
+        for url in urls {
+            if let item = await makeItem(from: url, type: type, scope: scope) {
+                items.append(item)
+            }
+        }
+        return items
+    }
+
+    private func makeItem(
+        from url: URL,
+        type: PersistenceType,
+        scope: PersistenceScope
+    ) async -> PersistenceItem? {
+        let path = url.path
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        let modDate = attrs?[.modificationDate] as? Date
+
+        // For LaunchAgent/Daemon plists, parse the plist for rich metadata
+        if url.pathExtension == "plist",
+           type == .launchAgent || type == .launchDaemon {
+            return await makeLaunchItem(from: url, plistType: type, scope: scope, modDate: modDate)
+        }
+
+        // For other items (scripts, system extensions), use filename as name
+        return PersistenceItem(
+            id: UUID(),
+            type: type,
+            name: url.lastPathComponent,
+            path: path,
+            executablePath: type == .periodicScript ? path : nil,
+            isEnabled: true,
+            signingStatus: nil,
+            scope: scope,
+            lastModified: modDate
         )
-        correlator?.ingest(signal)
+    }
+
+    private func makeLaunchItem(
+        from url: URL,
+        plistType: PersistenceType,
+        scope: PersistenceScope,
+        modDate: Date?
+    ) async -> PersistenceItem? {
+        guard let plist = try? parser.parse(at: url.path) else {
+            // Malformed plist — still record it, it's suspicious
+            return PersistenceItem(
+                id: UUID(),
+                type: plistType,
+                name: url.lastPathComponent,
+                path: url.path,
+                executablePath: nil,
+                isEnabled: false,
+                signingStatus: nil,
+                scope: scope,
+                lastModified: modDate
+            )
+        }
+
+        let execPath = plist.programPath
+        let signingStatus: SigningStatus? = execPath.map { path in
+            guard FileManager.default.fileExists(atPath: path) else { return .unknown }
+            return SignatureValidator.shared.evaluate(binaryPath: path)
+        }
+
+        let isEnabled = plist.runAtLoad || plist.keepAlive || plist.startInterval != nil
+
+        return PersistenceItem(
+            id: UUID(),
+            type: plistType,
+            name: plist.label.isEmpty ? url.lastPathComponent : plist.label,
+            path: url.path,
+            executablePath: execPath,
+            isEnabled: isEnabled,
+            signingStatus: signingStatus,
+            scope: scope,
+            lastModified: modDate
+        )
+    }
+
+    private func scanCrontabs() async -> [PersistenceItem] {
+        var items: [PersistenceItem] = []
+        let etcCrontab = "/etc/crontab"
+        if FileManager.default.fileExists(atPath: etcCrontab) {
+            items.append(PersistenceItem(
+                id: UUID(),
+                type: .cronJob,
+                name: "crontab (system)",
+                path: etcCrontab,
+                executablePath: nil,
+                isEnabled: true,
+                signingStatus: nil,
+                scope: .system,
+                lastModified: (try? FileManager.default.attributesOfItem(atPath: etcCrontab))?[.modificationDate] as? Date
+            ))
+        }
+        return items
+    }
+
+    // MARK: - Signal Generation
+
+    private func makeSignal(from item: PersistenceItem) -> ThreatSignal? {
+        // Unsigned executable in a launch agent/daemon → high severity
+        if item.signingStatus?.isSuspicious == true,
+           item.type == .launchAgent || item.type == .launchDaemon {
+            return ThreatSignal(
+                source: .persistence,
+                severity: .high,
+                title: "Unsigned launch \(item.type == .launchDaemon ? "daemon" : "agent")",
+                description: "'\(item.name)' at \(item.path) points to an unsigned executable at \(item.executablePath ?? "unknown").",
+                metadata: ["path": item.path, "executable": item.executablePath ?? ""]
+            )
+        }
+
+        // Launch item pointing to a nonexistent executable → medium severity
+        if let execPath = item.executablePath,
+           !FileManager.default.fileExists(atPath: execPath),
+           item.type == .launchAgent || item.type == .launchDaemon {
+            return ThreatSignal(
+                source: .persistence,
+                severity: .medium,
+                title: "Launch item with missing executable",
+                description: "'\(item.name)' references executable at \(execPath) which does not exist.",
+                metadata: ["path": item.path, "executable": execPath]
+            )
+        }
+
+        return nil
     }
 }

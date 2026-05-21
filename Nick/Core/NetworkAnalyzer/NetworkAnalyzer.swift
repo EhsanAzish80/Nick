@@ -1,52 +1,70 @@
+// MARK: - Nick
+// Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
+// Licensed under AGPL-3.0. See LICENSE for details.
+
 import Foundation
-import Network
+import Observation
+import os
 
-/// Monitors active network connections and flags suspicious activity.
+// MARK: - NetworkAnalyzer
+
+/// Snapshot monitor that enumerates active network connections and derives threat signals.
+///
+/// Wraps `ConnectionScanner` with the `MonitorProtocol` interface. Phase 1 is
+/// snapshot-only; Phase 2 adds continuous socket monitoring via
+/// `proc_pidfdinfo` and network extensions.
+@Observable
 @MainActor
-final class NetworkAnalyzer: ObservableObject {
+final class NetworkAnalyzer: MonitorProtocol {
 
-    @Published private(set) var isRunning = false
-    @Published private(set) var activeConnections: [ConnectionInfo] = []
+    // MARK: - MonitorProtocol
 
-    weak var correlator: ThreatCorrelator?
+    let monitorType: MonitorType = .network
+    private(set) var isRunning = false
 
-    // MARK: - Lifecycle
+    // MARK: - Published State
 
-    func start() {
+    /// All connections found in the most recent snapshot.
+    private(set) var connections: [NetworkConnectionInfo] = []
+
+    // MARK: - Private
+
+    private var pendingSignals: [ThreatSignal] = []
+    private let scanner = ConnectionScanner()
+
+    private static let logger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "NetworkAnalyzer"
+    )
+
+    // MARK: - MonitorProtocol
+
+    /// Performs a single snapshot scan.
+    func start() async throws {
         guard !isRunning else { return }
         isRunning = true
-        // TODO: Enumerate connections via sysctl NET_RT_DUMP2 / netstat equivalent
+        defer { isRunning = false }
+
+        let scanned: [NetworkConnectionInfo]
+        do {
+            scanned = try await scanner.scan()
+        } catch {
+            Self.logger.error("Network scan failed: \(error.localizedDescription)")
+            throw error
+        }
+
+        connections = scanned
+        pendingSignals = scanner.signals(from: scanned)
+        Self.logger.info("Network snapshot: \(scanned.count) connections, \(self.pendingSignals.count) signals")
     }
 
-    func stop() {
+    func stop() async {
         isRunning = false
     }
 
-    // MARK: - Detection stubs
-
-    /// Flags shell processes (bash, zsh, sh, python) with outbound connections.
-    private func detectReverseShell(connection: ConnectionInfo) {
-        let shellNames = ["bash", "zsh", "sh", "python3", "python", "ruby", "perl"]
-        guard shellNames.contains(connection.processName) else { return }
-        let signal = ThreatSignal(
-            source: .networkAnalysis,
-            severity: .critical,
-            title: "Possible reverse shell",
-            detail: "\(connection.processName) (PID \(connection.pid)) has outbound connection to \(connection.remoteAddress)",
-            pid: connection.pid,
-            resource: connection.remoteAddress
-        )
-        correlator?.ingest(signal)
+    func latestSignals() async -> [ThreatSignal] {
+        let signals = pendingSignals
+        pendingSignals = []
+        return signals
     }
-}
-
-// MARK: - Supporting Types
-
-struct ConnectionInfo: Identifiable, Sendable {
-    let id: UUID
-    let pid: Int32
-    let processName: String
-    let localAddress: String
-    let remoteAddress: String
-    let state: String
 }

@@ -1,5 +1,22 @@
 name: Nick
 
+# ⚠️  IMPORTANT — READ BEFORE RUNNING xcodegen generate
+#
+# xcodegen does NOT support Xcode's filesystem-synced folder references
+# (PBXFileSystemSynchronizedRootGroup). Every regeneration converts all
+# folder references back to plain groups.
+#
+# Only run `xcodegen generate` when:
+#   - Adding or removing a build TARGET (not individual source files)
+#   - Changing build settings or schemes
+#
+# After any regeneration, reopen Nick.xcodeproj in Xcode and
+# right-click each top-level source group → "Convert to Folder" to restore
+# folder references.
+#
+# For day-to-day source files: create them on disk (or via File → New in
+# Xcode). Filesystem-synced folders pick up new files automatically.
+
 options:
   bundleIdPrefix: com.ehsanazish
   deploymentTarget:
@@ -25,8 +42,6 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: Nick
-        excludes:
-          - "**/.gitkeep"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ehsanazish.nick
@@ -47,8 +62,6 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: NickHelper
-        excludes:
-          - "**/.gitkeep"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ehsanazish.nick.helper
@@ -64,8 +77,6 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: NickTests
-        excludes:
-          - "**/.gitkeep"
     dependencies:
       - target: Nick
     settings:
@@ -79,8 +90,6 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: NickIntegrationTests
-        excludes:
-          - "**/.gitkeep"
     dependencies:
       - target: Nick
     settings:

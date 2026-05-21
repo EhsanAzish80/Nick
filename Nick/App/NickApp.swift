@@ -1,37 +1,73 @@
+// MARK: - Nick
+// Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
+// Licensed under AGPL-3.0. See LICENSE for details.
+
 import SwiftUI
 
+// MARK: - NickApp
+
+/// Menu bar application entry point.
+///
+/// Nick runs as a menu bar only application (`LSUIElement = YES` in `Info.plist`).
+/// The main window is presented via `MenuBarExtra` with the `.window` style so it
+/// pops up directly below the status item without appearing in the Dock or the
+/// ⌘-Tab switcher.
 @main
 struct NickApp: App {
 
-    // MARK: - Core Services
-    @StateObject private var correlator    = ThreatCorrelator()
-    @StateObject private var processMonitor = ProcessMonitor()
-    @StateObject private var persistenceWatcher = PersistenceWatcher()
-    @StateObject private var networkAnalyzer = NetworkAnalyzer()
-    @StateObject private var auditor       = SystemAuditor()
+    @State private var engine = SecurityEngine()
 
     var body: some Scene {
-        // Menu bar item — no Dock icon (LSUIElement = YES in Info.plist)
-        MenuBarExtra("Nick", systemImage: "shield.fill") {
+        MenuBarExtra {
             DashboardView()
-                .environmentObject(correlator)
-                .environmentObject(auditor)
+                .environment(engine)
+                .frame(width: 560, height: 600)
+        } label: {
+            MenuBarLabel(engine: engine)
         }
         .menuBarExtraStyle(.window)
+    }
+}
 
-        Settings {
-            // TODO: NickSettingsView()
-            Text("Settings")
-                .padding()
+// MARK: - MenuBarLabel
+
+/// Status item icon and badge displayed in the menu bar.
+private struct MenuBarLabel: View {
+
+    let engine: SecurityEngine
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: statusImageName)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(statusColor, .secondary)
+            if !engine.alerts.filter({ $0.severity >= .high }).isEmpty {
+                Text("\(engine.alerts.filter({ $0.severity >= .high }).count)")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(.red)
+            }
         }
     }
 
-    init() {
-        // Wire monitors to the correlator
-        Task { @MainActor in
-            processMonitor.correlator    = correlator
-            persistenceWatcher.correlator = correlator
-            networkAnalyzer.correlator   = correlator
+    private var statusImageName: String {
+        guard !engine.alerts.isEmpty else { return "shield.fill" }
+        let max = engine.alerts.map(\.severity).max() ?? .info
+        switch max {
+        case .info:     return "shield.fill"
+        case .low:      return "shield.fill"
+        case .medium:   return "shield.lefthalf.filled"
+        case .high:     return "shield.slash.fill"
+        case .critical: return "exclamationmark.shield.fill"
+        }
+    }
+
+    private var statusColor: Color {
+        guard !engine.alerts.isEmpty else { return .green }
+        let max = engine.alerts.map(\.severity).max() ?? .info
+        switch max {
+        case .info, .low:           return .green
+        case .medium:               return .yellow
+        case .high, .critical:      return .red
         }
     }
 }

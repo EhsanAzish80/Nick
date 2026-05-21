@@ -1,62 +1,153 @@
+// MARK: - Nick
+// Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
+// Licensed under AGPL-3.0. See LICENSE for details.
+
 import SwiftUI
 
+// MARK: - DashboardView
+
+/// The root view shown when the user clicks the Nick menu bar icon.
+///
+/// Presents a navigation-based layout with:
+/// - `SystemHealthGauge` at the top
+/// - A list of `MonitorStatusRow` entries for each active monitor
+/// - Tab-like navigation to detailed sub-views (audit, network, alerts)
 struct DashboardView: View {
 
-    @EnvironmentObject private var correlator: ThreatCorrelator
-    @EnvironmentObject private var auditor: SystemAuditor
+    @Environment(SecurityEngine.self) private var engine
+    @State private var selectedPanel: Panel = .overview
 
     var body: some View {
         VStack(spacing: 0) {
-            headerBar
+            header
             Divider()
-            threatScoreSection
-            Spacer()
+            content
+            Divider()
+            footer
         }
-        .frame(width: 360)
-        .background(.background)
+        .background(.ultraThinMaterial)
+        .task {
+            if engine.auditResults.isEmpty && !engine.isScanning {
+                await engine.runFullScan()
+            }
+        }
     }
 
-    // MARK: - Sections
+    // MARK: - Sub-views
 
-    private var headerBar: some View {
+    private var header: some View {
         HStack {
-            Image(systemName: "shield.fill")
-                .foregroundStyle(.blue)
-            Text("Nick")
-                .font(.headline)
+            SystemHealthGauge(score: engine.healthScore, isScanning: engine.isScanning)
+                .padding(.leading)
             Spacer()
-            Text("v0.1")
+            panelPicker
+                .padding(.trailing)
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var panelPicker: some View {
+        Picker("Panel", selection: $selectedPanel) {
+            ForEach(Panel.allCases) { panel in
+                Label(panel.title, systemImage: panel.systemImage).tag(panel)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 280)
+        .labelsHidden()
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch selectedPanel {
+        case .overview:     overviewPanel
+        case .audit:        SystemAuditView()
+        case .network:      NetworkConnectionsView()
+        case .alerts:       AlertListView()
+        }
+    }
+
+    private var overviewPanel: some View {
+        ScrollView {
+            LazyVStack(spacing: 4) {
+                MonitorStatusRow(
+                    title: "System Audit",
+                    systemImage: "checkmark.shield",
+                    isRunning: engine.isScanning,
+                    itemCount: engine.auditResults.count,
+                    issueCount: engine.auditResults.filter { $0.status != .pass }.count
+                )
+                MonitorStatusRow(
+                    title: "Persistence",
+                    systemImage: "bolt.badge.clock",
+                    isRunning: engine.isScanning,
+                    itemCount: engine.persistenceItems.count,
+                    issueCount: engine.persistenceItems.filter { $0.signingStatus?.isSuspicious == true }.count
+                )
+                MonitorStatusRow(
+                    title: "Processes",
+                    systemImage: "cpu",
+                    isRunning: engine.isScanning,
+                    itemCount: engine.processes.count,
+                    issueCount: engine.processes.filter { $0.signingStatus == .unsigned || $0.signingStatus == .invalid }.count
+                )
+                MonitorStatusRow(
+                    title: "Network",
+                    systemImage: "network",
+                    isRunning: engine.isScanning,
+                    itemCount: engine.connections.count,
+                    issueCount: engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count
+                )
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Button(action: { Task { await engine.runFullScan() } }) {
+                Label("Scan Now", systemImage: "arrow.clockwise")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .disabled(engine.isScanning)
+            Spacer()
+            if engine.isScanning {
+                ProgressView().controlSize(.small)
+            }
+            Spacer()
+            Button("Quit Nick") { NSApp.terminate(nil) }
+                .buttonStyle(.plain)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal)
-        .padding(.vertical, 10)
-    }
-
-    private var threatScoreSection: some View {
-        VStack(spacing: 8) {
-            Text("Threat Score")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text(String(format: "%.0f%%", correlator.overallScore * 100))
-                .font(.system(size: 48, weight: .bold, design: .rounded))
-                .foregroundStyle(scoreColor)
-        }
-        .padding()
-    }
-
-    private var scoreColor: Color {
-        switch correlator.overallScore {
-        case 0..<0.25: return .green
-        case 0.25..<0.5: return .yellow
-        case 0.5..<0.75: return .orange
-        default: return .red
-        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 }
 
-#Preview {
-    DashboardView()
-        .environmentObject(ThreatCorrelator())
-        .environmentObject(SystemAuditor())
+// MARK: - Panel
+
+private enum Panel: String, CaseIterable, Identifiable {
+    case overview, audit, network, alerts
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .overview: "Overview"
+        case .audit:    "Audit"
+        case .network:  "Network"
+        case .alerts:   "Alerts"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview: "square.grid.2x2"
+        case .audit:    "checkmark.shield"
+        case .network:  "network"
+        case .alerts:   "bell.badge"
+        }
+    }
 }

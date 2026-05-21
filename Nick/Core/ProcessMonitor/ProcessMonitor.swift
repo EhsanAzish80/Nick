@@ -1,44 +1,70 @@
+// MARK: - Nick
+// Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
+// Licensed under AGPL-3.0. See LICENSE for details.
+
 import Foundation
+import Observation
+import os
 
-/// Monitors running processes for anomalous behaviour.
+// MARK: - ProcessMonitor
+
+/// Snapshot monitor that enumerates all running processes and derives threat signals.
+///
+/// `ProcessMonitor` wraps `ProcessScanner` with the `MonitorProtocol` interface.
+/// In Phase 1 it is purely snapshot-based; Phase 2 adds OpenBSM / Endpoint Security
+/// continuous monitoring.
+@Observable
 @MainActor
-final class ProcessMonitor: ObservableObject {
+final class ProcessMonitor: MonitorProtocol {
 
-    @Published private(set) var isRunning = false
+    // MARK: - MonitorProtocol
 
-    weak var correlator: ThreatCorrelator?
+    let monitorType: MonitorType = .process
+    private(set) var isRunning = false
 
-    // MARK: - Lifecycle
+    // MARK: - Published State
 
-    func start() {
+    /// All processes found in the most recent snapshot.
+    private(set) var processes: [NickProcessInfo] = []
+
+    // MARK: - Private
+
+    private var pendingSignals: [ThreatSignal] = []
+    private let scanner = ProcessScanner()
+
+    private static let logger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "ProcessMonitor"
+    )
+
+    // MARK: - MonitorProtocol
+
+    /// Performs a single snapshot scan and derives threat signals.
+    func start() async throws {
         guard !isRunning else { return }
         isRunning = true
-        // TODO: Begin polling via proc_listallpids / sysctl kinfo_proc
+        defer { isRunning = false }
+
+        let scanned: [NickProcessInfo]
+        do {
+            scanned = try scanner.scan()
+        } catch {
+            Self.logger.error("Process scan failed: \(error.localizedDescription)")
+            throw error
+        }
+
+        processes = scanned
+        pendingSignals = scanner.signals(from: scanned)
+        Self.logger.info("Process snapshot: \(scanned.count) processes, \(self.pendingSignals.count) signals")
     }
 
-    func stop() {
+    func stop() async {
         isRunning = false
     }
 
-    // MARK: - Detection stubs
-
-    /// Detects unsigned or ad-hoc signed binaries.
-    private func checkCodeSigning(pid: Int32, path: String) {
-        // TODO: Use SecCodeCopyGuestWithAttributes / SecStaticCodeCheckValidity
-    }
-
-    /// Flags processes running from suspicious directories.
-    private func checkSuspiciousPath(pid: Int32, path: String) {
-        let suspicious = ["/tmp", "/var/tmp", "/private/tmp"]
-        guard suspicious.contains(where: { path.hasPrefix($0) }) else { return }
-        let signal = ThreatSignal(
-            source: .processAudit,
-            severity: .medium,
-            title: "Process in suspicious location",
-            detail: "PID \(pid) running from \(path)",
-            pid: pid,
-            resource: path
-        )
-        correlator?.ingest(signal)
+    func latestSignals() async -> [ThreatSignal] {
+        let signals = pendingSignals
+        pendingSignals = []
+        return signals
     }
 }

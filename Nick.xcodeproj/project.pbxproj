@@ -6,23 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		06A8F844DA60577DE98A9235 /* MonitorType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F74E912149EE8E87209737D /* MonitorType.swift */; };
-		17E8CA1E980C231494AA1F3F /* SystemAuditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69A3BE8984622E5219F1CAC9 /* SystemAuditor.swift */; };
-		1ADB247286D4CF4CCFDCFD74 /* ThreatCorrelator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13789EC433D600AEE77BFA5F /* ThreatCorrelator.swift */; };
-		34B22B07D2EBA0666E54008D /* HelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = E78B47499464CA14890EBD06 /* HelperProtocol.swift */; };
-		42E0BEB5E4889306313FEDAB /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E088713BB1521A90531D7143 /* DashboardView.swift */; };
-		4BB623B21D8A5FD43CF5F3AB /* NickApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B42B850DE1748EBDC4A5D26 /* NickApp.swift */; };
-		69ECA8F16113FDFB61DFEB57 /* ThreatSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B19BA0D65DAC91653BCD80F /* ThreatSignal.swift */; };
-		987FDF52B722A9F247C7DF98 /* NetworkAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD68252ADCF3E3795F1C3C79 /* NetworkAnalyzer.swift */; };
-		B56A726604C2114F3A1CC7E6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D689333291F1EA48762000CF /* Assets.xcassets */; };
-		C3999E02FF3D46EE42B40A62 /* ProcessMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF02151C7B5D554CD922ED1 /* ProcessMonitor.swift */; };
-		CB70BA89FFAB66251F9000A2 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D8DD20824D820EABF3AB89 /* main.swift */; };
-		D46905970BD97CACD89A369E /* PersistenceWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C0CE00798B5AC7A6FB37D9 /* PersistenceWatcher.swift */; };
-		E3ECABAD58B2F74457D4EDE3 /* NickTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93E57087C08669BADD318161 /* NickTests.swift */; };
-		E5D70E047D24FB8EC7160F11 /* NickIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7BA6B21FD28FC244ECA47CC /* NickIntegrationTests.swift */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		04088AF375E1364BBB22476F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -48,42 +31,49 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		13789EC433D600AEE77BFA5F /* ThreatCorrelator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreatCorrelator.swift; sourceTree = "<group>"; };
 		1E8F435E967C1E411C4372EE /* NickTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NickTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		2E6A5735913FE94B90AC363A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		38DFE5592D83150BDECCFBB9 /* NickIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NickIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		5CA9A7DC5A8387423EC9412E /* NickHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = NickHelper; sourceTree = BUILT_PRODUCTS_DIR; };
-		69A3BE8984622E5219F1CAC9 /* SystemAuditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAuditor.swift; sourceTree = "<group>"; };
-		6B42B850DE1748EBDC4A5D26 /* NickApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NickApp.swift; sourceTree = "<group>"; };
-		6CE5926F45249E34E34D9E7C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		7BF02151C7B5D554CD922ED1 /* ProcessMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessMonitor.swift; sourceTree = "<group>"; };
-		8B19BA0D65DAC91653BCD80F /* ThreatSignal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreatSignal.swift; sourceTree = "<group>"; };
+		5CA9A7DC5A8387423EC9412E /* NickHelper */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = text; path = NickHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		8B8901B2276260484B8A6A0C /* Nick.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nick.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		8F74E912149EE8E87209737D /* MonitorType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MonitorType.swift; sourceTree = "<group>"; };
-		93E57087C08669BADD318161 /* NickTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NickTests.swift; sourceTree = "<group>"; };
-		A0C0CE00798B5AC7A6FB37D9 /* PersistenceWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceWatcher.swift; sourceTree = "<group>"; };
-		A8D8DD20824D820EABF3AB89 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		D689333291F1EA48762000CF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		E088713BB1521A90531D7143 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
-		E78B47499464CA14890EBD06 /* HelperProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperProtocol.swift; sourceTree = "<group>"; };
-		F7BA6B21FD28FC244ECA47CC /* NickIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NickIntegrationTests.swift; sourceTree = "<group>"; };
-		FD68252ADCF3E3795F1C3C79 /* NetworkAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkAnalyzer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
-/* Begin PBXGroup section */
-		08D19E0AB75D8CEDB55B97E1 /* Core */ = {
-			isa = PBXGroup;
-			children = (
-				4D42DD77F74514A844844AC9 /* Models */,
-				A57F4A642A4D9DFA69E00ED4 /* NetworkAnalyzer */,
-				682F980544E205E5BA3ED1D0 /* PersistenceWatcher */,
-				BF550BCAFE15B9341ED18320 /* ProcessMonitor */,
-				9F476CAFA5DD84323DCC1E81 /* SystemAudit */,
-				7AC0B8F02563E81DF33CB249 /* ThreatCorrelator */,
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		885ADC712FBFAF9F00664E7B /* Exceptions for "Nick" folder in "Nick" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
 			);
-			path = Core;
+			target = A7068781809A7A01D520A3F7 /* Nick */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		885ADC512FBFAF9E00664E7B /* Nick */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				885ADC712FBFAF9F00664E7B /* Exceptions for "Nick" folder in "Nick" target */,
+			);
+			path = Nick;
 			sourceTree = "<group>";
 		};
+		885ADC752FBFAFA200664E7B /* NickHelper */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = NickHelper;
+			sourceTree = "<group>";
+		};
+		885ADC792FBFAFA600664E7B /* NickIntegrationTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = NickIntegrationTests;
+			sourceTree = "<group>";
+		};
+		885ADC842FBFAFA900664E7B /* NickTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = NickTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXGroup section */
 		428C90590A8B2419274FDF24 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -95,126 +85,15 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		45232E768BCD2F1671EB1D4F /* Resources */ = {
-			isa = PBXGroup;
-			children = (
-				D689333291F1EA48762000CF /* Assets.xcassets */,
-			);
-			path = Resources;
-			sourceTree = "<group>";
-		};
-		4D42DD77F74514A844844AC9 /* Models */ = {
-			isa = PBXGroup;
-			children = (
-				8F74E912149EE8E87209737D /* MonitorType.swift */,
-				8B19BA0D65DAC91653BCD80F /* ThreatSignal.swift */,
-			);
-			path = Models;
-			sourceTree = "<group>";
-		};
-		682F980544E205E5BA3ED1D0 /* PersistenceWatcher */ = {
-			isa = PBXGroup;
-			children = (
-				A0C0CE00798B5AC7A6FB37D9 /* PersistenceWatcher.swift */,
-			);
-			path = PersistenceWatcher;
-			sourceTree = "<group>";
-		};
-		7AC0B8F02563E81DF33CB249 /* ThreatCorrelator */ = {
-			isa = PBXGroup;
-			children = (
-				13789EC433D600AEE77BFA5F /* ThreatCorrelator.swift */,
-			);
-			path = ThreatCorrelator;
-			sourceTree = "<group>";
-		};
-		7FB4B575B62BA8FB70F07BF5 /* NickTests */ = {
-			isa = PBXGroup;
-			children = (
-				93E57087C08669BADD318161 /* NickTests.swift */,
-			);
-			path = NickTests;
-			sourceTree = "<group>";
-		};
-		9CFF264B229239B79CAB9F70 /* NickHelper */ = {
-			isa = PBXGroup;
-			children = (
-				E78B47499464CA14890EBD06 /* HelperProtocol.swift */,
-				2E6A5735913FE94B90AC363A /* Info.plist */,
-				A8D8DD20824D820EABF3AB89 /* main.swift */,
-			);
-			path = NickHelper;
-			sourceTree = "<group>";
-		};
-		9F476CAFA5DD84323DCC1E81 /* SystemAudit */ = {
-			isa = PBXGroup;
-			children = (
-				69A3BE8984622E5219F1CAC9 /* SystemAuditor.swift */,
-			);
-			path = SystemAudit;
-			sourceTree = "<group>";
-		};
-		A57F4A642A4D9DFA69E00ED4 /* NetworkAnalyzer */ = {
-			isa = PBXGroup;
-			children = (
-				FD68252ADCF3E3795F1C3C79 /* NetworkAnalyzer.swift */,
-			);
-			path = NetworkAnalyzer;
-			sourceTree = "<group>";
-		};
-		A7A703CD6728DBB5875D3267 /* Dashboard */ = {
-			isa = PBXGroup;
-			children = (
-				E088713BB1521A90531D7143 /* DashboardView.swift */,
-			);
-			path = Dashboard;
-			sourceTree = "<group>";
-		};
-		B5470ED595DC2D7CF998FEA8 /* Nick */ = {
-			isa = PBXGroup;
-			children = (
-				6CE5926F45249E34E34D9E7C /* Info.plist */,
-				F4FE1B5A9782F256A1A09474 /* App */,
-				08D19E0AB75D8CEDB55B97E1 /* Core */,
-				45232E768BCD2F1671EB1D4F /* Resources */,
-			);
-			path = Nick;
-			sourceTree = "<group>";
-		};
 		BCABA6CBA60235CC5F3E0F78 = {
 			isa = PBXGroup;
 			children = (
-				B5470ED595DC2D7CF998FEA8 /* Nick */,
-				9CFF264B229239B79CAB9F70 /* NickHelper */,
-				E3F29D35C28FDCCB9598722E /* NickIntegrationTests */,
-				7FB4B575B62BA8FB70F07BF5 /* NickTests */,
+				885ADC512FBFAF9E00664E7B /* Nick */,
+				885ADC752FBFAFA200664E7B /* NickHelper */,
+				885ADC792FBFAFA600664E7B /* NickIntegrationTests */,
+				885ADC842FBFAFA900664E7B /* NickTests */,
 				428C90590A8B2419274FDF24 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		BF550BCAFE15B9341ED18320 /* ProcessMonitor */ = {
-			isa = PBXGroup;
-			children = (
-				7BF02151C7B5D554CD922ED1 /* ProcessMonitor.swift */,
-			);
-			path = ProcessMonitor;
-			sourceTree = "<group>";
-		};
-		E3F29D35C28FDCCB9598722E /* NickIntegrationTests */ = {
-			isa = PBXGroup;
-			children = (
-				F7BA6B21FD28FC244ECA47CC /* NickIntegrationTests.swift */,
-			);
-			path = NickIntegrationTests;
-			sourceTree = "<group>";
-		};
-		F4FE1B5A9782F256A1A09474 /* App */ = {
-			isa = PBXGroup;
-			children = (
-				6B42B850DE1748EBDC4A5D26 /* NickApp.swift */,
-				A7A703CD6728DBB5875D3267 /* Dashboard */,
-			);
-			path = App;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -229,6 +108,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				885ADC752FBFAFA200664E7B /* NickHelper */,
 			);
 			name = NickHelper;
 			packageProductDependencies = (
@@ -249,6 +131,9 @@
 			dependencies = (
 				535A0CC3BF4FE0A60C515DAF /* PBXTargetDependency */,
 			);
+			fileSystemSynchronizedGroups = (
+				885ADC512FBFAF9E00664E7B /* Nick */,
+			);
 			name = Nick;
 			packageProductDependencies = (
 			);
@@ -266,6 +151,9 @@
 			);
 			dependencies = (
 				B3CC946096B63B8E77454012 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				885ADC792FBFAFA600664E7B /* NickIntegrationTests */,
 			);
 			name = NickIntegrationTests;
 			packageProductDependencies = (
@@ -285,6 +173,9 @@
 			dependencies = (
 				A058580EB3C27AE81DAEAE0A /* PBXTargetDependency */,
 			);
+			fileSystemSynchronizedGroups = (
+				885ADC842FBFAFA900664E7B /* NickTests */,
+			);
 			name = NickTests;
 			packageProductDependencies = (
 			);
@@ -299,7 +190,15 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2650;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					34AB00A397D4C574D27D4777 = {
+						ProvisioningStyle = Automatic;
+					};
+					A7068781809A7A01D520A3F7 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
 			};
 			buildConfigurationList = 419DD7835B41EF667DA1A60C /* Build configuration list for PBXProject "Nick" */;
 			developmentRegion = en;
@@ -328,7 +227,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B56A726604C2114F3A1CC7E6 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -339,7 +237,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E5D70E047D24FB8EC7160F11 /* NickIntegrationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -347,8 +244,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				34B22B07D2EBA0666E54008D /* HelperProtocol.swift in Sources */,
-				CB70BA89FFAB66251F9000A2 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -356,7 +251,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E3ECABAD58B2F74457D4EDE3 /* NickTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -364,15 +258,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				42E0BEB5E4889306313FEDAB /* DashboardView.swift in Sources */,
-				06A8F844DA60577DE98A9235 /* MonitorType.swift in Sources */,
-				987FDF52B722A9F247C7DF98 /* NetworkAnalyzer.swift in Sources */,
-				4BB623B21D8A5FD43CF5F3AB /* NickApp.swift in Sources */,
-				D46905970BD97CACD89A369E /* PersistenceWatcher.swift in Sources */,
-				C3999E02FF3D46EE42B40A62 /* ProcessMonitor.swift in Sources */,
-				17E8CA1E980C231494AA1F3F /* SystemAuditor.swift in Sources */,
-				1ADB247286D4CF4CCFDCFD74 /* ThreatCorrelator.swift in Sources */,
-				69ECA8F16113FDFB61DFEB57 /* ThreatSignal.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -432,12 +317,9 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -459,7 +341,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
@@ -469,12 +350,8 @@
 		02043DECA96EDD1EC8B9B765 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickHelper/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -483,7 +360,6 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.helper;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -492,11 +368,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = Nick/Info.plist;
@@ -506,7 +379,6 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -546,12 +418,9 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -566,7 +435,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
@@ -577,11 +445,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -589,7 +453,6 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ehsanazish.nick.integration-tests";
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
@@ -599,11 +462,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -611,7 +470,6 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ehsanazish.nick.integration-tests";
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
@@ -621,11 +479,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = Nick/Info.plist;
@@ -635,7 +490,6 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -643,12 +497,8 @@
 		B35BDA9A43F083632EF4965E /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickHelper/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -657,7 +507,6 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.helper;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -666,11 +515,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -678,7 +523,6 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.tests;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
@@ -688,11 +532,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -700,7 +540,6 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.tests;
-				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
