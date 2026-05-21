@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/nick-banner.svg" alt="Nick" width="600">
+  <img src="nick-banner.svg" alt="Nick" width="600">
 </p>
 
 <h3 align="center">Open-source macOS security suite with on-device AI threat scoring</h3>
@@ -331,5 +331,5 @@ Nick stands on the shoulders of:
 ---
 
 <p align="center">
-  Built by <a href="https://3nsofts.com">3nsofts</a> · Crafted with Swift · Protected by the community
+  Built by Ehsan Azish at <a href="https://3nsofts.com">3nsofts</a> · Crafted with Swift · Protected by the community
 </p>
