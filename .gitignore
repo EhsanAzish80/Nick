@@ -31,6 +31,9 @@ xcuserdata/
 *.perspectivev3
 !default.perspectivev3
 
+# Docs (local only)
+docs/
+
 # Secrets / keys
 *.p12
 *.mobileprovision
