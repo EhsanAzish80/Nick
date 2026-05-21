@@ -1,0 +1,88 @@
+name: Nick
+
+options:
+  bundleIdPrefix: com.ehsanazish
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""          # Set your Team ID here
+
+targets:
+
+  # ── Main app ──────────────────────────────────────────────────────────────
+  Nick:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Nick
+        excludes:
+          - "**/.gitkeep"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ehsanazish.nick
+        INFOPLIST_FILE: Nick/Info.plist
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        ENABLE_HARDENED_RUNTIME: "YES"
+        ENABLE_APP_SANDBOX: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: NickHelper
+        embed: false
+
+  # ── Privileged helper ─────────────────────────────────────────────────────
+  NickHelper:
+    type: tool
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: NickHelper
+        excludes:
+          - "**/.gitkeep"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ehsanazish.nick.helper
+        INFOPLIST_FILE: NickHelper/Info.plist
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        ENABLE_HARDENED_RUNTIME: "YES"
+
+  # ── Unit tests ────────────────────────────────────────────────────────────
+  NickTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: NickTests
+        excludes:
+          - "**/.gitkeep"
+    dependencies:
+      - target: Nick
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ehsanazish.nick.tests
+
+  # ── Integration tests ─────────────────────────────────────────────────────
+  NickIntegrationTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: NickIntegrationTests
+        excludes:
+          - "**/.gitkeep"
+    dependencies:
+      - target: Nick
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ehsanazish.nick.integration-tests
