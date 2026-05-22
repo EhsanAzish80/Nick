@@ -246,7 +246,7 @@ private struct ThreatLogDetailView: View {
                     .foregroundStyle(severityColor(entry.severity))
                     .clipShape(Capsule())
             }
-            Text(entry.timestamp, style: .date) + Text(" ") + Text(entry.timestamp, style: .time)
+            Text("\(entry.timestamp, style: .date) \(entry.timestamp, style: .time)")
             Text(entry.alertDescription)
                 .font(.nickBody)
                 .foregroundStyle(Color.textSecondary)

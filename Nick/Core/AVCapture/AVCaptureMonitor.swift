@@ -203,7 +203,7 @@ final class AVCaptureMonitor: MonitorProtocol {
         let center = NotificationCenter.default
 
         let onConnect = center.addObserver(
-            forName: .AVCaptureDeviceWasConnected,
+            forName: AVCaptureDevice.wasConnectedNotification,
             object:  nil,
             queue:   .main
         ) { [weak self] _ in
@@ -213,7 +213,7 @@ final class AVCaptureMonitor: MonitorProtocol {
         }
 
         let onDisconnect = center.addObserver(
-            forName: .AVCaptureDeviceWasDisconnected,
+            forName: AVCaptureDevice.wasDisconnectedNotification,
             object:  nil,
             queue:   .main
         ) { [weak self] _ in

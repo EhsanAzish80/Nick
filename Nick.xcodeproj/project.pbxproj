@@ -342,6 +342,7 @@
 		02043DECA96EDD1EC8B9B765 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NickHelper/NickHelper.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -349,6 +350,7 @@
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickHelper/Info.plist;
+				SKIP_INSTALL = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -364,6 +366,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = NickIcon;
+				CODE_SIGN_ENTITLEMENTS = Nick/Nick.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -467,6 +470,7 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				GENERATE_INFOPLIST_FILE = YES;
+				SKIP_INSTALL = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
@@ -494,6 +498,7 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				GENERATE_INFOPLIST_FILE = YES;
+				SKIP_INSTALL = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
@@ -515,6 +520,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = NickIcon;
+				CODE_SIGN_ENTITLEMENTS = Nick/Nick.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -549,6 +555,7 @@
 		B35BDA9A43F083632EF4965E /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NickHelper/NickHelper.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -556,6 +563,7 @@
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickHelper/Info.plist;
+				SKIP_INSTALL = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -577,6 +585,7 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				GENERATE_INFOPLIST_FILE = YES;
+				SKIP_INSTALL = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
@@ -604,6 +613,7 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				GENERATE_INFOPLIST_FILE = YES;
+				SKIP_INSTALL = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
