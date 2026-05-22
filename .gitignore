@@ -37,7 +37,7 @@ xcuserdata/
 !default.perspectivev3
 
 # Docs (local only)
-docs/
+DOCS/
 
 # Secrets / keys
 *.p12
