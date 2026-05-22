@@ -169,12 +169,17 @@ struct ProcessScanner {
         var buffer = [CChar](repeating: 0, count: maxSize)
         let ret = proc_pidpath(pid, &buffer, UInt32(maxSize))
         guard ret > 0 else { return "" }
-        return String(cString: buffer)
+        return buffer.withUnsafeBufferPointer { bp in
+            String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
     }
 
     private func userName(for uid: uid_t) -> String? {
-        guard let pw = getpwuid(uid) else { return nil }
-        return String(cString: pw.pointee.pw_name)
+        guard let pw = getpwuid(uid), let namePtr = pw.pointee.pw_name else { return nil }
+        let len = Int(strlen(namePtr))
+        return namePtr.withMemoryRebound(to: UInt8.self, capacity: len + 1) { uPtr in
+            String(decoding: UnsafeBufferPointer(start: uPtr, count: len), as: UTF8.self)
+        }
     }
 
     // MARK: - Signal Generation

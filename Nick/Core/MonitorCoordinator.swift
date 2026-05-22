@@ -123,7 +123,7 @@ final class MonitorCoordinator {
         let now = Date()
         if now.timeIntervalSince(lastDeepScan) >= Self.deepScanInterval {
             Self.log.debug("Pipeline deep scan (last: \(self.lastDeepScan.formatted())")
-            await engine.runFullScan()
+            engine.runFullScan()
             lastDeepScan = now
         } else {
             Self.log.debug("Pipeline tick (correlation only — next deep scan in \(Int(Self.deepScanInterval - now.timeIntervalSince(self.lastDeepScan)))s)")

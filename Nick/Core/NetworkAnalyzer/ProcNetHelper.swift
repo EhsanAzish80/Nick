@@ -89,7 +89,9 @@ enum ProcNetHelper {
         // Resolve process name — proc_name returns at most MAXCOMLEN (16) bytes.
         var nameBuf = [CChar](repeating: 0, count: Int(MAXCOMLEN) + 1)
         proc_name(pid, &nameBuf, UInt32(nameBuf.count))
-        let processName = String(cString: nameBuf)
+        let processName = nameBuf.withUnsafeBufferPointer { bp in
+            String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
 
         // Query the total size needed for the fd list.
         let fdBufBytes = proc_pidinfo(pid, kPROC_PIDLISTFDS, 0, nil, 0)
@@ -175,7 +177,7 @@ enum ProcNetHelper {
         }
 
         // Ignore loopback-only sockets (both endpoints on 127.x or ::1)
-        let isLoopbackOnly = isLoopback(localAddr) && (remoteAddr == nil || isLoopback(remoteAddr ?? ""))
+        let isLoopbackOnly = isLoopback(localAddr) && isLoopback(remoteAddr)
         if isLoopbackOnly && state != .listen { return nil }
 
         return NetworkConnectionInfo(
@@ -206,7 +208,9 @@ enum ProcNetHelper {
             }
             var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
             inet_ntop(AF_INET, &s_addr, &buf, socklen_t(INET_ADDRSTRLEN))
-            return String(cString: buf)
+            return buf.withUnsafeBufferPointer { bp in
+                String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+            }
         } else {
             var addr6 = in6_addr()
             withUnsafeBytes(of: addrUnion) { raw in
@@ -214,7 +218,9 @@ enum ProcNetHelper {
             }
             var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
             inet_ntop(AF_INET6, &addr6, &buf, socklen_t(INET6_ADDRSTRLEN))
-            return String(cString: buf)
+            return buf.withUnsafeBufferPointer { bp in
+                String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+            }
         }
     }
 

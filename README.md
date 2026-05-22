@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS%2014%2B-000000?style=flat&logo=apple" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/platform-macOS%2026%2B-000000?style=flat&logo=apple" alt="macOS 26+">
   <img src="https://img.shields.io/badge/swift-6.0-F05138?style=flat&logo=swift" alt="Swift 6.0">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat" alt="AGPL-3.0">
   <img src="https://img.shields.io/github/stars/EhsanAzish80/Nick?style=flat" alt="Stars">
@@ -168,7 +168,7 @@ Nick/
 ## Installation
 
 ### Requirements
-- macOS 14 Sonoma or later
+- macOS 26 or later (required by the YARA static library)
 - Apple Silicon or Intel Mac
 
 ### Download

@@ -459,8 +459,9 @@ enum CaptureProcessScanner: Sendable {
             var comm = kp.kp_proc.p_comm
             let commSize = MemoryLayout.size(ofValue: comm)
             let name = withUnsafeMutablePointer(to: &comm) { ptr in
-                ptr.withMemoryRebound(to: CChar.self, capacity: commSize) {
-                    String(cString: $0)
+                ptr.withMemoryRebound(to: UInt8.self, capacity: commSize) { uPtr in
+                    let buf = UnsafeBufferPointer(start: uPtr, count: commSize)
+                    return String(decoding: buf.prefix(while: { $0 != 0 }), as: UTF8.self)
                 }
             }
             guard !name.isEmpty else { return nil }
@@ -468,7 +469,9 @@ enum CaptureProcessScanner: Sendable {
             // Full path via proc_pidpath
             var pathBuf = [Int8](repeating: 0, count: Int(MAXPATHLEN))
             proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
-            let path = String(cString: pathBuf)
+            let path = pathBuf.withUnsafeBufferPointer { bp in
+                String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+            }
 
             let tv = kp.kp_proc.p_starttime
             let startTime: Date? = tv.tv_sec > 0
