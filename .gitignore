@@ -2,8 +2,12 @@
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserdata/
 DerivedData/
 build/
+*.moved-aside
+*.hmap
 *.ipa
 *.dSYM.zip
 *.dSYM
@@ -11,6 +15,7 @@ build/
 # Swift Package Manager
 .build/
 .swiftpm/
+Package.resolved
 
 # macOS
 .DS_Store
@@ -39,3 +44,10 @@ docs/
 *.mobileprovision
 *.provisionprofile
 AuthKey_*.p8
+*.certSigningRequest
+
+# Python training artifacts
+Scripts/__pycache__/
+Scripts/*.csv
+Scripts/*.joblib
+*.pyc

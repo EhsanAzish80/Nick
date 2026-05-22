@@ -89,7 +89,7 @@ On-demand and real-time file scanning:
 - Heuristic analysis: entropy scoring, Mach-O header inspection, embedded URL/IP extraction
 
 ### 🧠 AI Behavioral Scoring (The Differentiator)
-On-device CoreML model that correlates signals across all monitors:
+On-device CoreML pipeline for behavioral threat correlation. v0.9 ships with rule-based scoring; the ML model activates once trained on real-world signal data.
 - Individual signals are noisy. Correlated signals are actionable.
 - `curl` downloading a binary to `/tmp` = medium risk
 - That binary executing unsigned 2 seconds later = high risk
@@ -135,22 +135,19 @@ Nick/
 │   ├── YARAEngine/              # C interop wrapper for libyara
 │   ├── SystemAudit/             # SIP, FileVault, Gatekeeper, firewall checks
 │   ├── BehavioralScorer/        # CoreML inference engine
-│   └── ThreatCorrelator/        # Multi-signal correlation and scoring
+│   ├── ThreatCorrelator/        # Multi-signal correlation and scoring
+│   ├── Notifications/           # NotificationManager
+│   ├── Settings/                # AppSettings
+│   └── MonitorCoordinator.swift # Lifecycle orchestration for all monitors
 │
 ├── App/                         # SwiftUI macOS application
 │   ├── Dashboard/               # Main security overview
 │   ├── Alerts/                  # Threat notifications and history
-│   ├── Scanner/                 # On-demand YARA scanning UI
-│   ├── SystemAudit/             # Hardening recommendations
-│   ├── NetworkView/             # Live connection viewer
-│   └── Settings/                # Configuration and preferences
+│   └── Scanner/                 # On-demand YARA scanning UI
 │
-├── Helper/                      # Privileged helper tool
-│   └── PrivilegedOperations/    # Elevated access via XPC + SMAppService
+├── NickHelper/                  # Privileged helper tool (XPC + SMAppService)
 │
-├── Models/                      # Machine learning
-│   ├── ThreatScorer.mlmodel     # CoreML behavioral scoring model
-│   └── Training/                # Python training scripts and datasets
+├── Models/                      # Shared Swift model types
 │
 ├── Rules/                       # YARA rule sets
 │   ├── stealers/                # Credential and data theft
@@ -159,9 +156,11 @@ Nick/
 │   ├── ransomware/              # Encryption-based threats
 │   └── community/               # Community-contributed rules
 │
+├── Scripts/                     # CoreML training pipeline (Python)
+│
 └── Tests/
-    ├── UnitTests/               # Core engine tests
-    └── IntegrationTests/        # End-to-end detection tests
+    ├── NickTests/               # Unit tests
+    └── NickIntegrationTests/    # End-to-end detection tests
 ```
 
 ---
@@ -197,19 +196,24 @@ Nick never accesses your documents, photos, or personal files. Monitoring is lim
 ## Building from Source
 
 ```bash
-# Clone
+## Clone
 git clone https://github.com/EhsanAzish80/Nick.git
 cd Nick
 
-# Open in Xcode
+## Open in Xcode (requires Xcode 16+)
 open Nick.xcodeproj
 
-# Build (requires Xcode 16+)
+## Build
 xcodebuild -scheme Nick -configuration Release
 
-# Run tests
-xcodebuild test -scheme NickTests
+## Run tests
+xcodebuild test -scheme NickTests -destination "platform=macOS"
+
+## Build unsigned (no signing team required)
+xcodebuild -scheme Nick CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 ```
+
+> The checked-in project uses the maintainer's signing team. Override with your own team in Xcode → Signing & Capabilities, or build unsigned using the command above.
 
 ### Dependencies
 Nick uses zero third-party Swift dependencies. The only external dependency is `libyara` (C library, vendored).
@@ -232,7 +236,7 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 | Persistence detection | ✅ | ✅ (BlockBlock) | ❌ | ❌ | ✅ |
 | Network monitoring | ✅ | ✅ (LuLu) | ✅ | ✅ (NetBarrier) | ✅ |
 | Webcam/mic monitoring | 🔜 | ✅ (OverSight) | ❌ | ❌ | ✅ |
-| YARA scanning | ✅ | ❌ | ❌ | ✅ | ✅ |
+| YARA scanning | ⚡ | ❌ | ❌ | ✅ | ✅ |
 | Behavioral AI scoring | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Correlated threat detection | ✅ | ❌ | ❌ | ❌ | ❌ |
 | System hardening audit | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -241,33 +245,36 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 | Single app | ✅ | ❌ (6 separate apps) | ✅ | ✅ | ✅ |
 | Free | ✅ | ✅ | ❌ ($59) | ❌ ($40-70/yr) | ❌ ($40-80/yr) |
 
+> ⚡ Heuristic scanning active (entropy, Mach-O, URL/IP extraction); libyara integration pending
+
 ---
 
 ## Roadmap
 
-### v0.1 — Foundation (In Progress)
-- [ ] System integrity audit (SIP, FileVault, Gatekeeper, firewall, XProtect)
-- [ ] LaunchAgent/Daemon monitoring with change detection
-- [ ] Process auditor (unsigned binaries, suspicious locations, parent-child chains)
-- [ ] Network connection viewer with process mapping
-- [ ] SwiftUI menu bar app with dashboard
+### v0.1 — Foundation ✅ Complete
+- [x] System integrity audit (SIP, FileVault, Gatekeeper, firewall, XProtect)
+- [x] LaunchAgent/Daemon monitoring with change detection
+- [x] Process auditor (unsigned binaries, suspicious locations, parent-child chains)
+- [x] Network connection viewer with process mapping
+- [x] SwiftUI menu bar app with dashboard
 
-### v0.5 — Active Detection
-- [ ] FSEvents watcher on critical directories
-- [ ] YARA engine integration with curated rule set
-- [ ] On-demand file/directory scanner
-- [ ] Heuristic analysis (entropy, code signing, Mach-O inspection)
-- [ ] Real-time notification system
-- [ ] Privileged helper for elevated operations
+### v0.5 — Active Detection ✅ Complete
+- [x] FSEvents watcher on critical directories
+- [x] YARA engine integration with curated rule set
+- [x] On-demand file/directory scanner
+- [x] Heuristic analysis (entropy, code signing, Mach-O inspection)
+- [x] Real-time notification system
+- [x] Privileged helper for elevated operations
 
-### v0.9 — AI Behavioral Scoring
-- [ ] Threat correlation engine (multi-signal scoring)
-- [ ] CoreML behavioral scoring model
-- [ ] Foundation Models alert explanations (macOS 26+)
-- [ ] Real-time behavioral monitoring
-- [ ] Threat log with forensic detail
+### v0.9 — AI Behavioral Scoring ✅ Complete
+- [x] Threat correlation engine (multi-signal scoring)
+- [x] CoreML behavioral scoring model
+  > CoreML pipeline implemented and tested; shipping with rule-based scoring until trained model replaces stub
+- [x] Foundation Models alert explanations (macOS 26+)
+- [x] Real-time behavioral monitoring
+- [x] Threat log with forensic detail
 
-### v1.0 — Public Release
+### v1.0 — Public Release (In Progress)
 - [ ] Third-party security audit of privileged helper and detection engine
 - [ ] False positive tuning across diverse Mac configurations
 - [ ] Performance optimization (< 1% CPU, < 50MB RAM)
