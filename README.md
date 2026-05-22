@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="nick-banner.svg" alt="Nick" width="600">
+  <img src="NickIcon.png" alt="Nick" height="100">
 </p>
 
 <h3 align="center">Open-source macOS security suite with on-device AI threat scoring</h3>
