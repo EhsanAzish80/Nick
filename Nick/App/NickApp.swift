@@ -15,13 +15,23 @@ import SwiftUI
 @main
 struct NickApp: App {
 
-    @State private var engine = SecurityEngine()
+    @State private var engine: SecurityEngine
+
+    init() {
+        let eng = SecurityEngine()
+        _engine = State(initialValue: eng)
+        // Kick off the initial scan once the main actor is ready.
+        // This Task is not tied to any view scope — it runs for the lifetime of
+        // the engine regardless of whether the panel is open.
+        Task { @MainActor in eng.runFullScan() }
+    }
 
     var body: some Scene {
         MenuBarExtra {
             DashboardView()
                 .environment(engine)
-                .frame(width: 560, height: 600)
+                .preferredColorScheme(.dark)
+                .frame(width: NickLayout.windowWidth, height: NickLayout.windowHeight)
         } label: {
             MenuBarLabel(engine: engine)
         }

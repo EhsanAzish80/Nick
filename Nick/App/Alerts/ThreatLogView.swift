@@ -74,13 +74,14 @@ struct ThreatLogView: View {
         VStack(spacing: 8) {
             HStack {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textTertiary)
                 TextField("Search alerts…", text: $searchText)
+                    .font(.nickBody)
                     .textFieldStyle(.plain)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, NickSpacing.md)
+            .padding(.vertical, NickSpacing.sm)
+            .background(Color.backgroundTertiary, in: RoundedRectangle(cornerRadius: NickLayout.badgeCornerRadius))
 
             HStack(spacing: 8) {
                 Picker("Severity", selection: $filterSeverity) {
@@ -104,12 +105,12 @@ struct ThreatLogView: View {
                 Spacer()
 
                 Text("\(filteredEntries.count) alert(s)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.nickCaption)
+                    .foregroundStyle(Color.textSecondary)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, NickSpacing.lg)
+        .padding(.vertical, NickSpacing.md)
     }
 
     // MARK: - Toolbar
@@ -150,45 +151,46 @@ private struct ThreatLogRowView: View {
 
     let entry: ThreatLogEntry
 
+    private func severityColor(_ severity: String) -> Color {
+        switch severity {
+        case "critical": return .statusRed
+        case "high":     return .statusOrange
+        case "medium":   return .statusYellow
+        default:         return .textTertiary
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: NickSpacing.md) {
             Circle()
                 .fill(severityColor(entry.severity))
                 .frame(width: 8, height: 8)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: NickSpacing.xs) {
                 Text(entry.alertTitle)
-                    .font(.body)
+                    .font(.nickBody)
+                    .foregroundStyle(Color.textPrimary)
                     .lineLimit(1)
-                HStack(spacing: 4) {
+                HStack(spacing: NickSpacing.sm) {
                     Text(entry.timestamp, style: .relative)
                     Text("·")
                     Text(entry.severity.capitalized)
                     Text("·")
                     Text(String(format: "%.0f%%", entry.score * 100))
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.nickCaption)
+                .foregroundStyle(Color.textSecondary)
             }
 
             Spacer()
 
             if entry.resolved {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.caption)
+                    .foregroundStyle(Color.statusGreen)
+                    .font(.system(size: NickLayout.iconSize))
             }
         }
-        .padding(.vertical, 2)
-    }
-
-    private func severityColor(_ severity: String) -> Color {
-        switch severity {
-        case "critical": return .red
-        case "high":     return .orange
-        case "medium":   return .yellow
-        default:         return .gray
-        }
+        .padding(.vertical, NickSpacing.xs)
     }
 }
 
@@ -204,7 +206,7 @@ private struct ThreatLogDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: NickSpacing.xl) {
                 headerSection
                 if let explanation = entry.explanation, !explanation.isEmpty {
                     explanationSection(explanation)
@@ -213,50 +215,63 @@ private struct ThreatLogDetailView: View {
                 contextSection
                 resolveSection
             }
-            .padding(20)
+            .padding(NickSpacing.xxl)
         }
         .sheet(isPresented: $showResolveSheet) {
             resolveSheet
         }
     }
 
+    private func severityColor(_ severity: String) -> Color {
+        switch severity {
+        case "critical": return .statusRed
+        case "high":     return .statusOrange
+        case "medium":   return .statusYellow
+        default:         return .textTertiary
+        }
+    }
+
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: NickSpacing.md) {
             HStack {
                 Text(entry.alertTitle)
-                    .font(.title2.bold())
+                    .font(.nickTitle)
+                    .foregroundStyle(Color.textPrimary)
                 Spacer()
-                Text(entry.severity.capitalized)
-                    .font(.caption.bold())
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(severityColor(entry.severity).opacity(0.2))
+                Text(entry.severity.capitalized.uppercased())
+                    .font(.nickCaption)
+                    .padding(.horizontal, NickSpacing.md)
+                    .padding(.vertical, NickSpacing.xs)
+                    .background(severityColor(entry.severity).opacity(0.15))
                     .foregroundStyle(severityColor(entry.severity))
                     .clipShape(Capsule())
             }
             Text(entry.timestamp, style: .date) + Text(" ") + Text(entry.timestamp, style: .time)
             Text(entry.alertDescription)
-                .foregroundStyle(.secondary)
+                .font(.nickBody)
+                .foregroundStyle(Color.textSecondary)
         }
     }
 
     private func explanationSection(_ text: String) -> some View {
         GroupBox(label: Label("Nick's Analysis", systemImage: "brain")) {
             Text(text)
-                .padding(.top, 4)
+                .font(.nickBody)
+                .foregroundStyle(Color.textPrimary)
+                .padding(.top, NickSpacing.sm)
         }
     }
 
     private var signalsSection: some View {
         GroupBox(label: Label("Contributing Signals (\(entry.contributingSignalSummaries.count))", systemImage: "exclamationmark.triangle")) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: NickSpacing.sm) {
                 ForEach(entry.contributingSignalSummaries, id: \.self) { summary in
                     Text("· \(summary)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textSecondary)
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, NickSpacing.sm)
         }
     }
 
@@ -300,27 +315,30 @@ private struct ThreatLogDetailView: View {
     private var resolveSection: some View {
         GroupBox(label: Label("Review Status", systemImage: "checkmark.shield")) {
             if entry.resolved {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: NickSpacing.sm) {
                     Label("Marked as Reviewed", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                        .font(.nickBodyMedium)
+                        .foregroundStyle(Color.statusGreen)
                     if let note = entry.resolvedNote, !note.isEmpty {
-                        Text("Note: \(note)").font(.caption).foregroundStyle(.secondary)
+                        Text("Note: \(note)")
+                            .font(.nickCaption)
+                            .foregroundStyle(Color.textSecondary)
                     }
                 }
-                .padding(.top, 4)
+                .padding(.top, NickSpacing.sm)
             } else {
                 Button("Mark as Reviewed") {
                     showResolveSheet = true
                 }
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 4)
+                .buttonStyle(.nickPrimary)
+                .padding(.top, NickSpacing.sm)
             }
         }
     }
 
     private var resolveSheet: some View {
-        VStack(spacing: 16) {
-            Text("Mark as Reviewed").font(.headline)
+        VStack(spacing: NickSpacing.xl) {
+            Text("Mark as Reviewed").font(.nickTitle)
             TextField("Optional note…", text: $resolveNote, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(3, reservesSpace: true)
@@ -336,17 +354,9 @@ private struct ThreatLogDetailView: View {
                 .buttonStyle(.borderedProminent)
             }
         }
-        .padding(24)
+        .padding(NickSpacing.xxl)
         .frame(minWidth: 300)
-    }
-
-    private func severityColor(_ severity: String) -> Color {
-        switch severity {
-        case "critical": return .red
-        case "high":     return .orange
-        case "medium":   return .yellow
-        default:         return .gray
-        }
+        .background(Color.backgroundPrimary)
     }
 }
 
@@ -367,8 +377,8 @@ private struct ThreatLogExporterSheet: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Export \(entries.count) Alert(s)").font(.headline)
+        VStack(spacing: NickSpacing.xl) {
+            Text("Export \(entries.count) Alert(s)").font(.nickTitle)
 
             Picker("Format", selection: $exportFormat) {
                 ForEach(ExportFormat.allCases, id: \.self) { Text($0.rawValue).tag($0) }
@@ -376,7 +386,9 @@ private struct ThreatLogExporterSheet: View {
             .pickerStyle(.segmented)
 
             if let err = errorMessage {
-                Text(err).foregroundStyle(.red).font(.caption)
+                Text(err)
+                    .font(.nickCaption)
+                    .foregroundStyle(Color.statusRed)
             }
 
             HStack {
@@ -387,8 +399,9 @@ private struct ThreatLogExporterSheet: View {
                     .disabled(isSaving)
             }
         }
-        .padding(24)
+        .padding(NickSpacing.xxl)
         .frame(minWidth: 320)
+        .background(Color.backgroundPrimary)
     }
 
     private func saveFile() {

@@ -17,6 +17,14 @@ import os
 /// are discarded before each rule evaluation. This prevents stale signals from
 /// inflating the threat score.
 ///
+/// **ML scoring path**: `BehavioralScorer`, `FeatureExtractor`, and `CorrelationWindow`
+/// are implemented and tested but are **not yet wired into the live correlation path**.
+/// v0.9-rc ships a 1-feature passthrough stub as `ThreatScorer.mlmodel`; the stub
+/// produces scores that are architecturally correct but not meaningful. All production
+/// detection in v0.9-rc runs through the rule-based path below. The ML path will be
+/// connected once the model is trained on real signal telemetry collected post-launch.
+/// Until then, do not describe the product as "AI-powered" in user-facing text.
+///
 /// Usage:
 /// ```swift
 /// let correlator = ThreatCorrelator()

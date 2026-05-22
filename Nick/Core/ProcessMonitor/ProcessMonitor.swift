@@ -30,7 +30,6 @@ final class ProcessMonitor: MonitorProtocol {
     // MARK: - Private
 
     private var pendingSignals: [ThreatSignal] = []
-    private let scanner = ProcessScanner()
 
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -40,22 +39,23 @@ final class ProcessMonitor: MonitorProtocol {
     // MARK: - MonitorProtocol
 
     /// Performs a single snapshot scan and derives threat signals.
+    ///
+    /// `SecStaticCodeCheckValidity` blocks the calling thread — the scan runs in a
+    /// `Task.detached` to keep `@MainActor` (and the UI) responsive during the
+    /// per-process signing checks.
     func start() async throws {
         guard !isRunning else { return }
         isRunning = true
         defer { isRunning = false }
 
-        let scanned: [NickProcessInfo]
-        do {
-            scanned = try scanner.scan()
-        } catch {
-            Self.logger.error("Process scan failed: \(error.localizedDescription)")
-            throw error
-        }
+        let scanned = try await Task.detached(priority: .userInitiated) {
+            try ProcessScanner().scan()
+        }.value
 
+        let signals = ProcessScanner().signals(from: scanned)
         processes = scanned
-        pendingSignals = scanner.signals(from: scanned)
-        Self.logger.info("Process snapshot: \(scanned.count) processes, \(self.pendingSignals.count) signals")
+        pendingSignals = signals
+        Self.logger.info("Process snapshot: \(scanned.count) processes, \(signals.count) signals")
     }
 
     func stop() async {

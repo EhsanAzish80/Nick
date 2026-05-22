@@ -6,49 +6,94 @@ import SwiftUI
 
 // MARK: - SystemHealthGauge
 
-/// Circular gauge that communicates the overall security health score (0–100).
+/// Displays the overall security health score (0–100) with a large numeric value,
+/// a single-word status label, and a thin horizontal progress bar.
 ///
-/// The ring colour transitions from green (≥ 80) through yellow (50–79)
-/// to red (< 50), giving the user an at-a-glance risk level.
+/// Replaces the earlier circular `Gauge` widget. The horizontal design fits the
+/// fixed 420pt panel width and avoids animation idioms inappropriate for a
+/// security-context tool (no spinning, no rotation).
+///
+/// Score ranges: 80–100 green (SECURE), 60–79 yellow (WARNING),
+/// 40–59 orange (ELEVATED), 0–39 red (CRITICAL).
 struct SystemHealthGauge: View {
 
     let score: Int
     let isScanning: Bool
 
     var body: some View {
-        Gauge(value: Double(score), in: 0...100) {
-            EmptyView()
-        } currentValueLabel: {
-            if isScanning {
-                ProgressView().controlSize(.small)
-            } else {
+        VStack(spacing: NickSpacing.sm) {
+            // Score number + status label. No inline spinner — the tab bar
+            // progress bar below the tab bar owns all scan feedback.
+            HStack(alignment: .lastTextBaseline, spacing: NickSpacing.md) {
                 Text("\(score)")
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .font(.nickGaugeValue)
                     .foregroundStyle(gaugeColor)
+                    .contentTransition(.numericText())
+                    .animation(.spring(response: 0.4, dampingFraction: 0.8), value: score)
+
+                Text(statusLabel)
+                    .font(.nickCaption)
+                    .foregroundStyle(Color.textSecondary)
+                    .kerning(2)
+                    .animation(.easeInOut(duration: 0.2), value: score)
             }
+            // Thin horizontal progress bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.borderSubtle)
+                        .frame(height: NickLayout.scoreBarHeight)
+                    Rectangle()
+                        .fill(gaugeColor)
+                        .frame(
+                            width: geo.size.width * CGFloat(score) / 100.0,
+                            height: NickLayout.scoreBarHeight
+                        )
+                        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: score)
+                }
+                .clipShape(Capsule())
+            }
+            .frame(height: NickLayout.scoreBarHeight)
         }
-        .gaugeStyle(.accessoryCircular)
-        .tint(gaugeColor)
-        .animation(.easeInOut(duration: 0.5), value: score)
+        .padding(.horizontal, NickSpacing.xl)
+        .padding(.vertical, NickSpacing.lg)
     }
+
+    // MARK: - Private
 
     private var gaugeColor: Color {
         switch score {
-        case 80...100: .green
-        case 50..<80:  .yellow
-        default:       .red
+        case 80...100: .statusGreen
+        case 60..<80:  .statusYellow
+        case 40..<60:  .statusOrange
+        default:       .statusRed
+        }
+    }
+
+    private var statusLabel: String {
+        switch score {
+        case 80...100: "SECURE"
+        case 60..<80:  "WARNING"
+        case 40..<60:  "ELEVATED"
+        default:       "CRITICAL"
         }
     }
 }
 
 // MARK: - Preview
 
-#Preview {
-    HStack(spacing: 24) {
+#Preview("Health States") {
+    VStack(spacing: 0) {
         SystemHealthGauge(score: 100, isScanning: false)
-        SystemHealthGauge(score: 65,  isScanning: false)
-        SystemHealthGauge(score: 30,  isScanning: false)
-        SystemHealthGauge(score: 50,  isScanning: true)
+        Divider()
+        SystemHealthGauge(score: 72,  isScanning: false)
+        Divider()
+        SystemHealthGauge(score: 45,  isScanning: false)
+        Divider()
+        SystemHealthGauge(score: 20,  isScanning: false)
+        Divider()
+        SystemHealthGauge(score: 0,   isScanning: true)
     }
-    .padding()
+    .frame(width: NickLayout.windowWidth)
+    .background(Color.backgroundPrimary)
 }

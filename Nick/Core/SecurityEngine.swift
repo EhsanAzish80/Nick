@@ -77,68 +77,93 @@ final class SecurityEngine {
 
     private let logger = Logger(subsystem: "com.ehsanazish.nick", category: "SecurityEngine")
 
+    /// Stored handle for the running scan. Kept on the engine so the task outlives
+    /// any SwiftUI view scope — panel hide/show cannot cancel it.
+    private var scanTask: Task<Void, Never>?
+
     // MARK: - Init
 
     init() {}
 
     // MARK: - Public API
 
-    /// Runs all monitors sequentially and correlates the resulting signals.
+    /// Launches a full security scan as an independent, stored task.
     ///
-    /// Each monitor is `@MainActor`-isolated; their async methods suspend (not block)
-    /// while waiting for OS responses, keeping the UI responsive.
-    /// This is safe to call multiple times; concurrent calls are ignored while
-    /// a scan is already in progress.
-    func runFullScan() async {
+    /// The scan task is owned by `SecurityEngine` — not by any SwiftUI view scope.
+    /// Hiding or reopening the panel has no effect on a scan in progress.
+    /// Concurrent calls while a scan is in progress are ignored.
+    func runFullScan() {
         guard !isScanning else { return }
+        // Unstructured Task inherits @MainActor from the call site, so all state
+        // mutations inside run on @MainActor without needing MainActor.run {}.
+        // It is NOT a child of any view task and cannot be cancelled by SwiftUI.
+        scanTask = Task { [weak self] in
+            await self?.performFullScan()
+        }
+    }
+
+    private func performFullScan() async {
         isScanning = true
         lastError = nil
         logger.info("Full scan started")
 
-        // SystemAuditor
-        do {
-            try await auditor.start()
-            let sigs = await auditor.latestSignals()
-            await correlator.ingest(sigs)
-            auditResults = auditor.results
-        } catch {
-            logger.error("SystemAuditor failed: \(error.localizedDescription)")
-        }
+        await startAuditor()
+        guard isScanning else { return }
 
-        // PersistenceWatcher
-        do {
-            try await persistence.start()
-            let sigs = await persistence.latestSignals()
-            await correlator.ingest(sigs)
-            persistenceItems = persistence.items
-        } catch {
-            logger.error("PersistenceWatcher failed: \(error.localizedDescription)")
-        }
+        await startPersistence()
+        guard isScanning else { return }
 
-        // ProcessMonitor
-        do {
-            try await procMon.start()
-            let sigs = await procMon.latestSignals()
-            await correlator.ingest(sigs)
-            processes = procMon.processes
-        } catch {
-            logger.error("ProcessMonitor failed: \(error.localizedDescription)")
-        }
+        await startProcMon()
+        guard isScanning else { return }
 
-        // NetworkAnalyzer
-        do {
-            try await netMon.start()
-            let sigs = await netMon.latestSignals()
-            await correlator.ingest(sigs)
-            connections = netMon.connections
-        } catch {
-            logger.error("NetworkAnalyzer failed: \(error.localizedDescription)")
-        }
+        await startNetMon()
+        guard isScanning else { return }
 
+        // Collect signals and batch-update published state on @MainActor.
+        var allSignals: [ThreatSignal] = []
+        allSignals += await auditor.latestSignals()
+        allSignals += await persistence.latestSignals()
+        allSignals += await procMon.latestSignals()
+        allSignals += await netMon.latestSignals()
+
+        auditResults     = auditor.results
+        persistenceItems = persistence.items
+        processes        = procMon.processes
+        connections      = netMon.connections
+
+        await correlator.ingest(allSignals)
         let newAlerts = await correlator.correlate()
         alerts = newAlerts.sorted { $0.score > $1.score }
         isScanning = false
+        scanTask = nil
+        lastScanDate = Date()
         logger.info("Full scan complete — \(newAlerts.count) alerts, health: \(self.healthScore)")
+    }
+
+    // MARK: - Private monitor starters (for async let decomposition)
+
+    private func startAuditor() async {
+        do { try await auditor.start() } catch {
+            logger.error("SystemAuditor failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func startPersistence() async {
+        do { try await persistence.start() } catch {
+            logger.error("PersistenceWatcher failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func startProcMon() async {
+        do { try await procMon.start() } catch {
+            logger.error("ProcessMonitor failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func startNetMon() async {
+        do { try await netMon.start() } catch {
+            logger.error("NetworkAnalyzer failed: \(error.localizedDescription)")
+        }
     }
 
     /// Clears all collected data and alerts.
@@ -156,5 +181,22 @@ final class SecurityEngine {
         let newIDs = Set(newAlerts.map { $0.id })
         alerts = alerts.filter { !newIDs.contains($0.id) } + newAlerts
         alerts.sort { $0.score > $1.score }
+    }
+
+    /// Removes a single alert by ID (user-dismissed).
+    func dismissAlert(_ id: UUID) {
+        alerts.removeAll { $0.id == id }
+    }
+
+    /// Cancels an in-progress scan, clearing all progress state immediately.
+    ///
+    /// Cancels the stored `scanTask` (cooperative cancellation) and resets all
+    /// progress state. Each stage in `performFullScan` checks `guard isScanning`
+    /// so remaining stages are skipped and no partial results are committed.
+    func cancelScan() {
+        guard isScanning else { return }
+        scanTask?.cancel()
+        scanTask = nil
+        isScanning = false
     }
 }

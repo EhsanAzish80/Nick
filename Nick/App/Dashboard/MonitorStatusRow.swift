@@ -8,8 +8,11 @@ import SwiftUI
 
 /// A single row in the Dashboard overview summarising one monitor's status.
 ///
-/// Shows the monitor name, a live/idle indicator, the total item count,
-/// and a coloured badge for any issues detected.
+/// Displays an 8pt status dot (green/yellow/red), monitor name, item count,
+/// and an issue pill badge when `issueCount > 0`. Tapping the row triggers
+/// `onTap` to navigate to the monitor's detail view.
+///
+/// All fonts and colors use Nick design tokens — no hardcoded values.
 struct MonitorStatusRow: View {
 
     let title: String
@@ -17,41 +20,55 @@ struct MonitorStatusRow: View {
     let isRunning: Bool
     let itemCount: Int
     let issueCount: Int
+    var onTap: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .frame(width: 20)
-                .foregroundStyle(isRunning ? Color.accentColor : Color.secondary)
+        Button(action: { onTap?() }) {
+            HStack(spacing: NickSpacing.md) {
+                // Status dot
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 8, height: 8)
 
-            Text(title)
-                .font(.callout)
+                // Monitor name
+                Text(title)
+                    .font(.nickBody)
+                    .foregroundStyle(Color.textPrimary)
 
-            Spacer()
+                Spacer()
 
-            if isRunning {
-                ProgressView().controlSize(.mini)
-            } else {
-                Text("\(itemCount) items")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // Always show count + status badge — scan state is in the bottom bar
+                Text("\(itemCount)")
+                    .font(.nickMono)
+                    .foregroundStyle(Color.textSecondary)
 
+                // Issues badge or checkmark
                 if issueCount > 0 {
                     Text("\(issueCount) issue\(issueCount == 1 ? "" : "s")")
-                        .font(.caption.bold())
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.red.opacity(0.15), in: Capsule())
-                        .foregroundStyle(.red)
-                } else {
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.statusRed)
+                        .padding(.horizontal, NickSpacing.md)
+                        .padding(.vertical, NickSpacing.xs)
+                        .background(Color.statusRedBg, in: Capsule())
+                } else if !isRunning {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.caption)
+                        .font(.system(size: NickLayout.iconSize))
+                        .foregroundStyle(Color.statusGreen)
                 }
             }
+            .padding(.horizontal, NickSpacing.lg)
+            .frame(minHeight: NickLayout.bottomBarHeight)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Private
+
+    private var dotColor: Color {
+        if isRunning { return .statusBlue }
+        if issueCount > 0 { return issueCount > 2 ? .statusRed : .statusYellow }
+        return .statusGreen
     }
 }
 
@@ -59,11 +76,18 @@ struct MonitorStatusRow: View {
 
 #Preview {
     VStack(spacing: 0) {
-        MonitorStatusRow(title: "System Audit", systemImage: "checkmark.shield", isRunning: false, itemCount: 8, issueCount: 2)
-        Divider()
-        MonitorStatusRow(title: "Processes",    systemImage: "cpu",               isRunning: false, itemCount: 245, issueCount: 0)
-        Divider()
-        MonitorStatusRow(title: "Network",      systemImage: "network",            isRunning: true,  itemCount: 0, issueCount: 0)
+        MonitorStatusRow(title: "System Audit", systemImage: "checkmark.shield",
+                         isRunning: false, itemCount: 8, issueCount: 3)
+        Divider().padding(.leading, NickLayout.separatorInset)
+        MonitorStatusRow(title: "Persistence", systemImage: "arrow.triangle.2.circlepath",
+                         isRunning: false, itemCount: 15, issueCount: 0)
+        Divider().padding(.leading, NickLayout.separatorInset)
+        MonitorStatusRow(title: "Processes", systemImage: "cpu",
+                         isRunning: false, itemCount: 785, issueCount: 0)
+        Divider().padding(.leading, NickLayout.separatorInset)
+        MonitorStatusRow(title: "Network", systemImage: "network",
+                         isRunning: true, itemCount: 0, issueCount: 0)
     }
-    .frame(width: 360)
+    .frame(width: NickLayout.windowWidth)
+    .background(Color.backgroundPrimary)
 }

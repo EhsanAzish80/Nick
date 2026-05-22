@@ -75,6 +75,22 @@ final class BehavioralScorer: Sendable {
     /// If `false`, callers must use the rule-based fallback in `ThreatCorrelator`.
     var isModelAvailable: Bool { modelURL != nil }
 
+    /// Whether the loaded model appears to be a production-trained model.
+    ///
+    /// Returns `false` when the bundled model is the 1-feature passthrough stub
+    /// shipped with v0.9-rc. A production model accepts all 40 `FeatureVector`
+    /// inputs; the stub accepts only 1. Callers can use this to gate marketing
+    /// language and to decide whether to trust the score or fall back to rules.
+    ///
+    /// Replace `Nick/Resources/ThreatScorer.mlmodel` with the output of
+    /// `Scripts/train_threat_scorer.py` trained on real signal data to make
+    /// this return `true`.
+    var isProductionModel: Bool {
+        guard let url = modelURL,
+              let model = try? MLModel(contentsOf: url) else { return false }
+        return model.modelDescription.inputDescriptionsByName.count >= 40
+    }
+
     /// Scores a feature vector and returns a threat probability in [0, 1].
     ///
     /// - Parameter features: The 40-dimensional feature vector to score.
@@ -84,6 +100,9 @@ final class BehavioralScorer: Sendable {
     ///           `BehavioralScorerError.inferenceFailed` if prediction fails.
     func score(features: FeatureVector) throws -> Double {
         let result = try predict(features: features)
+        if !isProductionModel {
+            Self.logger.warning("BehavioralScorer: stub model in use — score is not meaningful. Replace ThreatScorer.mlmodel with a trained model.")
+        }
         return result.threatProbability
     }
 

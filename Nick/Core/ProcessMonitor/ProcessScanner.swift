@@ -53,6 +53,10 @@ struct ProcessScanner {
     ///
     /// - Returns: Array of `NickProcessInfo` for every accessible process.
     /// - Throws: `ProcessScannerError` if the initial `sysctl` call fails.
+    /// Returns a snapshot of all currently running processes.
+    ///
+    /// - Returns: Array of `NickProcessInfo` for every accessible process.
+    /// - Throws: `ProcessScannerError` if the initial `sysctl` call fails.
     func scan() throws -> [NickProcessInfo] {
         let kinfos = try fetchKinfoList()
         var result: [NickProcessInfo] = []

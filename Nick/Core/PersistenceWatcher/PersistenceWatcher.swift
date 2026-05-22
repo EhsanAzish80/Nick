@@ -192,10 +192,15 @@ final class PersistenceWatcher: MonitorProtocol {
         }
 
         let execPath = plist.programPath
-        let signingStatus: SigningStatus? = execPath.map { path in
+        // SignatureValidator calls SecStaticCodeCheckValidity which blocks the calling
+        // thread. Run it off @MainActor so the UI stays responsive.
+        let signingStatus: SigningStatus? = await {
+            guard let path = execPath else { return nil }
             guard FileManager.default.fileExists(atPath: path) else { return .unknown }
-            return SignatureValidator.shared.evaluate(binaryPath: path)
-        }
+            return await Task.detached(priority: .userInitiated) {
+                SignatureValidator.shared.evaluate(binaryPath: path)
+            }.value
+        }()
 
         let isEnabled = plist.runAtLoad || plist.keepAlive || plist.startInterval != nil
 
