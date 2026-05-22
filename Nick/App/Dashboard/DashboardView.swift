@@ -46,6 +46,9 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.backgroundPrimary.ignoresSafeArea())
+        .onReceive(NotificationCenter.default.publisher(for: .nickNavigateToAlert)) { _ in
+            selectedPanel = .alerts
+        }
     }
 
     // MARK: - Content
@@ -137,6 +140,17 @@ struct DashboardView: View {
                 .foregroundStyle(Color.textTertiary)
 
             Spacer()
+
+            // Settings
+            Button(action: {
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            }) {
+                Image(systemName: "gearshape")
+                    .font(.nickBodySmall)
+                    .foregroundStyle(Color.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
 
             // Quit
             Button("Quit Nick") { NSApp.terminate(nil) }

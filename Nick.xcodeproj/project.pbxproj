@@ -390,7 +390,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick;
 				SDKROOT = macosx;
-				SWIFT_OBJC_BRIDGING_HEADER = "Nick/Core/YARAEngine/YARABridge.h";
+				SWIFT_OBJC_BRIDGING_HEADER = Nick/Core/YARAEngine/YARABridge.h;
 			};
 			name = Debug;
 		};
@@ -533,7 +533,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick;
 				SDKROOT = macosx;
-				SWIFT_OBJC_BRIDGING_HEADER = "Nick/Core/YARAEngine/YARABridge.h";
+				SWIFT_OBJC_BRIDGING_HEADER = Nick/Core/YARAEngine/YARABridge.h;
 			};
 			name = Release;
 		};

@@ -39,6 +39,7 @@ struct CorrelationRule: Sendable {
         unsignedBinaryInTmpRule,
         reverseShellRule,
         unsignedLaunchAgentRule,
+        unexpectedCaptureDeviceRule,
         multipleHighSignalsRule
     ]
 
@@ -128,6 +129,29 @@ struct CorrelationRule: Sendable {
             severity: .high,
             contributingSignals: matches,
             recommendedAction: "Inspect the plist file and its referenced executable. Remove if you do not recognise the software."
+        )
+    }
+
+    /// Camera or microphone activated by an unsigned or unrecognised process.
+    private static let unexpectedCaptureDeviceRule = CorrelationRule(
+        name:     "unexpected_capture_device",
+        score:    0.85,
+        severity: .high
+    ) { signals in
+        let matches = signals.filter { $0.source == .avCapture }
+        guard !matches.isEmpty else { return nil }
+        let devices   = matches.compactMap { $0.metadata["deviceName"] }.joined(separator: ", ")
+        let processes = matches.compactMap { $0.metadata["process"]    }.joined(separator: ", ")
+        return ThreatAlert(
+            score: 0.85,
+            title: "Unexpected capture device activation",
+            description: "Device(s) '\(devices)' were activated, attributed to '\(processes)'. " +
+                         "Covert camera or microphone access is a hallmark of spyware and RATs.",
+            severity: .high,
+            contributingSignals: matches,
+            recommendedAction:
+                "Open System Settings → Privacy & Security → Camera / Microphone and audit " +
+                "which apps have permission. Revoke access for anything unexpected."
         )
     }
 

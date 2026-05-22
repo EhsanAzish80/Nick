@@ -64,4 +64,22 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         self.recommendedAction = recommendedAction
         self.explanation = explanation
     }
+
+    /// Returns a copy of this alert with a different severity level.
+    ///
+    /// Used by `ThreatCorrelator` to apply trusted-process severity downgrade
+    /// after correlation, without mutating the original value.
+    func with(severity: SignalSeverity) -> ThreatAlert {
+        ThreatAlert(
+            id: self.id,
+            score: self.score,
+            title: self.title,
+            description: self.description,
+            severity: severity,
+            contributingSignals: self.contributingSignals,
+            timestamp: self.timestamp,
+            recommendedAction: self.recommendedAction,
+            explanation: self.explanation
+        )
+    }
 }

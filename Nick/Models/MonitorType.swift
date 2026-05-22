@@ -36,6 +36,9 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
     /// Signals from the CoreML `BehavioralScorer` — correlated anomaly patterns.
     case behavioral = "behavioral"
 
+    /// Signals from `AVCaptureMonitor` — camera and microphone activation by unexpected processes.
+    case avCapture = "avCapture"
+
     // MARK: - Display Helpers
 
     /// Human-readable label suitable for UI presentation.
@@ -48,6 +51,7 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
         case .yara:        return "YARA Scanner"
         case .systemAudit: return "System Audit"
         case .behavioral:  return "AI Behavioral Scorer"
+        case .avCapture:   return "Camera & Microphone"
         }
     }
 
@@ -61,6 +65,7 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
         case .yara:        return "magnifyingglass.circle"
         case .systemAudit: return "checkmark.shield"
         case .behavioral:  return "brain"
+        case .avCapture:   return "camera"
         }
     }
 }

@@ -142,6 +142,9 @@ final class MonitorCoordinator {
             // Log to persistent store
             await logger?.log(alert: alert, explanation: explanation)
 
+            // Deliver system notification (suppressed for .info severity / below threshold)
+            await NotificationManager.shared.send(for: alert)
+
             Self.log.info("Pipeline alert: \(alert.title) score=\(alert.score)")
         }
 

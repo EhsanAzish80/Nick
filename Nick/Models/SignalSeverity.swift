@@ -63,4 +63,9 @@ enum SignalSeverity: Int, Codable, Sendable, Comparable, CaseIterable {
         case .critical: return "xmark.shield.fill"
         }
     }
+
+    /// Returns the next lower severity level, clamped at `.info`.
+    var downgraded: SignalSeverity {
+        SignalSeverity(rawValue: max(rawValue - 1, SignalSeverity.info.rawValue)) ?? .info
+    }
 }

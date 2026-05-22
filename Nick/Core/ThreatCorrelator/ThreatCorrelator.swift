@@ -81,9 +81,10 @@ actor ThreatCorrelator {
 
     /// Adds new signals to the correlation buffer.
     ///
-    /// Signals whose `processInfo.name` matches the trusted process list are silently
-    /// discarded before buffering — this is the last-resort filter after signal
-    /// generation in individual monitors.
+    /// All signals are accepted regardless of trusted-process status. Severity
+    /// downgrade for trusted-process activity is applied post-correlation in
+    /// `correlate()` rather than suppressing signals at ingestion time — this
+    /// preserves observability while still reducing alert noise for trusted software.
     ///
     /// Old signals (older than `windowDuration`) are pruned after ingestion.
     /// If the buffer would exceed `maxBufferSize` after pruning, low-severity
@@ -91,15 +92,14 @@ actor ThreatCorrelator {
     ///
     /// - Parameter signals: Signals from any monitor.
     func ingest(_ signals: [ThreatSignal]) {
-        let filtered = signals.filter { signal in
-            guard let name = signal.processInfo?.name else { return true }
-            return !trustedProcessList.isTrusted(name)
-        }
-        signalBuffer.append(contentsOf: filtered)
+        signalBuffer.append(contentsOf: signals)
         pruneOldSignals()
         enforceBufferCap()
-        let suppressed = signals.count - filtered.count
-        Self.logger.debug("Ingested \(filtered.count) signals (\(suppressed) suppressed by trusted list) — buffer: \(self.signalBuffer.count)")
+        let trustedCount = signals.filter { signal in
+            guard let name = signal.processInfo?.name else { return false }
+            return trustedProcessList.isTrusted(name)
+        }.count
+        Self.logger.debug("Ingested \(signals.count) signals (\(trustedCount) from trusted processes) — buffer: \(self.signalBuffer.count)")
     }
 
     /// Evaluates all rules against the current signal window and returns alerts.
@@ -107,6 +107,11 @@ actor ThreatCorrelator {
     /// Each rule fires at most once per `correlate()` call; duplicate rule matches
     /// do not produce duplicate alerts. Rules are evaluated in priority order
     /// (highest score first).
+    ///
+    /// After rule evaluation, trusted-process severity downgrade is applied:
+    /// - All contributing processes trusted → severity downgraded to `.info`
+    /// - Some contributing processes trusted → severity downgraded by one level
+    /// - No trusted processes involved → severity unchanged
     ///
     /// - Returns: All alerts produced by the current rule set and signal window.
     func correlate() -> [ThreatAlert] {
@@ -120,8 +125,9 @@ actor ThreatCorrelator {
         let sortedRules = rules.sorted { $0.score > $1.score }
         for rule in sortedRules {
             if let alert = rule.evaluate(window) {
-                alerts.append(alert)
-                Self.logger.info("Rule '\(rule.name)' fired — score: \(alert.score)")
+                let adjusted = applyTrustedDowngrade(to: alert)
+                alerts.append(adjusted)
+                Self.logger.info("Rule '\(rule.name)' fired — score: \(adjusted.score), severity: \(adjusted.severity.displayName)")
             }
         }
 
@@ -158,5 +164,28 @@ actor ThreatCorrelator {
         let excess = signalBuffer.count - Self.maxBufferSize
         signalBuffer.removeFirst(excess)
         Self.logger.notice("Signal buffer cap enforced — evicted \(excess) low-severity signals")
+    }
+
+    /// Applies trusted-process severity downgrade to a correlated alert.
+    ///
+    /// - All contributing signals from trusted processes → severity becomes `.info`
+    /// - Some signals from trusted processes → severity downgraded by one level
+    /// - No trusted signals → severity unchanged
+    private func applyTrustedDowngrade(to alert: ThreatAlert) -> ThreatAlert {
+        let signals = alert.contributingSignals
+        guard !signals.isEmpty else { return alert }
+
+        let trustedCount = signals.filter { signal in
+            guard let name = signal.processInfo?.name else { return false }
+            return trustedProcessList.isTrusted(name)
+        }.count
+
+        let fraction = Double(trustedCount) / Double(signals.count)
+        if fraction == 1.0 {
+            return alert.with(severity: .info)
+        } else if fraction > 0 {
+            return alert.with(severity: alert.severity.downgraded)
+        }
+        return alert
     }
 }

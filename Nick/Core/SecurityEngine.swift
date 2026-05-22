@@ -88,6 +88,7 @@ final class SecurityEngine {
     private let persistence = PersistenceWatcher()
     private let procMon    = ProcessMonitor()
     private let netMon     = NetworkAnalyzer()
+    private let avCapture  = AVCaptureMonitor()
     private let correlator = ThreatCorrelator()
 
     private let logger = Logger(subsystem: "com.ehsanazish.nick", category: "SecurityEngine")
@@ -138,12 +139,16 @@ final class SecurityEngine {
         await startNetMon()
         guard isScanning else { return }
 
+        await startAVCapture()
+        guard isScanning else { return }
+
         // Collect signals and batch-update published state on @MainActor.
         var allSignals: [ThreatSignal] = []
         allSignals += await auditor.latestSignals()
         allSignals += await persistence.latestSignals()
         allSignals += await procMon.latestSignals()
         allSignals += await netMon.latestSignals()
+        allSignals += await avCapture.latestSignals()
 
         auditResults     = auditor.results
         persistenceItems = persistence.items
@@ -182,6 +187,12 @@ final class SecurityEngine {
     private func startNetMon() async {
         do { try await netMon.start() } catch {
             logger.error("NetworkAnalyzer failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func startAVCapture() async {
+        do { try await avCapture.start() } catch {
+            logger.error("AVCaptureMonitor failed: \(error.localizedDescription)")
         }
     }
 

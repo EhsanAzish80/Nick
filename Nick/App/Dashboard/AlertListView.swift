@@ -12,21 +12,47 @@ import SwiftUI
 /// Each alert is a flat list row (no card background, no shadow). Rows are
 /// separated by a `borderSubtle` divider. Copy JSON and Dismiss actions are
 /// inline on every row.
+///
+/// Alerts with `.info` severity represent trusted-app activity and are hidden
+/// by default; use the "Show trusted app activity" toggle to reveal them.
 struct AlertListView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @AppStorage("showTrustedAlerts") private var showTrustedAlerts: Bool = false
+
+    private var visibleAlerts: [ThreatAlert] {
+        showTrustedAlerts
+            ? engine.alerts
+            : engine.alerts.filter { $0.severity != .info }
+    }
 
     var body: some View {
-        if engine.alerts.isEmpty {
-            emptyState
-        } else {
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(engine.alerts) { alert in
-                        AlertRow(alert: alert)
-                        if alert.id != engine.alerts.last?.id {
-                            Divider()
-                                .overlay(Color.borderSubtle)
+        VStack(spacing: 0) {
+            // Filter toggle bar
+            HStack {
+                Toggle("Show trusted app activity", isOn: $showTrustedAlerts)
+                    .toggleStyle(.checkbox)
+                    .font(.nickCaption)
+                    .foregroundStyle(Color.textTertiary)
+                Spacer()
+            }
+            .padding(.horizontal, NickSpacing.lg)
+            .padding(.vertical, NickSpacing.sm)
+            .background(Color.backgroundSecondary)
+
+            Divider().overlay(Color.borderSubtle)
+
+            if visibleAlerts.isEmpty {
+                emptyState
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(visibleAlerts) { alert in
+                            AlertRow(alert: alert)
+                            if alert.id != visibleAlerts.last?.id {
+                                Divider()
+                                    .overlay(Color.borderSubtle)
+                            }
                         }
                     }
                 }
@@ -58,10 +84,16 @@ struct AlertListView: View {
 // MARK: - AlertRow
 
 /// Flat list row for one `ThreatAlert`. No card background — content only.
+///
+/// `.info` severity alerts (trusted-app activity) render with `textTertiary`
+/// styling to visually distinguish them from actionable alerts.
 private struct AlertRow: View {
 
     let alert: ThreatAlert
     @Environment(SecurityEngine.self) private var engine
+
+    /// Whether this alert represents trusted-app activity (severity == .info).
+    private var isTrustedActivity: Bool { alert.severity == .info }
 
     var body: some View {
         VStack(alignment: .leading, spacing: NickSpacing.md) {
@@ -70,10 +102,10 @@ private struct AlertRow: View {
             HStack(alignment: .top, spacing: NickSpacing.md) {
                 Image(systemName: alert.severity.systemImage)
                     .font(.system(size: NickLayout.iconSizeLarge))
-                    .foregroundStyle(alert.severity.statusColor)
+                    .foregroundStyle(isTrustedActivity ? Color.textTertiary : alert.severity.statusColor)
                 Text(alert.title)
                     .font(.nickBodyMedium)
-                    .foregroundStyle(Color.textPrimary)
+                    .foregroundStyle(isTrustedActivity ? Color.textTertiary : Color.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -98,7 +130,7 @@ private struct AlertRow: View {
             // Description
             Text(alert.description)
                 .font(.nickBody)
-                .foregroundStyle(Color.textPrimary)
+                .foregroundStyle(isTrustedActivity ? Color.textTertiary : Color.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
             // Contributing signals — flat list, ▸ prefix, 20pt indent

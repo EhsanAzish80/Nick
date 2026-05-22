@@ -23,7 +23,10 @@ struct NickApp: App {
         // Kick off the initial scan once the main actor is ready.
         // This Task is not tied to any view scope — it runs for the lifetime of
         // the engine regardless of whether the panel is open.
-        Task { @MainActor in eng.runFullScan() }
+        Task { @MainActor in
+            eng.runFullScan()
+            NotificationManager.shared.setup()
+        }
     }
 
     var body: some Scene {
