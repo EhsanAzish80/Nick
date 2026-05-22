@@ -9,28 +9,24 @@ import os
 
 /// Errors thrown by `ConnectionScanner`.
 enum ConnectionScannerError: LocalizedError {
-    /// The `lsof` tool could not be found or executed.
-    case lsofUnavailable
-    /// The output from `lsof` could not be parsed into any connections.
-    case noOutput
+    /// `ProcNetHelper` returned no connections and `lsof` is also unavailable.
+    case unavailable
 
     var errorDescription: String? {
-        switch self {
-        case .lsofUnavailable: return "lsof is not available at /usr/sbin/lsof"
-        case .noOutput:        return "lsof produced no parseable output"
-        }
+        "Network connection scan failed: proc_pidfdinfo returned no data and lsof is unavailable."
     }
 }
 
 // MARK: - ConnectionScanner
 
-/// Enumerates active network connections by parsing `lsof -i -n -P` output.
+/// Enumerates active network connections using `proc_pidfdinfo` (no subprocess spawn).
 ///
-/// Each line from `lsof` describes one file descriptor. We extract the process PID,
-/// protocol, local/remote address, and connection state.
+/// Phase 1 used `lsof` which required spawning a subprocess (~100ms overhead per scan).
+/// Phase 4 replaces that with direct `proc_pidfdinfo` calls via `ProcNetHelper`,
+/// reducing scan overhead and removing the `/usr/sbin/lsof` file-system dependency.
 ///
-/// - Important: The `lsof`-based implementation is a Phase 1 temporary.
-///   TODO(ehsan): Replace lsof with proc_pidfdinfo. See #1.
+/// `lsof` is kept as a fallback if `proc_pidfdinfo` returns zero connections
+/// (e.g. running inside a restrictive sandbox where proc_info access is limited).
 struct ConnectionScanner {
 
     // MARK: - Private
@@ -50,21 +46,30 @@ struct ConnectionScanner {
 
     /// Scans all active network connections visible to the current user.
     ///
-    /// - Returns: Array of `NetworkConnectionInfo` parsed from `lsof` output.
-    /// - Throws: `ConnectionScannerError` if `lsof` is not available.
+    /// Uses `ProcNetHelper.listConnections()` (proc_pidfdinfo) as the primary path.
+    /// Falls back to `lsof` if proc_pidfdinfo returns zero results (e.g. under a
+    /// sandbox that blocks proc_info calls).
     ///
-    /// - Note: lsof is always at `/usr/sbin/lsof` on macOS; no PATH lookup needed.
+    /// - Returns: Array of `NetworkConnectionInfo`.
+    /// - Throws: `ConnectionScannerError.unavailable` if both paths fail.
     func scan() async throws -> [NetworkConnectionInfo] {
-        let lsofPath = "/usr/sbin/lsof"
-        guard FileManager.default.isExecutableFile(atPath: lsofPath) else {
-            throw ConnectionScannerError.lsofUnavailable
+        // Primary path: proc_pidfdinfo (no subprocess, ~100ms faster)
+        let connections = ProcNetHelper.listConnections()
+        if !connections.isEmpty {
+            Self.logger.debug("Network scan (proc_pidfdinfo): \(connections.count) connections")
+            return connections
         }
 
-        // TODO(ehsan): Replace lsof with proc_pidfdinfo. See #1.
+        // Fallback: lsof subprocess (available outside sandbox environments)
+        let lsofPath = "/usr/sbin/lsof"
+        guard FileManager.default.isExecutableFile(atPath: lsofPath) else {
+            throw ConnectionScannerError.unavailable
+        }
+
         let output = try await runLsof(path: lsofPath)
-        let connections = parseLsofOutput(output)
-        Self.logger.debug("Network scan: \(connections.count) connections parsed")
-        return connections
+        let lsofConnections = parseLsofOutput(output)
+        Self.logger.info("Network scan (lsof fallback): \(lsofConnections.count) connections")
+        return lsofConnections
     }
 
     // MARK: - Private Helpers

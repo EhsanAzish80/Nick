@@ -1,0 +1,157 @@
+// MARK: - Nick
+// Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
+// Licensed under AGPL-3.0. See LICENSE for details.
+
+import Foundation
+import os
+
+// MARK: - TrustedProcessList
+
+/// A two-tier list of processes that are pre-approved as safe and should not trigger alerts.
+///
+/// `TrustedProcessList` solves the false positive problem for known-good software on the
+/// developer, creative, enterprise, and power-user configurations documented in
+/// `docs/FALSE_POSITIVE_MATRIX.md`. It combines a hardcoded built-in set with a
+/// user-configurable set that persists via `AppSettings`.
+///
+/// Processes in this list are excluded from:
+/// - Shell-spawn alerts (LOLBin detector, parent-chain analyzer)
+/// - Reverse-shell detection when the parent is a known terminal
+/// - High-severity signal emission (downgraded to `.info` for correlation only)
+///
+/// - Note: Trusting a process suppresses Nick's behavioural alerts for that process.
+///   Users should only add processes they have personally verified. Legitimate software
+///   does not typically need to be added — the built-in list covers common cases.
+struct TrustedProcessList {
+
+    // MARK: - Built-in List
+
+    /// Processes that are pre-approved as part of the default Nick installation.
+    ///
+    /// This list is conservative. It covers terminal emulators, developer tools,
+    /// package managers, known system processes, and a handful of popular apps
+    /// that legitimately perform operations Nick would otherwise flag.
+    ///
+    /// - Note: SECURITY: Every entry here permanently suppresses alerts for the named
+    ///   process. Review each addition against the false positive data in
+    ///   `docs/FALSE_POSITIVE_MATRIX.md` before merging.
+    static let builtIn: Set<String> = [
+        // Terminal emulators — shell-spawn from these is expected, not malicious.
+        "Terminal", "iTerm2", "iTerm", "Alacritty", "Warp", "Kitty", "Hyper",
+        "xterm", "WezTerm",
+
+        // VS Code and derivatives
+        "Code Helper", "Code Helper (Plugin)", "Code Helper (Renderer)",
+        "Code Helper (GPU)", "Cursor Helper", "Cursor Helper (Plugin)",
+        "Claude Helper", "Claude Helper (Renderer)",
+
+        // Xcode and Apple development tools
+        "Xcode", "SourceKit-LSP", "xcrun", "xcodebuild", "simctl",
+        "lldb", "lldb-rpc-server",
+
+        // Compilers and build tools
+        "swift", "swiftc", "clang", "clang++", "ld", "lld", "ar", "make",
+        "cmake", "ninja", "meson",
+
+        // Version control
+        "git", "git-credential-osxkeychain",
+
+        // Package managers
+        "brew", "npm", "node", "yarn", "pnpm", "bun",
+        "python3", "python", "pip3", "pip",
+        "ruby", "gem", "bundler",
+        "cargo", "rustc",
+        "go",
+
+        // SSH and remote access (standard Apple-signed sshd)
+        "sshd", "ssh", "scp", "sftp",
+
+        // macOS system background processes known to generate benign signals
+        "mdworker", "mdworker_shared", "mds", "mds_stores",
+        "cloudd", "nsurlsessiond", "nsurlstoraged",
+        "trustd", "syspolicyd", "opendirectoryd",
+        "securityd", "coreauthd", "authd",
+        "softwareupdated", "storedownloadd", "storeassetd",
+        "Spotlight", "SpotlightNetHelper",
+        "com.apple.TimeMachine",
+        "backupd", "backupd-helper",
+        "launchd", "kernel_task",
+
+        // Common productivity apps with legitimate background activity
+        "Finder",
+    ]
+
+    // MARK: - Private State
+
+    /// User-added process names, loaded from `AppSettings`.
+    var userTrusted: Set<String>
+
+    private static let logger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "TrustedProcessList"
+    )
+
+    // MARK: - Init
+
+    /// Creates a `TrustedProcessList` with the given user-trusted set.
+    ///
+    /// In production, pass the value from `AppSettings.shared.userTrustedProcesses`.
+    ///
+    /// - Parameter userTrusted: User-supplied process names to add to the built-in list.
+    init(userTrusted: Set<String> = []) {
+        self.userTrusted = userTrusted
+    }
+
+    // MARK: - Public API
+
+    /// Returns `true` if `processName` is in either the built-in or user-trusted list.
+    ///
+    /// Matching is case-sensitive and exact — there is no substring or glob matching.
+    /// Process names are taken from the `NickProcessInfo.name` property, which is the
+    /// `p_comm` field from `kinfo_proc` (truncated to 16 characters on macOS).
+    ///
+    /// - Parameter processName: The process name to check (e.g. `"bash"`, `"Xcode"`).
+    /// - Returns: `true` if the process is in the built-in or user-configured trusted list.
+    func isTrusted(_ processName: String) -> Bool {
+        Self.builtIn.contains(processName) || userTrusted.contains(processName)
+    }
+
+    /// Adds `processName` to the user-trusted set.
+    ///
+    /// Changes are not automatically persisted — call `AppSettings.shared.save()` after.
+    ///
+    /// - Parameter processName: The process name to trust.
+    mutating func addUserTrusted(_ processName: String) {
+        guard !processName.isEmpty else { return }
+        userTrusted.insert(processName)
+        Self.logger.info("User added trusted process: \(processName, privacy: .public)")
+    }
+
+    /// Removes `processName` from the user-trusted set.
+    ///
+    /// Has no effect if `processName` is not in the user-trusted set.
+    /// Cannot remove built-in trusted processes.
+    ///
+    /// - Parameter processName: The process name to remove from user trust.
+    mutating func removeUserTrusted(_ processName: String) {
+        userTrusted.remove(processName)
+        Self.logger.info("User removed trusted process: \(processName, privacy: .public)")
+    }
+
+    // MARK: - Internal Helpers
+
+    /// Returns all trusted process names from both lists, sorted alphabetically.
+    ///
+    /// Used by the Settings UI to display the full trusted list.
+    func allTrustedNames() -> [String] {
+        let all = Self.builtIn.union(userTrusted)
+        return all.sorted()
+    }
+
+    /// Returns only the user-configured names, sorted alphabetically.
+    ///
+    /// Used by the Settings UI to display the editable portion of the list.
+    func userTrustedNames() -> [String] {
+        userTrusted.sorted()
+    }
+}

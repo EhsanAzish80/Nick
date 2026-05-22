@@ -11,8 +11,9 @@ import os
 /// Validates the code-signing status of on-disk Mach-O binaries.
 ///
 /// Uses `SecStaticCode` APIs to inspect the binary without running it.
-/// All results are cached in-memory for the lifetime of the process; evict
-/// via `clearCache()` between long-running scans to avoid stale entries.
+/// Results are cached in-memory with a 5-minute TTL. Entries older than
+/// `cacheTTL` are re-evaluated on the next call to `evaluate(binaryPath:)`.
+/// Call `clearCache()` to force re-evaluation of all entries immediately.
 ///
 /// - Note: `SecStaticCodeCheckValidity` may be slow on first access while
 ///   the Trust Evaluation daemon warms up — call only from async contexts.
@@ -25,8 +26,16 @@ final class SignatureValidator: @unchecked Sendable {
 
     // MARK: - Private
 
+    /// How long a cached signing result is considered fresh.
+    let cacheTTL: TimeInterval = 5 * 60  // 5 minutes
+
+    private struct CacheEntry {
+        let status: SigningStatus
+        let cachedAt: Date
+    }
+
     private let lock = NSLock()
-    private var cache: [String: SigningStatus] = [:]
+    private var cache: [String: CacheEntry] = [:]
 
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -41,23 +50,24 @@ final class SignatureValidator: @unchecked Sendable {
 
     /// Returns the code-signing status of a binary at the given path.
     ///
-    /// Results are cached after the first evaluation. The cache key is the
-    /// absolute path string; there is no inode-based staleness check in Phase 1.
+    /// Results are cached for `cacheTTL` seconds (default: 5 minutes). After the
+    /// TTL expires the binary is re-evaluated on the next call. The cache key is
+    /// the absolute path string; there is no inode-based staleness check.
     ///
     /// - Parameter binaryPath: Absolute path to the Mach-O binary.
     /// - Returns: A `SigningStatus` value describing the binary's signing state.
     func evaluate(binaryPath: String) -> SigningStatus {
         lock.lock()
-        if let cached = cache[binaryPath] {
+        if let entry = cache[binaryPath], Date().timeIntervalSince(entry.cachedAt) < cacheTTL {
             lock.unlock()
-            return cached
+            return entry.status
         }
         lock.unlock()
 
         let result = performStaticCheck(path: binaryPath)
 
         lock.lock()
-        cache[binaryPath] = result
+        cache[binaryPath] = CacheEntry(status: result, cachedAt: Date())
         lock.unlock()
 
         return result
@@ -68,6 +78,50 @@ final class SignatureValidator: @unchecked Sendable {
         lock.lock()
         cache.removeAll()
         lock.unlock()
+    }
+
+    /// Returns the number of currently cached entries.
+    var cacheCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return cache.count
+    }
+
+    /// Resolves `.pending` signing statuses for a list of processes asynchronously.
+    ///
+    /// Iterates `processes`, skipping any that already have a non-`.pending` status
+    /// or an empty path. For each `.pending` entry it calls `evaluate(binaryPath:)`
+    /// (which may block the calling thread) and invokes `onUpdate` on `@MainActor`
+    /// with the updated process so callers can refresh their published state.
+    ///
+    /// Designed to run inside a `Task.detached(priority: .background)`. Cancellation
+    /// is checked between each evaluation so the caller can cancel the task promptly.
+    ///
+    /// - Parameters:
+    ///   - processes: Snapshot returned by `ProcessScanner.scanFast()`.
+    ///   - onUpdate: Called with each resolved process. Runs on `@MainActor`.
+    func backfill(
+        processes: [NickProcessInfo],
+        onUpdate: @MainActor @escaping (NickProcessInfo) -> Void
+    ) async {
+        for proc in processes {
+            guard !Task.isCancelled else { return }
+            guard proc.signingStatus == .pending, !proc.path.isEmpty else { continue }
+
+            let resolved = evaluate(binaryPath: proc.path)
+            let updated = NickProcessInfo(
+                pid: proc.pid,
+                path: proc.path,
+                name: proc.name,
+                parentPID: proc.parentPID,
+                parentName: proc.parentName,
+                signingStatus: resolved,
+                user: proc.user,
+                startTime: proc.startTime
+            )
+            await onUpdate(updated)
+        }
+        Self.logger.debug("Signature backfill complete for \(processes.count) processes")
     }
 
     // MARK: - Private Helpers

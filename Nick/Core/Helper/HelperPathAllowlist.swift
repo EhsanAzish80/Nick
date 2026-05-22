@@ -4,43 +4,16 @@
 
 import Foundation
 
-// MARK: - NickHelperProtocol
-
-/// XPC protocol exposed by the privileged helper to the main app.
-///
-/// Every method is strictly read-only. No write, move, create, or delete
-/// operations are ever exposed through this interface. All path-based methods
-/// validate their inputs against `HelperPathAllowlist` before touching the
-/// filesystem.
-///
-/// - Note: SECURITY: This is the full attack surface of the privileged helper.
-///   Any change to this protocol must be reviewed for privilege escalation risk.
-@objc protocol NickHelperProtocol {
-
-    /// Returns the SIP (System Integrity Protection) status.
-    func getSIPStatus(reply: @escaping (Bool) -> Void)
-
-    /// Returns the Application Firewall enabled state.
-    func getFirewallStatus(reply: @escaping (Bool) -> Void)
-
-    /// Reads a plist at a privileged path that has been approved by `HelperPathAllowlist`.
-    ///
-    /// - Parameters:
-    ///   - path: Absolute path to the plist file. Must satisfy `HelperPathAllowlist.validate(_:)`.
-    ///   - reply: Called with the raw plist data, or `nil` and a generic error on failure.
-    func readProtectedPlist(atPath path: String, reply: @escaping (Data?, Error?) -> Void)
-
-    /// Returns a list of listening ports with associated process names.
-    func getListeningPorts(reply: @escaping ([String: Int32]) -> Void)
-}
-
 // MARK: - HelperPathAllowlist
 
-/// Validates file paths before the helper attempts to read them.
+/// Validates file paths before they are sent to the privileged helper over XPC.
 ///
-/// The allowlist is the sole gate between an arbitrary caller-supplied path and
-/// a privileged file-system read. It must be exhaustive and minimal: every
-/// directory the helper legitimately needs is listed, and nothing else.
+/// This allowlist exists in the main app as a pre-validation layer (defense in depth).
+/// An identical copy lives in `NickHelper/HelperProtocol.swift` where the helper itself
+/// re-validates every path it receives — it never trusts the caller, even if it's Nick.
+///
+/// Keeping both copies in sync is intentional and documented here so future maintainers
+/// understand the duplication. If you change the allowlist, update both files.
 ///
 /// Validation steps (applied in order):
 /// 1. Reject null bytes — filesystem APIs stop at the first null, creating a mismatch.
@@ -53,11 +26,11 @@ import Foundation
 ///
 /// - Note: SECURITY: Adding a prefix to `allowedPrefixes` expands the helper's
 ///   read surface. Review every addition against the principle of least privilege.
-enum HelperPathAllowlist {
+public enum HelperPathAllowlist {
 
     /// Directories the helper is permitted to read plist files from.
     /// Each entry must end with `/` to prevent prefix-bypass (e.g. `/Library/LaunchDaemonsEvil`).
-    static let allowedPrefixes: [String] = [
+    public static let allowedPrefixes: [String] = [
         "/Library/LaunchDaemons/",
         "/Library/LaunchAgents/",
         "/Library/Preferences/",
@@ -66,13 +39,13 @@ enum HelperPathAllowlist {
     ]
 
     /// Maximum accepted byte length for a path string.
-    static let maxPathLength = 4_096
+    public static let maxPathLength = 4_096
 
     /// Returns `true` if `path` passes all validation checks.
     ///
     /// - Parameter path: The caller-supplied path string.
     /// - Returns: `true` only when the path resolves to an allowed directory.
-    static func validate(_ path: String) -> Bool {
+    public static func validate(_ path: String) -> Bool {
         // 1. Reject null bytes.
         // SECURITY: A null byte terminates C strings; a path "a\0../etc/passwd"
         // looks valid to String but truncates at the null in C file APIs.
@@ -110,8 +83,3 @@ enum HelperPathAllowlist {
         return allowedPrefixes.contains { resolved.hasPrefix($0) }
     }
 }
-
-// MARK: - Mach Service Name
-
-/// Mach service name used to register/look up the helper.
-let NickHelperMachServiceName = "com.ehsanazish.nick.helper"

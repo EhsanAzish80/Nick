@@ -55,6 +55,21 @@ final class SecurityEngine {
     /// The date of the most recent scan completion.
     var lastScanDate: Date?
 
+    /// The trusted process list used to suppress false positive signals.
+    ///
+    /// Changing this takes effect on the next `runFullScan()` call.
+    /// The user-trusted subset is automatically persisted to `UserDefaults`.
+    var trustedProcessList: TrustedProcessList = {
+        let saved = UserDefaults.standard.stringArray(forKey: "userTrustedProcesses") ?? []
+        return TrustedProcessList(userTrusted: Set(saved))
+    }() {
+        didSet {
+            // Persist user-configured entries whenever the list changes.
+            let names = Array(trustedProcessList.userTrusted)
+            UserDefaults.standard.set(names, forKey: "userTrustedProcesses")
+        }
+    }
+
     // MARK: - Overall Health Score (0–100)
 
     /// Computed security health score: 100 = all clear, 0 = critical issues.
@@ -106,6 +121,10 @@ final class SecurityEngine {
         isScanning = true
         lastError = nil
         logger.info("Full scan started")
+
+        // Propagate the current trusted process configuration to monitors.
+        procMon.trustedProcessList = trustedProcessList
+        await correlator.updateTrustedProcessList(trustedProcessList)
 
         await startAuditor()
         guard isScanning else { return }

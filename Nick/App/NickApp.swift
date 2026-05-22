@@ -36,6 +36,11 @@ struct NickApp: App {
             MenuBarLabel(engine: engine)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+                .environment(engine)
+        }
     }
 }
 

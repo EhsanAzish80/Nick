@@ -42,6 +42,7 @@ actor ThreatCorrelator {
 
     private var signalBuffer: [ThreatSignal] = []
     private var rules: [CorrelationRule]
+    private var trustedProcessList: TrustedProcessList = TrustedProcessList()
 
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -60,17 +61,45 @@ actor ThreatCorrelator {
         self.windowDuration = windowDuration
     }
 
+    // MARK: - Configuration
+
+    /// Hard cap on the number of signals retained in the correlation buffer.
+    ///
+    /// SECURITY: Without this limit a malware process emitting thousands of signals per
+    /// second could exhaust memory. When the cap is reached, incoming `.low` and `.info`
+    /// signals are discarded. Higher-severity signals always displace low-severity ones.
+    static let maxBufferSize = 10_000
+
     // MARK: - Public API
+
+    /// Updates the trusted process list used to filter signals during ingestion.
+    ///
+    /// - Parameter list: The current trusted process configuration from `SecurityEngine`.
+    func updateTrustedProcessList(_ list: TrustedProcessList) {
+        trustedProcessList = list
+    }
 
     /// Adds new signals to the correlation buffer.
     ///
+    /// Signals whose `processInfo.name` matches the trusted process list are silently
+    /// discarded before buffering — this is the last-resort filter after signal
+    /// generation in individual monitors.
+    ///
     /// Old signals (older than `windowDuration`) are pruned after ingestion.
+    /// If the buffer would exceed `maxBufferSize` after pruning, low-severity
+    /// signals are evicted to make room for higher-severity incoming signals.
     ///
     /// - Parameter signals: Signals from any monitor.
     func ingest(_ signals: [ThreatSignal]) {
-        signalBuffer.append(contentsOf: signals)
+        let filtered = signals.filter { signal in
+            guard let name = signal.processInfo?.name else { return true }
+            return !trustedProcessList.isTrusted(name)
+        }
+        signalBuffer.append(contentsOf: filtered)
         pruneOldSignals()
-        Self.logger.debug("Ingested \(signals.count) signals — buffer size: \(self.signalBuffer.count)")
+        enforceBufferCap()
+        let suppressed = signals.count - filtered.count
+        Self.logger.debug("Ingested \(filtered.count) signals (\(suppressed) suppressed by trusted list) — buffer: \(self.signalBuffer.count)")
     }
 
     /// Evaluates all rules against the current signal window and returns alerts.
@@ -112,5 +141,22 @@ actor ThreatCorrelator {
     private func pruneOldSignals() {
         let cutoff = Date(timeIntervalSinceNow: -windowDuration)
         signalBuffer.removeAll { $0.timestamp < cutoff }
+    }
+
+    /// Enforces `maxBufferSize` by evicting the lowest-severity, oldest signals.
+    ///
+    /// SECURITY: Prevents unbounded memory growth under a sustained signal flood.
+    private func enforceBufferCap() {
+        guard signalBuffer.count > Self.maxBufferSize else { return }
+
+        // Sort ascending by severity then timestamp so the weakest/oldest are first.
+        signalBuffer.sort {
+            if $0.severity == $1.severity { return $0.timestamp < $1.timestamp }
+            return $0.severity.rawValue < $1.severity.rawValue
+        }
+
+        let excess = signalBuffer.count - Self.maxBufferSize
+        signalBuffer.removeFirst(excess)
+        Self.logger.notice("Signal buffer cap enforced — evicted \(excess) low-severity signals")
     }
 }

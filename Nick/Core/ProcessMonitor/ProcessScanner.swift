@@ -72,6 +72,29 @@ struct ProcessScanner {
         return result
     }
 
+    /// Returns a process snapshot immediately with all signing statuses set to `.pending`.
+    ///
+    /// This is the first half of the two-phase scan strategy. Callers display results
+    /// right away, then call `SignatureValidator.shared.backfill(processes:onUpdate:)`
+    /// to resolve signing statuses asynchronously in the background.
+    ///
+    /// - Returns: Process snapshot where every entry has `signingStatus == .pending`.
+    /// - Throws: `ProcessScannerError` if the `sysctl` call fails.
+    func scanFast() throws -> [NickProcessInfo] {
+        let kinfos = try fetchKinfoList()
+        var result: [NickProcessInfo] = []
+        result.reserveCapacity(kinfos.count)
+
+        for kinfo in kinfos {
+            if let info = buildProcessInfo(from: kinfo, skipSigning: true) {
+                result.append(info)
+            }
+        }
+
+        Self.logger.debug("Fast process scan: \(result.count) processes (signing deferred)")
+        return result
+    }
+
     // MARK: - Private Helpers
 
     /// Calls `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_ALL)` and returns the raw kinfo_proc array.
@@ -96,7 +119,7 @@ struct ProcessScanner {
         return Array(buffer.prefix(actualCount))
     }
 
-    private func buildProcessInfo(from kinfo: kinfo_proc) -> NickProcessInfo? {
+    private func buildProcessInfo(from kinfo: kinfo_proc, skipSigning: Bool = false) -> NickProcessInfo? {
         let pid = kinfo.kp_proc.p_pid
         guard pid > 0 else { return nil }
 
@@ -121,9 +144,12 @@ struct ProcessScanner {
             return Date(timeIntervalSince1970: TimeInterval(tv.tv_sec))
         }()
 
-        let signingStatus: SigningStatus = path.isEmpty
-            ? .unknown
-            : SignatureValidator.shared.evaluate(binaryPath: path)
+        let signingStatus: SigningStatus
+        if skipSigning {
+            signingStatus = .pending
+        } else {
+            signingStatus = path.isEmpty ? .unknown : SignatureValidator.shared.evaluate(binaryPath: path)
+        }
 
         return NickProcessInfo(
             pid: pid,
@@ -160,13 +186,23 @@ struct ProcessScanner {
     /// - Unsigned binary in `/tmp/`, `/var/folders/`, `/private/tmp/` → `.high`
     /// - Shell process with no terminal parent (LOLBin) → `.medium`
     ///
-    /// - Parameter processes: Output of `scan()`.
+    /// Processes in `trustedProcessList` are silently skipped — no signals are emitted
+    /// for them. This eliminates false positives from known-good software such as
+    /// terminal emulators, Homebrew tools, and IDE helpers.
+    ///
+    /// - Parameters:
+    ///   - processes: Output of `scan()`.
+    ///   - trustedProcessList: Allowlist of process names to suppress.
     /// - Returns: Zero or more signals derived from this snapshot.
-    func signals(from processes: [NickProcessInfo]) -> [ThreatSignal] {
+    func signals(from processes: [NickProcessInfo],
+                 trustedProcessList: TrustedProcessList = TrustedProcessList()) -> [ThreatSignal] {
         var signals: [ThreatSignal] = []
         let pidToName = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0.name) })
 
         for proc in processes {
+            // Skip known-good processes — suppresses false positives on developer/creative Macs.
+            if trustedProcessList.isTrusted(proc.name) { continue }
+
             // Unsigned binary in temp/scratch directories → high
             if proc.signingStatus == .unsigned || proc.signingStatus == .invalid,
                isTemporaryPath(proc.path) {
@@ -235,5 +271,38 @@ struct ProcessScanner {
             || path.hasPrefix("/System/")
             || path.hasPrefix("/Applications/")
             || path.hasPrefix("/Library/Apple/")
+    }
+
+    /// Produces a signing-status signal for a process whose status was just resolved
+    /// by the background backfill pass.
+    ///
+    /// Returns `nil` if the status is not suspicious or the process is in a system path.
+    func signalFromResolved(_ proc: NickProcessInfo) -> ThreatSignal? {
+        guard proc.signingStatus.isSuspicious else { return nil }
+        if proc.path.isEmpty { return nil }
+
+        if isTemporaryPath(proc.path) {
+            return ThreatSignal(
+                source: .process,
+                severity: .high,
+                title: "Unsigned binary in temporary directory",
+                description: "Process '\(proc.name)' (PID \(proc.pid)) is running from \(proc.path), which is a writable temporary location.",
+                processInfo: proc,
+                metadata: ["reason": "unsigned_temp_path", "phase": "backfill"]
+            )
+        }
+
+        if !isSystemPath(proc.path) {
+            return ThreatSignal(
+                source: .process,
+                severity: .medium,
+                title: "Unsigned binary",
+                description: "Process '\(proc.name)' (PID \(proc.pid)) is unsigned and running from \(proc.path).",
+                processInfo: proc,
+                metadata: ["reason": "unsigned", "phase": "backfill"]
+            )
+        }
+
+        return nil
     }
 }

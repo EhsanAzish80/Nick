@@ -31,6 +31,10 @@ enum SigningStatus: Sendable, Equatable {
     /// Status cannot be determined — file not found or permission denied.
     case unknown
 
+    /// Validation has not yet run — assigned on the fast first scan; replaced
+    /// asynchronously by `SignatureValidator.backfill(processes:onUpdate:)`.
+    case pending
+
     // MARK: - Display Helpers
 
     /// Human-readable label for UI presentation.
@@ -41,6 +45,7 @@ enum SigningStatus: Sendable, Equatable {
         case .unsigned:       return "Unsigned"
         case .invalid:        return "Invalid Signature"
         case .unknown:        return "Unknown"
+        case .pending:        return "Checking…"
         }
     }
 
@@ -52,6 +57,7 @@ enum SigningStatus: Sendable, Equatable {
         case .unsigned: return true
         case .invalid:  return true
         case .unknown:  return false
+        case .pending:  return false   // Not yet evaluated — withhold judgment
         }
     }
 }
@@ -78,6 +84,8 @@ extension SigningStatus: Codable {
             try container.encode("invalid", forKey: .type)
         case .unknown:
             try container.encode("unknown", forKey: .type)
+        case .pending:
+            try container.encode("pending", forKey: .type)
         }
     }
 
@@ -94,6 +102,8 @@ extension SigningStatus: Codable {
             self = .unsigned
         case "invalid":
             self = .invalid
+        case "pending":
+            self = .pending
         default:
             self = .unknown
         }
