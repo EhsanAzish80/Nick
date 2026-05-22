@@ -115,7 +115,16 @@ struct DashboardView: View {
             if engine.isScanning {
                 ProgressView().controlSize(.small)
             }
+            // Pipeline status indicator
+            Label(engine.activePipelineStatus.rawValue, systemImage: engine.activePipelineStatus.systemImage)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             Spacer()
+            if let scanDate = engine.lastScanDate {
+                Text("Last scan: \(scanDate, style: .relative) ago")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             Button("Quit Nick") { NSApp.terminate(nil) }
                 .buttonStyle(.plain)
                 .font(.caption)

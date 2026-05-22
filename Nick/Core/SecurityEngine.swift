@@ -46,6 +46,15 @@ final class SecurityEngine {
     /// The last error thrown during a scan, if any.
     private(set) var lastError: Error?
 
+    /// The most recent threat score from the real-time ML pipeline (0.0–1.0).
+    var currentThreatScore: Double = 0.0
+
+    /// Whether the real-time pipeline is running, stopped, or degraded.
+    var activePipelineStatus: PipelineStatus = .stopped
+
+    /// The date of the most recent scan completion.
+    var lastScanDate: Date?
+
     // MARK: - Overall Health Score (0–100)
 
     /// Computed security health score: 100 = all clear, 0 = critical issues.
@@ -140,5 +149,12 @@ final class SecurityEngine {
         processes = []
         connections = []
         await correlator.flush()
+    }
+
+    /// Merges new alerts from the real-time pipeline, deduplicating by ID.
+    func mergeAlerts(_ newAlerts: [ThreatAlert]) {
+        let newIDs = Set(newAlerts.map { $0.id })
+        alerts = alerts.filter { !newIDs.contains($0.id) } + newAlerts
+        alerts.sort { $0.score > $1.score }
     }
 }
