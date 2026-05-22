@@ -236,7 +236,7 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 | Persistence detection | ✅ | ✅ (BlockBlock) | ❌ | ❌ | ✅ |
 | Network monitoring | ✅ | ✅ (LuLu) | ✅ | ✅ (NetBarrier) | ✅ |
 | Webcam/mic monitoring | 🔜 | ✅ (OverSight) | ❌ | ❌ | ✅ |
-| YARA scanning | ⚡ | ❌ | ❌ | ✅ | ✅ |
+| YARA scanning | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Behavioral AI scoring | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Correlated threat detection | ✅ | ❌ | ❌ | ❌ | ❌ |
 | System hardening audit | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -244,8 +244,6 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 | No cloud dependency | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Single app | ✅ | ❌ (6 separate apps) | ✅ | ✅ | ✅ |
 | Free | ✅ | ✅ | ❌ ($59) | ❌ ($40-70/yr) | ❌ ($40-80/yr) |
-
-> ⚡ Heuristic scanning active (entropy, Mach-O, URL/IP extraction); libyara integration pending
 
 ---
 
