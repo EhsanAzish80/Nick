@@ -26,6 +26,7 @@ struct MainWindowView: View {
 
     @Environment(SecurityEngine.self) private var engine
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @State private var selectedSection: SidebarSection? = .overview
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
@@ -101,6 +102,12 @@ struct MainWindowView: View {
         }
         .onAppear {
             NSApp.setActivationPolicy(.regular)
+            // Forward the SwiftUI openSettings action to AppDelegate so the status-bar
+            // context-menu "Settings..." item can open the Settings scene without using
+            // the private showSettingsWindow: selector (which triggers a SwiftUI warning).
+            (NSApp.delegate as? AppDelegate)?.openSettingsAction = { [openSettings] in
+                openSettings()
+            }
         }
         .onDisappear {
             // Return to menu-bar-only mode when the main window closes.

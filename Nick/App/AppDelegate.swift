@@ -27,6 +27,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// even when the main window is hidden.
     private var forceQuit = false
 
+    /// Injected by `MainWindowView.onAppear`. Calls SwiftUI's `openSettings` environment
+    /// action so the status-bar "Settings..." menu item opens the Settings scene through
+    /// the official path instead of the private `showSettingsWindow:` selector.
+    var openSettingsAction: (() -> Void)?
+
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -147,30 +152,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openMainWindow() {
-        guard let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) else { return }
-
-        // Re-attach our delegate — SwiftUI may have reset it if the scene was rebuilt.
-        window.delegate = mainWindowDelegate
-
-        // 1. Flip policy first — this makes the app eligible to become frontmost.
+        // Flip policy first — makes the app eligible to become frontmost and appear in Dock.
         NSApp.setActivationPolicy(.regular)
 
-        // 2. Give the policy change ~0.1 s to propagate through the window server
-        //    before issuing the activation calls. A bare `async` (next run-loop tick)
-        //    is sometimes not enough; 100 ms is imperceptible to the user but reliable.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak window] in
-            guard let window else { return }
-            window.makeKeyAndOrderFront(nil) // raise + key focus
-            NSApp.activate()                 // steal front-most status from current app
-            window.orderFrontRegardless()    // belt-and-suspenders: forces to front even
-                                             // if the window server still thinks another
-                                             // app owns the front position
+        // Give the policy change ~0.1 s to propagate through the window server before
+        // issuing activation calls. Re-query the window inside the block so we always
+        // act on the live NSWindow reference (avoids silent no-ops from stale weak refs).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) {
+                window.delegate = self.mainWindowDelegate
+                window.makeKeyAndOrderFront(nil) // raise + acquire key focus
+                window.orderFrontRegardless()    // force to front even if another app
+                                                 // still owns the front position
+            }
+            NSApp.activate()                     // steal frontmost status from current app
         }
     }
 
-    /// Opens the SwiftUI Settings scene — mirrors what `SettingsLink` does internally.
+    /// Opens the SwiftUI Settings scene via the `openSettings` environment action injected
+    /// by `MainWindowView.onAppear`. Falls back to the sendAction path only if the action
+    /// has not been set yet (e.g., Settings tapped before the main window first appeared).
     @objc private func openSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        if let action = openSettingsAction {
+            action()
+        } else {
+            // Fallback: fires only on very first launch before MainWindowView has appeared.
+            // SwiftUI will log a deprecation warning but Settings will still open.
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
     }
