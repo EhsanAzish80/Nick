@@ -94,13 +94,16 @@ final class SecurityEngine {
 
     /// Computed security health score: 100 = all clear, 0 = critical issues.
     var healthScore: Int {
-        guard !auditResults.isEmpty else { return 100 }
+        guard !auditResults.isEmpty else { return -1 }
         let failCount = auditResults.filter { $0.status == .fail }.count
         let warnCount = auditResults.filter { $0.status == .warning }.count
         let alertBonus = min(alerts.filter { $0.severity >= .high }.count * 10, 40)
         let raw = 100 - (failCount * 15) - (warnCount * 5) - alertBonus
         return max(0, raw)
     }
+
+    /// Returns `true` once the first full scan has completed and audit results are populated.
+    var hasCompletedFirstScan: Bool { !auditResults.isEmpty }
 
     // MARK: - Private
 
@@ -139,6 +142,15 @@ final class SecurityEngine {
     }
 
     // MARK: - Public API
+
+    /// Clears all stored threat alerts and resets threat counters.
+    ///
+    /// Monitoring continues uninterrupted. This only affects historical display data.
+    func clearAlertHistory() {
+        alerts = []
+        totalThreatsDetected = 0
+        UserDefaults.standard.set(0, forKey: "nickTotalThreatsDetected")
+    }
 
     /// Launches a full security scan as an independent, stored task.
     ///

@@ -27,6 +27,7 @@ struct MainWindowView: View {
     @Environment(SecurityEngine.self) private var engine
     @Environment(\.openWindow) private var openWindow
     @State private var selectedSection: SidebarSection? = .overview
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
     // Alert count for sidebar badge (info-severity are trusted-app activity, not actionable).
     private var activeAlertCount: Int {
@@ -34,6 +35,15 @@ struct MainWindowView: View {
     }
 
     var body: some View {
+        if !hasCompletedOnboarding {
+            WelcomeView(hasCompletedOnboarding: $hasCompletedOnboarding)
+        } else {
+            mainContent
+        }
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
         NavigationSplitView {
             // Change 2: VStack so we can pin the Settings button below the nav list.
             VStack(spacing: 0) {
@@ -99,8 +109,6 @@ struct MainWindowView: View {
     }
 }
 
-// MARK: - SidebarSection
-
 enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case overview    = "Overview"
     case audit       = "System Audit"
@@ -153,9 +161,22 @@ struct OverviewDetailView: View {
         ScrollView {
             VStack(spacing: NickSpacing.xl) {
 
-                // Circular security gauge — centred.
-                SecurityGauge(score: engine.healthScore)
+                // Circular security gauge — shown only after the first scan completes.
+                if engine.hasCompletedFirstScan {
+                    SecurityGauge(score: engine.healthScore)
+                        .padding(.vertical, NickSpacing.lg)
+                } else {
+                    VStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("SCANNING")
+                            .font(.system(size: 9, weight: .bold))
+                            .tracking(2)
+                            .foregroundStyle(Color.textTertiary)
+                    }
+                    .frame(height: 200)
                     .padding(.vertical, NickSpacing.lg)
+                }
 
                 // 2×2 monitor cards with sparklines.
                 let auditIssues       = engine.auditResults.filter { $0.status != .pass }.count
@@ -1236,7 +1257,7 @@ private struct DeepScanResultsView: View {
             let desc  = item.match.metadata["description"] ?? ""
             let verd  = verdicts[item.match.filePath]?.rawValue ?? ThreatVerdict.suspicious.rawValue
             return ExportResult(rule_name: item.match.ruleName, severity: sev, verdict: verd,
-                                file_path: item.match.filePath, file_size: size ?? 0, description: desc)
+                                file_path: item.match.filePath, file_size: size, description: desc)
         }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let report  = Report(

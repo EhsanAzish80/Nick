@@ -63,3 +63,31 @@ extension ButtonStyle where Self == NickSecondaryButtonStyle {
     /// Nick secondary button: tertiary fill, secondary text.
     static var nickSecondary: NickSecondaryButtonStyle { NickSecondaryButtonStyle() }
 }
+
+// MARK: - NickDestructiveButtonStyle
+
+/// Destructive button style for irreversible actions (e.g., "Remove Helper", "Clear History").
+///
+/// Renders with a `statusRed` fill and `textInverse` label.
+struct NickDestructiveButtonStyle: ButtonStyle {
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.nickButton)
+            .foregroundStyle(Color.textInverse)
+            .padding(.horizontal, NickSpacing.xl)
+            .padding(.vertical, NickSpacing.md)
+            .background(
+                RoundedRectangle(cornerRadius: NickLayout.badgeCornerRadius)
+                    .fill(Color.statusRed.opacity(configuration.isPressed ? 0.7 : (isEnabled ? 1.0 : 0.4)))
+            )
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+extension ButtonStyle where Self == NickDestructiveButtonStyle {
+    /// Nick destructive button: red fill, inverse text.
+    static var nickDestructive: NickDestructiveButtonStyle { NickDestructiveButtonStyle() }
+}

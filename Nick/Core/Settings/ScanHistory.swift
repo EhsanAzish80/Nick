@@ -66,6 +66,12 @@ final class ScanHistory {
         snapshots.suffix(count).map { $0[keyPath: keyPath] }
     }
 
+    /// Clears all stored snapshots and removes the persisted UserDefaults data.
+    func clear() {
+        snapshots = []
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
     // MARK: - Persistence
 
     private func save() {

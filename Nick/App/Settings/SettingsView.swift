@@ -54,7 +54,7 @@ struct SettingsView: View {
             }
 
             Section("Scanning") {
-                LabeledContent("Scan interval") {
+                LabeledContent("Background sweep interval") {
                     Picker("", selection: $deepScanIntervalSeconds) {
                         Text("30 seconds").tag(30)
                         Text("1 minute").tag(60)
@@ -65,7 +65,7 @@ struct SettingsView: View {
                     .labelsHidden()
                     .frame(width: 150)
                 }
-                Text("How often Nick performs a full system sweep.")
+                Text("How often Nick performs a background sweep. Shorter intervals increase detection sensitivity but consume more CPU.")
                     .font(.nickBodySmall)
                     .foregroundStyle(.secondary)
             }
@@ -76,6 +76,50 @@ struct SettingsView: View {
                 Text("Start Nick automatically when you log in.")
                     .font(.nickBodySmall)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Maintenance") {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: NickSpacing.sm) {
+                        Text("Remove Privileged Helper")
+                            .font(.nickBodyMedium)
+                            .foregroundStyle(Color.textPrimary)
+                        Text("Unregisters and removes the Nick privileged helper. Nick's monitoring capabilities will be reduced until the helper is reinstalled at next launch.")
+                            .font(.nickBodySmall)
+                            .foregroundStyle(.secondary)
+                        Button("Remove Helper…") { removeHelper() }
+                            .buttonStyle(NickDestructiveButtonStyle())
+                    }
+                    .padding(NickSpacing.sm)
+                }
+            }
+
+            Section("Data") {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: NickSpacing.sm) {
+                        Button("Clear Alert History") {
+                            engine.clearAlertHistory()
+                        }
+                        .buttonStyle(NickDestructiveButtonStyle())
+                        Text("Removes all stored threat alerts and resets the threats-detected counter. Monitoring continues uninterrupted.")
+                            .font(.nickBodySmall)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(NickSpacing.sm)
+                }
+
+                GroupBox {
+                    VStack(alignment: .leading, spacing: NickSpacing.sm) {
+                        Button("Reset Scan History") {
+                            engine.scanHistory.clear()
+                        }
+                        .buttonStyle(NickDestructiveButtonStyle())
+                        Text("Clears the sparkline chart data in the Overview. Does not affect threat alerts.")
+                            .font(.nickBodySmall)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(NickSpacing.sm)
+                }
             }
 
             Section("Monitored Directories") {
@@ -198,6 +242,12 @@ struct SettingsView: View {
     }
 
     // MARK: - Actions
+
+    private func removeHelper() {
+        Task {
+            try? await SMAppService.daemon(plistName: "com.ehsanazish.nick.helper.plist").unregister()
+        }
+    }
 
     private func addProcess() {
         let trimmed = newProcessName.trimmingCharacters(in: .whitespaces)

@@ -39,7 +39,13 @@ final class MonitorCoordinator {
     /// A full scan includes `lsof`, process table walk, and persistence baseline diff —
     /// measured at ~150–300 ms on Apple Silicon. Running every 60 s instead of every
     /// 5 s reduces steady-state CPU load by ~12× vs the naive approach.
-    static let deepScanInterval: TimeInterval = 60.0
+    ///
+    /// Reads `deepScanIntervalSeconds` from `UserDefaults` so the user's Settings
+    /// preference is respected without restarting the pipeline.
+    var deepScanInterval: TimeInterval {
+        let stored = UserDefaults.standard.integer(forKey: "deepScanIntervalSeconds")
+        return stored > 0 ? TimeInterval(stored) : 60.0
+    }
 
     // MARK: - Private
 
@@ -121,12 +127,12 @@ final class MonitorCoordinator {
         // Two-tier cadence: expensive OS sweeps only every deepScanInterval.
         // Correlation runs every tick against the already-buffered signal window.
         let now = Date()
-        if now.timeIntervalSince(lastDeepScan) >= Self.deepScanInterval {
+        if now.timeIntervalSince(lastDeepScan) >= deepScanInterval {
             Self.log.debug("Pipeline deep scan (last: \(self.lastDeepScan.formatted())")
             engine.runFullScan()
             lastDeepScan = now
         } else {
-            Self.log.debug("Pipeline tick (correlation only — next deep scan in \(Int(Self.deepScanInterval - now.timeIntervalSince(self.lastDeepScan)))s)")
+            Self.log.debug("Pipeline tick (correlation only — next deep scan in \(Int(deepScanInterval - now.timeIntervalSince(self.lastDeepScan)))s)")
         }
 
         // Correlate current window

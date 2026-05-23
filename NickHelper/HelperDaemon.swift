@@ -39,7 +39,7 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate {
     /// SECURITY: This constant is hardcoded and is not read from any external source.
     /// Allowing it to be configured at runtime would let an attacker substitute their
     /// own team ID and gain full helper access.
-    static let authorisedTeamID = "EHSANA80XX" // TODO(ehsan): Replace with actual Team ID before release.
+    static let authorisedTeamID = "UXGW5V3BY6"
 
     /// Maximum XPC connections accepted from a single PID within one second.
     static let maxConnectionsPerSecond = 10

@@ -324,6 +324,22 @@ Nick is a security tool — we hold ourselves to a higher standard. If you disco
 
 ---
 
+## Uninstalling
+
+1. Quit Nick from the menu bar icon → **Quit Nick**.
+2. Open **Nick → Settings → Maintenance** and click **Remove Helper…** to unregister the privileged helper.
+3. Drag `Nick.app` from `/Applications` to the Trash.
+4. Remove preferences and data:
+   ```bash
+   defaults delete com.ehsanazish.nick
+   rm -rf ~/Library/Application\ Support/Nick
+   rm -f ~/Library/LaunchAgents/com.ehsanazish.nick.plist
+   sudo rm -f /Library/LaunchDaemons/com.ehsanazish.nick.helper.plist
+   sudo rm -f /Library/PrivilegedHelperTools/com.ehsanazish.nick.helper
+   ```
+
+---
+
 ## Philosophy
 
 1. **No cloud, ever.** All scanning, analysis, and AI inference happens on your Mac. Your security data never leaves your machine.
