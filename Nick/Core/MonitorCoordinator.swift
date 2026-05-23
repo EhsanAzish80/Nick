@@ -58,6 +58,9 @@ final class MonitorCoordinator {
     /// Tracks when the last full monitor sweep ran. Initialised to `.distantPast`
     /// so the first tick always runs a deep scan.
     private var lastDeepScan: Date = .distantPast
+    /// PID set from the most recent fast-check snapshot.
+    /// Empty until the first fast-check tick, which seeds the baseline.
+    private var lastKnownPIDs: Set<Int32> = []
 
     private static let log = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -132,7 +135,8 @@ final class MonitorCoordinator {
             engine.runFullScan()
             lastDeepScan = now
         } else {
-            Self.log.debug("Pipeline tick (correlation only — next deep scan in \(Int(self.deepScanInterval - now.timeIntervalSince(self.lastDeepScan)))s)")
+            Self.log.debug("Pipeline fast tick (next deep scan in \(Int(self.deepScanInterval - now.timeIntervalSince(self.lastDeepScan)))s)")
+            await fastProcessCheck()
         }
 
         // Correlate current window
@@ -160,6 +164,50 @@ final class MonitorCoordinator {
             engine.currentThreatScore = newAlerts.map { $0.score }.max() ?? engine.currentThreatScore
             engine.lastScanDate = Date()
         }
+    }
+
+    // MARK: - Fast PID Check
+
+    /// Performs a lightweight check for newly spawned suspicious processes.
+    ///
+    /// Called every 5-second tick when a deep scan is not due. Uses
+    /// `ProcessScanner.scanFast()` (no code-signing validation) to enumerate
+    /// current PIDs and compares them against `lastKnownPIDs`. Any new PID is
+    /// evaluated by `signalsForNewProcesses`, which catches:
+    /// - Processes spawned in `/tmp/` or other temp paths (path check, no signing needed)
+    /// - Shells spawned from non-terminal or download-tool parents (LOLBin / pipe attack)
+    ///
+    /// Detected signals are ingested into the correlator; the final
+    /// `correlator.correlate()` call at the end of `tick()` converts them to alerts.
+    private func fastProcessCheck() async {
+        let processes: [NickProcessInfo]
+        do {
+            processes = try await Task.detached(priority: .utility) {
+                try ProcessScanner().scanFast()
+            }.value
+        } catch {
+            Self.log.debug("Fast PID check scan failed: \(error)")
+            return
+        }
+
+        let currentPIDs = Set(processes.map { $0.pid })
+        defer { lastKnownPIDs = currentPIDs }
+
+        // First call after startup — seed the baseline without emitting signals.
+        guard !lastKnownPIDs.isEmpty else { return }
+
+        let newPIDs = currentPIDs.subtracting(lastKnownPIDs)
+        guard !newPIDs.isEmpty else { return }
+
+        let newSignals = ProcessScanner().signalsForNewProcesses(
+            all: processes,
+            newPIDs: newPIDs,
+            trustedProcessList: engine.trustedProcessList
+        )
+        guard !newSignals.isEmpty else { return }
+
+        Self.log.info("Fast PID check: \(newSignals.count) signal(s) from \(newPIDs.count) new PID(s)")
+        await correlator.ingest(newSignals)
     }
 }
 
