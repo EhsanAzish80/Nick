@@ -212,6 +212,11 @@ final class YARAEngine: @unchecked Sendable {
                 compiled += 1
             } else {
                 Self.log.error("YARA rule file had \(errCount) error(s): \(fullPath, privacy: .private)")
+                // YARA asserts compiler->errors == 0 at the top of every
+                // subsequent yr_compiler_add_file call. If we continue here,
+                // the next iteration will hit that assertion and abort the
+                // process. Stop early; rules compiled so far remain usable.
+                break
             }
         }
 

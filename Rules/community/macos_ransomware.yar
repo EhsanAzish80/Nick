@@ -44,7 +44,7 @@ rule macos_mass_file_rename
         $enc1 = "CCCrypt" ascii
         $enc2 = "SecKeyEncrypt" ascii
     condition:
-        ($ren2 or $ren3) and ($enc1 or $enc2)
+        ($ren1 or $ren2 or $ren3) and ($enc1 or $enc2)
 }
 
 rule macos_shadow_copy_delete

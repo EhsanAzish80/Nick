@@ -25,6 +25,7 @@ struct DashboardView: View {
     @State private var isFileScanRunning = false
     @State private var fileScanSummary: FileScanSummary?
     @State private var fileScanDuration: TimeInterval = 0
+    @State private var showDeepScanSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -70,6 +71,9 @@ struct DashboardView: View {
                     duration: fileScanDuration
                 )
             }
+        }
+        .sheet(isPresented: $showDeepScanSheet) {
+            DeepScanView()
         }
     }
 
@@ -161,6 +165,15 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isFileScanRunning)
+                Button(action: { showDeepScanSheet = true }) {
+                    HStack(spacing: NickSpacing.sm) {
+                        Image(systemName: "magnifyingglass.circle")
+                        Text("Deep Scan")
+                    }
+                    .font(.nickButton)
+                    .foregroundStyle(Color.textSecondary)
+                }
+                .buttonStyle(.plain)
             }
 
             Spacer()

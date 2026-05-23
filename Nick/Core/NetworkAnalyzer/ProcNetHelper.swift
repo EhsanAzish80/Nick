@@ -89,8 +89,17 @@ enum ProcNetHelper {
         // Resolve process name — proc_name returns at most MAXCOMLEN (16) bytes.
         var nameBuf = [CChar](repeating: 0, count: Int(MAXCOMLEN) + 1)
         proc_name(pid, &nameBuf, UInt32(nameBuf.count))
-        let processName = nameBuf.withUnsafeBufferPointer { bp in
+        var processName = nameBuf.withUnsafeBufferPointer { bp in
             String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
+        // proc_name is capped at MAXCOMLEN (16 chars) and fails silently for some
+        // processes. Fall back to proc_pidpath to derive the name from the
+        // executable path, which works for any process the caller can inspect.
+        if processName.isEmpty {
+            var pathBuf = [CChar](repeating: 0, count: 4096)
+            if proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count)) > 0 {
+                processName = (String(cString: pathBuf) as NSString).lastPathComponent
+            }
         }
 
         // Query the total size needed for the fd list.

@@ -54,10 +54,20 @@ struct ConnectionScanner {
     /// - Throws: `ConnectionScannerError.unavailable` if both paths fail.
     func scan() async throws -> [NetworkConnectionInfo] {
         // Primary path: proc_pidfdinfo (no subprocess, ~100ms faster)
-        let connections = ProcNetHelper.listConnections()
-        if !connections.isEmpty {
-            Self.logger.debug("Network scan (proc_pidfdinfo): \(connections.count) connections")
-            return connections
+        let procResults = ProcNetHelper.listConnections()
+
+        // Validate: if proc_pidfdinfo returned entries but every local address is
+        // zeroed (0.0.0.0 / ::), the kernel denied access and the data is garbage.
+        // Fall through to lsof so the user sees real connections instead of blanks.
+        let validProc = procResults.filter {
+            $0.localAddress != "0.0.0.0" && $0.localAddress != "::"
+        }
+        if !procResults.isEmpty && !validProc.isEmpty {
+            Self.logger.debug("Network scan (proc_pidfdinfo): \(procResults.count) connections")
+            return procResults
+        }
+        if !procResults.isEmpty {
+            Self.logger.warning("Network scan (proc_pidfdinfo): all addresses zeroed — falling back to lsof")
         }
 
         // Fallback: lsof subprocess (available outside sandbox environments)
