@@ -88,6 +88,14 @@ On-demand and real-time file scanning:
 - Drag-and-drop scanning of any file or folder
 - Heuristic analysis: entropy scoring, Mach-O header inspection, embedded URL/IP extraction
 
+### 📷 Camera & Microphone Sentinel
+Detects unauthorized access to your camera and microphone in real time:
+- Monitors all CoreMediaIO video devices for unexpected activation
+- Monitors CoreAudio input devices for unsanctioned recording
+- Attributes device activation to the most-recently-launched non-system process
+- Elevates severity to high when an unsigned binary is found accessing media hardware
+- Baseline-delta approach: only alerts on new activations, not ongoing expected usage
+
 ### 🧠 AI Behavioral Scoring (The Differentiator)
 On-device CoreML pipeline for behavioral threat correlation. v0.9 ships with rule-based scoring; the ML model activates once trained on real-world signal data.
 - Individual signals are noisy. Correlated signals are actionable.
@@ -128,35 +136,42 @@ On-device CoreML pipeline for behavioral threat correlation. v0.9 ships with rul
 ```
 Nick/
 ├── Core/                        # Detection engine (pure Swift, no UI dependency)
-│   ├── ProcessMonitor/          # Process auditing and anomaly detection
-│   ├── PersistenceWatcher/      # LaunchAgent/Daemon/Login Item surveillance
-│   ├── NetworkAnalyzer/         # Connection monitoring and tunnel detection
-│   ├── FileSystemWatcher/       # FSEvents-based directory monitoring
-│   ├── YARAEngine/              # C interop wrapper for libyara
-│   ├── SystemAudit/             # SIP, FileVault, Gatekeeper, firewall checks
+│   ├── AVCapture/               # Camera and microphone activity monitoring
 │   ├── BehavioralScorer/        # CoreML inference engine
-│   ├── ThreatCorrelator/        # Multi-signal correlation and scoring
+│   ├── DeepScan/                # Full-system YARA deep scan driver
+│   ├── Helper/                  # Privileged helper client interface
+│   ├── Models/                  # Core-layer model types
+│   ├── NetworkAnalyzer/         # Connection monitoring and tunnel detection
 │   ├── Notifications/           # NotificationManager
+│   ├── PersistenceWatcher/      # LaunchAgent/Daemon/Login Item surveillance
+│   ├── ProcessMonitor/          # Process auditing and anomaly detection
+│   ├── Protocols/               # Shared monitor protocol definitions
+│   ├── Services/                # macOS Services menu provider
 │   ├── Settings/                # AppSettings
+│   ├── SystemAudit/             # SIP, FileVault, Gatekeeper, firewall checks
+│   ├── ThreatCorrelator/        # Multi-signal correlation and scoring
+│   ├── ThreatLog/               # Persistent threat log
+│   ├── YARAEngine/              # C interop wrapper for libyara + FSEvents watcher
+│   ├── SecurityEngine.swift     # Top-level observable state model
 │   └── MonitorCoordinator.swift # Lifecycle orchestration for all monitors
 │
 ├── App/                         # SwiftUI macOS application
-│   ├── Dashboard/               # Main security overview
-│   ├── Alerts/                  # Threat notifications and history
-│   └── Scanner/                 # On-demand YARA scanning UI
+│   ├── Dashboard/               # Overview, scanner, deep scan, network, and alert views
+│   ├── Alerts/                  # Threat log export and history
+│   ├── Settings/                # Settings view
+│   ├── SystemAudit/             # System audit view
+│   ├── Theme/                   # Design tokens (colors, typography, spacing, layout)
+│   ├── MainWindowView.swift     # NavigationSplitView shell and sidebar
+│   ├── NickApp.swift            # @main entry point
+│   └── AppDelegate.swift        # NSStatusItem and engine bootstrap
 │
 ├── NickHelper/                  # Privileged helper tool (XPC + SMAppService)
 │
 ├── Models/                      # Shared Swift model types
+│   └── Training/                # CoreML training pipeline (Python)
 │
 ├── Rules/                       # YARA rule sets
-│   ├── stealers/                # Credential and data theft
-│   ├── backdoors/               # Remote access and persistence
-│   ├── adware/                  # Potentially unwanted programs
-│   ├── ransomware/              # Encryption-based threats
 │   └── community/               # Community-contributed rules
-│
-├── Scripts/                     # CoreML training pipeline (Python)
 │
 └── Tests/
     ├── NickTests/               # Unit tests
@@ -186,6 +201,7 @@ Nick requires the following permissions to function (each is requested individua
 |---|---|
 | **Full Disk Access** | Monitor LaunchAgents, browser extensions, and system directories |
 | **Network Monitoring** | Detect suspicious connections and tunnels |
+| **Camera & Microphone** | Detect unauthorized access to media hardware |
 | **Accessibility** | Detect UI-level process manipulation (optional) |
 | **Notifications** | Alert you when threats are detected |
 
@@ -235,7 +251,7 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 | Process monitoring | ✅ | ✅ (BlockBlock + KnockKnock) | ❌ | ❌ | ✅ |
 | Persistence detection | ✅ | ✅ (BlockBlock) | ❌ | ❌ | ✅ |
 | Network monitoring | ✅ | ✅ (LuLu) | ✅ | ✅ (NetBarrier) | ✅ |
-| Webcam/mic monitoring | 🔜 | ✅ (OverSight) | ❌ | ❌ | ✅ |
+| Webcam/mic monitoring | ✅ | ✅ (OverSight) | ❌ | ❌ | ✅ |
 | YARA scanning | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Behavioral AI scoring | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Correlated threat detection | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -271,6 +287,7 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 - [x] Foundation Models alert explanations (macOS 26+)
 - [x] Real-time behavioral monitoring
 - [x] Threat log with forensic detail
+- [x] Camera and microphone activity monitoring (AVCaptureMonitor)
 
 ### v1.0 — Public Release (In Progress)
 - [ ] Third-party security audit of privileged helper and detection engine
@@ -280,7 +297,6 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 - [ ] Comprehensive documentation
 
 ### Future
-- [ ] Webcam/microphone monitoring (OverSight equivalent)
 - [ ] DNS-over-HTTPS tunnel detection
 - [ ] Community rule marketplace
 - [ ] Automated incident response actions

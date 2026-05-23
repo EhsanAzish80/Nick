@@ -45,13 +45,6 @@ struct NetworkConnectionsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NickSearchField(text: $searchText)
-                .padding(.horizontal, NickSpacing.md)
-                .padding(.vertical, NickSpacing.sm)
-            Rectangle()
-                .fill(Color.borderSubtle)
-                .frame(height: 0.5)
-
             if grouped.isEmpty {
                 emptyState
             } else {
@@ -72,6 +65,8 @@ struct NetworkConnectionsView: View {
                 }
             }
         }
+        // Change 4: native toolbar search replaces the custom NickSearchField.
+        .searchable(text: $searchText, placement: .toolbar, prompt: "Search process or address...")
     }
 
     // MARK: - Private

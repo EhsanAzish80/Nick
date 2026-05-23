@@ -6,13 +6,13 @@ import SwiftUI
 
 // MARK: - DeepScanView
 
-/// Full-system YARA scan sheet presented when the user taps "Deep Scan".
+/// Full-system YARA scan window opened when the user taps "Deep Scan".
 ///
 /// Three sequential states driven by `DeepScanner`:
 /// 1. **Confirmation** — description, time estimate, power toggle, Start/Cancel.
 /// 2. **Progress** — percentage, file counter, progress bar, current path, timing.
 /// 3. **Results** — clean summary or threat list matching the Nick Scan format.
-struct DeepScanView: View {
+struct DeepScanWindowView: View {
 
     @Environment(SecurityEngine.self) private var engine
     @Environment(\.dismiss) private var dismiss
@@ -45,7 +45,7 @@ struct DeepScanView: View {
                     .frame(maxWidth: .infinity, minHeight: 320, alignment: .top)
             }
         }
-        .frame(width: NickLayout.windowWidth)
+        .frame(minWidth: 480, idealWidth: 480)
         .background(Color.backgroundPrimary.ignoresSafeArea())
         .onDisappear { scanner.cancel() }
     }
@@ -117,14 +117,38 @@ struct DeepScanView: View {
             }
             .toggleStyle(.checkbox)
 
+            // Full Disk Access note
+            HStack(alignment: .top, spacing: NickSpacing.sm) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.statusBlue)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: NickSpacing.xs) {
+                    Text("For a thorough scan, grant Nick Full Disk Access in System Settings → Privacy & Security → Full Disk Access.")
+                        .font(.nickBodySmall)
+                        .foregroundStyle(Color.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Privacy Settings →") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .font(.nickCaption)
+                    .foregroundStyle(Color.statusBlue)
+                    .buttonStyle(.plain)
+                }
+            }
+
             HStack(spacing: NickSpacing.md) {
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.nickSecondary)
                 Spacer()
                 Button("Start Deep Scan") {
                     hasStarted = true
-                    scanner.start(onlyOnPower: onlyOnPower) { [engine] path in
-                        try await engine.scanFile(at: URL(fileURLWithPath: path))
+                    Task { @MainActor in
+                        scanner.start(onlyOnPower: onlyOnPower) { [engine] path in
+                            try await engine.scanFile(at: URL(fileURLWithPath: path))
+                        }
                     }
                 }
                 .buttonStyle(.nickPrimary)

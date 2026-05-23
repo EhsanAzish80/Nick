@@ -191,17 +191,32 @@ final class YARAEngine: @unchecked Sendable {
         )
 
         let fm = FileManager.default
-        guard let contents = try? fm.contentsOfDirectory(atPath: rulesDirectory) else {
+        guard let enumerator = fm.enumerator(
+            at: URL(fileURLWithPath: rulesDirectory),
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
             throw YARAError.noRulesCompiled
         }
-        let yarFiles = contents.filter { $0.hasSuffix(".yar") }.sorted()
+
+        var yarFiles: [String] = []
+        for case let url as URL in enumerator
+            where url.pathExtension == "yar" || url.pathExtension == "yara" {
+            yarFiles.append(url.path)
+        }
+        yarFiles.sort()
+
+        Self.log.info("YARA: found \(yarFiles.count) rule file(s) in \(self.rulesDirectory, privacy: .private)")
+        for ruleFile in yarFiles {
+            Self.log.info("YARA rule found: \(ruleFile, privacy: .public)")
+        }
+
         guard !yarFiles.isEmpty else {
             throw YARAError.noRulesCompiled
         }
 
         var compiled = 0
-        for filename in yarFiles {
-            let fullPath = (rulesDirectory as NSString).appendingPathComponent(filename)
+        for fullPath in yarFiles {
             guard let fp = fopen(fullPath, "r") else {
                 Self.log.warning("Cannot open YARA rule file: \(fullPath, privacy: .private)")
                 continue

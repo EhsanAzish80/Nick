@@ -17,6 +17,7 @@ import SwiftUI
 struct DashboardView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(\.openWindow) private var openWindow
     @State private var selectedPanel: Panel = .overview
     @State private var fileScanURL: URL?
     @State private var fileScanResults: [YARAMatch] = []
@@ -25,7 +26,6 @@ struct DashboardView: View {
     @State private var isFileScanRunning = false
     @State private var fileScanSummary: FileScanSummary?
     @State private var fileScanDuration: TimeInterval = 0
-    @State private var showDeepScanSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,9 +71,6 @@ struct DashboardView: View {
                     duration: fileScanDuration
                 )
             }
-        }
-        .sheet(isPresented: $showDeepScanSheet) {
-            DeepScanView()
         }
     }
 
@@ -165,7 +162,10 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isFileScanRunning)
-                Button(action: { showDeepScanSheet = true }) {
+                Button(action: {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: "deep-scan")
+                }) {
                     HStack(spacing: NickSpacing.sm) {
                         Image(systemName: "magnifyingglass.circle")
                         Text("Deep Scan")
@@ -177,6 +177,17 @@ struct DashboardView: View {
             }
 
             Spacer()
+
+            // Open main window
+            Button(action: {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "main")
+            }) {
+                Label("Open Nick", systemImage: "macwindow")
+                    .font(.nickButton)
+                    .foregroundStyle(Color.textSecondary)
+            }
+            .buttonStyle(.plain)
 
             // Pipeline status
             Label(engine.activePipelineStatus.rawValue,

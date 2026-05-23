@@ -148,18 +148,28 @@ final class DeepScanner {
     /// reasonable. Marked `nonisolated` so it can run inside `Task.detached`.
     nonisolated private static func enumerateExecutables() -> [String] {
         var files: [String] = []
-        let fm = FileManager.default
+        let fm  = FileManager.default
+        let log = Logger(subsystem: "com.ehsanazish.nick", category: "DeepScanner")
 
         let scanPaths: [String] = [
             "/Applications",
             "/usr/local/bin",
+            "/usr/local/sbin",
             "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
             "/Library/LaunchDaemons",
             "/Library/LaunchAgents",
+            "/Library/Application Support",
+            "/Library/Extensions",
+            "/Library/PrivilegedHelperTools",
             NSHomeDirectory() + "/Library/LaunchAgents",
+            NSHomeDirectory() + "/Library/Application Support",
             NSHomeDirectory() + "/Downloads",
+            NSHomeDirectory() + "/Desktop",
+            NSHomeDirectory() + "/Applications",
             "/tmp",
-            "/var/tmp"
+            "/var/tmp",
+            "/private/tmp"
         ]
 
         let skipExtensions: Set<String> = [
@@ -176,12 +186,20 @@ final class DeepScanner {
         ]
 
         for scanPath in scanPaths {
+            guard fm.isReadableFile(atPath: scanPath) else {
+                log.warning("DeepScan: no access to \(scanPath, privacy: .public)")
+                continue
+            }
             guard let enumerator = fm.enumerator(
                 at: URL(fileURLWithPath: scanPath),
                 includingPropertiesForKeys: [.isExecutableKey, .isRegularFileKey],
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
-            ) else { continue }
+            ) else {
+                log.warning("DeepScan: cannot enumerate \(scanPath, privacy: .public)")
+                continue
+            }
 
+            var count = 0
             for case let url as URL in enumerator {
                 let ext = url.pathExtension.lowercased()
                 guard !skipExtensions.contains(ext) else { continue }
@@ -194,8 +212,10 @@ final class DeepScanner {
                     || ext.isEmpty
                 {
                     files.append(url.path)
+                    count += 1
                 }
             }
+            log.info("DeepScan: \(count) files from \(scanPath, privacy: .public)")
         }
 
         return files

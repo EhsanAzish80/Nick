@@ -67,7 +67,11 @@ final class AVCaptureMonitor: MonitorProtocol {
         await scanAllDevices()
         registerDeviceNotifications()
 
-        Self.log.info("AVCapture scan — camera:\(self.isCameraActive) mic:\(self.isMicrophoneActive) signals:\(self.pendingSignals.count)")
+        // Only log when a camera or mic is actually active — avoids CMIO framework noise
+        // on machines without supported camera hardware.
+        if isCameraActive || isMicrophoneActive {
+            Self.log.info("AVCapture scan — camera:\(self.isCameraActive) mic:\(self.isMicrophoneActive) signals:\(self.pendingSignals.count)")
+        }
     }
 
     func stop() async {

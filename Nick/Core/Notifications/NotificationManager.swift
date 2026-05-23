@@ -67,11 +67,19 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         center.delegate = self
 
         Task {
-            do {
-                let granted = try await center.requestAuthorization(options: [.alert, .sound])
-                Self.log.info("Notification permission: \(granted ? "granted" : "denied")")
-            } catch {
-                Self.log.warning("Notification authorisation request failed: \(error.localizedDescription)")
+            let settings = await center.notificationSettings()
+            switch settings.authorizationStatus {
+            case .denied:
+                Self.log.info("Notification permission denied — skipping request, alerts will be silent")
+            case .notDetermined:
+                do {
+                    let granted = try await center.requestAuthorization(options: [.alert, .sound])
+                    Self.log.info("Notification permission: \(granted ? "granted" : "denied")")
+                } catch {
+                    Self.log.warning("Notification authorisation request failed: \(error.localizedDescription)")
+                }
+            default:
+                Self.log.debug("Notification permission already set: \(settings.authorizationStatus.rawValue)")
             }
         }
     }

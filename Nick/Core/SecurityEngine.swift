@@ -58,6 +58,23 @@ final class SecurityEngine {
     /// The date of the most recent scan completion.
     var lastScanDate: Date?
 
+    // MARK: - Lifetime Statistics (persisted to UserDefaults)
+
+    /// Date Nick first launched on this system. Set once and never reset.
+    private(set) var monitoringSince: Date = Date()
+
+    /// Total number of full scans completed since installation.
+    private(set) var totalScanCount: Int = 0
+
+    /// Lifetime count of non-info threats detected across all scans.
+    private(set) var totalThreatsDetected: Int = 0
+
+    /// Date of the most recent YARA deep scan.
+    var lastDeepScanDate: Date? = nil
+
+    /// Number of files scanned in the most recent YARA deep scan.
+    var lastDeepScanFileCount: Int = 0
+
     /// The trusted process list used to suppress false positive signals.
     ///
     /// Changing this takes effect on the next `runFullScan()` call.
@@ -102,7 +119,18 @@ final class SecurityEngine {
 
     // MARK: - Init
 
-    init() {}
+    init() {
+        let ud = UserDefaults.standard
+        if let stored = ud.object(forKey: "nickMonitoringSince") as? Date {
+            monitoringSince = stored
+        } else {
+            ud.set(monitoringSince, forKey: "nickMonitoringSince")
+        }
+        totalScanCount        = ud.integer(forKey: "nickTotalScanCount")
+        totalThreatsDetected  = ud.integer(forKey: "nickTotalThreatsDetected")
+        lastDeepScanDate      = ud.object(forKey: "nickLastDeepScanDate") as? Date
+        lastDeepScanFileCount = ud.integer(forKey: "nickLastDeepScanFileCount")
+    }
 
     // MARK: - Public API
 
@@ -164,6 +192,12 @@ final class SecurityEngine {
         isScanning = false
         scanTask = nil
         lastScanDate = Date()
+        totalScanCount += 1
+        let newThreatCount = newAlerts.filter { $0.severity != .info }.count
+        if newThreatCount > 0 { totalThreatsDetected += newThreatCount }
+        let ud = UserDefaults.standard
+        ud.set(totalScanCount, forKey: "nickTotalScanCount")
+        ud.set(totalThreatsDetected, forKey: "nickTotalThreatsDetected")
         logger.info("Full scan complete — \(newAlerts.count) alerts, health: \(self.healthScore)")
     }
 
@@ -235,6 +269,15 @@ final class SecurityEngine {
         isScanning = false
     }
 
+    /// Records the completion of a YARA deep scan and persists the stats.
+    func recordDeepScan(fileCount: Int) {
+        lastDeepScanDate      = Date()
+        lastDeepScanFileCount = fileCount
+        let ud = UserDefaults.standard
+        ud.set(lastDeepScanDate, forKey: "nickLastDeepScanDate")
+        ud.set(fileCount, forKey: "nickLastDeepScanFileCount")
+    }
+
     // MARK: - YARA File Scanning
 
     /// Lazily-created YARA engine used for on-demand file scanning.
@@ -253,7 +296,7 @@ final class SecurityEngine {
     func scanFile(at url: URL) async throws -> [YARAMatch] {
         if yaraEngine == nil {
             let rulesDir = Bundle.main.resourceURL?
-                .appendingPathComponent("Rules/community").path ?? ""
+                .appendingPathComponent("Rules").path ?? ""
             yaraEngine = try YARAEngine(rulesDirectory: rulesDir)
         }
         guard let engine = yaraEngine else { throw YARAError.noRulesCompiled }

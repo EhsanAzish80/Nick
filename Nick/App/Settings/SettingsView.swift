@@ -2,6 +2,7 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
+import AppKit
 import SwiftUI
 import ServiceManagement
 
@@ -29,7 +30,6 @@ struct SettingsView: View {
         (UserDefaults.standard.array(forKey: "monitoredDirectories") as? [String])
             ?? ["/Users", "/Applications", "/Library", "/private/tmp"]
     }()
-    @State private var newDirectoryPath: String = ""
     @State private var newProcessName: String = ""
     @State private var showRemoveProcessConfirmation = false
     @State private var nameToRemove: String?
@@ -37,130 +37,51 @@ struct SettingsView: View {
     // MARK: - Body
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: NickSpacing.xxl) {
-                notificationsSection
-                Divider()
-                scanningSection
-                Divider()
-                systemSection
-                Divider()
-                directoriesSection
-                Divider()
-                trustedProcessesSection
-            }
-            .padding(NickSpacing.xl)
-        }
-        .frame(minWidth: 540, minHeight: 420)
-    }
-
-    // MARK: - Notifications Section
-
-    private var notificationsSection: some View {
-        VStack(alignment: .leading, spacing: NickSpacing.lg) {
-            Text("Notifications")
-                .font(.nickSubtitle)
-                .foregroundStyle(Color.textPrimary)
-
-            HStack {
-                Text("Minimum severity")
-                    .font(.nickBodySmall)
-                    .foregroundStyle(Color.textSecondary)
-                Spacer()
-                Picker("", selection: $notificationThresholdRaw) {
-                    ForEach(SignalSeverity.allCases.filter { $0 != .info }, id: \.rawValue) { sev in
-                        Text(sev.displayName).tag(sev.rawValue)
+        Form {
+            Section("Notifications") {
+                LabeledContent("Minimum severity") {
+                    Picker("", selection: $notificationThresholdRaw) {
+                        ForEach(SignalSeverity.allCases.filter { $0 != .info }, id: \.rawValue) { sev in
+                            Text(sev.displayName).tag(sev.rawValue)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 150)
                 }
-                .labelsHidden()
-                .frame(width: 120)
-            }
-
-            Text("Alerts below this severity are logged but will not trigger a system notification.")
-                .font(.nickCaption)
-                .foregroundStyle(Color.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: - Scanning Section
-
-    private var scanningSection: some View {
-        VStack(alignment: .leading, spacing: NickSpacing.lg) {
-            Text("Scanning")
-                .font(.nickSubtitle)
-                .foregroundStyle(Color.textPrimary)
-
-            HStack {
-                Text("Deep scan interval")
+                Text("Alerts below this severity are logged but won't trigger a notification.")
                     .font(.nickBodySmall)
-                    .foregroundStyle(Color.textSecondary)
-                Spacer()
-                Picker("", selection: $deepScanIntervalSeconds) {
-                    Text("30 seconds").tag(30)
-                    Text("1 minute").tag(60)
-                    Text("5 minutes").tag(300)
-                    Text("15 minutes").tag(900)
-                    Text("30 minutes").tag(1800)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Scanning") {
+                LabeledContent("Scan interval") {
+                    Picker("", selection: $deepScanIntervalSeconds) {
+                        Text("30 seconds").tag(30)
+                        Text("1 minute").tag(60)
+                        Text("5 minutes").tag(300)
+                        Text("15 minutes").tag(900)
+                        Text("30 minutes").tag(1800)
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
                 }
-                .labelsHidden()
-                .frame(width: 140)
+                Text("How often Nick performs a full system sweep.")
+                    .font(.nickBodySmall)
+                    .foregroundStyle(.secondary)
             }
 
-            Text("How often Nick performs a full system sweep. More frequent scans increase CPU and battery usage.")
-                .font(.nickCaption)
-                .foregroundStyle(Color.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: - System Section
-
-    private var systemSection: some View {
-        VStack(alignment: .leading, spacing: NickSpacing.lg) {
-            Text("System")
-                .font(.nickSubtitle)
-                .foregroundStyle(Color.textPrimary)
-
-            Toggle(isOn: $launchAtLogin) {
-                VStack(alignment: .leading, spacing: NickSpacing.xs) {
-                    Text("Launch at login")
-                        .font(.nickBodySmall)
-                        .foregroundStyle(Color.textSecondary)
-                    Text("Start Nick automatically when you log in.")
-                        .font(.nickCaption)
-                        .foregroundStyle(Color.textTertiary)
-                }
-            }
-            .onChange(of: launchAtLogin) { _, newValue in
-                toggleLaunchAtLogin(newValue)
-            }
-        }
-    }
-
-    // MARK: - Monitored Directories Section
-
-    private var directoriesSection: some View {
-        VStack(alignment: .leading, spacing: NickSpacing.lg) {
-            Text("Monitored Directories")
-                .font(.nickSubtitle)
-                .foregroundStyle(Color.textPrimary)
-
-            Text("Persistence and filesystem watchers scan these directories for suspicious changes.")
-                .font(.nickCaption)
-                .foregroundStyle(Color.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: NickSpacing.sm) {
-                TextField("/path/to/directory", text: $newDirectoryPath)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { addDirectory() }
-                Button("Add", action: addDirectory)
-                    .disabled(newDirectoryPath.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .buttonStyle(NickPrimaryButtonStyle())
+            Section("System") {
+                Toggle("Launch at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, newValue in toggleLaunchAtLogin(newValue) }
+                Text("Start Nick automatically when you log in.")
+                    .font(.nickBodySmall)
+                    .foregroundStyle(.secondary)
             }
 
-            VStack(spacing: 0) {
+            Section("Monitored Directories") {
+                Text("Persistence and filesystem watchers scan these directories for suspicious changes.")
+                    .font(.nickBodySmall)
+                    .foregroundStyle(.secondary)
                 ForEach(monitoredDirectories, id: \.self) { path in
                     HStack {
                         Image(systemName: "folder")
@@ -179,32 +100,20 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.vertical, NickSpacing.sm)
-                    if path != monitoredDirectories.last {
-                        Divider()
-                    }
                 }
+                Button("Add Folder...") { selectDirectory() }
+            }
+
+            Section("Trusted Processes") {
+                Text("Alerts where all contributing processes are trusted are downgraded to Info severity and suppressed from notifications.")
+                    .font(.nickBodySmall)
+                    .foregroundStyle(.secondary)
+                addProcessRow
+                userListSection
             }
         }
-    }
-
-    // MARK: - Trusted Processes Section
-
-    private var trustedProcessesSection: some View {
-        VStack(alignment: .leading, spacing: NickSpacing.lg) {
-            Text("Trusted Processes")
-                .font(.nickSubtitle)
-                .foregroundStyle(Color.textPrimary)
-
-            Text("Alerts where all contributing processes are trusted are downgraded to Info severity and suppressed from notifications. Only add software you have personally verified. Built-in entries cover common developer tools and cannot be removed.")
-                .font(.nickCaption)
-                .foregroundStyle(Color.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            addProcessRow
-
-            userListSection
-        }
+        .formStyle(.grouped)
+        .frame(width: 500)
     }
 
     private var addProcessRow: some View {
@@ -304,11 +213,17 @@ struct SettingsView: View {
         nameToRemove = nil
     }
 
-    private func addDirectory() {
-        let trimmed = newDirectoryPath.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, !monitoredDirectories.contains(trimmed) else { return }
-        monitoredDirectories.append(trimmed)
-        newDirectoryPath = ""
+    private func selectDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.title = "Select Directory to Monitor"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let path = url.path
+        guard !monitoredDirectories.contains(path) else { return }
+        monitoredDirectories.append(path)
         saveDirectories()
     }
 

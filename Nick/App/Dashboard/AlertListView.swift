@@ -28,20 +28,6 @@ struct AlertListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Filter toggle bar
-            HStack {
-                Toggle("Show trusted app activity", isOn: $showTrustedAlerts)
-                    .toggleStyle(.checkbox)
-                    .font(.nickCaption)
-                    .foregroundStyle(Color.textTertiary)
-                Spacer()
-            }
-            .padding(.horizontal, NickSpacing.lg)
-            .padding(.vertical, NickSpacing.sm)
-            .background(Color.backgroundSecondary)
-
-            Divider().overlay(Color.borderSubtle)
-
             if visibleAlerts.isEmpty {
                 emptyState
             } else {
@@ -63,6 +49,7 @@ struct AlertListView: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
+        // Change 3: centered vertically in available space.
         VStack(spacing: NickSpacing.lg) {
             Image(systemName: "bell.slash")
                 .font(.system(size: 32))
@@ -77,7 +64,8 @@ struct AlertListView: View {
                 .foregroundStyle(Color.textSecondary)
                 .multilineTextAlignment(.center)
         }
-        .padding(NickSpacing.xxl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.backgroundPrimary)
     }
 }
 
