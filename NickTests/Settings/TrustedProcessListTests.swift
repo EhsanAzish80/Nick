@@ -46,11 +46,13 @@ final class TrustedProcessListTests: XCTestCase {
         XCTAssertFalse(sut.isTrusted("cryptominer"),   "Unknown process must not be trusted by default")
     }
 
-    func test_isTrusted_isCaseSensitive() {
+    func test_isTrusted_isCaseInsensitive() {
         let sut = TrustedProcessList()
-        // "terminal" (lowercase) is NOT in the built-in list — only "Terminal"
-        XCTAssertFalse(sut.isTrusted("terminal"),  "Matching is case-sensitive; 'terminal' != 'Terminal'")
-        XCTAssertFalse(sut.isTrusted("XCODE"),     "Matching is case-sensitive; 'XCODE' != 'Xcode'")
+        // Matching is intentionally case-insensitive so process names that differ
+        // in capitalisation between macOS versions (and p_comm truncation variants)
+        // are still recognised correctly.
+        XCTAssertTrue(sut.isTrusted("terminal"),  "'terminal' should match 'Terminal' (case-insensitive)")
+        XCTAssertTrue(sut.isTrusted("XCODE"),     "'XCODE' should match 'Xcode' (case-insensitive)")
     }
 
     // MARK: - User Trusted Additions
