@@ -23,6 +23,8 @@ struct DashboardView: View {
     @State private var fileScanError: String?
     @State private var showFileScanSheet = false
     @State private var isFileScanRunning = false
+    @State private var fileScanSummary: FileScanSummary?
+    @State private var fileScanDuration: TimeInterval = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,7 +65,9 @@ struct DashboardView: View {
                     url: url,
                     results: fileScanResults,
                     isScanning: isFileScanRunning,
-                    error: fileScanError
+                    error: fileScanError,
+                    summary: fileScanSummary,
+                    duration: fileScanDuration
                 )
             }
         }
@@ -190,14 +194,21 @@ struct DashboardView: View {
         fileScanURL = url
         fileScanResults = []
         fileScanError = nil
+        fileScanSummary = nil
+        fileScanDuration = 0
         isFileScanRunning = true
         showFileScanSheet = true
         Task { @MainActor in
+            let scanStart = Date()
+            async let yaraTask: [YARAMatch]    = engine.scanFile(at: url)
+            async let summaryTask: FileScanSummary = FileScanSummary.analyze(url: url)
             do {
-                fileScanResults = try await engine.scanFile(at: url)
+                fileScanResults = try await yaraTask
             } catch {
                 fileScanError = error.localizedDescription
             }
+            fileScanSummary  = await summaryTask
+            fileScanDuration = Date().timeIntervalSince(scanStart)
             isFileScanRunning = false
         }
     }

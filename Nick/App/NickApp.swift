@@ -20,16 +20,14 @@ struct NickApp: App {
     init() {
         let eng = SecurityEngine()
         _engine = State(initialValue: eng)
-        // Register as a macOS Services provider (Finder right-click "Scan with Nick").
-        // NSApp is available here because SwiftUI has already called NSApplicationMain.
-        NSApp.servicesProvider = NickServicesProvider()
-        NSUpdateDynamicServices()
-        // Kick off the initial scan once the main actor is ready.
-        // This Task is not tied to any view scope — it runs for the lifetime of
-        // the engine regardless of whether the panel is open.
+        // All NSApp interactions are deferred until the main actor is live —
+        // NSApp is not fully initialised during the SwiftUI @main struct init().
         Task { @MainActor in
             eng.runFullScan()
             NotificationManager.shared.setup()
+            // Register as a macOS Services provider (Finder right-click "Scan with Nick").
+            NSApp.servicesProvider = NickServicesProvider()
+            NSUpdateDynamicServices()
         }
     }
 

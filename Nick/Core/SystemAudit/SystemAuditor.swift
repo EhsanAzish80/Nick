@@ -5,6 +5,7 @@
 import Foundation
 import Observation
 import os
+import Security
 
 // MARK: - SystemAuditorError
 
@@ -213,22 +214,17 @@ final class SystemAuditor: MonitorProtocol {
     private func checkFirewallStealth() async -> SystemCheckResult {
         let fwPath = "/usr/libexec/ApplicationFirewall/socketfilterfw"
         let output = (try? await runCommand(fwPath, args: ["--getstealthmode"])) ?? ""
-        let enabled = output.lowercased().contains("enabled")
-        let disabled = output.lowercased().contains("disabled")
-
-        let status: CheckStatus
-        if enabled { status = .pass }
-        else if disabled { status = .warning }
-        else { status = .unknown }
+        let lower   = output.lowercased()
+        let enabled = lower.contains("enabled") || lower.contains("is on")
 
         return SystemCheckResult(
             id: UUID(),
             check: .firewallStealth,
-            status: status,
-            currentValue: enabled ? "Enabled" : (disabled ? "Disabled" : "Unknown"),
+            status: enabled ? .pass : .fail,
+            currentValue: enabled ? "Enabled" : "Disabled",
             expectedValue: "Enabled",
             description: "Stealth mode causes your Mac to ignore unsolicited probe packets, reducing network visibility.",
-            recommendation: status == .warning ? "Enable stealth mode in System Settings → Network → Firewall → Options." : nil
+            recommendation: enabled ? nil : "Enable stealth mode in System Settings → Network → Firewall → Options."
         )
     }
 
@@ -266,51 +262,132 @@ final class SystemAuditor: MonitorProtocol {
     }
 
     private func checkAutomaticUpdates() async -> SystemCheckResult {
-        let output = (try? await runCommand(
-            "/usr/bin/defaults",
-            args: ["read", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled"]
-        )) ?? ""
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isEnabled = trimmed == "1"
-        let isDisabled = trimmed == "0"
+        let prefs = "/Library/Preferences/com.apple.SoftwareUpdate"
 
-        let status: CheckStatus
-        if isEnabled { status = .pass }
-        else if isDisabled { status = .warning }
-        else { status = .unknown }
+        async let dl  = (try? await runCommand("/usr/bin/defaults", args: ["read", prefs, "AutomaticDownload"])) ?? ""
+        async let ins = (try? await runCommand("/usr/bin/defaults", args: ["read", prefs, "AutomaticallyInstallMacOSUpdates"])) ?? ""
+        async let cri = (try? await runCommand("/usr/bin/defaults", args: ["read", prefs, "CriticalUpdateInstall"])) ?? ""
+        async let cfg = (try? await runCommand("/usr/bin/defaults", args: ["read", prefs, "ConfigDataInstall"])) ?? ""
+
+        let values = await [dl, ins, cri, cfg].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let allEnabled  = values.allSatisfy { $0 == "1" }
+        let someEnabled = values.contains    { $0 == "1" }
+
+        let (status, currentValue, recommendation): (CheckStatus, String, String?)
+        if allEnabled {
+            (status, currentValue, recommendation) = (.pass, "Fully enabled", nil)
+        } else if someEnabled {
+            (status, currentValue, recommendation) = (
+                .pass,
+                "Partially enabled",
+                "Enable all update types in System Settings → General → Software Update."
+            )
+        } else {
+            (status, currentValue, recommendation) = (
+                .fail,
+                "Disabled",
+                "Enable automatic updates in System Settings → General → Software Update."
+            )
+        }
 
         return SystemCheckResult(
             id: UUID(),
             check: .automaticUpdates,
             status: status,
-            currentValue: isEnabled ? "Enabled" : (isDisabled ? "Disabled" : "Unknown"),
-            expectedValue: "Enabled",
-            description: "Automatic update checks ensure security patches are applied promptly.",
-            recommendation: status == .warning ? "Enable automatic updates in System Settings → General → Software Update." : nil
+            currentValue: currentValue,
+            expectedValue: "Fully enabled",
+            description: "Automatic updates ensure security patches are applied promptly.",
+            recommendation: recommendation
         )
     }
 
     private func checkRemoteLogin() async -> SystemCheckResult {
-        // SECURITY: systemsetup requires elevated privileges on some macOS versions.
-        // If it fails, return .unknown rather than crashing or hanging.
-        let output = (try? await runCommand("/usr/sbin/systemsetup", args: ["-getremotelogin"])) ?? ""
-        let isOff = output.lowercased().contains("off")
-        let isOn  = output.lowercased().contains("on")
-
-        let status: CheckStatus
-        if isOff { status = .pass }
-        else if isOn { status = .warning }
-        else { status = .unknown }
+        let output    = (try? await runCommand("/bin/launchctl", args: ["list"])) ?? ""
+        let isEnabled = output.contains("com.openssh.sshd")
 
         return SystemCheckResult(
             id: UUID(),
             check: .remoteLogin,
-            status: status,
-            currentValue: isOff ? "Off" : (isOn ? "On" : "Unknown"),
-            expectedValue: "Off",
+            status: isEnabled ? .fail : .pass,
+            currentValue: isEnabled ? "Enabled" : "Disabled",
+            expectedValue: "Disabled",
             description: "Remote Login enables SSH access to your Mac. Disable it unless actively needed.",
-            recommendation: status == .warning ? "Disable Remote Login in System Settings → General → Sharing." : nil
+            recommendation: isEnabled ? "Disable Remote Login in System Settings → General → Sharing." : nil
         )
+    }
+
+    // MARK: - Firewall Allowlist Audit
+
+    /// Reads every entry from the Application Firewall allowlist and checks
+    /// whether each path exists, is signed, and lives in a standard location.
+    ///
+    /// - Returns: A `FirewallAllowlistResult` with per-entry findings.
+    ///            Never throws — command failures produce an empty result.
+    func checkFirewallAllowlist() async -> FirewallAllowlistResult {
+        let fwPath = "/usr/libexec/ApplicationFirewall/socketfilterfw"
+        let output  = (try? await runCommand(fwPath, args: ["--listapps"])) ?? ""
+        let paths   = Self.parseAllowlistPaths(output)
+        guard !paths.isEmpty else { return FirewallAllowlistResult(entries: []) }
+
+        // Check each path concurrently on a background thread.
+        let entries = await Task.detached(priority: .utility) {
+            paths
+                .map { Self.checkAllowlistEntry(path: $0) }
+                .sorted { $0.path < $1.path }
+        }.value
+
+        return FirewallAllowlistResult(entries: entries)
+    }
+
+    // MARK: - Private Allowlist Helpers
+
+    /// Extracts every app path from raw `socketfilterfw --listapps` output.
+    ///
+    /// Each numbered entry appears as `"N :  /path/to/app"`.
+    nonisolated private static func parseAllowlistPaths(_ output: String) -> [String] {
+        output
+            .components(separatedBy: "\n")
+            .compactMap { line -> String? in
+                // The app line contains " :  " (space colon two-spaces).
+                guard let colonRange = line.range(of: ": ") else { return nil }
+                let remainder = String(line[colonRange.upperBound...])
+                    .trimmingCharacters(in: .whitespaces)
+                return remainder.hasPrefix("/") ? remainder : nil
+            }
+    }
+
+    /// Checks a single firewall-allowlisted path for the three issue types.
+    nonisolated private static func checkAllowlistEntry(path: String) -> FirewallAllowlistEntry {
+        let name = displayName(for: path)
+
+        // 1. Existence
+        guard FileManager.default.fileExists(atPath: path) else {
+            return FirewallAllowlistEntry(path: path, displayName: name, issue: .notInstalled)
+        }
+
+        // 2. Code signature
+        var staticCode: SecStaticCode?
+        let url = URL(fileURLWithPath: path)
+        let isSigned = SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess
+            && staticCode != nil
+            && SecStaticCodeCheckValidity(staticCode!, [], nil) == errSecSuccess
+        if !isSigned {
+            return FirewallAllowlistEntry(path: path, displayName: name, issue: .unsigned)
+        }
+
+        // 3. Standard location
+        let standardPrefixes = ["/Applications/", "/System/", "/Library/", "/usr/"]
+        if !standardPrefixes.contains(where: { path.hasPrefix($0) }) {
+            return FirewallAllowlistEntry(path: path, displayName: name, issue: .nonStandardLocation)
+        }
+
+        return FirewallAllowlistEntry(path: path, displayName: name, issue: nil)
+    }
+
+    /// Derives a short display name from a full path.
+    nonisolated private static func displayName(for path: String) -> String {
+        let last = (path as NSString).lastPathComponent
+        return last.hasSuffix(".app") ? String(last.dropLast(4)) : last
     }
 
     // MARK: - Signal Conversion

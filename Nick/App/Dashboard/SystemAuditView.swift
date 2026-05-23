@@ -24,7 +24,11 @@ struct SystemAuditView: View {
                     emptyState
                 } else {
                     ForEach(engine.auditResults) { result in
-                        AuditResultRow(result: result)
+                        if result.check == .firewall {
+                            FirewallAuditRow(result: result, allowlist: engine.firewallAllowlist)
+                        } else {
+                            AuditResultRow(result: result)
+                        }
                         Divider()
                             .padding(.leading, NickLayout.separatorInset)
                     }
@@ -49,6 +53,106 @@ struct SystemAuditView: View {
                 .multilineTextAlignment(.center)
         }
         .padding(NickSpacing.xxl)
+    }
+}
+
+// MARK: - FirewallAuditRow
+
+/// Extended audit row for the Application Firewall check.
+///
+/// Displays the standard pass/fail header and description, then appends a
+/// sub-section listing any allowlisted apps with issues. Flagged entries do
+/// not affect the issue count or health score — they are recommendations only.
+private struct FirewallAuditRow: View {
+
+    let result:    SystemCheckResult
+    let allowlist: FirewallAllowlistResult?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: NickSpacing.md) {
+            Image(systemName: result.status.systemImage)
+                .font(.system(size: NickLayout.iconSize, weight: .medium))
+                .foregroundStyle(statusColor)
+                .frame(width: NickLayout.iconSizeLarge)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: NickSpacing.xs) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(result.check.displayName)
+                        .font(.nickBodyMedium)
+                        .foregroundStyle(Color.textPrimary)
+                    Spacer()
+                    Text(result.currentValue)
+                        .font(.nickMono)
+                        .foregroundStyle(statusColor)
+                        .lineLimit(1)
+                }
+                Text(result.description)
+                    .font(.nickBodySmall)
+                    .foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let allowlist {
+                    allowlistSection(allowlist)
+                        .padding(.top, NickSpacing.sm)
+                }
+
+                AuditFixLink(
+                    label: "Open Firewall settings",
+                    destination: .url("x-apple.systempreferences:com.apple.NetworkFirewall-Settings.extension")
+                )
+                .padding(.top, NickSpacing.xs)
+            }
+        }
+        .padding(.horizontal, NickSpacing.lg)
+        .padding(.vertical, NickSpacing.md)
+    }
+
+    // MARK: - Private
+
+    private var statusColor: Color {
+        switch result.status {
+        case .pass:    .statusGreen
+        case .warning: .statusYellow
+        case .fail:    .statusRed
+        case .unknown: .textTertiary
+        }
+    }
+
+    @ViewBuilder
+    private func allowlistSection(_ allowlist: FirewallAllowlistResult) -> some View {
+        if allowlist.flagged.isEmpty {
+            HStack(spacing: NickSpacing.sm) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.statusGreen)
+                Text("All \(allowlist.entries.count) allowed apps verified")
+                    .font(.nickBodySmall)
+                    .foregroundStyle(Color.textSecondary)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: NickSpacing.xs) {
+                HStack(spacing: NickSpacing.sm) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.statusYellow)
+                    Text("\(allowlist.flagged.count) firewall rule\(allowlist.flagged.count == 1 ? "" : "s") need attention")
+                        .font(.nickBodySmall)
+                        .foregroundStyle(Color.textSecondary)
+                }
+                ForEach(allowlist.flagged) { entry in
+                    HStack(alignment: .top, spacing: NickSpacing.xs) {
+                        Text("▸")
+                            .font(.nickBodySmall)
+                            .foregroundStyle(Color.textTertiary)
+                        Text("\(entry.displayName) \u{2014} \(entry.issue!.description)")
+                            .font(.nickBodySmall)
+                            .foregroundStyle(Color.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -120,9 +224,9 @@ private struct AuditResultRow: View {
         case .fileVault:
             return ("Open FileVault settings", .url("x-apple.systempreferences:com.apple.preference.security?FDE"))
         case .firewall:
-            return ("Open Firewall settings", .url("x-apple.systempreferences:com.apple.preference.security?Firewall"))
+            return ("Open Firewall settings", .url("x-apple.systempreferences:com.apple.NetworkFirewall-Settings.extension"))
         case .firewallStealth:
-            return ("Configure Stealth Mode in Firewall settings", .url("x-apple.systempreferences:com.apple.preference.security?Firewall"))
+            return ("Configure Stealth Mode in Firewall settings", .url("x-apple.systempreferences:com.apple.NetworkFirewall-Settings.extension"))
         case .gatekeeper:
             return ("Copy terminal command to re-enable Gatekeeper", .copyableCommand("sudo spctl --global-enable"))
         case .sip:

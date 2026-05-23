@@ -125,6 +125,7 @@
 			buildPhases = (
 				FD3030CD51A6F9759B07888B /* Sources */,
 				1E5C0074F6A2B9D1CE8EFCDE /* Resources */,
+				CC1AABB4D5E6F78900002300 /* Copy YARA Rules */,
 			);
 			buildRules = (
 			);
@@ -223,6 +224,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		CC1AABB4D5E6F78900002300 /* Copy YARA Rules */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Rules",
+			);
+			name = "Copy YARA Rules";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules\"\nrm -rf \"${RULES_DST}\"\ncp -R \"${RULES_SRC}\" \"${RULES_DST}\"\necho \"note: Copied YARA rules to ${RULES_DST}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		1B558429B1846E674F0E28CA /* Sources */ = {

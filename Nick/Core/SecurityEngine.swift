@@ -31,6 +31,9 @@ final class SecurityEngine {
     /// The most recent set of system audit results.
     private(set) var auditResults: [SystemCheckResult] = []
 
+    /// Firewall allowlist audit run alongside the system audit.
+    private(set) var firewallAllowlist: FirewallAllowlistResult?
+
     /// The most recent persistence snapshot.
     private(set) var persistenceItems: [PersistenceItem] = []
 
@@ -170,6 +173,7 @@ final class SecurityEngine {
         do { try await auditor.start() } catch {
             logger.error("SystemAuditor failed: \(error.localizedDescription)")
         }
+        firewallAllowlist = await auditor.checkFirewallAllowlist()
     }
 
     private func startPersistence() async {
@@ -200,6 +204,7 @@ final class SecurityEngine {
     func reset() async {
         alerts = []
         auditResults = []
+        firewallAllowlist = nil
         persistenceItems = []
         processes = []
         connections = []
@@ -248,8 +253,7 @@ final class SecurityEngine {
     func scanFile(at url: URL) async throws -> [YARAMatch] {
         if yaraEngine == nil {
             let rulesDir = Bundle.main.resourceURL?
-                .appendingPathComponent("Rules").path
-                ?? Bundle.main.bundlePath
+                .appendingPathComponent("Rules/community").path ?? ""
             yaraEngine = try YARAEngine(rulesDirectory: rulesDir)
         }
         guard let engine = yaraEngine else { throw YARAError.noRulesCompiled }
