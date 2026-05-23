@@ -17,7 +17,12 @@
 
 // SECURITY: yara.h is vendored at a pinned version (v4.5.2).
 // Never replace with a system-installed header that could be tampered with.
-#include "Vendor/include/yara.h"
+// Use the angle-bracket form so clang resolves via HEADER_SEARCH_PATHS
+// ($(SRCROOT)/Nick/Core/YARAEngine/Vendor/include) rather than relative to
+// whatever working directory the PCH compilation step uses. Both local and CI
+// builds have the search path set; the relative-path form can silently break
+// when Xcode compiles the bridging header from a derived-data staging location.
+#include <yara.h>
 
 // ---------------------------------------------------------------------------
 // C accessor helpers — Swift cannot traverse DECLARE_REFERENCE anonymous

@@ -90,13 +90,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        // SwiftUI Settings scene responds to this semi-private selector.
+        // SwiftUI's SettingsLink sends showSettingsWindow: up the responder chain.
+        // Replicating that here keeps the Settings scene as the single source of truth.
         let settingsItem = NSMenuItem(
             title:         "Settings...",
-            action:        Selector(("showSettingsWindow:")),
+            action:        #selector(openSettings),
             keyEquivalent: ","
         )
         settingsItem.keyEquivalentModifierMask = .command
+        settingsItem.target = self
         menu.addItem(settingsItem)
 
         menu.addItem(.separator())
@@ -145,13 +147,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openMainWindow() {
+        guard let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) else { return }
+
+        // Re-attach our delegate — SwiftUI may have reset it if the scene was rebuilt.
+        window.delegate = mainWindowDelegate
+
+        // 1. Flip policy first — this makes the app eligible to become frontmost.
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) {
-            window.makeKeyAndOrderFront(nil)
-            // Re-attach our delegate — SwiftUI may have reset it if the scene was rebuilt.
-            window.delegate = mainWindowDelegate
+
+        // 2. Give the policy change ~0.1 s to propagate through the window server
+        //    before issuing the activation calls. A bare `async` (next run-loop tick)
+        //    is sometimes not enough; 100 ms is imperceptible to the user but reliable.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak window] in
+            guard let window else { return }
+            window.makeKeyAndOrderFront(nil) // raise + key focus
+            NSApp.activate()                 // steal front-most status from current app
+            window.orderFrontRegardless()    // belt-and-suspenders: forces to front even
+                                             // if the window server still thinks another
+                                             // app owns the front position
         }
+    }
+
+    /// Opens the SwiftUI Settings scene — mirrors what `SettingsLink` does internally.
+    @objc private func openSettings() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
     }
 
     /// Bypasses the `applicationShouldTerminate` window-visibility gate and quits immediately.
