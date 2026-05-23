@@ -152,21 +152,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openMainWindow() {
-        // Flip policy first — makes the app eligible to become frontmost and appear in Dock.
+        // Step 1 — policy + activate IMMEDIATELY, while the menu-bar click event is
+        // still the current event. macOS grants activate() requests from user-event
+        // context far more reliably than from a deferred block where the event is gone.
         NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
 
-        // Give the policy change ~0.1 s to propagate through the window server before
-        // issuing activation calls. Re-query the window inside the block so we always
-        // act on the live NSWindow reference (avoids silent no-ops from stale weak refs).
+        // Step 2 — defer window ordering so the policy change has time to propagate
+        // through the window server before we raise the window. 100 ms is imperceptible.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             guard let self else { return }
             if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) {
                 window.delegate = self.mainWindowDelegate
-                window.makeKeyAndOrderFront(nil) // raise + acquire key focus
-                window.orderFrontRegardless()    // force to front even if another app
-                                                 // still owns the front position
+                window.makeKeyAndOrderFront(nil) // raise + key focus
+                window.orderFrontRegardless()    // force above any other app's windows
             }
-            NSApp.activate()                     // steal frontmost status from current app
         }
     }
 
