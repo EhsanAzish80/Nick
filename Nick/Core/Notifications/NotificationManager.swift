@@ -161,4 +161,11 @@ extension Notification.Name {
     ///
     /// `userInfo["alertID"]` contains a `UUID` when the notification was for a specific alert.
     static let nickNavigateToAlert = Notification.Name("com.ehsanazish.nick.navigateToAlert")
+
+    /// Posted when a file or folder should be scanned via the YARA engine.
+    ///
+    /// `object` is a `URL` pointing to the file or directory to scan.
+    /// Emitted by `NickServicesProvider` (Finder right-click) and by
+    /// `DashboardView.openFileScanPanel()` (manual button).
+    static let nickScanFileRequest = Notification.Name("com.ehsanazish.nick.scanFileRequest")
 }

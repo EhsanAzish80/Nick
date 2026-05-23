@@ -176,8 +176,18 @@ actor ThreatCorrelator {
         guard !signals.isEmpty else { return alert }
 
         let trustedCount = signals.filter { signal in
-            guard let name = signal.processInfo?.name else { return false }
-            return trustedProcessList.isTrusted(name)
+            // Check the signal's own process (leaf)
+            if let name = signal.processInfo?.name,
+               trustedProcessList.isTrusted(name) { return true }
+            // Check parent process from metadata (stored by ProcessScanner for LOLBin signals)
+            if let parent = signal.metadata["parent"], !parent.isEmpty,
+               trustedProcessList.isTrusted(parent) { return true }
+            // Check full chain from metadata (stored by ParentChainAnalyzer)
+            if let chain = signal.metadata["chain"] {
+                let names = chain.components(separatedBy: " → ")
+                if names.contains(where: { trustedProcessList.isTrusted($0) }) { return true }
+            }
+            return false
         }.count
 
         let fraction = Double(trustedCount) / Double(signals.count)

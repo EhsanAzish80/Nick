@@ -238,21 +238,24 @@ struct ProcessScanner {
 
             // Shell spawned without a terminal (LOLBin pattern)
             if Self.shellProcessNames.contains(proc.name.lowercased()) {
-                let parentName = pidToName[proc.parentPID]?.lowercased() ?? ""
+                let rawParentName = pidToName[proc.parentPID] ?? ""
+                let parentName = rawParentName.lowercased()
                 let hasTerminalParent = parentName.contains("terminal")
                     || parentName.contains("iterm")
                     || parentName.contains("warp")
                     || parentName.contains("ssh")
                     || parentName.contains("bash")
                     || parentName.contains("zsh")
-                if !hasTerminalParent {
+                // Suppress signal when the parent is a trusted IDE helper or known-good process.
+                let parentTrusted = !rawParentName.isEmpty && trustedProcessList.isTrusted(rawParentName)
+                if !hasTerminalParent && !parentTrusted {
                     signals.append(ThreatSignal(
                         source: .process,
                         severity: .medium,
                         title: "Shell spawned from non-terminal parent",
-                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(parentName.isEmpty ? "unknown" : parentName)' (PID \(proc.parentPID)), which is not a recognized terminal.",
+                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)' (PID \(proc.parentPID)), which is not a recognized terminal.",
                         processInfo: proc,
-                        metadata: ["reason": "lolbin", "parent": parentName]
+                        metadata: ["reason": "lolbin", "parent": rawParentName]
                     ))
                 }
             }

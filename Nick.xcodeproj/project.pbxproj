@@ -350,7 +350,6 @@
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickHelper/Info.plist;
-				SKIP_INSTALL = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -359,6 +358,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.helper;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
 			};
 			name = Debug;
 		};
@@ -470,7 +470,6 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				GENERATE_INFOPLIST_FILE = YES;
-				SKIP_INSTALL = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
@@ -484,6 +483,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ehsanazish.nick.integration-tests";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
 			name = Release;
@@ -498,7 +498,6 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				GENERATE_INFOPLIST_FILE = YES;
-				SKIP_INSTALL = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
@@ -512,6 +511,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.ehsanazish.nick.integration-tests";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
 			name = Debug;
@@ -563,7 +563,6 @@
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickHelper/Info.plist;
-				SKIP_INSTALL = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -572,6 +571,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.helper;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
 			};
 			name = Release;
 		};
@@ -585,7 +585,6 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				GENERATE_INFOPLIST_FILE = YES;
-				SKIP_INSTALL = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
@@ -599,6 +598,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.tests;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
 			name = Release;
@@ -613,7 +613,6 @@
 				DEVELOPMENT_TEAM = "";
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				GENERATE_INFOPLIST_FILE = YES;
-				SKIP_INSTALL = YES;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
@@ -627,6 +626,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.tests;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
 			name = Debug;

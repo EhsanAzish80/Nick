@@ -229,4 +229,33 @@ final class SecurityEngine {
         scanTask = nil
         isScanning = false
     }
+
+    // MARK: - YARA File Scanning
+
+    /// Lazily-created YARA engine used for on-demand file scanning.
+    private var yaraEngine: YARAEngine?
+
+    /// Scans a single file or directory with the bundled YARA rule set.
+    ///
+    /// The YARA engine is compiled lazily on first use from the `Rules` directory
+    /// inside the app bundle. If the bundle does not contain a `Rules` directory
+    /// (development builds), the engine is still initialised and will return no
+    /// matches rather than crashing.
+    ///
+    /// - Parameter url: The file or directory URL to scan.
+    /// - Returns: All YARA matches found in the target.
+    /// - Throws: `YARAError` if the engine cannot initialise or the scan fails.
+    func scanFile(at url: URL) async throws -> [YARAMatch] {
+        if yaraEngine == nil {
+            let rulesDir = Bundle.main.resourceURL?
+                .appendingPathComponent("Rules").path
+                ?? Bundle.main.bundlePath
+            yaraEngine = try YARAEngine(rulesDirectory: rulesDir)
+        }
+        guard let engine = yaraEngine else { throw YARAError.noRulesCompiled }
+        if url.hasDirectoryPath {
+            return try await engine.scanDirectory(at: url.path, recursive: true)
+        }
+        return try await engine.scanFile(at: url.path)
+    }
 }

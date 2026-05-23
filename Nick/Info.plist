@@ -32,5 +32,22 @@
     <!-- Permission usage descriptions -->
     <key>NSSystemAdministrationUsageDescription</key>
     <string>Nick requires administrator access to monitor system security state.</string>
+    <!-- Finder / Services menu integration -->
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Scan with Nick</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>scanWithNick</string>
+            <key>NSSendTypes</key>
+            <array>
+                <string>NSFilenamesPboardType</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

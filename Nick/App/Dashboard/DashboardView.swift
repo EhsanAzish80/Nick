@@ -18,6 +18,11 @@ struct DashboardView: View {
 
     @Environment(SecurityEngine.self) private var engine
     @State private var selectedPanel: Panel = .overview
+    @State private var fileScanURL: URL?
+    @State private var fileScanResults: [YARAMatch] = []
+    @State private var fileScanError: String?
+    @State private var showFileScanSheet = false
+    @State private var isFileScanRunning = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,6 +53,19 @@ struct DashboardView: View {
         .background(Color.backgroundPrimary.ignoresSafeArea())
         .onReceive(NotificationCenter.default.publisher(for: .nickNavigateToAlert)) { _ in
             selectedPanel = .alerts
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nickScanFileRequest)) { note in
+            if let url = note.object as? URL { startFileScan(url: url) }
+        }
+        .sheet(isPresented: $showFileScanSheet) {
+            if let url = fileScanURL {
+                FileScanResultsView(
+                    url: url,
+                    results: fileScanResults,
+                    isScanning: isFileScanRunning,
+                    error: fileScanError
+                )
+            }
         }
     }
 
@@ -129,6 +147,16 @@ struct DashboardView: View {
                     .foregroundStyle(Color.textSecondary)
                 }
                 .buttonStyle(.plain)
+                Button(action: { openFileScanPanel() }) {
+                    HStack(spacing: NickSpacing.sm) {
+                        Image(systemName: "doc.viewfinder")
+                        Text("Scan File…")
+                    }
+                    .font(.nickButton)
+                    .foregroundStyle(Color.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(isFileScanRunning)
             }
 
             Spacer()
@@ -138,29 +166,40 @@ struct DashboardView: View {
                   systemImage: engine.activePipelineStatus.systemImage)
                 .font(.nickMonoSmall)
                 .foregroundStyle(Color.textTertiary)
-
-            Spacer()
-
-            // Settings
-            Button(action: {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-            }) {
-                Image(systemName: "gearshape")
-                    .font(.nickBodySmall)
-                    .foregroundStyle(Color.textTertiary)
-            }
-            .buttonStyle(.plain)
-            .help("Settings")
-
-            // Quit
-            Button("Quit Nick") { NSApp.terminate(nil) }
-                .buttonStyle(.plain)
-                .font(.nickBodySmall)
-                .foregroundStyle(Color.textTertiary)
         }
         .padding(.horizontal, NickSpacing.lg)
         .frame(height: NickLayout.bottomBarHeight)
         .background(Color.backgroundSecondary)
+    }
+
+    // MARK: - File Scan Helpers
+
+    private func openFileScanPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Select a File or Folder to Scan"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            startFileScan(url: url)
+        }
+    }
+
+    private func startFileScan(url: URL) {
+        fileScanURL = url
+        fileScanResults = []
+        fileScanError = nil
+        isFileScanRunning = true
+        showFileScanSheet = true
+        Task { @MainActor in
+            do {
+                fileScanResults = try await engine.scanFile(at: url)
+            } catch {
+                fileScanError = error.localizedDescription
+            }
+            isFileScanRunning = false
+        }
     }
 }
 

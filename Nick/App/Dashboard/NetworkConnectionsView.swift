@@ -207,7 +207,8 @@ private struct ConnectionDetailRow: View {
     private var addressLine: String {
         let local = "\(connection.localAddress):\(connection.localPort)"
         guard let remote = connection.remoteAddress, let rPort = connection.remotePort else {
-            return "\(local) [\(connection.state.rawValue)]"
+            if connection.state == .listen { return "\(local) [listening]" }
+            return local
         }
         return "\(local) → \(remote):\(rPort)"
     }

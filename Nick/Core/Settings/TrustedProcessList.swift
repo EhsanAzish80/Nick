@@ -106,14 +106,28 @@ struct TrustedProcessList {
 
     /// Returns `true` if `processName` is in either the built-in or user-trusted list.
     ///
-    /// Matching is case-sensitive and exact — there is no substring or glob matching.
-    /// Process names are taken from the `NickProcessInfo.name` property, which is the
-    /// `p_comm` field from `kinfo_proc` (truncated to 16 characters on macOS).
+    /// Matching is case-insensitive to handle process names that differ in capitalisation
+    /// between macOS versions. The check also handles `p_comm` truncation: because the
+    /// kernel caps process names at `MAXCOMLEN` (16 characters), a name such as
+    /// `"Code Helper (Plugin)"` may arrive as `"Code Helper (Plu"`. Any supplied name
+    /// of at least 8 characters that is a case-insensitive prefix of a trusted entry is
+    /// still considered trusted.
     ///
     /// - Parameter processName: The process name to check (e.g. `"bash"`, `"Xcode"`).
     /// - Returns: `true` if the process is in the built-in or user-configured trusted list.
     func isTrusted(_ processName: String) -> Bool {
-        Self.builtIn.contains(processName) || userTrusted.contains(processName)
+        let name = processName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return false }
+        // Fast case-insensitive exact match
+        if Self.builtIn.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame })
+            || userTrusted.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+            return true
+        }
+        // Handle p_comm truncation: "Code Helper (Plu" should match "Code Helper (Plugin)"
+        guard name.count >= 8 else { return false }
+        let nameLower = name.lowercased()
+        return Self.builtIn.contains { $0.lowercased().hasPrefix(nameLower) }
+            || userTrusted.contains { $0.lowercased().hasPrefix(nameLower) }
     }
 
     /// Adds `processName` to the user-trusted set.
