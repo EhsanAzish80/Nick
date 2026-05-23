@@ -345,15 +345,29 @@ final class SystemAuditor: MonitorProtocol {
     ///
     /// Each numbered entry appears as `"N :  /path/to/app"`.
     nonisolated private static func parseAllowlistPaths(_ output: String) -> [String] {
-        output
-            .components(separatedBy: "\n")
-            .compactMap { line -> String? in
-                // The app line contains " :  " (space colon two-spaces).
-                guard let colonRange = line.range(of: ": ") else { return nil }
-                let remainder = String(line[colonRange.upperBound...])
-                    .trimmingCharacters(in: .whitespaces)
-                return remainder.hasPrefix("/") ? remainder : nil
-            }
+        // Each entry spans two consecutive lines:
+        //   "N :  /path/to/app"
+        //   "  ( Allow    Incoming connections )"  — or "Block"
+        // Only collect paths whose status line contains "allow"; blocked apps
+        // are already handled by the user and need no recommendations.
+        let lines = output.components(separatedBy: "\n")
+        var paths: [String] = []
+
+        for (index, line) in lines.enumerated() {
+            guard let colonRange = line.range(of: ": ") else { continue }
+            let remainder = String(line[colonRange.upperBound...])
+                .trimmingCharacters(in: .whitespaces)
+            guard remainder.hasPrefix("/") else { continue }
+
+            let statusLine = (index + 1 < lines.count)
+                ? lines[index + 1].lowercased()
+                : ""
+            guard statusLine.contains("allow") else { continue }
+
+            paths.append(remainder)
+        }
+
+        return paths
     }
 
     /// Checks a single firewall-allowlisted path for the three issue types.
