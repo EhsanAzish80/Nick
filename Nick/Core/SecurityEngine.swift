@@ -111,6 +111,12 @@ final class SecurityEngine {
     private let avCapture  = AVCaptureMonitor()
     private let correlator = ThreatCorrelator()
 
+    /// Historical scan snapshots powering sparkline charts in the Overview.
+    let scanHistory = ScanHistory()
+
+    /// Running activity log displayed in the Overview's Recent Activity feed.
+    let activityLog = ActivityLog()
+
     private let logger = Logger(subsystem: "com.ehsanazish.nick", category: "SecurityEngine")
 
     /// Stored handle for the running scan. Kept on the engine so the task outlives
@@ -160,15 +166,30 @@ final class SecurityEngine {
 
         await startAuditor()
         guard isScanning else { return }
+        activityLog.log(
+            icon: "checkmark.shield", color: "green",
+            title: "System audit complete",
+            subtitle: "\(auditor.results.count) check\(auditor.results.count == 1 ? "" : "s") · \(auditor.results.filter { $0.status == .pass }.count) passed"
+        )
 
         await startPersistence()
         guard isScanning else { return }
+        activityLog.log(
+            icon: "checkmark.circle", color: "green",
+            title: "Persistence check passed",
+            subtitle: "\(persistence.items.count) launch item\(persistence.items.count == 1 ? "" : "s") verified"
+        )
 
         await startProcMon()
         guard isScanning else { return }
 
         await startNetMon()
         guard isScanning else { return }
+        activityLog.log(
+            icon: "network", color: "green",
+            title: "Network baseline updated",
+            subtitle: "\(netMon.connections.count) connection\(netMon.connections.count == 1 ? "" : "s") fingerprinted"
+        )
 
         await startAVCapture()
         guard isScanning else { return }
@@ -198,6 +219,33 @@ final class SecurityEngine {
         let ud = UserDefaults.standard
         ud.set(totalScanCount, forKey: "nickTotalScanCount")
         ud.set(totalThreatsDetected, forKey: "nickTotalThreatsDetected")
+
+        // Record a snapshot for sparkline charts.
+        scanHistory.record(
+            processes: processes.count,
+            network: connections.count,
+            persistence: persistenceItems.count,
+            auditIssues: auditResults.filter { $0.status != .pass }.count,
+            health: healthScore
+        )
+
+        // Log overall scan completion.
+        let totalItems = processes.count + connections.count + persistenceItems.count + auditResults.count
+        activityLog.log(
+            icon: "shield.checkered", color: "blue",
+            title: "Full system scan completed",
+            subtitle: "\(totalItems) items checked · \(newThreatCount) threat\(newThreatCount == 1 ? "" : "s")"
+        )
+
+        // Log each actionable threat alert.
+        for alert in newAlerts where alert.severity != .info {
+            activityLog.log(
+                icon: "exclamationmark.triangle", color: "red",
+                title: "Threat detected: \(alert.title)",
+                subtitle: "\(alert.severity.displayName) · \(alert.contributingSignals.count) signal\(alert.contributingSignals.count == 1 ? "" : "s")"
+            )
+        }
+
         logger.info("Full scan complete — \(newAlerts.count) alerts, health: \(self.healthScore)")
     }
 

@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Private
 
     private var statusItem: NSStatusItem?
+    private let mainWindowDelegate = MainWindowDelegate()
 
     // MARK: - NSApplicationDelegate
 
@@ -31,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NotificationManager.shared.setup()
             NSApp.servicesProvider = NickServicesProvider()
             NSUpdateDynamicServices()
+            configureMainWindowDelegate()
         }
     }
 
@@ -56,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if event.type == .rightMouseUp {
             showContextMenu()
         } else {
-            openMainWindow()
+            toggleMainWindow()
         }
     }
 
@@ -94,12 +96,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = nil
     }
 
+    /// Toggles the main window: hides if visible, shows if hidden. Used by the status item left-click.
+    @objc private func toggleMainWindow() {
+        if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }),
+           window.isVisible {
+            window.orderOut(nil)
+            NSApp.setActivationPolicy(.accessory)
+        } else {
+            openMainWindow()
+        }
+    }
+
+    /// Attaches the window delegate so the red close button hides instead of destroying the window.
+    /// Safe to call multiple times — only sets the delegate if it isn't already assigned.
+    private func configureMainWindowDelegate() {
+        guard let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }),
+              window.delegate == nil else { return }
+        window.delegate = mainWindowDelegate
+    }
+
     @objc func openMainWindow() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         // SwiftUI creates the NSWindow for a Window scene at launch (hidden).
         if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) {
             window.makeKeyAndOrderFront(nil)
+            // Ensure the delegate is attached even if the window was created after launch.
+            if window.delegate == nil {
+                window.delegate = mainWindowDelegate
+            }
         }
+    }
+}
+
+// MARK: - MainWindowDelegate
+
+/// Intercepts the red close button so it hides the window instead of destroying it.
+///
+/// Returning `false` from `windowShouldClose` prevents the window from being closed.
+/// `orderOut` hides it, and dropping back to `.accessory` removes Nick from the Dock.
+/// The window is brought back by clicking the menu bar icon (or ⌘Q to quit fully).
+@MainActor
+final class MainWindowDelegate: NSObject, NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        NSApp.setActivationPolicy(.accessory)
+        return false
     }
 }

@@ -84,7 +84,7 @@ struct MainWindowView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: { engine.runFullScan() }) {
-                    Label("Scan Now", systemImage: "arrow.clockwise")
+                    Label("Run Scan", systemImage: "arrow.clockwise")
                 }
                 .disabled(engine.isScanning)
             }
@@ -130,147 +130,245 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
 
 // MARK: - OverviewDetailView
 
-/// Health score centred at the top with a 2×2 grid of monitor-status cards below.
+/// Redesigned overview with circular security gauge, sparkline monitor cards,
+/// recent activity feed, and protection summary.
 struct OverviewDetailView: View {
 
     @Binding var selectedSection: SidebarSection?
     @Environment(SecurityEngine.self) private var engine
 
+    @AppStorage("deepScanIntervalSeconds") private var scanIntervalSeconds: Int = 60
+    @State private var now: Date = .now
+
     private let columns = [GridItem(.flexible()), GridItem(.flexible())]
+
+    /// Seconds until the next scheduled sweep, counting down live.
+    private var nextScanIn: Int {
+        guard let last = engine.lastScanDate else { return scanIntervalSeconds }
+        let elapsed = Int(now.timeIntervalSince(last))
+        return max(0, scanIntervalSeconds - elapsed)
+    }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: NickSpacing.lg) {
-                // Large health score
-                SystemHealthGauge(score: engine.healthScore, isScanning: engine.isScanning)
-                    .padding(.horizontal, NickSpacing.xxl)
-                    .padding(.top, NickSpacing.lg)
+            VStack(spacing: NickSpacing.xl) {
 
-                // Monitor cards — tapping navigates to the relevant section
-                LazyVGrid(columns: columns, spacing: NickSpacing.md) {
-                    Button(action: { selectedSection = .audit }) {
-                        MonitorCard(
-                            title:      "System Audit",
-                            icon:       "checkmark.shield",
-                            itemCount:  engine.auditResults.count,
-                            issueCount: engine.auditResults.filter { $0.status != .pass }.count,
-                            isScanning: engine.isScanning
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    Button(action: { selectedSection = .persistence }) {
-                        MonitorCard(
-                            title:      "Persistence",
-                            icon:       "arrow.triangle.2.circlepath",
-                            itemCount:  engine.persistenceItems.count,
-                            issueCount: engine.persistenceItems.filter { $0.signingStatus?.isSuspicious == true }.count,
-                            isScanning: engine.isScanning
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    Button(action: { selectedSection = .processes }) {
-                        MonitorCard(
-                            title:      "Processes",
-                            icon:       "cpu",
-                            itemCount:  engine.processes.count,
-                            issueCount: engine.processes.filter {
-                                $0.signingStatus == .unsigned || $0.signingStatus == .invalid
-                            }.count,
-                            isScanning: engine.isScanning
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    Button(action: { selectedSection = .network }) {
-                        MonitorCard(
-                            title:      "Network",
-                            icon:       "network",
-                            itemCount:  engine.connections.count,
-                            issueCount: engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count,
-                            isScanning: engine.isScanning
-                        )
-                    }
-                    .buttonStyle(.plain)
+                // Circular security gauge — centred.
+                SecurityGauge(score: engine.healthScore)
+                    .padding(.vertical, NickSpacing.lg)
+
+                // 2×2 monitor cards with sparklines.
+                let auditIssues       = engine.auditResults.filter { $0.status != .pass }.count
+                let persistenceIssues = engine.persistenceItems.filter { $0.signingStatus?.isSuspicious == true }.count
+                let processIssues     = engine.processes.filter { $0.signingStatus == .unsigned || $0.signingStatus == .invalid }.count
+                let networkIssues     = engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count
+
+                LazyVGrid(columns: columns, spacing: NickSpacing.lg) {
+                    MonitorCard(
+                        title:           "System Audit",
+                        count:           engine.auditResults.count,
+                        status:          statusLabel(issues: auditIssues),
+                        statusColor:     statusColor(issues: auditIssues),
+                        icon:            "checkmark.shield",
+                        sparklineValues: engine.scanHistory.recentValues(for: \.auditIssueCount),
+                        sparklineColor:  .statusGreen,
+                        action:          { selectedSection = .audit }
+                    )
+                    MonitorCard(
+                        title:           "Persistence",
+                        count:           engine.persistenceItems.count,
+                        status:          statusLabel(issues: persistenceIssues),
+                        statusColor:     statusColor(issues: persistenceIssues),
+                        icon:            "arrow.triangle.2.circlepath",
+                        sparklineValues: engine.scanHistory.recentValues(for: \.persistenceCount),
+                        sparklineColor:  .statusGreen,
+                        action:          { selectedSection = .persistence }
+                    )
+                    MonitorCard(
+                        title:           "Processes",
+                        count:           engine.processes.count,
+                        status:          statusLabel(issues: processIssues),
+                        statusColor:     statusColor(issues: processIssues),
+                        icon:            "cpu",
+                        sparklineValues: engine.scanHistory.recentValues(for: \.processCount),
+                        sparklineColor:  .statusGreen,
+                        action:          { selectedSection = .processes }
+                    )
+                    MonitorCard(
+                        title:           "Network",
+                        count:           engine.connections.count,
+                        status:          statusLabel(issues: networkIssues),
+                        statusColor:     statusColor(issues: networkIssues),
+                        icon:            "network",
+                        sparklineValues: engine.scanHistory.recentValues(for: \.networkCount),
+                        sparklineColor:  .statusGreen,
+                        action:          { selectedSection = .network }
+                    )
                 }
-                .padding(.horizontal, NickSpacing.lg)
+                .padding(.horizontal, NickSpacing.xl)
 
-                // Protection Summary card (includes last scan timestamp)
-                protectionSummary
-                    .padding(.horizontal, NickSpacing.lg)
-                    .padding(.bottom, NickSpacing.lg)
+                // Protection Summary + Recent Activity side by side.
+                HStack(alignment: .top, spacing: NickSpacing.lg) {
+                    ProtectionSummaryView(
+                        monitoringSince: engine.monitoringSince,
+                        totalScans:      engine.totalScanCount,
+                        threatsDetected: engine.totalThreatsDetected,
+                        lastScanDate:    engine.lastScanDate,
+                        nextScanIn:      nextScanIn
+                    )
+                    .frame(maxWidth: .infinity)
+
+                    RecentActivityView(
+                        events:    engine.activityLog.events,
+                        onViewAll: { selectedSection = .alerts }
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, NickSpacing.xl)
+                .padding(.bottom, NickSpacing.xl)
             }
+            .padding(.top, NickSpacing.xl)
         }
         .background(Color.backgroundPrimary)
         .navigationTitle("Overview")
-    }
-
-    // MARK: - Protection Summary
-
-    @AppStorage("deepScanIntervalSeconds") private var scanIntervalSeconds: Int = 60
-
-    private var nextScanDate: Date? {
-        guard let last = engine.lastScanDate else { return nil }
-        return last.addingTimeInterval(Double(scanIntervalSeconds))
-    }
-
-    private var protectionSummary: some View {
-        VStack(alignment: .leading, spacing: NickSpacing.sm) {
-            Text("Protection Summary")
-                .font(.nickBodyMedium)
-                .foregroundStyle(Color.textPrimary)
-                .padding(.bottom, NickSpacing.xs)
-            Rectangle()
-                .fill(Color.borderSubtle)
-                .frame(height: 0.5)
-                .padding(.bottom, NickSpacing.xs)
-
-            OverviewSummaryRow(icon: "shield",
-                               label: "Monitoring since",
-                               value: engine.monitoringSince.formatted(date: .abbreviated, time: .omitted))
-            OverviewSummaryRow(icon: "magnifyingglass",
-                               label: "Total scans",
-                               value: engine.totalScanCount.formatted())
-            OverviewSummaryRow(icon: "exclamationmark.triangle",
-                               label: "Threats detected",
-                               value: engine.totalThreatsDetected.formatted())
-            if let date = engine.lastScanDate {
-                OverviewSummaryRow(
-                    icon:  "clock",
-                    label: "Last scan",
-                    value: date.formatted(date: .abbreviated, time: .shortened)
-                )
-            }
-            if let deepDate = engine.lastDeepScanDate {
-                OverviewSummaryRow(
-                    icon:  "doc.text.magnifyingglass",
-                    label: "Last deep scan",
-                    value: "\(deepDate.formatted(date: .abbreviated, time: .shortened)) · \(engine.lastDeepScanFileCount.formatted()) files"
-                )
-            }
-            if let next = nextScanDate {
-                HStack(spacing: NickSpacing.sm) {
-                    Image(systemName: "timer")
-                        .frame(width: 16)
-                        .foregroundStyle(Color.textTertiary)
-                        .imageScale(.small)
-                    Text("Next scan")
-                        .font(.nickBodySmall)
-                        .foregroundStyle(Color.textSecondary)
-                    Spacer()
-                    Text(next, style: .relative)
-                        .font(.nickMonoSmall)
-                        .foregroundStyle(Color.textTertiary)
-                }
+        .task {
+            // Tick every second so the "Next scan" countdown stays live.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                now = .now
             }
         }
-        .padding(NickLayout.cardPadding)
+    }
+
+    // MARK: - Status helpers
+
+    private func statusLabel(issues: Int) -> String {
+        if engine.isScanning { return "Scanning…" }
+        if issues > 0 { return "\(issues) issue\(issues == 1 ? "" : "s")" }
+        return "All clear"
+    }
+
+    private func statusColor(issues: Int) -> Color {
+        if engine.isScanning { return .textTertiary }
+        if issues > 0 { return .statusRed }
+        return .statusGreen
+    }
+}
+
+// MARK: - MonitorCard
+
+private struct MonitorCard: View {
+
+    let title:           String
+    let count:           Int
+    let status:          String
+    let statusColor:     Color
+    let icon:            String
+    let sparklineValues: [Int]
+    let sparklineColor:  Color
+    let action:          () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                VStack(alignment: .leading, spacing: NickSpacing.sm) {
+                    Image(systemName: icon)
+                        .font(.system(size: 20))
+                        .foregroundStyle(Color.statusGreen)
+                        .padding(8)
+                        .background(Color.statusGreen.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    Text(title)
+                        .font(.nickBodyMedium)
+                        .foregroundStyle(Color.textPrimary)
+
+                    HStack(spacing: NickSpacing.sm) {
+                        Text("\(count)")
+                            .font(.nickMono)
+                            .foregroundStyle(Color.textPrimary)
+                        Text("items")
+                            .font(.nickBodySmall)
+                            .foregroundStyle(Color.textSecondary)
+                    }
+
+                    HStack(spacing: NickSpacing.xs) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 6, height: 6)
+                        Text(status)
+                            .font(.nickCaption)
+                            .foregroundStyle(statusColor)
+                    }
+                }
+
+                Spacer()
+
+                SparklineView(values: sparklineValues, color: sparklineColor)
+                    .frame(width: 80, height: 40)
+            }
+            .padding(NickSpacing.lg)
+            .background(Color.backgroundSecondary)
+            .clipShape(RoundedRectangle(cornerRadius: NickLayout.cardCornerRadius))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - ProtectionSummaryView
+
+private struct ProtectionSummaryView: View {
+
+    let monitoringSince: Date
+    let totalScans:      Int
+    let threatsDetected: Int
+    let lastScanDate:    Date?
+    let nextScanIn:      Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: NickSpacing.md) {
+            HStack {
+                Text("Protection Summary")
+                    .font(.nickSubtitle)
+                    .foregroundStyle(Color.textPrimary)
+                Spacer()
+                HStack(spacing: NickSpacing.xs) {
+                    Circle()
+                        .fill(Color.statusGreen)
+                        .frame(width: 6, height: 6)
+                    Text("LIVE")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.statusGreen)
+                }
+            }
+
+            SummaryRow(icon: "clock",
+                       label: "Monitoring since",
+                       value: monitoringSince.formatted(date: .abbreviated, time: .omitted))
+            SummaryRow(icon: "magnifyingglass",
+                       label: "Total scans",
+                       value: "\(totalScans)")
+            SummaryRow(icon: "exclamationmark.triangle",
+                       label: "Threats detected",
+                       value: "\(threatsDetected)")
+            if let lastScan = lastScanDate {
+                SummaryRow(icon: "clock.arrow.circlepath",
+                           label: "Last scan",
+                           value: lastScan.formatted(date: .abbreviated, time: .shortened))
+            }
+            SummaryRow(icon: "timer",
+                       label: "Next scan",
+                       value: "\(nextScanIn) sec")
+        }
+        .padding(NickSpacing.lg)
         .background(Color.backgroundSecondary)
         .clipShape(RoundedRectangle(cornerRadius: NickLayout.cardCornerRadius))
     }
 }
 
-// MARK: - OverviewSummaryRow
+// MARK: - SummaryRow
 
-private struct OverviewSummaryRow: View {
+private struct SummaryRow: View {
     let icon:  String
     let label: String
     let value: String
@@ -291,57 +389,71 @@ private struct OverviewSummaryRow: View {
     }
 }
 
-// MARK: - MonitorCard
+// MARK: - RecentActivityView
 
-private struct MonitorCard: View {
+private struct RecentActivityView: View {
 
-    let title:      String
-    let icon:       String
-    let itemCount:  Int
-    let issueCount: Int
-    let isScanning: Bool
-
-    private var statusColor: Color {
-        if isScanning   { return Color.textTertiary }
-        if issueCount > 0 { return Color.statusRed }
-        if itemCount == 0 { return Color.textTertiary }
-        return Color.statusGreen
-    }
-
-    private var statusLabel: String {
-        if isScanning      { return "Scanning…" }
-        if issueCount > 0  { return "\(issueCount) issue\(issueCount == 1 ? "" : "s")" }
-        if itemCount == 0  { return "No data" }
-        return "All clear"
-    }
+    let events:    [ActivityEvent]
+    let onViewAll: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: NickSpacing.sm) {
+        VStack(alignment: .leading, spacing: NickSpacing.md) {
             HStack {
-                Image(systemName: icon)
-                    .font(.system(size: NickLayout.iconSizeLarge, weight: .medium))
-                    .foregroundStyle(statusColor)
+                Text("Recent Activity")
+                    .font(.nickSubtitle)
+                    .foregroundStyle(Color.textPrimary)
                 Spacer()
-                if isScanning {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                        .frame(width: 14, height: 14)
+                Button("View all ›") { onViewAll() }
+                    .font(.nickCaption)
+                    .foregroundStyle(Color.textTertiary)
+                    .buttonStyle(.plain)
+            }
+
+            if events.isEmpty {
+                Text("No activity yet")
+                    .font(.nickBodySmall)
+                    .foregroundStyle(Color.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, NickSpacing.lg)
+            } else {
+                ForEach(events.prefix(5)) { event in
+                    HStack(spacing: NickSpacing.md) {
+                        Image(systemName: event.icon)
+                            .font(.system(size: 12))
+                            .foregroundStyle(colorFor(event.iconColor))
+                            .frame(width: 20)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(event.title)
+                                .font(.nickBodySmall)
+                                .foregroundStyle(Color.textPrimary)
+                            Text(event.subtitle)
+                                .font(.nickMonoSmall)
+                                .foregroundStyle(Color.textTertiary)
+                        }
+
+                        Spacer()
+
+                        Text(event.timestamp, format: .dateTime.hour().minute().second())
+                            .font(.nickMonoSmall)
+                            .foregroundStyle(Color.textTertiary)
+                    }
                 }
             }
-            Text(title)
-                .font(.nickSubtitle)
-                .foregroundStyle(Color.textPrimary)
-            Text("\(itemCount) item\(itemCount == 1 ? "" : "s")")
-                .font(.nickCaption)
-                .foregroundStyle(Color.textSecondary)
-            Text(statusLabel)
-                .font(.nickCaption)
-                .foregroundStyle(statusColor)
         }
-        .padding(NickLayout.cardPadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(NickSpacing.lg)
         .background(Color.backgroundSecondary)
         .clipShape(RoundedRectangle(cornerRadius: NickLayout.cardCornerRadius))
+    }
+
+    private func colorFor(_ string: String) -> Color {
+        switch string {
+        case "green":  return .statusGreen
+        case "blue":   return .statusBlue
+        case "yellow": return .statusYellow
+        case "red":    return .statusRed
+        default:       return .textTertiary
+        }
     }
 }
 
