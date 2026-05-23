@@ -465,4 +465,107 @@ struct ProcessScanner {
 
         return nil
     }
+
+    // MARK: - Fast Static Helpers
+
+    /// Returns the set of all running PIDs using KERN_PROC_ALL.
+    /// Does not resolve paths or user names — O(n) over the kinfo_proc buffer only.
+    /// Suitable for the 5-second diff tick because it avoids all per-process syscalls.
+    static func quickPIDList() -> Set<Int32> {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return [] }
+        let count = size / MemoryLayout<kinfo_proc>.stride
+        var buffer = [kinfo_proc](repeating: kinfo_proc(), count: count)
+        guard sysctl(&mib, 4, &buffer, &size, nil, 0) == 0 else { return [] }
+        let actualCount = size / MemoryLayout<kinfo_proc>.stride
+        return Set(buffer.prefix(actualCount).compactMap { k in
+            let pid = k.kp_proc.p_pid
+            return pid > 0 ? pid : nil
+        })
+    }
+
+    /// Returns basic process info for a single PID using KERN_PROC_PID + proc_pidpath.
+    /// Returns `nil` if the process has already exited or is otherwise inaccessible.
+    /// Signing status is always `.pending`; use `SignatureValidator` to backfill if needed.
+    static func quickInfo(pid: Int32) -> NickProcessInfo? {
+        guard pid > 0 else { return nil }
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var kinfo = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&mib, 4, &kinfo, &size, nil, 0) == 0, size > 0 else { return nil }
+        guard kinfo.kp_proc.p_pid > 0 else { return nil }
+
+        let processName = withUnsafeBytes(of: kinfo.kp_proc.p_comm) { bytes in
+            let bound = bytes.bindMemory(to: CChar.self)
+            return String(cString: bound.baseAddress!)
+        }
+        let parentPID = kinfo.kp_eproc.e_ppid
+
+        var pathBuffer = [CChar](repeating: 0, count: 4096)
+        let ret = proc_pidpath(pid, &pathBuffer, 4096)
+        let path = ret > 0 ? String(cString: &pathBuffer) : ""
+
+        let uid = kinfo.kp_eproc.e_pcred.p_ruid
+        let user: String? = getpwuid(uid).flatMap { pw in
+            guard let ptr = pw.pointee.pw_name else { return nil }
+            return String(cString: ptr)
+        }
+
+        let startTime: Date? = {
+            let tv = kinfo.kp_proc.p_starttime
+            guard tv.tv_sec > 0 else { return nil }
+            return Date(timeIntervalSince1970: TimeInterval(tv.tv_sec))
+        }()
+
+        let arguments = ProcessScanner.getArguments(pid: pid)
+
+        return NickProcessInfo(
+            pid: pid,
+            path: path,
+            name: processName,
+            parentPID: parentPID,
+            parentName: nil,
+            signingStatus: .pending,
+            user: user,
+            startTime: startTime,
+            arguments: arguments
+        )
+    }
+
+    /// Returns the command-line arguments for `pid` by reading `KERN_PROCARGS2`.
+    ///
+    /// Parses the kernel buffer: first 4 bytes = `argc`, followed by the exec path
+    /// (null-terminated), null-byte padding, then exactly `argc` argv strings.
+    /// Returns `[]` when the process is inaccessible or has already exited.
+    static func getArguments(pid: Int32) -> [String] {
+        guard pid > 0 else { return [] }
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size: Int = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return [] }
+
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return [] }
+
+        let argc = buffer.withUnsafeBytes { $0.load(as: Int32.self) }
+        guard argc > 0 else { return [] }
+
+        var offset = 4
+        // Skip exec path (first null-terminated string)
+        while offset < size && buffer[offset] != 0 { offset += 1 }
+        // Skip null padding before argv
+        while offset < size && buffer[offset] == 0 { offset += 1 }
+
+        var args: [String] = []
+        for _ in 0..<argc {
+            var end = offset
+            while end < size && buffer[end] != 0 { end += 1 }
+            if end > offset {
+                args.append(String(bytes: buffer[offset..<end], encoding: .utf8) ?? "")
+            }
+            offset = end + 1
+            if offset >= size { break }
+        }
+        return args
+    }
 }

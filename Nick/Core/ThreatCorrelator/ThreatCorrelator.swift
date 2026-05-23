@@ -44,6 +44,11 @@ actor ThreatCorrelator {
     private var rules: [CorrelationRule]
     private var trustedProcessList: TrustedProcessList = TrustedProcessList()
 
+    /// Tracks which rule names have already fired since the last `resetEmittedRules()` call.
+    /// Prevents the same rule from re-firing every 5-second tick while its contributing
+    /// signals remain in the 30-second correlation window.
+    private var emittedRuleNames: Set<String> = []
+
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
         category: "ThreatCorrelator"
@@ -113,6 +118,9 @@ actor ThreatCorrelator {
     /// - Some contributing processes trusted → severity downgraded by one level
     /// - No trusted processes involved → severity unchanged
     ///
+    /// Fired rule names are recorded in `emittedRuleNames` so that a subsequent
+    /// `correlateNew()` call in the same session does not re-deliver the same alerts.
+    ///
     /// - Returns: All alerts produced by the current rule set and signal window.
     func correlate() -> [ThreatAlert] {
         pruneOldSignals()
@@ -127,11 +135,51 @@ actor ThreatCorrelator {
             if let alert = rule.evaluate(window) {
                 let adjusted = applyTrustedDowngrade(to: alert)
                 alerts.append(adjusted)
+                emittedRuleNames.insert(rule.name)
                 Self.logger.info("Rule '\(rule.name)' fired — score: \(adjusted.score), severity: \(adjusted.severity.displayName)")
             }
         }
 
         return alerts
+    }
+
+    /// Like `correlate()` but only returns alerts for rules that have **not** fired
+    /// since the last `resetEmittedRules()` call.
+    ///
+    /// Used by the pipeline's fast-tick path so that a rule firing at T=5 s is not
+    /// re-delivered at T=10 s, T=15 s, … while its contributing signals remain inside
+    /// the 30-second correlation window.
+    ///
+    /// - Returns: Alerts for newly-triggered rules only.
+    func correlateNew() -> [ThreatAlert] {
+        pruneOldSignals()
+        guard !signalBuffer.isEmpty else { return [] }
+
+        let window = signalBuffer
+        var alerts: [ThreatAlert] = []
+
+        let sortedRules = rules.sorted { $0.score > $1.score }
+        for rule in sortedRules {
+            guard !emittedRuleNames.contains(rule.name) else { continue }
+            if let alert = rule.evaluate(window) {
+                let adjusted = applyTrustedDowngrade(to: alert)
+                alerts.append(adjusted)
+                emittedRuleNames.insert(rule.name)
+                Self.logger.info("Rule '\(rule.name)' fired (new) — score: \(adjusted.score), severity: \(adjusted.severity.displayName)")
+            }
+        }
+
+        return alerts
+    }
+
+    /// Clears the set of already-emitted rule names so that all rules are eligible
+    /// to fire again on the next `correlate()` or `correlateNew()` call.
+    ///
+    /// Call this at the start of each full scan (`performFullScan`) so that a rule
+    /// suppressed in a previous scan window can re-fire if the same condition persists.
+    func resetEmittedRules() {
+        emittedRuleNames.removeAll()
+        Self.logger.debug("Emitted-rule history reset — all rules eligible to fire")
     }
 
     /// Removes all signals from the internal buffer.

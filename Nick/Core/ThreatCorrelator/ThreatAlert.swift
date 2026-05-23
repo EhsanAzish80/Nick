@@ -82,4 +82,18 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
             explanation: self.explanation
         )
     }
+
+    /// Stable key that identifies the same logical threat scenario across scan runs.
+    ///
+    /// Because `id` is a fresh `UUID` on every `correlate()` call, it cannot be
+    /// used to recognise a previously-dismissed alert. This key uses the alert title,
+    /// severity, and the sorted names of all contributing processes — none of which
+    /// change between scans for the same underlying condition.
+    var deduplicationKey: String {
+        let procNames = contributingSignals
+            .compactMap { $0.processInfo?.name }
+            .sorted()
+            .joined(separator: ",")
+        return "\(title)|\(severity.rawValue)|\(procNames)"
+    }
 }

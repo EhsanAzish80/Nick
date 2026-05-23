@@ -147,4 +147,31 @@ struct NickProcessInfo: Sendable, Codable, Equatable {
 
     /// Time the process was created, derived from `kp_proc.p_starttime`.
     let startTime: Date?
+
+    /// Command-line arguments retrieved via `KERN_PROCARGS2`.
+    /// Empty for processes where argument retrieval was not performed or failed.
+    let arguments: [String]
+}
+
+// MARK: - Backwards-Compatible Initialiser
+
+extension NickProcessInfo {
+    /// Creates a `NickProcessInfo` without argument data.
+    /// All existing construction sites use this; `arguments` defaults to `[]`.
+    init(
+        pid: Int32,
+        path: String,
+        name: String,
+        parentPID: Int32,
+        parentName: String?,
+        signingStatus: SigningStatus,
+        user: String?,
+        startTime: Date?
+    ) {
+        self.init(
+            pid: pid, path: path, name: name, parentPID: parentPID,
+            parentName: parentName, signingStatus: signingStatus,
+            user: user, startTime: startTime, arguments: []
+        )
+    }
 }

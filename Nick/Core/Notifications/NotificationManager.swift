@@ -46,10 +46,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Setup
 
-    /// Registers notification categories and requests user permission.
-    ///
-    /// Safe to call multiple times — category registration and delegate
-    /// assignment are both idempotent.
+    /// Registers notification categories, sets the delegate, and kicks off a
+    /// permission request. Safe to call multiple times — idempotent.
     func setup() {
         let viewAction = UNNotificationAction(
             identifier: "VIEW_ALERT",
@@ -65,22 +63,43 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let center = UNUserNotificationCenter.current()
         center.setNotificationCategories([alertCategory])
         center.delegate = self
+        // requestPermission() is NOT called here — no window is open at launch and
+        // macOS will silently discard the dialog for a .accessory-policy app with no
+        // active foreground window. Permission is requested by WelcomeView (new users)
+        // or by MainWindowView's .task modifier (returning users).
+    }
 
-        Task {
-            let settings = await center.notificationSettings()
-            switch settings.authorizationStatus {
-            case .denied:
-                Self.log.info("Notification permission denied — skipping request, alerts will be silent")
-            case .notDetermined:
-                do {
-                    let granted = try await center.requestAuthorization(options: [.alert, .sound])
-                    Self.log.info("Notification permission: \(granted ? "granted" : "denied")")
-                } catch {
-                    Self.log.warning("Notification authorisation request failed: \(error.localizedDescription)")
+    /// Requests notification permission and returns whether it was granted.
+    ///
+    /// - `.notDetermined`: shows the macOS system prompt.
+    /// - `.denied`: logs a warning; returns `false` (caller should surface in-app guidance).
+    /// - `.authorized` / `.provisional` / `.ephemeral`: returns `true` immediately.
+    @discardableResult
+    func requestPermission() async -> Bool {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+
+        switch settings.authorizationStatus {
+        case .notDetermined:
+            do {
+                let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge, .timeSensitive])
+                if granted {
+                    Self.log.info("Notification permission granted")
+                } else {
+                    Self.log.warning("Notification permission denied by user")
                 }
-            default:
-                Self.log.debug("Notification permission already set: \(settings.authorizationStatus.rawValue)")
+                return granted
+            } catch {
+                Self.log.error("Notification permission request failed: \(error.localizedDescription)")
+                return false
             }
+        case .denied:
+            Self.log.warning("Notifications denied — user must enable in System Settings")
+            return false
+        case .authorized, .provisional, .ephemeral:
+            return true
+        @unknown default:
+            return false
         }
     }
 
@@ -95,6 +114,21 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     func send(for alert: ThreatAlert) async {
         guard alert.severity != .info else { return }
 
+        // macOS does not throw from add() when permission is denied — it silently
+        // discards the notification. Check authorization first and bail early with
+        // a clear log so the root cause is visible in the console.
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        let authStatus = settings.authorizationStatus
+        Self.log.info("Notification settings — auth:\(authStatus.rawValue) alertStyle:\(settings.alertStyle.rawValue) sound:\(settings.soundSetting.rawValue) badge:\(settings.badgeSetting.rawValue) (alertStyle: 0=none 1=banner 2=alert)")
+        guard authStatus == .authorized || authStatus == .provisional else {
+            Self.log.warning("Notifications not authorized (status=\(authStatus.rawValue)) — skipping delivery for '\(alert.title)'")
+            return
+        }
+        guard settings.alertStyle != .none else {
+            Self.log.warning("Nick's notification style is 'None' in System Settings — no banner will appear. Fix: System Settings → Notifications → Nick → set to Banners or Alerts")
+            return
+        }
+
         let thresholdRaw = UserDefaults.standard.integer(forKey: "notificationThresholdRaw")
         let threshold = SignalSeverity(rawValue: thresholdRaw) ?? .high
         guard alert.severity >= threshold else {
@@ -105,7 +139,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent()
         content.title = "Nick — \(alert.severity.displayName) Alert"
         content.body = alert.title
-        content.sound = alert.severity >= .high ? .defaultCritical : .default
+        content.sound = .default
+        content.interruptionLevel = .timeSensitive   // breaks through Focus / DND
         content.categoryIdentifier = "THREAT_ALERT"
         content.userInfo = ["alertID": alert.id.uuidString]
 
@@ -137,7 +172,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         if response.actionIdentifier == "VIEW_ALERT" ||
            response.actionIdentifier == UNNotificationDefaultActionIdentifier {
             Task { @MainActor in
-                NSApp.activate(ignoringOtherApps: true)
+                NSApp.setActivationPolicy(.regular)
+                if let window = NSApp.windows.first(where: { $0.title == "Nick" || $0.title == "Overview" }) {
+                    window.makeKeyAndOrderFront(nil)
+                }
+                NSApp.activate()
                 var notificationUserInfo: [AnyHashable: Any] = [:]
                 if let id = alertID {
                     notificationUserInfo["alertID"] = id
@@ -157,8 +196,10 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
     ) {
-        // Show banner and play sound even when Nick is the frontmost app.
-        completionHandler([.banner, .sound])
+        let log = Logger(subsystem: "com.ehsanazish.nick", category: "NotificationManager")
+        log.info("willPresent called — forcing banner for '\(notification.request.content.body, privacy: .public)'")
+        // Show banner, play sound, and update badge even when Nick is the frontmost app.
+        completionHandler([.banner, .sound, .badge])
     }
 }
 

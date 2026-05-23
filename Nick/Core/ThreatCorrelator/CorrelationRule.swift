@@ -36,10 +36,12 @@ struct CorrelationRule: Sendable {
     /// The hardcoded rules applied by `ThreatCorrelator` in Phase 1.
     static let standard: [CorrelationRule] = [
         criticalSystemAuditRule,
+        curlPipeShellRule,
         unsignedBinaryInTmpRule,
         reverseShellRule,
         unsignedLaunchAgentRule,
         unexpectedCaptureDeviceRule,
+        lolbinRule,
         multipleHighSignalsRule
     ]
 
@@ -66,6 +68,8 @@ struct CorrelationRule: Sendable {
     }
 
     /// Unsigned binary running from /tmp or similar writable directory.
+    /// Also matches `temp_path_spawn` signals from the fast-check path, which fire
+    /// before code-signing validation completes but still indicate high-risk placement.
     private static let unsignedBinaryInTmpRule = CorrelationRule(
         name: "unsigned_binary_in_tmp",
         score: 0.85,
@@ -74,7 +78,8 @@ struct CorrelationRule: Sendable {
         let matches = signals.filter {
             $0.source == .process &&
             $0.severity == .high &&
-            $0.metadata["reason"] == "unsigned_temp_path"
+            ($0.metadata["reason"] == "unsigned_temp_path" ||
+             $0.metadata["reason"] == "temp_path_spawn")
         }
         guard !matches.isEmpty else { return nil }
         let names = matches.compactMap { $0.processInfo?.name }.joined(separator: ", ")
@@ -152,6 +157,58 @@ struct CorrelationRule: Sendable {
             recommendedAction:
                 "Open System Settings → Privacy & Security → Camera / Microphone and audit " +
                 "which apps have permission. Revoke access for anything unexpected."
+        )
+    }
+
+    /// Shell interpreter piped from a concurrent download tool (curl|bash / wget|bash).
+    private static let curlPipeShellRule = CorrelationRule(
+        name: "curl_pipe_shell",
+        score: 0.95,
+        severity: .critical
+    ) { signals in
+        let matches = signals.filter {
+            $0.source == .process &&
+            $0.metadata["reason"] == "curl_pipe_shell"
+        }
+        guard !matches.isEmpty else { return nil }
+        let details = matches.compactMap { s -> String? in
+            guard let proc = s.processInfo else { return nil }
+            let parent = s.metadata["parent"] ?? "unknown"
+            return "'\(proc.name)' (parent: '\(parent)')"
+        }.joined(separator: "; ")
+        return ThreatAlert(
+            score: 0.95,
+            title: "Download-to-shell pipe attack detected",
+            description: "A shell process appeared concurrently with a download tool: \(details). The 'curl|bash' pattern is the most common initial-access vector for macOS malware.",
+            severity: .critical,
+            contributingSignals: matches,
+            recommendedAction: "Terminate the shell process immediately. Audit recently created files and any processes spawned by the affected parent."
+        )
+    }
+
+    /// Shell interpreter spawned from a non-terminal, non-trusted parent (LOLBin pattern).
+    private static let lolbinRule = CorrelationRule(
+        name: "lolbin_execution",
+        score: 0.65,
+        severity: .medium
+    ) { signals in
+        let matches = signals.filter {
+            $0.source == .process &&
+            $0.metadata["reason"] == "lolbin"
+        }
+        guard !matches.isEmpty else { return nil }
+        let details = matches.compactMap { s -> String? in
+            guard let proc = s.processInfo else { return nil }
+            let parent = s.metadata["parent"] ?? "unknown"
+            return "'\(proc.name)' spawned by '\(parent)'"
+        }.joined(separator: "; ")
+        return ThreatAlert(
+            score: 0.65,
+            title: "LOLBin execution detected",
+            description: "Shell interpreter(s) spawned from a non-terminal parent: \(details). Malware uses this pattern to execute arbitrary commands without a visible terminal window.",
+            severity: .medium,
+            contributingSignals: matches,
+            recommendedAction: "Identify the parent application and determine whether it has a legitimate reason to spawn a shell. Terminate if unexpected."
         )
     }
 

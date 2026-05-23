@@ -28,6 +28,10 @@ final class SecurityEngine {
     /// All threat alerts produced by the correlator since the last `reset()`.
     private(set) var alerts: [ThreatAlert] = []
 
+    /// Stable deduplication keys for alerts the user has explicitly dismissed.
+    /// Persisted to `UserDefaults` so dismissed alerts do not reappear after a rescan.
+    private(set) var dismissedAlertKeys: Set<String> = []
+
     /// The most recent set of system audit results.
     private(set) var auditResults: [SystemCheckResult] = []
 
@@ -139,17 +143,22 @@ final class SecurityEngine {
         totalThreatsDetected  = ud.integer(forKey: "nickTotalThreatsDetected")
         lastDeepScanDate      = ud.object(forKey: "nickLastDeepScanDate") as? Date
         lastDeepScanFileCount = ud.integer(forKey: "nickLastDeepScanFileCount")
+        let storedKeys        = ud.stringArray(forKey: "nickDismissedAlertKeys") ?? []
+        dismissedAlertKeys    = Set(storedKeys)
     }
 
     // MARK: - Public API
 
-    /// Clears all stored threat alerts and resets threat counters.
+    /// Clears all stored threat alerts, resets threat counters, and removes all
+    /// dismissed-alert suppression so every alert type can fire again.
     ///
     /// Monitoring continues uninterrupted. This only affects historical display data.
     func clearAlertHistory() {
         alerts = []
         totalThreatsDetected = 0
+        dismissedAlertKeys = []
         UserDefaults.standard.set(0, forKey: "nickTotalThreatsDetected")
+        UserDefaults.standard.removeObject(forKey: "nickDismissedAlertKeys")
     }
 
     /// Launches a full security scan as an independent, stored task.
@@ -219,9 +228,10 @@ final class SecurityEngine {
         processes        = procMon.processes
         connections      = netMon.connections
 
+        await correlator.resetEmittedRules()
         await correlator.ingest(allSignals)
         let newAlerts = await correlator.correlate()
-        alerts = newAlerts.sorted { $0.score > $1.score }
+        mergeAlerts(newAlerts)
         isScanning = false
         scanTask = nil
         lastScanDate = Date()
@@ -305,16 +315,34 @@ final class SecurityEngine {
         await correlator.flush()
     }
 
+    /// Adds a single alert from the real-time pipeline.
+    /// Skips dismissed alerts and alerts already shown (matched by `deduplicationKey`).
+    @MainActor
+    func addAlert(_ alert: ThreatAlert) {
+        guard !dismissedAlertKeys.contains(alert.deduplicationKey) else { return }
+        guard !alerts.contains(where: { $0.deduplicationKey == alert.deduplicationKey }) else { return }
+        mergeAlerts([alert])
+    }
+
     /// Merges new alerts from the real-time pipeline, deduplicating by ID.
+    /// Alerts whose `deduplicationKey` has been previously dismissed are silently dropped.
     func mergeAlerts(_ newAlerts: [ThreatAlert]) {
-        let newIDs = Set(newAlerts.map { $0.id })
-        alerts = alerts.filter { !newIDs.contains($0.id) } + newAlerts
+        let filtered = newAlerts.filter { !dismissedAlertKeys.contains($0.deduplicationKey) }
+        let newIDs = Set(filtered.map { $0.id })
+        alerts = alerts.filter { !newIDs.contains($0.id) } + filtered
         alerts.sort { $0.score > $1.score }
     }
 
-    /// Removes a single alert by ID (user-dismissed).
+    /// Removes a single alert by ID and persists its `deduplicationKey` so it
+    /// is suppressed on all future scans until `clearAlertHistory()` is called.
     func dismissAlert(_ id: UUID) {
+        guard let alert = alerts.first(where: { $0.id == id }) else {
+            alerts.removeAll { $0.id == id }
+            return
+        }
+        dismissedAlertKeys.insert(alert.deduplicationKey)
         alerts.removeAll { $0.id == id }
+        UserDefaults.standard.set(Array(dismissedAlertKeys), forKey: "nickDismissedAlertKeys")
     }
 
     /// Cancels an in-progress scan, clearing all progress state immediately.

@@ -40,6 +40,13 @@ struct TrustedProcessList {
         "Terminal", "iTerm2", "iTerm", "Alacritty", "Warp", "Kitty", "Hyper",
         "xterm", "WezTerm",
 
+        // macOS terminal session infrastructure — login is the intermediate
+        // process in every Terminal.app session (Terminal → login → shell).
+        // tmux and screen also legitimately spawn shells as session managers.
+        "login",
+        "tmux", "tmux-client", "tmux: server",
+        "screen",
+
         // VS Code and derivatives
         "Code Helper", "Code Helper (Plugin)", "Code Helper (Renderer)",
         "Code Helper (GPU)", "Cursor Helper", "Cursor Helper (Plugin)",

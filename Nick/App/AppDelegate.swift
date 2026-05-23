@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private let mainWindowDelegate = MainWindowDelegate()
+    private var coordinator: MonitorCoordinator?
     /// Set to `true` before calling `NSApp.terminate` from an explicit user action
     /// (right-click → Quit Nick) so `applicationShouldTerminate` allows the quit
     /// even when the main window is hidden.
@@ -38,6 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         Task { @MainActor in
             engine.runFullScan()
+            let coord = MonitorCoordinator(engine: engine, correlator: ThreatCorrelator())
+            coordinator = coord
+            coord.startRealTimePipeline()
             NotificationManager.shared.setup()
             NSApp.servicesProvider = NickServicesProvider()
             NSUpdateDynamicServices()

@@ -132,82 +132,123 @@ final class MonitorCoordinator {
         let now = Date()
         if now.timeIntervalSince(lastDeepScan) >= deepScanInterval {
             Self.log.debug("Pipeline deep scan (last: \(self.lastDeepScan.formatted())")
+            // runFullScan handles its own ingest → correlate → mergeAlerts → UI update.
+            // Returning here prevents a second correlate() call racing against it.
             engine.runFullScan()
             lastDeepScan = now
-        } else {
-            Self.log.debug("Pipeline fast tick (next deep scan in \(Int(self.deepScanInterval - now.timeIntervalSince(self.lastDeepScan)))s)")
-            await fastProcessCheck()
-        }
-
-        // Correlate current window
-        let newAlerts = await correlator.correlate()
-        guard !newAlerts.isEmpty else { return }
-
-        // Enrich and log each new alert
-        for var alert in newAlerts {
-            // Generate explanation (async, Foundation Models on macOS 26+)
-            let explanation = await explainer.explain(alert: alert, topFeatures: [])
-            alert.explanation = explanation
-
-            // Log to persistent store
-            await logger?.log(alert: alert, explanation: explanation)
-
-            // Deliver system notification (suppressed for .info severity / below threshold)
-            await NotificationManager.shared.send(for: alert)
-
-            Self.log.info("Pipeline alert: \(alert.title) score=\(alert.score)")
-        }
-
-        // Update engine on main actor with enriched alerts
-        await MainActor.run { [engine, newAlerts] in
-            engine.mergeAlerts(newAlerts)
-            engine.currentThreatScore = newAlerts.map { $0.score }.max() ?? engine.currentThreatScore
-            engine.lastScanDate = Date()
-        }
-    }
-
-    // MARK: - Fast PID Check
-
-    /// Performs a lightweight check for newly spawned suspicious processes.
-    ///
-    /// Called every 5-second tick when a deep scan is not due. Uses
-    /// `ProcessScanner.scanFast()` (no code-signing validation) to enumerate
-    /// current PIDs and compares them against `lastKnownPIDs`. Any new PID is
-    /// evaluated by `signalsForNewProcesses`, which catches:
-    /// - Processes spawned in `/tmp/` or other temp paths (path check, no signing needed)
-    /// - Shells spawned from non-terminal or download-tool parents (LOLBin / pipe attack)
-    ///
-    /// Detected signals are ingested into the correlator; the final
-    /// `correlator.correlate()` call at the end of `tick()` converts them to alerts.
-    private func fastProcessCheck() async {
-        let processes: [NickProcessInfo]
-        do {
-            processes = try await Task.detached(priority: .utility) {
-                try ProcessScanner().scanFast()
-            }.value
-        } catch {
-            Self.log.debug("Fast PID check scan failed: \(error)")
             return
         }
 
-        let currentPIDs = Set(processes.map { $0.pid })
+        Self.log.debug("Pipeline fast tick (next deep scan in \(Int(self.deepScanInterval - now.timeIntervalSince(self.lastDeepScan)))s)")
+        await quickTick()
+    }
+
+    // MARK: - Quick Process Tick
+
+    /// Performs a lightweight per-PID check for newly spawned suspicious processes.
+    ///
+    /// Uses `ProcessScanner.quickPIDList()` (pure sysctl, no path resolution) to diff
+    /// against the previous snapshot. For each new PID, `ProcessScanner.quickInfo(pid:)`
+    /// fetches name, path, and parent — then three inline checks fire:
+    ///   1. Executable launched from a temp directory
+    ///   2. LOLBin argument pattern (`LOLBinDetector`)
+    ///   3. Suspicious parent → child chain (`ParentChainAnalyzer`)
+    ///
+    /// Signals are ingested into the correlator and correlated immediately; each
+    /// resulting alert is pushed to `SecurityEngine` and delivered as a notification.
+    private func quickTick() async {
+        let currentPIDs = ProcessScanner.quickPIDList()
         defer { lastKnownPIDs = currentPIDs }
 
-        // First call after startup — seed the baseline without emitting signals.
+        // First call: seed baseline without emitting signals.
         guard !lastKnownPIDs.isEmpty else { return }
 
         let newPIDs = currentPIDs.subtracting(lastKnownPIDs)
+
+        Self.log.info("quickTick: \(currentPIDs.count) current PIDs, \(newPIDs.count) new")
+
         guard !newPIDs.isEmpty else { return }
 
-        let newSignals = ProcessScanner().signalsForNewProcesses(
-            all: processes,
-            newPIDs: newPIDs,
-            trustedProcessList: engine.trustedProcessList
-        )
+        var newSignals: [ThreatSignal] = []
+
+        for pid in newPIDs {
+            guard let info = ProcessScanner.quickInfo(pid: pid) else { continue }
+
+            Self.log.info("quickTick: new PID \(pid) — \(info.name, privacy: .public) at \(info.path, privacy: .public) args: \(info.arguments.joined(separator: " "), privacy: .public)")
+
+            if engine.trustedProcessList.isTrusted(info.name) { continue }
+
+            // Check 1: Executable in a writable temp directory, OR interpreter running
+            // a script whose first argument points to a temp-directory path.
+            // Catches: /tmp/evil (direct) AND /bin/bash /tmp/evil.sh (interpreter pattern).
+            let p = info.path
+            let isTempExec = !p.isEmpty && (p.hasPrefix("/tmp/") || p.hasPrefix("/private/tmp/")
+                                            || p.hasPrefix("/var/tmp/")
+                                            || p.hasPrefix("/private/var/folders/"))
+            let interpreterBinaries: Set<String> = [
+                "bash", "sh", "zsh", "python3", "python", "ruby", "perl", "node"
+            ]
+            let execName = p.components(separatedBy: "/").last ?? p
+            let isInterpreter = interpreterBinaries.contains(execName)
+            let scriptInTmp = info.arguments.first {
+                $0.hasPrefix("/tmp/") || $0.hasPrefix("/private/tmp/") || $0.hasPrefix("/var/tmp/")
+            }
+
+            if isTempExec || (isInterpreter && scriptInTmp != nil) {
+                let detectedPath = scriptInTmp ?? p
+                newSignals.append(ThreatSignal(
+                    source: .process,
+                    severity: .high,
+                    title: "Script executing from temp directory",
+                    description: "'\(info.name)' (PID \(pid)) is executing '\(detectedPath)' from a writable temporary location.",
+                    processInfo: info,
+                    metadata: ["reason": "temp_path_spawn", "script_path": detectedPath]
+                ))
+            }
+
+            // Check 2: LOLBin argument patterns
+            let parentInfo = ProcessScanner.quickInfo(pid: info.parentPID)
+            if let signal = LOLBinDetector.evaluate(
+                info, parentName: parentInfo?.name,
+                trustedProcessList: engine.trustedProcessList
+            ) {
+                newSignals.append(signal)
+            }
+
+            // Check 3: Suspicious parent → child chain
+            if let parent = parentInfo {
+                let chain = ParentChainAnalyzer.ProcessChain(processes: [parent, info])
+                if let signal = ParentChainAnalyzer.evaluateChain(
+                    chain, trustedProcessList: engine.trustedProcessList
+                ) {
+                    newSignals.append(signal)
+                }
+            }
+        }
+
         guard !newSignals.isEmpty else { return }
 
-        Self.log.info("Fast PID check: \(newSignals.count) signal(s) from \(newPIDs.count) new PID(s)")
+        Self.log.info("Quick tick: \(newSignals.count) signal(s) from \(newPIDs.count) new PID(s)")
         await correlator.ingest(newSignals)
+
+        let newAlerts = await correlator.correlateNew()
+        guard !newAlerts.isEmpty else { return }
+
+        for var alert in newAlerts {
+            let explanation = await explainer.explain(alert: alert, topFeatures: [])
+            alert.explanation = explanation
+            await logger?.log(alert: alert, explanation: explanation)
+            await NotificationManager.shared.send(for: alert)
+            Self.log.info("Quick tick alert: \(alert.title) score=\(alert.score)")
+        }
+
+        await MainActor.run { [engine, newAlerts] in
+            for alert in newAlerts {
+                engine.addAlert(alert)
+            }
+            engine.currentThreatScore = newAlerts.map { $0.score }.max() ?? engine.currentThreatScore
+            engine.lastScanDate = Date()
+        }
     }
 }
 

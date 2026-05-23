@@ -79,10 +79,8 @@ struct WelcomeView: View {
 
             // CTA
             Button {
-                // Request notification authorisation now so the first alert isn't lost.
-                Task {
-                    try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
-                }
+                // Permission is requested by MainWindowView's .task once the main
+                // navigation UI is on screen — do not call requestPermission() here.
                 hasCompletedOnboarding = true
             } label: {
                 Text("Get Started")

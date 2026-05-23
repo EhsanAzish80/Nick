@@ -4,6 +4,7 @@
 
 import AppKit
 import SwiftUI
+import UserNotifications
 
 // MARK: - NickProcessInfo + Identifiable
 
@@ -29,6 +30,7 @@ struct MainWindowView: View {
     @Environment(\.openSettings) private var openSettings
     @State private var selectedSection: SidebarSection? = .overview
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @State private var notificationsDenied = false
 
     // Alert count for sidebar badge (info-severity are trusted-app activity, not actionable).
     private var activeAlertCount: Int {
@@ -39,7 +41,45 @@ struct MainWindowView: View {
         if !hasCompletedOnboarding {
             WelcomeView(hasCompletedOnboarding: $hasCompletedOnboarding)
         } else {
-            mainContent
+            VStack(spacing: 0) {
+                if notificationsDenied {
+                    HStack(spacing: NickSpacing.sm) {
+                        Image(systemName: "bell.slash")
+                            .foregroundStyle(Color.statusYellow)
+                        Text("Notifications are disabled. Nick can't alert you about threats.")
+                            .font(.nickBodySmall)
+                            .foregroundStyle(Color.textSecondary)
+                        Spacer()
+                        Button("Enable") {
+                            NSWorkspace.shared.open(
+                                URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings")!
+                            )
+                        }
+                        .font(.nickCaption)
+                        Button("Dismiss") {
+                            notificationsDenied = false
+                        }
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textTertiary)
+                    }
+                    .padding(NickSpacing.md)
+                    .background(Color.statusYellow.opacity(0.12))
+                }
+                mainContent
+            }
+            .task {
+                // Switch to .regular before calling requestAuthorization — macOS
+                // silently drops the dialog for .accessory-policy apps.
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate()
+                let settings = await UNUserNotificationCenter.current().notificationSettings()
+                if settings.authorizationStatus == .denied {
+                    notificationsDenied = true
+                } else if settings.authorizationStatus == .notDetermined {
+                    let granted = await NotificationManager.shared.requestPermission()
+                    notificationsDenied = !granted
+                }
+            }
         }
     }
 
@@ -49,11 +89,12 @@ struct MainWindowView: View {
             // Change 2: VStack so we can pin the Settings button below the nav list.
             VStack(spacing: 0) {
                 List(selection: $selectedSection) {
-                    ForEach(SidebarSection.allCases.filter { $0 == .alerts ? activeAlertCount > 0 : true }) { section in
+                    ForEach(SidebarSection.allCases) { section in
                         if section == .alerts {
                             Label(section.title, systemImage: section.icon)
-                                .tag(section)
                                 .badge(activeAlertCount)
+                                .tag(section)
+                                .disabled(activeAlertCount == 0)
                         } else {
                             Label(section.title, systemImage: section.icon)
                                 .tag(section)
