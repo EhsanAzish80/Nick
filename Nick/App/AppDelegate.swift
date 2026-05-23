@@ -22,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private let mainWindowDelegate = MainWindowDelegate()
+    /// Set to `true` before calling `NSApp.terminate` from an explicit user action
+    /// (right-click → Quit Nick) so `applicationShouldTerminate` allows the quit
+    /// even when the main window is hidden.
+    private var forceQuit = false
 
     // MARK: - NSApplicationDelegate
 
@@ -34,6 +38,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSUpdateDynamicServices()
             configureMainWindowDelegate()
         }
+    }
+
+    /// Keep Nick alive in the background when the last window closes.
+    /// The app only quits via the right-click menu or ⌘Q while the window is visible.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
+    }
+
+    /// Allow termination only when (a) the user explicitly chose Quit from the
+    /// right-click menu (`forceQuit == true`), or (b) the main window is currently
+    /// visible (i.e. ⌘Q is meaningful to the user).
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if forceQuit { return .terminateNow }
+        let windowVisible = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain })?.isVisible ?? false
+        return windowVisible ? .terminateNow : .terminateCancel
     }
 
     /// Re-opening (e.g., dock icon click when LSUIElement is temporarily .regular) should surface the window.
@@ -84,10 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let quitItem = NSMenuItem(
             title:         "Quit Nick",
-            action:        #selector(NSApplication.terminate(_:)),
+            action:        #selector(forceQuitApp),
             keyEquivalent: "q"
         )
         quitItem.keyEquivalentModifierMask = .command
+        quitItem.target = self
         menu.addItem(quitItem)
 
         // Assign menu so performClick shows it, then clear so left-click uses the action handler.
@@ -96,10 +116,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = nil
     }
 
-    /// Toggles the main window: hides if visible, shows if hidden. Used by the status item left-click.
+    /// Toggles the main window: hides it when it is visible and key, shows it otherwise.
+    /// Checks `isKeyWindow` so clicking the icon while Nick is in the background brings
+    /// the window forward rather than hiding it.
     @objc private func toggleMainWindow() {
         if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }),
-           window.isVisible {
+           window.isVisible && window.isKeyWindow {
             window.orderOut(nil)
             NSApp.setActivationPolicy(.accessory)
         } else {
@@ -107,25 +129,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Attaches the window delegate so the red close button hides instead of destroying the window.
-    /// Safe to call multiple times — only sets the delegate if it isn't already assigned.
+    /// Attaches `mainWindowDelegate` to the main window.
+    ///
+    /// SwiftUI sets its own internal delegate on the NSWindow before `applicationDidFinishLaunching`
+    /// returns, so we must wait ~0.5 s and then unconditionally replace it. The `MainWindowDelegate`
+    /// only overrides `windowShouldClose`; all other delegate methods are unimplemented and fall
+    /// through to AppKit's default behaviour, so SwiftUI scene management is not affected.
     private func configureMainWindowDelegate() {
-        guard let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }),
-              window.delegate == nil else { return }
-        window.delegate = mainWindowDelegate
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) {
+                window.delegate = self.mainWindowDelegate
+            }
+        }
     }
 
     @objc func openMainWindow() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        // SwiftUI creates the NSWindow for a Window scene at launch (hidden).
         if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) {
             window.makeKeyAndOrderFront(nil)
-            // Ensure the delegate is attached even if the window was created after launch.
-            if window.delegate == nil {
-                window.delegate = mainWindowDelegate
-            }
+            // Re-attach our delegate — SwiftUI may have reset it if the scene was rebuilt.
+            window.delegate = mainWindowDelegate
         }
+    }
+
+    /// Bypasses the `applicationShouldTerminate` window-visibility gate and quits immediately.
+    /// Used exclusively by the right-click → "Quit Nick" menu item.
+    @objc private func forceQuitApp() {
+        forceQuit = true
+        NSApp.terminate(nil)
     }
 }
 

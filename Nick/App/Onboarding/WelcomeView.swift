@@ -4,6 +4,7 @@
 
 import AppKit
 import SwiftUI
+import UserNotifications
 
 // MARK: - WelcomeView
 
