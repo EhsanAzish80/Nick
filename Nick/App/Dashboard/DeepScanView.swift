@@ -256,7 +256,7 @@ struct DeepScanView: View {
             Text("No threats detected")
                 .font(.nickSubtitle)
                 .foregroundStyle(Color.textPrimary)
-            Text("\(scanner.totalFiles.formatted()) files scanned in \(formatTime(scanner.elapsedTime))")
+            Text("\(scanner.totalFiles.formatted()) executables in monitored directories · \(formatTime(scanner.elapsedTime))")
                 .font(.nickBodySmall)
                 .foregroundStyle(Color.textSecondary)
             Button("Close") { dismiss() }
@@ -277,11 +277,9 @@ struct DeepScanView: View {
                 Text("\(scanner.threatsFound) threat\(scanner.threatsFound == 1 ? "" : "s") detected")
                     .font(.nickSubtitle)
                     .foregroundStyle(Color.textPrimary)
-                Text("\(scanner.totalFiles.formatted()) files scanned in \(formatTime(scanner.elapsedTime))")
+                Text("\(scanner.totalFiles.formatted()) executables in monitored directories · \(formatTime(scanner.elapsedTime))")
                     .font(.nickBodySmall)
                     .foregroundStyle(Color.textSecondary)
-                Button("Close") { dismiss() }
-                    .buttonStyle(.nickSecondary)
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, NickSpacing.lg)
@@ -292,19 +290,42 @@ struct DeepScanView: View {
                 .frame(height: 0.5)
 
             VStack(spacing: 0) {
-                ForEach(scanner.results, id: \.ruleName) { match in
-                    DeepScanMatchRow(match: match)
+                ForEach(deduplicatedResults.indices, id: \.self) { i in
+                    DeepScanMatchRow(match: deduplicatedResults[i].match, count: deduplicatedResults[i].count)
                     Rectangle()
                         .fill(Color.borderSubtle)
                         .frame(height: 0.5)
                         .padding(.leading, NickSpacing.lg)
                 }
             }
-            .padding(.bottom, NickSpacing.md)
+
+            Button("Close") { dismiss() }
+                .buttonStyle(.nickSecondary)
+                .padding(NickSpacing.lg)
         }
     }
 
     // MARK: - Helpers
+
+    /// Collapses duplicate (filePath, ruleName) pairs into a single entry with a count,
+    /// preserving the original first-occurrence order.
+    private var deduplicatedResults: [(match: YARAMatch, count: Int)] {
+        var counts:  [String: Int]      = [:]
+        var first:   [String: YARAMatch] = [:]
+        var ordered: [String]           = []
+        for match in scanner.results {
+            let key = "\(match.filePath)|\(match.ruleName)"
+            if counts[key] == nil {
+                ordered.append(key)
+                first[key] = match
+            }
+            counts[key, default: 0] += 1
+        }
+        return ordered.compactMap { key in
+            guard let match = first[key], let count = counts[key] else { return nil }
+            return (match: match, count: count)
+        }
+    }
 
     private func formatTime(_ interval: TimeInterval) -> String {
         guard interval > 0 else { return "--:--" }
@@ -320,6 +341,7 @@ struct DeepScanView: View {
 private struct DeepScanMatchRow: View {
 
     let match: YARAMatch
+    let count: Int
 
     var body: some View {
         HStack(alignment: .top, spacing: NickSpacing.sm) {
@@ -329,7 +351,7 @@ private struct DeepScanMatchRow: View {
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: NickSpacing.xs) {
                 HStack(spacing: NickSpacing.sm) {
-                    Text(match.ruleName)
+                    Text(count > 1 ? "\(match.ruleName) (×\(count))" : match.ruleName)
                         .font(.nickBodyMedium)
                         .foregroundStyle(Color.textPrimary)
                     Spacer()
@@ -348,6 +370,12 @@ private struct DeepScanMatchRow: View {
                     .foregroundStyle(Color.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                Button("Show in Finder") {
+                    NSWorkspace.shared.selectFile(match.filePath, inFileViewerRootedAtPath: "")
+                }
+                .font(.nickCaption)
+                .foregroundStyle(Color.statusBlue)
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, NickSpacing.lg)
