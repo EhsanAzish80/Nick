@@ -132,7 +132,7 @@ final class MonitorCoordinator {
             engine.runFullScan()
             lastDeepScan = now
         } else {
-            Self.log.debug("Pipeline tick (correlation only — next deep scan in \(Int(deepScanInterval - now.timeIntervalSince(self.lastDeepScan)))s)")
+            Self.log.debug("Pipeline tick (correlation only — next deep scan in \(Int(self.deepScanInterval - now.timeIntervalSince(self.lastDeepScan)))s)")
         }
 
         // Correlate current window
