@@ -52,3 +52,8 @@ jobs:
         run: |
           xcrun xcresulttool get test-results summary \
             --path TestResults.xcresult 2>/dev/null || echo "Test results unavailable"
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
