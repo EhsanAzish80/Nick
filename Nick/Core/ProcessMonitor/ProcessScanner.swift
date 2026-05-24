@@ -158,8 +158,7 @@ struct ProcessScanner {
             parentPID: parentPID,
             parentName: nil, // resolved in second pass if needed
             signingStatus: signingStatus,
-            user: user,
-            startTime: startTime
+            metadata: ProcessMetadata(user: user, startTime: startTime)
         )
     }
 
@@ -216,8 +215,7 @@ struct ProcessScanner {
                     severity: .high,
                     title: "Unsigned binary in temporary directory",
                     description: "Process '\(proc.name)' (PID \(proc.pid)) is running from \(proc.path), which is a writable temporary location.",
-                    processInfo: proc,
-                    metadata: ["reason": "unsigned_temp_path"]
+                    context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "unsigned_temp_path"])
                 ))
                 continue
             }
@@ -231,8 +229,7 @@ struct ProcessScanner {
                     severity: .medium,
                     title: "Unsigned binary",
                     description: "Process '\(proc.name)' (PID \(proc.pid)) is unsigned and running from \(proc.path).",
-                    processInfo: proc,
-                    metadata: ["reason": "unsigned"]
+                    context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "unsigned"])
                 ))
             }
 
@@ -254,8 +251,7 @@ struct ProcessScanner {
                         severity: .medium,
                         title: "Shell spawned from non-terminal parent",
                         description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)' (PID \(proc.parentPID)), which is not a recognized terminal.",
-                        processInfo: proc,
-                        metadata: ["reason": "lolbin", "parent": rawParentName]
+                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "lolbin", "parent": rawParentName])
                     ))
                 } else if Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
                        || Self.hasPipeDownloadPattern(
@@ -267,8 +263,7 @@ struct ProcessScanner {
                         severity: .critical,
                         title: "Shell piped from download tool",
                         description: "'\(proc.name)' (PID \(proc.pid)) is running concurrently with a download tool under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a download-to-shell pipe attack.",
-                        processInfo: proc,
-                        metadata: ["reason": "curl_pipe_shell", "parent": rawParentName]
+                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "curl_pipe_shell", "parent": rawParentName])
                     ))
                 }
             }
@@ -389,8 +384,7 @@ struct ProcessScanner {
                     severity: .high,
                     title: "Process spawned from temporary directory",
                     description: "New process '\(proc.name)' (PID \(proc.pid)) appeared at \(proc.path), a writable temporary location.",
-                    processInfo: proc,
-                    metadata: ["reason": "temp_path_spawn"]
+                    context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "temp_path_spawn"])
                 ))
                 continue
             }
@@ -412,8 +406,7 @@ struct ProcessScanner {
                         severity: .medium,
                         title: "Shell spawned from non-terminal parent",
                         description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)', which is not a recognized terminal.",
-                        processInfo: proc,
-                        metadata: ["reason": "lolbin", "parent": rawParentName]
+                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "lolbin", "parent": rawParentName])
                     ))
                 } else if Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
                        || Self.hasPipeDownloadPattern(
@@ -423,8 +416,7 @@ struct ProcessScanner {
                         severity: .critical,
                         title: "Shell piped from download tool",
                         description: "'\(proc.name)' (PID \(proc.pid)) appeared concurrently with a download tool under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a pipe attack.",
-                        processInfo: proc,
-                        metadata: ["reason": "curl_pipe_shell", "parent": rawParentName]
+                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "curl_pipe_shell", "parent": rawParentName])
                     ))
                 }
             }
@@ -447,8 +439,7 @@ struct ProcessScanner {
                 severity: .high,
                 title: "Unsigned binary in temporary directory",
                 description: "Process '\(proc.name)' (PID \(proc.pid)) is running from \(proc.path), which is a writable temporary location.",
-                processInfo: proc,
-                metadata: ["reason": "unsigned_temp_path", "phase": "backfill"]
+                context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "unsigned_temp_path", "phase": "backfill"])
             )
         }
 
@@ -458,8 +449,7 @@ struct ProcessScanner {
                 severity: .medium,
                 title: "Unsigned binary",
                 description: "Process '\(proc.name)' (PID \(proc.pid)) is unsigned and running from \(proc.path).",
-                processInfo: proc,
-                metadata: ["reason": "unsigned", "phase": "backfill"]
+                context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "unsigned", "phase": "backfill"])
             )
         }
 
@@ -527,9 +517,7 @@ struct ProcessScanner {
             parentPID: parentPID,
             parentName: nil,
             signingStatus: .pending,
-            user: user,
-            startTime: startTime,
-            arguments: arguments
+            metadata: ProcessMetadata(user: user, startTime: startTime, arguments: arguments)
         )
     }
 

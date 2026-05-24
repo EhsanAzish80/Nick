@@ -90,10 +90,7 @@ struct ThreatSignal: Identifiable, Sendable, Codable, Equatable {
     ///   - timestamp: Detection time. Defaults to `Date()`.
     ///   - title: Short summary string.
     ///   - description: Full human-readable explanation.
-    ///   - processInfo: Optional process context.
-    ///   - networkInfo: Optional network context.
-    ///   - fileInfo: Optional file context.
-    ///   - metadata: Optional freeform key-value context.
+    ///   - context: Optional process/network/file context and metadata.
     init(
         id: UUID = UUID(),
         source: MonitorType,
@@ -101,10 +98,7 @@ struct ThreatSignal: Identifiable, Sendable, Codable, Equatable {
         timestamp: Date = Date(),
         title: String,
         description: String,
-        processInfo: NickProcessInfo? = nil,
-        networkInfo: NetworkConnectionInfo? = nil,
-        fileInfo: FileInfo? = nil,
-        metadata: [String: String] = [:]
+        context: ThreatSignalContext = ThreatSignalContext()
     ) {
         self.id = id
         self.source = source
@@ -112,6 +106,37 @@ struct ThreatSignal: Identifiable, Sendable, Codable, Equatable {
         self.timestamp = timestamp
         self.title = title
         self.description = description
+        self.processInfo = context.processInfo
+        self.networkInfo = context.networkInfo
+        self.fileInfo = context.fileInfo
+        self.metadata = context.metadata
+    }
+}
+
+// MARK: - ThreatSignalContext
+
+/// Groups the optional forensic context parameters for a `ThreatSignal`,
+/// reducing the initialiser's parameter count to satisfy code quality limits.
+struct ThreatSignalContext: Sendable {
+
+    /// Process metadata when the signal is associated with a running process.
+    var processInfo: NickProcessInfo?
+
+    /// Network connection metadata when the signal involves a network event.
+    var networkInfo: NetworkConnectionInfo?
+
+    /// File metadata when the signal is associated with a file on disk.
+    var fileInfo: FileInfo?
+
+    /// Freeform key-value pairs that carry monitor-specific context for correlation.
+    var metadata: [String: String]
+
+    init(
+        processInfo: NickProcessInfo? = nil,
+        networkInfo: NetworkConnectionInfo? = nil,
+        fileInfo: FileInfo? = nil,
+        metadata: [String: String] = [:]
+    ) {
         self.processInfo = processInfo
         self.networkInfo = networkInfo
         self.fileInfo = fileInfo

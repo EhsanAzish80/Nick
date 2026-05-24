@@ -227,13 +227,14 @@ private extension AVCaptureMonitorTests {
             severity:    severity,
             title:       "\(deviceName) activated by \(process)",
             description: "Test signal",
-            processInfo: nil,
-            metadata: [
-                "mediaType":  "camera",
-                "deviceName": deviceName,
-                "process":    process,
-                "reason":     "capture_device_active"
-            ]
+            context: ThreatSignalContext(
+                metadata: [
+                    "mediaType":  "camera",
+                    "deviceName": deviceName,
+                    "process":    process,
+                    "reason":     "capture_device_active"
+                ]
+            )
         )
     }
 
@@ -243,9 +244,7 @@ private extension AVCaptureMonitorTests {
             source:      .process,
             severity:    .high,
             title:       "Suspicious process",
-            description: "Test",
-            processInfo: nil,
-            metadata:    [:]
+            description: "Test"
         )
     }
 

@@ -153,11 +153,13 @@ final class AlertExplainerTests: XCTestCase {
     ) -> ThreatAlert {
         ThreatAlert(
             score: score,
-            title: title,
-            description: "Test alert description",
-            severity: severity,
-            contributingSignals: [],
-            recommendedAction: "Investigate the flagged process."
+            content: AlertContent(
+                title: title,
+                description: "Test alert description",
+                severity: severity,
+                recommendedAction: "Investigate the flagged process."
+            ),
+            contributingSignals: []
         )
     }
 
@@ -175,8 +177,7 @@ final class AlertExplainerTests: XCTestCase {
             parentPID: 1,
             parentName: nil,
             signingStatus: .unsigned,
-            user: "user",
-            startTime: Date()
+            metadata: ProcessMetadata(user: "user", startTime: Date())
         )
         let netInfo = NetworkConnectionInfo(
             id: UUID(),
@@ -196,18 +197,17 @@ final class AlertExplainerTests: XCTestCase {
             timestamp: Date(),
             title: title,
             description: "Test",
-            processInfo: procInfo,
-            networkInfo: netInfo,
-            fileInfo: nil,
-            metadata: [:]
+            context: ThreatSignalContext(processInfo: procInfo, networkInfo: netInfo)
         )
         return ThreatAlert(
             score: score,
-            title: title,
-            description: "Test alert",
-            severity: severity,
-            contributingSignals: [signal],
-            recommendedAction: "Investigate."
+            content: AlertContent(
+                title: title,
+                description: "Test alert",
+                severity: severity,
+                recommendedAction: "Investigate."
+            ),
+            contributingSignals: [signal]
         )
     }
 }

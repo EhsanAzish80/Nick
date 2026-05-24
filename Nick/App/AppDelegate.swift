@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - NSApplicationDelegate
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_: Notification) {
         // Register defaults so first-run behaviour matches configured behaviour.
         // Must run before any code that reads these keys.
         UserDefaults.standard.register(defaults: [
@@ -70,14 +70,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Keep Nick alive in the background when the last window closes.
     /// The app only quits via the right-click menu or ⌘Q while the window is visible.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
         return false
     }
 
     /// Allow termination only when (a) the user explicitly chose Quit from the
     /// right-click menu (`forceQuit == true`), or (b) the main window is currently
     /// visible (i.e. ⌘Q is meaningful to the user).
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
         if forceQuit { return .terminateNow }
         // canBecomeMain is unreliable during .accessory→.regular transitions; filter by
         // class instead. Prefer the titled "Nick" window over any other non-panel window.
@@ -88,7 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Re-opening (e.g., dock icon click when LSUIElement is temporarily .regular) should surface the window.
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+    func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
         openMainWindow()
         return true
     }
@@ -104,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.target = self
     }
 
-    @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
+    @objc private func handleStatusItemClick(_: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {
             showContextMenu()

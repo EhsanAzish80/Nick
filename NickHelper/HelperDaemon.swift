@@ -60,7 +60,7 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate {
     // MARK: - NSXPCListenerDelegate
 
     func listener(
-        _ listener: NSXPCListener,
+        _: NSXPCListener,
         shouldAcceptNewConnection connection: NSXPCConnection
     ) -> Bool {
         let pid = connection.processIdentifier

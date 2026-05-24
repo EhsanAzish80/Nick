@@ -84,17 +84,22 @@ final class ProcessMonitor: MonitorProtocol {
         backfillTask?.cancel()
         backfillTask = Task.detached(priority: .background) { [weak self] in
             guard let self else { return }
-            await SignatureValidator.shared.backfill(processes: scanned) { updated in
-                guard let idx = self.processes.firstIndex(where: { $0.pid == updated.pid }) else { return }
-                self.processes[idx] = updated
-
-                // Emit an additional signal if the resolved status is suspicious
-                // and was not already flagged in the initial scan.
-                if updated.signingStatus.isSuspicious {
-                    let signal = ProcessScanner().signalFromResolved(updated)
-                    if let signal { self.pendingSignals.append(signal) }
-                }
+            await SignatureValidator.shared.backfill(processes: scanned) { [weak self] updated in
+                await self?.handleBackfilledProcess(updated)
             }
+        }
+    }
+
+    @MainActor
+    private func handleBackfilledProcess(_ updated: NickProcessInfo) {
+        guard let idx = processes.firstIndex(where: { $0.pid == updated.pid }) else { return }
+        processes[idx] = updated
+
+        // Emit an additional signal if the resolved status is suspicious
+        // and was not already flagged in the initial scan.
+        if updated.signingStatus.isSuspicious {
+            let signal = ProcessScanner().signalFromResolved(updated)
+            if let signal { pendingSignals.append(signal) }
         }
     }
 

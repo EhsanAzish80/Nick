@@ -212,7 +212,7 @@ final class FileSystemWatcher: @unchecked Sendable {
             severity: severity,
             title: "Sensitive file modified: \(fileName)",
             description: "'\(path)' was created or modified. This is a common persistence and privilege-escalation vector.",
-            metadata: ["reason": reason, "path": path]
+            context: ThreatSignalContext(metadata: ["reason": reason, "path": path])
         )
         Self.log.warning("Persistence signal: \(reason, privacy: .public) — \(path, privacy: .private)")
         Task.detached(priority: .utility) { [weak self, signal] in
@@ -267,14 +267,16 @@ final class FileSystemWatcher: @unchecked Sendable {
             severity: severity,
             title: "YARA match: \(ruleNames)",
             description: "YARA rule(s) [\(ruleNames)] matched file at \(path). Tags: \(tags.isEmpty ? "none" : tags).",
-            fileInfo: FileInfo(
-                path: path,
-                sha256Hash: nil,
-                entropy: nil,
-                signingStatus: nil,
-                sizeBytes: (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? nil
-            ),
-            metadata: meta
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: path,
+                    sha256Hash: nil,
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? nil
+                ),
+                metadata: meta
+            )
         )
     }
 }

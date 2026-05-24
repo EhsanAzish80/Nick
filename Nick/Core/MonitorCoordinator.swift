@@ -116,9 +116,7 @@ final class MonitorCoordinator {
                     for alert in alerts {
                         await NotificationManager.shared.send(for: alert)
                     }
-                    await MainActor.run { [engine = self.engine, alerts] in
-                        for alert in alerts { engine.addAlert(alert) }
-                    }
+                    await self.addFileSystemWatcherAlerts(alerts)
                 }
             }
             watcher.startWatching()
@@ -154,6 +152,11 @@ final class MonitorCoordinator {
     }
 
     // MARK: - Private Pipeline Tick
+
+    @MainActor
+    private func addFileSystemWatcherAlerts(_ alerts: [ThreatAlert]) {
+        for alert in alerts { engine.addAlert(alert) }
+    }
 
     private func tick() async {
         // Two-tier cadence: expensive OS sweeps only every deepScanInterval.
@@ -230,8 +233,10 @@ final class MonitorCoordinator {
                     severity: .high,
                     title: "Script executing from temp directory",
                     description: "'\(info.name)' (PID \(pid)) is executing '\(detectedPath)' from a writable temporary location.",
-                    processInfo: info,
-                    metadata: ["reason": "temp_path_spawn", "script_path": detectedPath]
+                    context: ThreatSignalContext(
+                        processInfo: info,
+                        metadata: ["reason": "temp_path_spawn", "script_path": detectedPath]
+                    )
                 ))
             }
 

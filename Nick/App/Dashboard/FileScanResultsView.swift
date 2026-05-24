@@ -37,12 +37,10 @@ struct FileScanResultsView: View {
                 VStack(spacing: 0) {
                     stateContent
                         .frame(minHeight: 200)
-                    if !isScanning {
-                        if let info = summary {
+                    if !isScanning, let info = summary {
                             fileInfoBox(info)
                                 .padding(.horizontal, NickSpacing.lg)
                                 .padding(.bottom, NickSpacing.lg)
-                        }
                     }
                 }
             }
@@ -226,9 +224,9 @@ struct FileScanResultsView: View {
     }
 
     private var durationText: String {
-        duration < 0.1 ? "< 0.1s"
-        : duration < 1  ? String(format: "%.1fs", duration)
-        : String(format: "%.0fs", duration)
+        if duration < 0.1 { return "< 0.1s" }
+        if duration < 1 { return String(format: "%.1fs", duration) }
+        return String(format: "%.0fs", duration)
     }
 
     // MARK: - File Info Box

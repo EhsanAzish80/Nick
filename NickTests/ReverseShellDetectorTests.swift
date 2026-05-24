@@ -19,7 +19,7 @@ final class ReverseShellDetectorTests: XCTestCase {
         NickProcessInfo(
             pid: pid, path: path, name: name,
             parentPID: 1, parentName: "",
-            signingStatus: .adHoc, user: "user", startTime: Date()
+            signingStatus: .adHoc, metadata: ProcessMetadata(user: "user", startTime: Date())
         )
     }
 

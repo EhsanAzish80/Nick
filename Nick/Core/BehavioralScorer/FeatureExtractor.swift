@@ -44,7 +44,7 @@ final class FeatureExtractor: Sendable {
     ///   - signals: All signals currently in the correlation window.
     ///   - windowDuration: Duration of the correlation window used to compute temporal features.
     /// - Returns: A `FeatureVector` ready for CoreML inference. Never contains NaN or infinity.
-    func extract(from signals: [ThreatSignal], windowDuration: TimeInterval) -> FeatureVector {
+    func extract(from signals: [ThreatSignal], windowDuration _: TimeInterval) -> FeatureVector {
         var vec = FeatureVector()
 
         guard !signals.isEmpty else { return vec }

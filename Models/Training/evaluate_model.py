@@ -52,7 +52,7 @@ def print_confusion_matrix(cm, label_names):
     print(header)
     for i, row in enumerate(cm):
         row_str = "  ".join(f"{v:>10}" for v in row)
-        print("{label_names[i]:>8} {row_str}")
+        print(f"{label_names[i]:>8} {row_str}")
 
 
 def main():
@@ -65,10 +65,10 @@ def main():
     data_path  = Path(args.data)
 
     if not model_path.exists():
-        print("ERROR: Model not found: {model_path}", file=sys.stderr)
+        print(f"ERROR: Model not found: {model_path}", file=sys.stderr)
         sys.exit(1)
     if not data_path.exists():
-        print("ERROR: Data not found: {data_path}", file=sys.stderr)
+        print(f"ERROR: Data not found: {data_path}", file=sys.stderr)
         sys.exit(1)
 
     with model_path.open("rb") as f:
@@ -81,7 +81,7 @@ def main():
     y_pred = model.predict(X)
     y_prob = model.predict_proba(X)
 
-    print("Evaluated {len(X)} samples")
+    print(f"Evaluated {len(X)} samples")
     print(classification_report(y, y_pred, target_names=LABEL_NAMES, zero_division=0))
 
     cm = confusion_matrix(y, y_pred)
@@ -100,10 +100,10 @@ def main():
         auc = 0.0
 
     print("\n=== Malicious Detection (binary) ===")
-    print("  Precision : {precision:.3f}")
-    print("  Recall    : {recall:.3f}")
-    print("  F1        : {f1:.3f}")
-    print("  ROC-AUC   : {auc:.3f}")
+    print(f"  Precision : {precision:.3f}")
+    print(f"  Recall    : {recall:.3f}")
+    print(f"  F1        : {f1:.3f}")
+    print(f"  ROC-AUC   : {auc:.3f}")
 
 
 if __name__ == "__main__":

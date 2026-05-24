@@ -66,11 +66,13 @@ struct CorrelationRule: Sendable {
         guard let first = matches.first else { return nil }
         return ThreatAlert(
             score: 0.9,
-            title: "Critical system security configuration issue",
-            description: "A fundamental macOS security control (\(first.title)) is disabled. This significantly raises the risk of compromise.",
-            severity: .critical,
-            contributingSignals: matches,
-            recommendedAction: first.description
+            content: AlertContent(
+                title: "Critical system security configuration issue",
+                description: "A fundamental macOS security control (\(first.title)) is disabled. This significantly raises the risk of compromise.",
+                severity: .critical,
+                recommendedAction: first.description
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -92,11 +94,13 @@ struct CorrelationRule: Sendable {
         let names = matches.compactMap { $0.processInfo?.name }.joined(separator: ", ")
         return ThreatAlert(
             score: 0.85,
-            title: "Unsigned binary executing from temporary directory",
-            description: "Process(es) '\(names)' are unsigned and running from writable temporary locations — a common technique used by droppers and implants.",
-            severity: .high,
-            contributingSignals: matches,
-            recommendedAction: "Terminate the process and investigate the file at the reported path."
+            content: AlertContent(
+                title: "Unsigned binary executing from temporary directory",
+                description: "Process(es) '\(names)' are unsigned and running from writable temporary locations — a common technique used by droppers and implants.",
+                severity: .high,
+                recommendedAction: "Terminate the process and investigate the file at the reported path."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -121,11 +125,13 @@ struct CorrelationRule: Sendable {
         }.joined(separator: ", ")
         return ThreatAlert(
             score: 0.95,
-            title: "Potential reverse shell detected",
-            description: "Shell interpreter(s) or netcat '\(processes)' have outbound ESTABLISHED network connections on non-standard ports. This is a strong indicator of a reverse shell.",
-            severity: .critical,
-            contributingSignals: matches,
-            recommendedAction: "Kill the process immediately, block the remote IP at your firewall, and investigate how the binary was executed."
+            content: AlertContent(
+                title: "Potential reverse shell detected",
+                description: "Shell interpreter(s) or netcat '\(processes)' have outbound ESTABLISHED network connections on non-standard ports. This is a strong indicator of a reverse shell.",
+                severity: .critical,
+                recommendedAction: "Kill the process immediately, block the remote IP at your firewall, and investigate how the binary was executed."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -143,11 +149,13 @@ struct CorrelationRule: Sendable {
         let names = matches.map { $0.title }.joined(separator: "; ")
         return ThreatAlert(
             score: 0.7,
-            title: "Unsigned persistence mechanism detected",
-            description: "One or more launch agents/daemons reference unsigned executables: \(names). Malware commonly installs unsigned persistence items.",
-            severity: .high,
-            contributingSignals: matches,
-            recommendedAction: "Inspect the plist file and its referenced executable. Remove if you do not recognise the software."
+            content: AlertContent(
+                title: "Unsigned persistence mechanism detected",
+                description: "One or more launch agents/daemons reference unsigned executables: \(names). Malware commonly installs unsigned persistence items.",
+                severity: .high,
+                recommendedAction: "Inspect the plist file and its referenced executable. Remove if you do not recognise the software."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -163,14 +171,16 @@ struct CorrelationRule: Sendable {
         let processes = matches.compactMap { $0.metadata["process"]    }.joined(separator: ", ")
         return ThreatAlert(
             score: 0.85,
-            title: "Unexpected capture device activation",
-            description: "Device(s) '\(devices)' were activated, attributed to '\(processes)'. " +
-                         "Covert camera or microphone access is a hallmark of spyware and RATs.",
-            severity: .high,
-            contributingSignals: matches,
-            recommendedAction:
-                "Open System Settings → Privacy & Security → Camera / Microphone and audit " +
-                "which apps have permission. Revoke access for anything unexpected."
+            content: AlertContent(
+                title: "Unexpected capture device activation",
+                description: "Device(s) '\(devices)' were activated, attributed to '\(processes)'. " +
+                             "Covert camera or microphone access is a hallmark of spyware and RATs.",
+                severity: .high,
+                recommendedAction:
+                    "Open System Settings → Privacy & Security → Camera / Microphone and audit " +
+                    "which apps have permission. Revoke access for anything unexpected."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -193,11 +203,13 @@ struct CorrelationRule: Sendable {
         }.joined(separator: "; ")
         return ThreatAlert(
             score: 0.95,
-            title: "Download-to-shell pipe attack detected",
-            description: "A shell process appeared concurrently with a download tool: \(details). The 'curl|bash' pattern is the most common initial-access vector for macOS malware.",
-            severity: .critical,
-            contributingSignals: matches,
-            recommendedAction: "Terminate the shell process immediately. Audit recently created files and any processes spawned by the affected parent."
+            content: AlertContent(
+                title: "Download-to-shell pipe attack detected",
+                description: "A shell process appeared concurrently with a download tool: \(details). The 'curl|bash' pattern is the most common initial-access vector for macOS malware.",
+                severity: .critical,
+                recommendedAction: "Terminate the shell process immediately. Audit recently created files and any processes spawned by the affected parent."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -219,11 +231,13 @@ struct CorrelationRule: Sendable {
         }.joined(separator: "; ")
         return ThreatAlert(
             score: 0.65,
-            title: "LOLBin execution detected",
-            description: "Shell interpreter(s) spawned from a non-terminal parent: \(details). Malware uses this pattern to execute arbitrary commands without a visible terminal window.",
-            severity: .medium,
-            contributingSignals: matches,
-            recommendedAction: "Identify the parent application and determine whether it has a legitimate reason to spawn a shell. Terminate if unexpected."
+            content: AlertContent(
+                title: "LOLBin execution detected",
+                description: "Shell interpreter(s) spawned from a non-terminal parent: \(details). Malware uses this pattern to execute arbitrary commands without a visible terminal window.",
+                severity: .medium,
+                recommendedAction: "Identify the parent application and determine whether it has a legitimate reason to spawn a shell. Terminate if unexpected."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -251,11 +265,13 @@ struct CorrelationRule: Sendable {
         }.joined(separator: "; ")
         return ThreatAlert(
             score: 0.80,
-            title: "Advanced LOLBin technique detected",
-            description: "Suspicious system-tool abuse pattern(s): \(details). These techniques are used for post-exploitation, persistence installation, and detection evasion.",
-            severity: .high,
-            contributingSignals: matches,
-            recommendedAction: "Investigate each flagged process and its arguments. Terminate unexpected activity and audit recently modified persistence items."
+            content: AlertContent(
+                title: "Advanced LOLBin technique detected",
+                description: "Suspicious system-tool abuse pattern(s): \(details). These techniques are used for post-exploitation, persistence installation, and detection evasion.",
+                severity: .high,
+                recommendedAction: "Investigate each flagged process and its arguments. Terminate unexpected activity and audit recently modified persistence items."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -272,11 +288,13 @@ struct CorrelationRule: Sendable {
         let paths = matches.compactMap { $0.fileInfo?.path }.joined(separator: "; ")
         return ThreatAlert(
             score: 0.90,
-            title: "YARA threat signature matched",
-            description: "YARA rule(s) [\(ruleNames.isEmpty ? "unknown" : ruleNames)] matched \(matches.count) file(s). Paths: \(paths.isEmpty ? "unknown" : paths).",
-            severity: .high,
-            contributingSignals: matches,
-            recommendedAction: "Examine the matched files immediately. Quarantine or delete files that cannot be explained by installed software."
+            content: AlertContent(
+                title: "YARA threat signature matched",
+                description: "YARA rule(s) [\(ruleNames.isEmpty ? "unknown" : ruleNames)] matched \(matches.count) file(s). Paths: \(paths.isEmpty ? "unknown" : paths).",
+                severity: .high,
+                recommendedAction: "Examine the matched files immediately. Quarantine or delete files that cannot be explained by installed software."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -291,11 +309,13 @@ struct CorrelationRule: Sendable {
         let sources = Set(mediumOrAbove.map { $0.source.rawValue }).sorted().joined(separator: ", ")
         return ThreatAlert(
             score: 0.75,
-            title: "Multiple concurrent threat indicators",
-            description: "\(mediumOrAbove.count) medium-or-higher signals observed within the correlation window across: \(sources). This pattern suggests coordinated or multi-stage activity.",
-            severity: .high,
-            contributingSignals: mediumOrAbove,
-            recommendedAction: "Review the contributing signals below and investigate each affected component."
+            content: AlertContent(
+                title: "Multiple concurrent threat indicators",
+                description: "\(mediumOrAbove.count) medium-or-higher signals observed within the correlation window across: \(sources). This pattern suggests coordinated or multi-stage activity.",
+                severity: .high,
+                recommendedAction: "Review the contributing signals below and investigate each affected component."
+            ),
+            contributingSignals: mediumOrAbove
         )
     }
 
@@ -314,11 +334,13 @@ struct CorrelationRule: Sendable {
         let paths = matches.compactMap { $0.metadata["path"] }.joined(separator: "; ")
         return ThreatAlert(
             score: 0.70,
-            title: "Shell profile modified",
-            description: "One or more shell startup files were written: \(paths). Attackers inject commands here for persistent code execution on every shell launch.",
-            severity: .high,
-            contributingSignals: matches,
-            recommendedAction: "Inspect the modified file(s) immediately. Look for new lines at the end or obfuscated base64/eval commands and remove anything unfamiliar."
+            content: AlertContent(
+                title: "Shell profile modified",
+                description: "One or more shell startup files were written: \(paths). Attackers inject commands here for persistent code execution on every shell launch.",
+                severity: .high,
+                recommendedAction: "Inspect the modified file(s) immediately. Look for new lines at the end or obfuscated base64/eval commands and remove anything unfamiliar."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -337,11 +359,13 @@ struct CorrelationRule: Sendable {
         let paths = matches.compactMap { $0.metadata["path"] }.joined(separator: "; ")
         return ThreatAlert(
             score: 0.90,
-            title: "SSH authorized_keys modified",
-            description: "The SSH authorized keys file was written: \(paths). Adding a public key here grants persistent, password-free remote access.",
-            severity: .critical,
-            contributingSignals: matches,
-            recommendedAction: "Review ~/.ssh/authorized_keys immediately. Remove any unrecognised public keys and audit recent SSH login attempts in /var/log/system.log."
+            content: AlertContent(
+                title: "SSH authorized_keys modified",
+                description: "The SSH authorized keys file was written: \(paths). Adding a public key here grants persistent, password-free remote access.",
+                severity: .critical,
+                recommendedAction: "Review ~/.ssh/authorized_keys immediately. Remove any unrecognised public keys and audit recent SSH login attempts in /var/log/system.log."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -367,11 +391,13 @@ struct CorrelationRule: Sendable {
         let processNames = matches.compactMap { $0.processInfo?.name }.joined(separator: ", ")
         return ThreatAlert(
             score: isCritical ? 0.90 : 0.75,
-            title: "Suspicious process chain detected",
-            description: "Process(es) '\(processNames)' exhibit a suspicious parent-child relationship. This pattern is commonly used by exploit payloads and document-based malware.",
-            severity: isCritical ? .critical : .high,
-            contributingSignals: matches,
-            recommendedAction: "Investigate the parent application and terminate suspicious child processes. Check browser/office extensions and recently opened documents."
+            content: AlertContent(
+                title: "Suspicious process chain detected",
+                description: "Process(es) '\(processNames)' exhibit a suspicious parent-child relationship. This pattern is commonly used by exploit payloads and document-based malware.",
+                severity: isCritical ? .critical : .high,
+                recommendedAction: "Investigate the parent application and terminate suspicious child processes. Check browser/office extensions and recently opened documents."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -392,11 +418,13 @@ struct CorrelationRule: Sendable {
         let ips = matches.compactMap { $0.networkInfo?.remoteAddress }.joined(separator: ", ")
         return ThreatAlert(
             score: 0.35,
-            title: "Outbound connection to raw IP address",
-            description: "Process(es) '\(processNames)' connected to a raw IP address without DNS resolution\(ips.isEmpty ? "" : ": \(ips)"). Malware often uses raw IPs to avoid DNS-based blocking.",
-            severity: .low,
-            contributingSignals: matches,
-            recommendedAction: "Check whether the destination IP is legitimate for the process involved. Consider blocking the connection via the firewall if unexpected."
+            content: AlertContent(
+                title: "Outbound connection to raw IP address",
+                description: "Process(es) '\(processNames)' connected to a raw IP address without DNS resolution\(ips.isEmpty ? "" : ": \(ips)"). Malware often uses raw IPs to avoid DNS-based blocking.",
+                severity: .low,
+                recommendedAction: "Check whether the destination IP is legitimate for the process involved. Consider blocking the connection via the firewall if unexpected."
+            ),
+            contributingSignals: matches
         )
     }
 
@@ -417,11 +445,13 @@ struct CorrelationRule: Sendable {
         let checks = matches.compactMap { $0.metadata["check"] }.joined(separator: ", ")
         return ThreatAlert(
             score: 0.50,
-            title: "System hardening misconfiguration",
-            description: "Non-critical security controls are not at their recommended settings: \(checks). While not an immediate compromise indicator, these weaken your defence-in-depth posture.",
-            severity: .medium,
-            contributingSignals: matches,
-            recommendedAction: "Open System Settings → Privacy & Security and follow the recommendations in the System Audit tab to restore the expected configuration."
+            content: AlertContent(
+                title: "System hardening misconfiguration",
+                description: "Non-critical security controls are not at their recommended settings: \(checks). While not an immediate compromise indicator, these weaken your defence-in-depth posture.",
+                severity: .medium,
+                recommendedAction: "Open System Settings → Privacy & Security and follow the recommendations in the System Audit tab to restore the expected configuration."
+            ),
+            contributingSignals: matches
         )
     }
 }

@@ -15,14 +15,15 @@ struct NickPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let fillOpacity: Double = configuration.isPressed ? 0.7 : (isEnabled ? 1.0 : 0.4)
+        return configuration.label
             .font(.nickButton)
             .foregroundStyle(Color.textInverse)
             .padding(.horizontal, NickSpacing.xl)
             .padding(.vertical, NickSpacing.md)
             .background(
                 RoundedRectangle(cornerRadius: NickLayout.badgeCornerRadius)
-                    .fill(Color.statusBlue.opacity(configuration.isPressed ? 0.7 : (isEnabled ? 1.0 : 0.4)))
+                    .fill(Color.statusBlue.opacity(fillOpacity))
             )
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }
@@ -74,14 +75,15 @@ struct NickDestructiveButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let fillOpacity: Double = configuration.isPressed ? 0.7 : (isEnabled ? 1.0 : 0.4)
+        return configuration.label
             .font(.nickButton)
             .foregroundStyle(Color.textInverse)
             .padding(.horizontal, NickSpacing.xl)
             .padding(.vertical, NickSpacing.md)
             .background(
                 RoundedRectangle(cornerRadius: NickLayout.badgeCornerRadius)
-                    .fill(Color.statusRed.opacity(configuration.isPressed ? 0.7 : (isEnabled ? 1.0 : 0.4)))
+                    .fill(Color.statusRed.opacity(fillOpacity))
             )
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
     }

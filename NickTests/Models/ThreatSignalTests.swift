@@ -68,7 +68,7 @@ final class ThreatSignalTests: XCTestCase {
             timestamp: Date(timeIntervalSince1970: 1_000_000),
             title: "SIP Disabled",
             description: "System Integrity Protection has been disabled.",
-            metadata: ["csrutil": "disabled"]
+            context: ThreatSignalContext(metadata: ["csrutil": "disabled"])
         )
 
         let data = try JSONEncoder().encode(original)
@@ -90,15 +90,14 @@ final class ThreatSignalTests: XCTestCase {
             parentPID: 1,
             parentName: "launchd",
             signingStatus: .unsigned,
-            user: "ehsan",
-            startTime: nil
+            metadata: ProcessMetadata(user: "ehsan", startTime: nil)
         )
         let signal = ThreatSignal(
             source: .process,
             severity: .high,
             title: "Unsigned binary",
             description: "Unsigned binary in /tmp",
-            processInfo: processInfo
+            context: ThreatSignalContext(processInfo: processInfo)
         )
 
         let data = try JSONEncoder().encode(signal)

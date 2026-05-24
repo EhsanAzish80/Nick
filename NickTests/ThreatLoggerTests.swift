@@ -113,10 +113,12 @@ final class ThreatLoggerTests: XCTestCase {
         let old = ThreatLogEntry(
             id: UUID(),
             timestamp: Date(timeIntervalSinceNow: -200 * 86_400),
-            alertTitle: "Old Alert",
-            alertDescription: "old",
-            score: 0.5,
-            severity: "medium"
+            content: ThreatLogContent(
+                alertTitle: "Old Alert",
+                alertDescription: "old",
+                score: 0.5,
+                severity: "medium"
+            )
         )
         ctx.insert(old)
         try? ctx.save()
@@ -168,10 +170,12 @@ final class ThreatLoggerTests: XCTestCase {
         let old = ThreatLogEntry(
             id: UUID(),
             timestamp: Date(timeIntervalSinceNow: -100 * 86_400), // 100 days ago
-            alertTitle: "Stale Alert",
-            alertDescription: "stale",
-            score: 0.5,
-            severity: "medium"
+            content: ThreatLogContent(
+                alertTitle: "Stale Alert",
+                alertDescription: "stale",
+                score: 0.5,
+                severity: "medium"
+            )
         )
         ctx.insert(old)
         try? ctx.save()
@@ -196,11 +200,13 @@ final class ThreatLoggerTests: XCTestCase {
     private func makeAlert(score: Double, severity: SignalSeverity, title: String) -> ThreatAlert {
         ThreatAlert(
             score: score,
-            title: title,
-            description: "Test description",
-            severity: severity,
-            contributingSignals: [],
-            recommendedAction: "Investigate."
+            content: AlertContent(
+                title: title,
+                description: "Test description",
+                severity: severity,
+                recommendedAction: "Investigate."
+            ),
+            contributingSignals: []
         )
     }
 
@@ -212,8 +218,7 @@ final class ThreatLoggerTests: XCTestCase {
             parentPID: 1,
             parentName: nil,
             signingStatus: .unsigned,
-            user: "root",
-            startTime: Date()
+            metadata: ProcessMetadata(user: "root", startTime: Date())
         )
         let net = NetworkConnectionInfo(
             id: UUID(),
@@ -233,18 +238,17 @@ final class ThreatLoggerTests: XCTestCase {
             timestamp: Date(),
             title: "Test Signal",
             description: "Test",
-            processInfo: proc,
-            networkInfo: net,
-            fileInfo: nil,
-            metadata: [:]
+            context: ThreatSignalContext(processInfo: proc, networkInfo: net)
         )
         return ThreatAlert(
             score: score,
-            title: "Alert with Signals",
-            description: "Test",
-            severity: severity,
-            contributingSignals: [signal],
-            recommendedAction: "Investigate."
+            content: AlertContent(
+                title: "Alert with Signals",
+                description: "Test",
+                severity: severity,
+                recommendedAction: "Investigate."
+            ),
+            contributingSignals: [signal]
         )
     }
 }

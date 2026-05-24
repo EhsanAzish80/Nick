@@ -136,11 +136,16 @@ final class SystemAuditor: MonitorProtocol {
         else if disabled { status = .fail }
         else { status = .unknown }
 
+        let sipCurrentValue: String
+        if enabled { sipCurrentValue = "Enabled" }
+        else if disabled { sipCurrentValue = "Disabled" }
+        else { sipCurrentValue = "Unknown" }
+
         return SystemCheckResult(
             id: UUID(),
             check: .sip,
             status: status,
-            currentValue: enabled ? "Enabled" : (disabled ? "Disabled" : "Unknown"),
+            currentValue: sipCurrentValue,
             expectedValue: "Enabled",
             description: "System Integrity Protection prevents modifications to system files, even by root.",
             recommendation: status == .fail ? "Re-enable SIP by booting to Recovery Mode and running `csrutil enable`." : nil
@@ -157,11 +162,16 @@ final class SystemAuditor: MonitorProtocol {
         else if isOff { status = .fail }
         else { status = .unknown }
 
+        let fvCurrentValue: String
+        if isOn { fvCurrentValue = "On" }
+        else if isOff { fvCurrentValue = "Off" }
+        else { fvCurrentValue = "Unknown" }
+
         return SystemCheckResult(
             id: UUID(),
             check: .fileVault,
             status: status,
-            currentValue: isOn ? "On" : (isOff ? "Off" : "Unknown"),
+            currentValue: fvCurrentValue,
             expectedValue: "On",
             description: "FileVault encrypts the startup disk, protecting data if your Mac is lost or stolen.",
             recommendation: status == .fail ? "Enable FileVault in System Settings → Privacy & Security → FileVault." : nil
@@ -178,11 +188,16 @@ final class SystemAuditor: MonitorProtocol {
         else if disabled { status = .fail }
         else { status = .unknown }
 
+        let gkCurrentValue: String
+        if enabled { gkCurrentValue = "Assessments enabled" }
+        else if disabled { gkCurrentValue = "Assessments disabled" }
+        else { gkCurrentValue = "Unknown" }
+
         return SystemCheckResult(
             id: UUID(),
             check: .gatekeeper,
             status: status,
-            currentValue: enabled ? "Assessments enabled" : (disabled ? "Assessments disabled" : "Unknown"),
+            currentValue: gkCurrentValue,
             expectedValue: "Assessments enabled",
             description: "Gatekeeper verifies that apps are notarised by Apple before allowing them to run.",
             recommendation: status == .fail ? "Run `sudo spctl --master-enable` in Terminal to re-enable Gatekeeper." : nil
@@ -200,11 +215,16 @@ final class SystemAuditor: MonitorProtocol {
         else if disabled { status = .fail }
         else { status = .unknown }
 
+        let fwCurrentValue: String
+        if enabled { fwCurrentValue = "Enabled" }
+        else if disabled { fwCurrentValue = "Disabled" }
+        else { fwCurrentValue = "Unknown" }
+
         return SystemCheckResult(
             id: UUID(),
             check: .firewall,
             status: status,
-            currentValue: enabled ? "Enabled" : (disabled ? "Disabled" : "Unknown"),
+            currentValue: fwCurrentValue,
             expectedValue: "Enabled",
             description: "The Application Firewall controls which apps may accept incoming network connections.",
             recommendation: status == .fail ? "Enable the firewall in System Settings → Network → Firewall." : nil
@@ -413,7 +433,7 @@ final class SystemAuditor: MonitorProtocol {
             severity: result.impliedSeverity,
             title: "\(result.check.displayName): \(result.currentValue)",
             description: result.description,
-            metadata: ["check": result.check.rawValue, "value": result.currentValue]
+            context: ThreatSignalContext(metadata: ["check": result.check.rawValue, "value": result.currentValue])
         )
     }
 

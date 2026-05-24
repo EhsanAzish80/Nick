@@ -129,8 +129,7 @@ final class ProcessMonitorTests: XCTestCase {
             parentPID: parentPID,
             parentName: nil,
             signingStatus: signing,
-            user: "test",
-            startTime: nil
+            metadata: ProcessMetadata(user: "test", startTime: nil)
         )
     }
 }

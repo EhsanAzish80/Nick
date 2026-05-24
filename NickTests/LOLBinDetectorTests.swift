@@ -25,8 +25,7 @@ final class LOLBinDetectorTests: XCTestCase {
             parentPID: parentPID,
             parentName: parentName,
             signingStatus: .adHoc,
-            user: "root",
-            startTime: Date()
+            metadata: ProcessMetadata(user: "root", startTime: Date())
         )
     }
 
@@ -45,7 +44,7 @@ final class LOLBinDetectorTests: XCTestCase {
         let procWithCurlPath = NickProcessInfo(
             pid: 101, path: "/usr/bin/curl | sh", name: "sh",
             parentPID: 1, parentName: "curl",
-            signingStatus: .adHoc, user: "root", startTime: Date()
+            signingStatus: .adHoc, metadata: ProcessMetadata(user: "root", startTime: Date())
         )
         let signal = LOLBinDetector.evaluate(procWithCurlPath, parentName: "curl")
         XCTAssertNotNil(signal)
@@ -64,7 +63,7 @@ final class LOLBinDetectorTests: XCTestCase {
         let proc = NickProcessInfo(
             pid: 102, path: "/usr/bin/osascript do shell script", name: "osascript",
             parentPID: 1, parentName: "",
-            signingStatus: .signed(teamID: "APPLE"), user: "root", startTime: Date()
+            signingStatus: .signed(teamID: "APPLE"), metadata: ProcessMetadata(user: "root", startTime: Date())
         )
         let signal = LOLBinDetector.evaluate(proc, parentName: nil)
         XCTAssertNotNil(signal)
@@ -77,7 +76,7 @@ final class LOLBinDetectorTests: XCTestCase {
         let proc = NickProcessInfo(
             pid: 103, path: "/usr/bin/xattr -d com.apple.quarantine /tmp/app", name: "xattr",
             parentPID: 1, parentName: "",
-            signingStatus: .signed(teamID: "APPLE"), user: "root", startTime: Date()
+            signingStatus: .signed(teamID: "APPLE"), metadata: ProcessMetadata(user: "root", startTime: Date())
         )
         let signal = LOLBinDetector.evaluate(proc, parentName: nil)
         XCTAssertNotNil(signal)
@@ -90,7 +89,7 @@ final class LOLBinDetectorTests: XCTestCase {
         let proc = NickProcessInfo(
             pid: 104, path: "/usr/bin/python3 -c import base64", name: "python3",
             parentPID: 1, parentName: "",
-            signingStatus: .adHoc, user: "user", startTime: Date()
+            signingStatus: .adHoc, metadata: ProcessMetadata(user: "user", startTime: Date())
         )
         let signal = LOLBinDetector.evaluate(proc, parentName: nil)
         XCTAssertNotNil(signal)
@@ -101,7 +100,7 @@ final class LOLBinDetectorTests: XCTestCase {
         let proc = NickProcessInfo(
             pid: 105, path: "/usr/bin/ruby base64", name: "ruby",
             parentPID: 1, parentName: "",
-            signingStatus: .adHoc, user: "user", startTime: Date()
+            signingStatus: .adHoc, metadata: ProcessMetadata(user: "user", startTime: Date())
         )
         let signal = LOLBinDetector.evaluate(proc, parentName: nil)
         XCTAssertNotNil(signal)
@@ -113,7 +112,7 @@ final class LOLBinDetectorTests: XCTestCase {
         let proc = NickProcessInfo(
             pid: 106, path: "/bin/launchctl load /tmp/com.evil.plist", name: "launchctl",
             parentPID: 1, parentName: "",
-            signingStatus: .signed(teamID: "APPLE"), user: "root", startTime: Date()
+            signingStatus: .signed(teamID: "APPLE"), metadata: ProcessMetadata(user: "root", startTime: Date())
         )
         let signal = LOLBinDetector.evaluate(proc, parentName: nil)
         XCTAssertNotNil(signal)
@@ -150,10 +149,10 @@ final class LOLBinDetectorTests: XCTestCase {
         let processes: [NickProcessInfo] = [
             NickProcessInfo(pid: 200, path: "/bin/bash curl something", name: "bash",
                             parentPID: 1, parentName: "curl",
-                            signingStatus: .adHoc, user: "root", startTime: Date()),
+                            signingStatus: .adHoc, metadata: ProcessMetadata(user: "root", startTime: Date())),
             NickProcessInfo(pid: 201, path: "/usr/bin/xattr -d com.apple.quarantine /tmp/app", name: "xattr",
                             parentPID: 1, parentName: "",
-                            signingStatus: .signed(teamID: "APPLE"), user: "root", startTime: Date()),
+                            signingStatus: .signed(teamID: "APPLE"), metadata: ProcessMetadata(user: "root", startTime: Date())),
             makeProc(pid: 202, name: "Safari", path: "/Applications/Safari.app"),
         ]
         let signals = LOLBinDetector.signals(from: processes)
@@ -170,7 +169,7 @@ final class LOLBinDetectorTests: XCTestCase {
         let processes = [
             NickProcessInfo(pid: 400, path: "/bin/bash curl x", name: "bash",
                             parentPID: 1, parentName: "Terminal",
-                            signingStatus: .adHoc, user: "user", startTime: Date())
+                            signingStatus: .adHoc, metadata: ProcessMetadata(user: "user", startTime: Date()))
         ]
         let signals = LOLBinDetector.signals(from: processes)
         // bash is not in builtIn; Terminal parent suppresses it
@@ -183,7 +182,7 @@ final class LOLBinDetectorTests: XCTestCase {
         let proc = NickProcessInfo(
             pid: 500, path: "/usr/bin/xattr -d com.apple.quarantine /tmp/x", name: "xattr",
             parentPID: 1, parentName: "",
-            signingStatus: .signed(teamID: "APPLE"), user: "root", startTime: Date()
+            signingStatus: .signed(teamID: "APPLE"), metadata: ProcessMetadata(user: "root", startTime: Date())
         )
         let signal = LOLBinDetector.evaluate(proc, parentName: nil)
         XCTAssertEqual(signal?.metadata["detector"], "LOLBinDetector")

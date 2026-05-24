@@ -178,8 +178,7 @@ final class AVCaptureMonitor: MonitorProtocol {
                 parentPID:   0,
                 parentName:  nil,
                 signingStatus: p.signingStatus,
-                user:        nil,
-                startTime:   nil
+                metadata: ProcessMetadata()
             )
         }
 
@@ -191,13 +190,15 @@ final class AVCaptureMonitor: MonitorProtocol {
                          "Access attributed to '\(processName)'. " +
                          "Malware commonly activates cameras and microphones silently — " +
                          "verify this is expected.",
-            processInfo: processInfo,
-            metadata: [
-                "mediaType":  mediaType,
-                "deviceName": deviceName,
-                "process":    processName,
-                "reason":     "capture_device_active"
-            ]
+            context: ThreatSignalContext(
+                processInfo: processInfo,
+                metadata: [
+                    "mediaType":  mediaType,
+                    "deviceName": deviceName,
+                    "process":    processName,
+                    "reason":     "capture_device_active"
+                ]
+            )
         )
     }
 
@@ -211,9 +212,7 @@ final class AVCaptureMonitor: MonitorProtocol {
             object:  nil,
             queue:   .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.scanCameraDevices()
-            }
+            self?.handleDeviceConnected()
         }
 
         let onDisconnect = center.addObserver(
@@ -221,12 +220,18 @@ final class AVCaptureMonitor: MonitorProtocol {
             object:  nil,
             queue:   .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.isCameraActive = false
-            }
+            self?.handleDeviceDisconnected()
         }
 
         deviceObservers = [onConnect, onDisconnect]
+    }
+
+    private func handleDeviceConnected() {
+        Task { await scanCameraDevices() }
+    }
+
+    private func handleDeviceDisconnected() {
+        isCameraActive = false
     }
 
     private func unregisterDeviceNotifications() {

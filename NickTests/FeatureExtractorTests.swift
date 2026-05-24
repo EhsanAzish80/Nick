@@ -214,8 +214,7 @@ final class FeatureExtractorTests: XCTestCase {
             parentPID: 1,
             parentName: nil,
             signingStatus: signingStatus,
-            user: "user",
-            startTime: Date(timeIntervalSinceNow: -60)
+            metadata: ProcessMetadata(user: "user", startTime: Date(timeIntervalSinceNow: -60))
         )
         return ThreatSignal(
             id: UUID(),
@@ -224,10 +223,7 @@ final class FeatureExtractorTests: XCTestCase {
             timestamp: Date(),
             title: "Test process signal",
             description: "Test",
-            processInfo: procInfo,
-            networkInfo: nil,
-            fileInfo: nil,
-            metadata: [:]
+            context: ThreatSignalContext(processInfo: procInfo)
         )
     }
 
@@ -254,10 +250,7 @@ final class FeatureExtractorTests: XCTestCase {
             timestamp: Date(),
             title: "Test network signal",
             description: "Test",
-            processInfo: nil,
-            networkInfo: netInfo,
-            fileInfo: nil,
-            metadata: [:]
+            context: ThreatSignalContext(networkInfo: netInfo)
         )
     }
 
@@ -276,10 +269,7 @@ final class FeatureExtractorTests: XCTestCase {
             timestamp: Date(),
             title: "Test fs signal",
             description: "Test",
-            processInfo: nil,
-            networkInfo: nil,
-            fileInfo: fileInfo,
-            metadata: [:]
+            context: ThreatSignalContext(fileInfo: fileInfo)
         )
     }
 
@@ -291,13 +281,12 @@ final class FeatureExtractorTests: XCTestCase {
             timestamp: Date(),
             title: "Test persistence signal",
             description: "Test",
-            processInfo: nil,
-            networkInfo: nil,
-            fileInfo: nil,
-            metadata: [
-                "persistType": persistType,
-                "targetUnsigned": targetUnsigned ? "true" : "false",
-            ]
+            context: ThreatSignalContext(
+                metadata: [
+                    "persistType": persistType,
+                    "targetUnsigned": targetUnsigned ? "true" : "false",
+                ]
+            )
         )
     }
 
@@ -308,11 +297,7 @@ final class FeatureExtractorTests: XCTestCase {
             severity: severity,
             timestamp: Date(),
             title: "YARA match",
-            description: "Test",
-            processInfo: nil,
-            networkInfo: nil,
-            fileInfo: nil,
-            metadata: [:]
+            description: "Test"
         )
     }
 
@@ -324,10 +309,7 @@ final class FeatureExtractorTests: XCTestCase {
             timestamp: Date(),
             title: "System audit",
             description: "Test",
-            processInfo: nil,
-            networkInfo: nil,
-            fileInfo: nil,
-            metadata: ["check": check]
+            context: ThreatSignalContext(metadata: ["check": check])
         )
     }
 
@@ -339,10 +321,12 @@ final class FeatureExtractorTests: XCTestCase {
             timestamp: signal.timestamp,
             title: signal.title,
             description: signal.description,
-            processInfo: signal.processInfo,
-            networkInfo: signal.networkInfo,
-            fileInfo: signal.fileInfo,
-            metadata: signal.metadata.merging(metadata) { _, new in new }
+            context: ThreatSignalContext(
+                processInfo: signal.processInfo,
+                networkInfo: signal.networkInfo,
+                fileInfo: signal.fileInfo,
+                metadata: signal.metadata.merging(metadata) { _, new in new }
+            )
         )
     }
 }

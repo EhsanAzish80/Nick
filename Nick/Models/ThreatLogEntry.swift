@@ -93,37 +93,26 @@ final class ThreatLogEntry {
     init(
         id: UUID = UUID(),
         timestamp: Date = Date(),
-        alertTitle: String,
-        alertDescription: String,
-        explanation: String? = nil,
-        score: Double,
-        severity: String,
-        contributingSignalIDs: [UUID] = [],
-        contributingSignalSummaries: [String] = [],
-        processPath: String? = nil,
-        processName: String? = nil,
-        processPID: Int32? = nil,
-        remoteAddress: String? = nil,
-        remotePort: Int? = nil,
-        filePath: String? = nil,
+        content: ThreatLogContent,
+        forensics: ThreatLogForensics = ThreatLogForensics(),
         resolved: Bool = false,
         resolvedNote: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
-        self.alertTitle = alertTitle
-        self.alertDescription = alertDescription
-        self.explanation = explanation
-        self.score = score
-        self.severity = severity
-        self.contributingSignalIDs = contributingSignalIDs
-        self.contributingSignalSummaries = contributingSignalSummaries
-        self.processPath = processPath
-        self.processName = processName
-        self.processPID = processPID
-        self.remoteAddress = remoteAddress
-        self.remotePort = remotePort
-        self.filePath = filePath
+        self.alertTitle = content.alertTitle
+        self.alertDescription = content.alertDescription
+        self.explanation = content.explanation
+        self.score = content.score
+        self.severity = content.severity
+        self.contributingSignalIDs = forensics.contributingSignalIDs
+        self.contributingSignalSummaries = forensics.contributingSignalSummaries
+        self.processPath = forensics.processPath
+        self.processName = forensics.processName
+        self.processPID = forensics.processPID
+        self.remoteAddress = forensics.remoteAddress
+        self.remotePort = forensics.remotePort
+        self.filePath = forensics.filePath
         self.resolved = resolved
         self.resolvedNote = resolvedNote
     }
@@ -142,27 +131,26 @@ final class ThreatLogEntry {
         let netInfo   = alert.contributingSignals.compactMap { $0.networkInfo }.first
         let fileInfo  = alert.contributingSignals.compactMap { $0.fileInfo }.first
 
-        let signalIDs = alert.contributingSignals.map { $0.id }
-        let summaries = alert.contributingSignals.map { "\($0.source.rawValue): \($0.title)" }
-
         self.init(
             id: alert.id,
             timestamp: alert.timestamp,
-            alertTitle: alert.title,
-            alertDescription: alert.description,
-            explanation: explanation ?? alert.explanation,
-            score: alert.score,
-            severity: alert.severity.displayName.lowercased(),
-            contributingSignalIDs: signalIDs,
-            contributingSignalSummaries: summaries,
-            processPath: procInfo?.path,
-            processName: procInfo?.name,
-            processPID: procInfo.map { Int32($0.pid) },
-            remoteAddress: netInfo?.remoteAddress,
-            remotePort: netInfo?.remotePort,
-            filePath: fileInfo?.path,
-            resolved: false,
-            resolvedNote: nil
+            content: ThreatLogContent(
+                alertTitle: alert.title,
+                alertDescription: alert.description,
+                explanation: explanation ?? alert.explanation,
+                score: alert.score,
+                severity: alert.severity.displayName.lowercased()
+            ),
+            forensics: ThreatLogForensics(
+                contributingSignalIDs: alert.contributingSignals.map { $0.id },
+                contributingSignalSummaries: alert.contributingSignals.map { "\($0.source.rawValue): \($0.title)" },
+                processPath: procInfo?.path,
+                processName: procInfo?.name,
+                processPID: procInfo.map { Int32($0.pid) },
+                remoteAddress: netInfo?.remoteAddress,
+                remotePort: netInfo?.remotePort,
+                filePath: fileInfo?.path
+            )
         )
     }
 }
@@ -177,6 +165,67 @@ final class ThreatLogEntry {
 enum ThreatLogSchemaV1: VersionedSchema {
     static let versionIdentifier = Schema.Version(1, 0, 0)
     static var models: [any PersistentModel.Type] { [ThreatLogEntry.self] }
+}
+
+// MARK: - ThreatLogContent
+
+/// Groups the five descriptive fields of a `ThreatLogEntry`, reducing the
+/// designated initialiser's parameter count.
+struct ThreatLogContent {
+    let alertTitle: String
+    let alertDescription: String
+    var explanation: String?
+    let score: Double
+    let severity: String
+
+    init(
+        alertTitle: String,
+        alertDescription: String,
+        explanation: String? = nil,
+        score: Double,
+        severity: String
+    ) {
+        self.alertTitle = alertTitle
+        self.alertDescription = alertDescription
+        self.explanation = explanation
+        self.score = score
+        self.severity = severity
+    }
+}
+
+// MARK: - ThreatLogForensics
+
+/// Groups the eight optional forensic context fields of a `ThreatLogEntry`,
+/// reducing the designated initialiser's parameter count.
+struct ThreatLogForensics {
+    var contributingSignalIDs: [UUID]
+    var contributingSignalSummaries: [String]
+    var processPath: String?
+    var processName: String?
+    var processPID: Int32?
+    var remoteAddress: String?
+    var remotePort: Int?
+    var filePath: String?
+
+    init(
+        contributingSignalIDs: [UUID] = [],
+        contributingSignalSummaries: [String] = [],
+        processPath: String? = nil,
+        processName: String? = nil,
+        processPID: Int32? = nil,
+        remoteAddress: String? = nil,
+        remotePort: Int? = nil,
+        filePath: String? = nil
+    ) {
+        self.contributingSignalIDs = contributingSignalIDs
+        self.contributingSignalSummaries = contributingSignalSummaries
+        self.processPath = processPath
+        self.processName = processName
+        self.processPID = processPID
+        self.remoteAddress = remoteAddress
+        self.remotePort = remotePort
+        self.filePath = filePath
+    }
 }
 
 /// Migration plan anchored to v1.0.

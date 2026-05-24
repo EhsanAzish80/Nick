@@ -148,49 +148,51 @@ final class ExplanationPromptBuilder {
     }
 
     /// Maps a feature name to a short human-readable description for the prompt.
+    private static let featureDescriptions: [String: String] = [
+        "process_is_unsigned":                    "Binary has no valid code signature",
+        "process_is_adhoc_signed":                "Signed but no team identifier",
+        "process_in_tmp":                         "Executing from temporary directory",
+        "process_in_hidden_dir":                  "Running from a hidden folder",
+        "process_is_shell":                       "Process is a shell interpreter",
+        "process_parent_is_gui_app":              "Spawned from a GUI application",
+        "process_parent_is_terminal":             "Spawned from a terminal",
+        "process_parent_chain_depth":             "Deep process chain depth",
+        "process_age_seconds":                    "Process recently started",
+        "process_is_lolbin":                      "Living-off-the-land binary",
+        "net_has_outbound_connection":            "Active outbound TCP connection",
+        "net_remote_is_raw_ip":                   "Connected to raw IP address",
+        "net_remote_port":                        "Specific remote port",
+        "net_remote_port_is_common":              "Using common service port",
+        "net_is_listening":                       "Process is listening on a socket",
+        "net_connection_count":                   "Multiple active connections",
+        "net_uses_uncommon_port":                 "Connecting on unusual port",
+        "fs_file_in_tmp":                         "File is in temp directory",
+        "fs_file_entropy":                        "High file entropy (encrypted/packed)",
+        "fs_file_entropy_is_high":                "File entropy exceeds 7.5",
+        "fs_file_is_macho":                       "File is an executable binary",
+        "fs_file_has_embedded_urls":              "File contains embedded URLs",
+        "fs_file_has_embedded_base64":            "File contains encoded data",
+        "fs_rapid_creation_detected":             "Rapid file creation in temp dir",
+        "persist_new_launchagent":                "New LaunchAgent persistence",
+        "persist_new_launchdaemon":               "New LaunchDaemon persistence",
+        "persist_new_cronjob":                    "New cron job entry",
+        "persist_executable_unsigned":            "Persistence target is unsigned",
+        "persist_executable_missing":             "Persistence target doesn't exist",
+        "yara_match_count":                       "Matched malware patterns",
+        "yara_max_severity":                      "High severity YARA match",
+        "audit_sip_disabled":                     "System Integrity Protection off",
+        "audit_filevault_disabled":               "FileVault disk encryption off",
+        "audit_gatekeeper_disabled":              "Gatekeeper disabled",
+        "audit_firewall_disabled":                "Application Firewall off",
+        "temporal_time_since_file_creation":      "Rapid file-to-process sequence",
+        "temporal_time_since_net_connection":     "Rapid process-to-network sequence",
+        "temporal_signals_in_window":             "Many concurrent signals",
+        "temporal_unique_monitors_firing":        "Multiple monitors triggered",
+        "temporal_severity_escalation":           "Severity increased over time",
+    ]
+
     private func featureDescription(for featureName: String) -> String {
-        switch featureName {
-        case "process_is_unsigned":         return "Binary has no valid code signature"
-        case "process_is_adhoc_signed":     return "Signed but no team identifier"
-        case "process_in_tmp":              return "Executing from temporary directory"
-        case "process_in_hidden_dir":       return "Running from a hidden folder"
-        case "process_is_shell":            return "Process is a shell interpreter"
-        case "process_parent_is_gui_app":   return "Spawned from a GUI application"
-        case "process_parent_is_terminal":  return "Spawned from a terminal"
-        case "process_parent_chain_depth":  return "Deep process chain depth"
-        case "process_age_seconds":         return "Process recently started"
-        case "process_is_lolbin":           return "Living-off-the-land binary"
-        case "net_has_outbound_connection": return "Active outbound TCP connection"
-        case "net_remote_is_raw_ip":        return "Connected to raw IP address"
-        case "net_remote_port":             return "Specific remote port"
-        case "net_remote_port_is_common":   return "Using common service port"
-        case "net_is_listening":            return "Process is listening on a socket"
-        case "net_connection_count":        return "Multiple active connections"
-        case "net_uses_uncommon_port":      return "Connecting on unusual port"
-        case "fs_file_in_tmp":              return "File is in temp directory"
-        case "fs_file_entropy":             return "High file entropy (encrypted/packed)"
-        case "fs_file_entropy_is_high":     return "File entropy exceeds 7.5"
-        case "fs_file_is_macho":            return "File is an executable binary"
-        case "fs_file_has_embedded_urls":   return "File contains embedded URLs"
-        case "fs_file_has_embedded_base64": return "File contains encoded data"
-        case "fs_rapid_creation_detected":  return "Rapid file creation in temp dir"
-        case "persist_new_launchagent":     return "New LaunchAgent persistence"
-        case "persist_new_launchdaemon":    return "New LaunchDaemon persistence"
-        case "persist_new_cronjob":         return "New cron job entry"
-        case "persist_executable_unsigned": return "Persistence target is unsigned"
-        case "persist_executable_missing":  return "Persistence target doesn't exist"
-        case "yara_match_count":            return "Matched malware patterns"
-        case "yara_max_severity":           return "High severity YARA match"
-        case "audit_sip_disabled":          return "System Integrity Protection off"
-        case "audit_filevault_disabled":    return "FileVault disk encryption off"
-        case "audit_gatekeeper_disabled":   return "Gatekeeper disabled"
-        case "audit_firewall_disabled":     return "Application Firewall off"
-        case "temporal_time_since_file_creation":  return "Rapid file-to-process sequence"
-        case "temporal_time_since_net_connection": return "Rapid process-to-network sequence"
-        case "temporal_signals_in_window":  return "Many concurrent signals"
-        case "temporal_unique_monitors_firing":    return "Multiple monitors triggered"
-        case "temporal_severity_escalation": return "Severity increased over time"
-        default:                            return featureName.replacingOccurrences(of: "_", with: " ")
-        }
+        Self.featureDescriptions[featureName]
+            ?? featureName.replacingOccurrences(of: "_", with: " ")
     }
 }

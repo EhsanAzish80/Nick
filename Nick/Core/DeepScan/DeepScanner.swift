@@ -135,14 +135,16 @@ final class DeepScanner {
                                 severity: severity,
                                 title: "YARA match: \(match.ruleName)",
                                 description: "\(match.metadata["description"] ?? match.ruleName) at \(match.filePath)",
-                                fileInfo: FileInfo(
-                                    path: match.filePath,
-                                    sha256Hash: nil,
-                                    entropy: nil,
-                                    signingStatus: nil,
-                                    sizeBytes: nil
-                                ),
-                                metadata: ["path": match.filePath, "rule": match.ruleName]
+                                context: ThreatSignalContext(
+                                    fileInfo: FileInfo(
+                                        path: match.filePath,
+                                        sha256Hash: nil,
+                                        entropy: nil,
+                                        signingStatus: nil,
+                                        sizeBytes: nil
+                                    ),
+                                    metadata: ["path": match.filePath, "rule": match.ruleName]
+                                )
                             ))
                         }
                         await eng.correlator.ingest(signals)

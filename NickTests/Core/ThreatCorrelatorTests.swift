@@ -124,8 +124,8 @@ final class ThreatCorrelatorTests: XCTestCase {
     func test_threatAlert_scoreIsClamped_belowZero() {
         let alert = ThreatAlert(
             score: -0.5,
-            title: "T", description: "D", severity: .low,
-            contributingSignals: [], recommendedAction: "R"
+            content: AlertContent(title: "T", description: "D", severity: .low, recommendedAction: "R"),
+            contributingSignals: []
         )
         XCTAssertEqual(alert.score, 0.0)
     }
@@ -133,8 +133,8 @@ final class ThreatCorrelatorTests: XCTestCase {
     func test_threatAlert_scoreIsClamped_aboveOne() {
         let alert = ThreatAlert(
             score: 1.5,
-            title: "T", description: "D", severity: .low,
-            contributingSignals: [], recommendedAction: "R"
+            content: AlertContent(title: "T", description: "D", severity: .low, recommendedAction: "R"),
+            contributingSignals: []
         )
         XCTAssertEqual(alert.score, 1.0)
     }
@@ -143,12 +143,14 @@ final class ThreatCorrelatorTests: XCTestCase {
         let alert = ThreatAlert(
             id: UUID(),
             score: 0.85,
-            title: "Test Alert",
-            description: "Test",
-            severity: .high,
+            content: AlertContent(
+                title: "Test Alert",
+                description: "Test",
+                severity: .high,
+                recommendedAction: "Do something"
+            ),
             contributingSignals: [],
-            timestamp: Date(timeIntervalSince1970: 0),
-            recommendedAction: "Do something"
+            timestamp: Date(timeIntervalSince1970: 0)
         )
         let data = try JSONEncoder().encode(alert)
         let decoded = try JSONDecoder().decode(ThreatAlert.self, from: data)
@@ -170,7 +172,7 @@ final class ThreatCorrelatorTests: XCTestCase {
             severity: severity,
             title: title,
             description: "Test signal for \(source.rawValue)",
-            metadata: metadata
+            context: ThreatSignalContext(metadata: metadata)
         )
     }
 

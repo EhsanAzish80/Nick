@@ -19,7 +19,7 @@ final class ParentChainAnalyzerTests: XCTestCase {
         NickProcessInfo(
             pid: pid, path: "/usr/bin/\(name)", name: name,
             parentPID: parentPID, parentName: "",
-            signingStatus: .signed(teamID: "APPLE"), user: "user", startTime: Date()
+            signingStatus: .signed(teamID: "APPLE"), metadata: ProcessMetadata(user: "user", startTime: Date())
         )
     }
 
@@ -45,9 +45,9 @@ final class ParentChainAnalyzerTests: XCTestCase {
     func test_buildChain_cycleDetected_doesNotLoop() {
         // Artificial cycle: proc A has parent B, B has parent A
         let a = NickProcessInfo(pid: 10, path: "/a", name: "a", parentPID: 20, parentName: "",
-                                signingStatus: .adHoc, user: "u", startTime: Date())
+                                signingStatus: .adHoc, metadata: ProcessMetadata(user: "u", startTime: Date()))
         let b = NickProcessInfo(pid: 20, path: "/b", name: "b", parentPID: 10, parentName: "",
-                                signingStatus: .adHoc, user: "u", startTime: Date())
+                                signingStatus: .adHoc, metadata: ProcessMetadata(user: "u", startTime: Date()))
         let chain = ParentChainAnalyzer.buildChain(for: a, allProcesses: [a, b])
         XCTAssertLessThanOrEqual(chain.depth, 3) // must not loop forever
     }
@@ -131,7 +131,7 @@ final class ParentChainAnalyzerTests: XCTestCase {
         let terminal = NickProcessInfo(
             pid: 600, path: "/Applications/Utilities/Terminal.app", name: "Terminal",
             parentPID: 1, parentName: "",
-            signingStatus: .signed(teamID: "APPLE"), user: "user", startTime: Date()
+            signingStatus: .signed(teamID: "APPLE"), metadata: ProcessMetadata(user: "user", startTime: Date())
         )
         let shell = makeProc(pid: 601, name: "bash", parentPID: 600)
         let chain = ParentChainAnalyzer.buildChain(for: shell, allProcesses: [terminal, shell])

@@ -171,7 +171,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
 
     var id: String { rawValue }
 
-    var title: String { rawValue }
+    var title: String { id }
 
     var icon: String {
         switch self {
@@ -658,14 +658,12 @@ struct ProcessListView: View {
     }
 
     static func signingText(_ p: NickProcessInfo) -> String {
-        if p.signingStatus == .pending {
-            // Fix stuck "Checking…": fall back to Unknown after 10 s.
-            if let start = p.startTime, Date().timeIntervalSince(start) > 10 {
-                return "Unknown"
-            }
-            return "Checking…"
+        guard p.signingStatus == .pending else { return p.signingStatus.displayName }
+        // Fix stuck "Checking…": fall back to Unknown after 10 s.
+        if let start = p.startTime, Date().timeIntervalSince(start) > 10 {
+            return "Unknown"
         }
-        return p.signingStatus.displayName
+        return "Checking…"
     }
 
     static func threatLabel(_ p: NickProcessInfo) -> String? {

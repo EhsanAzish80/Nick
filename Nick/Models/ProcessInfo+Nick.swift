@@ -156,7 +156,7 @@ struct NickProcessInfo: Sendable, Codable, Equatable {
 // MARK: - Backwards-Compatible Initialiser
 
 extension NickProcessInfo {
-    /// Creates a `NickProcessInfo` without argument data.
+    /// Creates a `NickProcessInfo` with optional metadata.
     /// All existing construction sites use this; `arguments` defaults to `[]`.
     init(
         pid: Int32,
@@ -165,13 +165,28 @@ extension NickProcessInfo {
         parentPID: Int32,
         parentName: String?,
         signingStatus: SigningStatus,
-        user: String?,
-        startTime: Date?
+        metadata: ProcessMetadata = ProcessMetadata()
     ) {
         self.init(
             pid: pid, path: path, name: name, parentPID: parentPID,
             parentName: parentName, signingStatus: signingStatus,
-            user: user, startTime: startTime, arguments: []
+            user: metadata.user, startTime: metadata.startTime, arguments: metadata.arguments
         )
+    }
+}
+
+// MARK: - ProcessMetadata
+
+/// Groups the optional metadata fields of a `NickProcessInfo` initialiser,
+/// reducing the parameter count to satisfy the 7-parameter limit.
+struct ProcessMetadata: Sendable {
+    var user: String?
+    var startTime: Date?
+    var arguments: [String]
+
+    init(user: String? = nil, startTime: Date? = nil, arguments: [String] = []) {
+        self.user = user
+        self.startTime = startTime
+        self.arguments = arguments
     }
 }

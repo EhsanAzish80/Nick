@@ -316,7 +316,7 @@ final class PersistenceWatcher: MonitorProtocol {
                 severity: .high,
                 title: "Unsigned launch \(item.type == .launchDaemon ? "daemon" : "agent")",
                 description: "'\(item.name)' at \(item.path) points to an unsigned executable at \(item.executablePath ?? "unknown").",
-                metadata: ["path": item.path, "executable": item.executablePath ?? ""]
+                context: ThreatSignalContext(metadata: ["path": item.path, "executable": item.executablePath ?? ""])
             )
         }
 
@@ -329,7 +329,7 @@ final class PersistenceWatcher: MonitorProtocol {
                 severity: .medium,
                 title: "Launch item with missing executable",
                 description: "'\(item.name)' references executable at \(execPath) which does not exist.",
-                metadata: ["path": item.path, "executable": execPath]
+                context: ThreatSignalContext(metadata: ["path": item.path, "executable": execPath])
             )
         }
 

@@ -46,23 +46,19 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
     init(
         id: UUID = UUID(),
         score: Double,
-        title: String,
-        description: String,
-        severity: SignalSeverity,
+        content: AlertContent,
         contributingSignals: [ThreatSignal],
-        timestamp: Date = Date(),
-        recommendedAction: String,
-        explanation: String? = nil
+        timestamp: Date = Date()
     ) {
         self.id = id
         self.score = max(0, min(1, score)) // clamp to [0, 1]
-        self.title = title
-        self.description = description
-        self.severity = severity
+        self.title = content.title
+        self.description = content.description
+        self.severity = content.severity
         self.contributingSignals = contributingSignals
         self.timestamp = timestamp
-        self.recommendedAction = recommendedAction
-        self.explanation = explanation
+        self.recommendedAction = content.recommendedAction
+        self.explanation = content.explanation
     }
 
     /// Returns a copy of this alert with a different severity level.
@@ -73,13 +69,15 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         ThreatAlert(
             id: self.id,
             score: self.score,
-            title: self.title,
-            description: self.description,
-            severity: severity,
+            content: AlertContent(
+                title: self.title,
+                description: self.description,
+                severity: severity,
+                recommendedAction: self.recommendedAction,
+                explanation: self.explanation
+            ),
             contributingSignals: self.contributingSignals,
-            timestamp: self.timestamp,
-            recommendedAction: self.recommendedAction,
-            explanation: self.explanation
+            timestamp: self.timestamp
         )
     }
 
@@ -95,5 +93,31 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
             .sorted()
             .joined(separator: ",")
         return "\(title)|\(severity.rawValue)|\(procNames)"
+    }
+}
+
+// MARK: - AlertContent
+
+/// Groups the five descriptive fields of a `ThreatAlert` into a single parameter,
+/// reducing the initialiser's parameter count to satisfy the 7-parameter limit.
+struct AlertContent: Sendable {
+    let title: String
+    let description: String
+    let severity: SignalSeverity
+    let recommendedAction: String
+    var explanation: String?
+
+    init(
+        title: String,
+        description: String,
+        severity: SignalSeverity,
+        recommendedAction: String,
+        explanation: String? = nil
+    ) {
+        self.title = title
+        self.description = description
+        self.severity = severity
+        self.recommendedAction = recommendedAction
+        self.explanation = explanation
     }
 }

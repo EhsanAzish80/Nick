@@ -128,12 +128,14 @@ enum ParentChainAnalyzer {
                 severity: .critical,
                 title: "Shell spawned from web browser",
                 description: "'\(leaf.name)' (PID \(leaf.pid)) was spawned from browser '\(parent.name)'. This pattern indicates browser exploit or malicious web content execution.",
-                processInfo: leaf,
-                metadata: [
-                    "reason": "browser_to_shell",
-                    "detector": "ParentChainAnalyzer",
-                    "chain": chainNames.joined(separator: " → ")
-                ]
+                context: ThreatSignalContext(
+                    processInfo: leaf,
+                    metadata: [
+                        "reason": "browser_to_shell",
+                        "detector": "ParentChainAnalyzer",
+                        "chain": chainNames.joined(separator: " → ")
+                    ]
+                )
             )
         }
 
@@ -146,12 +148,14 @@ enum ParentChainAnalyzer {
                 severity: .critical,
                 title: "Shell spawned from Office application",
                 description: "'\(leaf.name)' (PID \(leaf.pid)) was spawned from '\(parent.name)'. This is the classic Office macro attack pattern.",
-                processInfo: leaf,
-                metadata: [
-                    "reason": "office_to_shell",
-                    "detector": "ParentChainAnalyzer",
-                    "chain": chainNames.joined(separator: " → ")
-                ]
+                context: ThreatSignalContext(
+                    processInfo: leaf,
+                    metadata: [
+                        "reason": "office_to_shell",
+                        "detector": "ParentChainAnalyzer",
+                        "chain": chainNames.joined(separator: " → ")
+                    ]
+                )
             )
         }
 
@@ -164,12 +168,14 @@ enum ParentChainAnalyzer {
                 severity: .critical,
                 title: "Shell spawned from PDF viewer",
                 description: "'\(leaf.name)' (PID \(leaf.pid)) was spawned from '\(parent.name)'. This pattern suggests PDF exploit exploitation.",
-                processInfo: leaf,
-                metadata: [
-                    "reason": "pdf_to_shell",
-                    "detector": "ParentChainAnalyzer",
-                    "chain": chainNames.joined(separator: " → ")
-                ]
+                context: ThreatSignalContext(
+                    processInfo: leaf,
+                    metadata: [
+                        "reason": "pdf_to_shell",
+                        "detector": "ParentChainAnalyzer",
+                        "chain": chainNames.joined(separator: " → ")
+                    ]
+                )
             )
         }
 
@@ -183,12 +189,14 @@ enum ParentChainAnalyzer {
                 severity: .medium,
                 title: "Application spawning network downloader",
                 description: "'\(leaf.name)' (PID \(leaf.pid)) was spawned from '\(parent.name)'. Applications should not directly spawn download utilities.",
-                processInfo: leaf,
-                metadata: [
-                    "reason": "app_to_downloader",
-                    "detector": "ParentChainAnalyzer",
-                    "chain": chainNames.joined(separator: " → ")
-                ]
+                context: ThreatSignalContext(
+                    processInfo: leaf,
+                    metadata: [
+                        "reason": "app_to_downloader",
+                        "detector": "ParentChainAnalyzer",
+                        "chain": chainNames.joined(separator: " → ")
+                    ]
+                )
             )
         }
 
@@ -200,13 +208,15 @@ enum ParentChainAnalyzer {
                 severity: .high,
                 title: "Deep shell nesting detected",
                 description: "Shell chain of depth \(shellDepth) detected: \(chainNames.joined(separator: " → ")). Multiple layers of shell spawning is a common obfuscation technique.",
-                processInfo: leaf,
-                metadata: [
-                    "reason": "deep_shell_nesting",
-                    "detector": "ParentChainAnalyzer",
-                    "shell_depth": String(shellDepth),
-                    "chain": chainNames.joined(separator: " → ")
-                ]
+                context: ThreatSignalContext(
+                    processInfo: leaf,
+                    metadata: [
+                        "reason": "deep_shell_nesting",
+                        "detector": "ParentChainAnalyzer",
+                        "shell_depth": String(shellDepth),
+                        "chain": chainNames.joined(separator: " → ")
+                    ]
+                )
             )
         }
 

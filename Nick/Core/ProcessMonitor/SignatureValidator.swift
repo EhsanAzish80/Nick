@@ -118,8 +118,7 @@ final class SignatureValidator: @unchecked Sendable {
                 parentPID: proc.parentPID,
                 parentName: proc.parentName,
                 signingStatus: resolved,
-                user: proc.user,
-                startTime: proc.startTime
+                metadata: ProcessMetadata(user: proc.user, startTime: proc.startTime)
             )
             await onUpdate(updated)
         }

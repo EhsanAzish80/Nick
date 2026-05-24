@@ -182,12 +182,14 @@ enum LOLBinDetector {
                 severity: sig.severity,
                 title: sig.title,
                 description: "'\(proc.name)' (PID \(proc.pid)) matches LOLBin pattern '\(sig.argumentPattern)'. Parent: '\(parentName ?? "unknown")'.",
-                processInfo: proc,
-                metadata: [
-                    "reason": sig.reason,
-                    "detector": "LOLBinDetector",
-                    "matched_pattern": sig.argumentPattern
-                ]
+                context: ThreatSignalContext(
+                    processInfo: proc,
+                    metadata: [
+                        "reason": sig.reason,
+                        "detector": "LOLBinDetector",
+                        "matched_pattern": sig.argumentPattern
+                    ]
+                )
             )
         }
 

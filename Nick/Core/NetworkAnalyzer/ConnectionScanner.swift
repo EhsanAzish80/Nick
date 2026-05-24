@@ -282,8 +282,7 @@ struct ConnectionScanner {
                     severity: .high,
                     title: "Potential reverse shell",
                     description: "'\(conn.processName)' (PID \(conn.pid)) has an outbound ESTABLISHED connection to \(conn.remoteAddress ?? "unknown"):\(conn.remotePort.map(String.init) ?? "?").",
-                    networkInfo: conn,
-                    metadata: ["reason": "reverse_shell", "process": conn.processName]
+                    context: ThreatSignalContext(networkInfo: conn, metadata: ["reason": "reverse_shell", "process": conn.processName])
                 ))
                 continue
             }
@@ -303,8 +302,7 @@ struct ConnectionScanner {
                     severity: .low,
                     title: "Outbound connection to raw IP",
                     description: "'\(conn.processName)' (PID \(conn.pid)) is connected to \(remote):\(conn.remotePort.map(String.init) ?? "?").",
-                    networkInfo: conn,
-                    metadata: ["reason": "raw_ip_outbound"]
+                    context: ThreatSignalContext(networkInfo: conn, metadata: ["reason": "raw_ip_outbound"])
                 ))
             }
         }

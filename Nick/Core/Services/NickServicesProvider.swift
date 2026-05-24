@@ -32,7 +32,7 @@ final class NickServicesProvider: NSObject {
     ///   - userData: Optional user data string declared in `Info.plist` (unused).
     ///   - error: Output parameter for an error message if the service fails.
     @objc func scanWithNick(_ pboard: NSPasteboard,
-                            userData: String,
+                            userData _: String,
                             error: AutoreleasingUnsafeMutablePointer<NSString?>) {
         // Prefer NSURL objects (modern path); fall back to NSFilenamesPboardType.
         let urls: [URL]

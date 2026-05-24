@@ -100,13 +100,15 @@ enum ReverseShellDetector {
                     severity: .high,
                     title: "Shell process with unexpected outbound connection",
                     description: "'\(proc.name)' (PID \(proc.pid)) has an established TCP connection to \(remote) on non-standard port \(remotePort). This is consistent with a reverse shell.",
-                    processInfo: proc,
-                    metadata: [
-                        "reason": "reverse_shell_port",
-                        "detector": "ReverseShellDetector",
-                        "remote": remote,
-                        "remote_port": String(remotePort)
-                    ]
+                    context: ThreatSignalContext(
+                        processInfo: proc,
+                        metadata: [
+                            "reason": "reverse_shell_port",
+                            "detector": "ReverseShellDetector",
+                            "remote": remote,
+                            "remote_port": String(remotePort)
+                        ]
+                    )
                 ))
                 continue
             }
@@ -119,13 +121,15 @@ enum ReverseShellDetector {
                     severity: .high,
                     title: "Process in temp directory with outbound connection",
                     description: "'\(proc.name)' (PID \(proc.pid)) is running from a temporary path '\(proc.path)' and has an established TCP connection to \(remote).",
-                    processInfo: proc,
-                    metadata: [
-                        "reason": "temp_binary_network",
-                        "detector": "ReverseShellDetector",
-                        "remote": remote,
-                        "path": proc.path
-                    ]
+                    context: ThreatSignalContext(
+                        processInfo: proc,
+                        metadata: [
+                            "reason": "temp_binary_network",
+                            "detector": "ReverseShellDetector",
+                            "remote": remote,
+                            "path": proc.path
+                        ]
+                    )
                 ))
             }
 
@@ -137,12 +141,14 @@ enum ReverseShellDetector {
                     severity: .high,
                     title: "netcat with active connection",
                     description: "'\(proc.name)' (PID \(proc.pid)) has an established TCP connection to \(remote). netcat is frequently used for reverse shells and data exfiltration.",
-                    processInfo: proc,
-                    metadata: [
-                        "reason": "netcat_connection",
-                        "detector": "ReverseShellDetector",
-                        "remote": remote
-                    ]
+                    context: ThreatSignalContext(
+                        processInfo: proc,
+                        metadata: [
+                            "reason": "netcat_connection",
+                            "detector": "ReverseShellDetector",
+                            "remote": remote
+                        ]
+                    )
                 ))
             }
         }
@@ -180,13 +186,15 @@ enum ReverseShellDetector {
             severity: .high,
             title: "Shell process with unexpected outbound connection",
             description: "'\(proc.name)' (PID \(proc.pid)) has an established TCP connection to \(remote) on non-standard port \(remotePort).",
-            processInfo: proc,
-            metadata: [
-                "reason": "reverse_shell_port",
-                "detector": "ReverseShellDetector",
-                "remote": remote,
-                "remote_port": String(remotePort)
-            ]
+            context: ThreatSignalContext(
+                processInfo: proc,
+                metadata: [
+                    "reason": "reverse_shell_port",
+                    "detector": "ReverseShellDetector",
+                    "remote": remote,
+                    "remote_port": String(remotePort)
+                ]
+            )
         )
     }
 
