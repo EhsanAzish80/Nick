@@ -96,6 +96,41 @@ final class NetworkAnalyzerTests: XCTestCase {
         XCTAssertTrue(signals.isEmpty)
     }
 
+    func test_signals_bogusRemoteAddress_returnsNoSignal() {
+        for bogus in ["0.0.0.0", "::", "", "0:0:0:0:0:0:0:0"] {
+            let conn = makeConnection(processName: "someapp", remoteAddress: bogus, remotePort: 80, state: .established)
+            let signals = scanner.signals(from: [conn]).filter { $0.metadata["reason"] == "raw_ip_outbound" }
+            XCTAssertTrue(signals.isEmpty, "Expected no raw_ip_outbound signal for bogus address '\(bogus)'")
+        }
+    }
+
+    func test_signals_linkLocalIPv6_returnsNoSignal() {
+        let conn = makeConnection(processName: "someapp", remoteAddress: "fe80::1%lo0", remotePort: 5353, state: .established)
+        let signals = scanner.signals(from: [conn]).filter { $0.metadata["reason"] == "raw_ip_outbound" }
+        XCTAssertTrue(signals.isEmpty)
+    }
+
+    func test_signals_trustedProcess_returnsNoRawIPSignal() {
+        for process in ["Spotify", "Xcode", "Claude Helper", "rapportd", "identityservicesd", "Safari"] {
+            let conn = makeConnection(processName: process, remoteAddress: "203.0.113.1", remotePort: 443, state: .established)
+            let signals = scanner.signals(from: [conn]).filter { $0.metadata["reason"] == "raw_ip_outbound" }
+            XCTAssertTrue(signals.isEmpty, "Expected no raw_ip_outbound signal for trusted process '\(process)'")
+        }
+    }
+
+    func test_signals_privateNetworkAddresses_returnsNoSignal() {
+        let privateAddresses = [
+            "10.0.0.1", "10.128.5.9",
+            "192.168.1.1", "192.168.100.200",
+            "172.16.0.1", "172.20.5.5", "172.31.255.254"
+        ]
+        for addr in privateAddresses {
+            let conn = makeConnection(processName: "someapp", remoteAddress: addr, remotePort: 80, state: .established)
+            let signals = scanner.signals(from: [conn]).filter { $0.metadata["reason"] == "raw_ip_outbound" }
+            XCTAssertTrue(signals.isEmpty, "Expected no raw_ip_outbound signal for private address '\(addr)'")
+        }
+    }
+
     // MARK: - Multiple connections
 
     func test_signals_mixedConnections_returnsCorrectCount() {
@@ -104,6 +139,7 @@ final class NetworkAnalyzerTests: XCTestCase {
         let rawIP        = makeConnection(processName: "myapp", remoteAddress: "99.99.99.99", remotePort: 8080, state: .established)
 
         let signals = scanner.signals(from: [reverseShell, normal, rawIP])
+        // Safari is a trusted process, so only reverseShell + rawIP (myapp) fire → 2 signals
         XCTAssertEqual(signals.count, 2)
     }
 

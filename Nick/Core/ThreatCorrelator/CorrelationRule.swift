@@ -380,8 +380,8 @@ struct CorrelationRule: Sendable {
     /// Malware and C2 beacons frequently use raw IPs to bypass DNS-based blocking.
     private static let rawIpOutboundRule = CorrelationRule(
         name: "raw_ip_outbound",
-        score: 0.60,
-        severity: .medium
+        score: 0.35,
+        severity: .low
     ) { signals in
         let matches = signals.filter {
             $0.source == .network &&
@@ -391,10 +391,10 @@ struct CorrelationRule: Sendable {
         let processNames = matches.compactMap { $0.processInfo?.name }.joined(separator: ", ")
         let ips = matches.compactMap { $0.networkInfo?.remoteAddress }.joined(separator: ", ")
         return ThreatAlert(
-            score: 0.60,
+            score: 0.35,
             title: "Outbound connection to raw IP address",
             description: "Process(es) '\(processNames)' connected to a raw IP address without DNS resolution\(ips.isEmpty ? "" : ": \(ips)"). Malware often uses raw IPs to avoid DNS-based blocking.",
-            severity: .medium,
+            severity: .low,
             contributingSignals: matches,
             recommendedAction: "Check whether the destination IP is legitimate for the process involved. Consider blocking the connection via the firewall if unexpected."
         )

@@ -239,6 +239,25 @@ struct ConnectionScanner {
 
     // MARK: - Signal Generation
 
+    /// Names of trusted network processes that should never trigger raw-IP alerts.
+    /// These are known-signed apps (Spotify, Xcode, etc.) that routinely connect
+    /// to CDN or Apple infrastructure by IP.
+    private static let trustedNetworkProcesses: Set<String> = [
+        "Spotify", "Spotify Helper",
+        "Xcode", "xcodebuild", "com.apple.dt.GitHubHostBuiltInExtension",
+        "Claude Helper", "Code Helper", "Code Helper (Plugin)",
+        "ChatGPT", "ChatGPTHelper",
+        "rapportd", "identityservicesd", "nsurlsessiond",
+        "HueSync", "Mail", "Safari", "WeatherWidget",
+        "mDNSResponder", "trustd", "cloudd"
+    ]
+
+    /// Placeholder addresses produced when `ProcNetHelper` fails to resolve a
+    /// peer address — these are not real connections and must never raise alerts.
+    private static let bogusRemoteAddresses: Set<String> = [
+        "0.0.0.0", "::", "", "0:0:0:0:0:0:0:0"
+    ]
+
     /// Derives threat signals from a list of active connections.
     ///
     /// Detection rules:
@@ -273,8 +292,12 @@ struct ConnectionScanner {
             if conn.isOutbound,
                conn.state == .established,
                let remote = conn.remoteAddress,
+               !Self.bogusRemoteAddresses.contains(remote),               // skip ProcNetHelper failures
+               !remote.hasPrefix("fe80:"),                                // skip IPv6 link-local
+               !Self.trustedNetworkProcesses.contains(conn.processName),  // skip known-signed apps
                isRawIP(remote),
-               !isLoopback(remote) {
+               !isLoopback(remote),
+               !isPrivateAddress(remote) {                                 // skip LAN / RFC-1918 traffic
                 signals.append(ThreatSignal(
                     source: .network,
                     severity: .low,
@@ -301,5 +324,28 @@ struct ConnectionScanner {
 
     private func isLoopback(_ address: String) -> Bool {
         address == "127.0.0.1" || address == "::1" || address.hasPrefix("127.")
+    }
+
+    /// Returns `true` for RFC-1918 private-network addresses (LAN traffic that
+    /// should never produce a raw-IP alert).
+    private func isPrivateAddress(_ address: String) -> Bool {
+        address.hasPrefix("10.")       ||
+        address.hasPrefix("192.168.") ||
+        address.hasPrefix("172.16.")  ||
+        address.hasPrefix("172.17.")  ||
+        address.hasPrefix("172.18.")  ||
+        address.hasPrefix("172.19.")  ||
+        address.hasPrefix("172.20.")  ||
+        address.hasPrefix("172.21.")  ||
+        address.hasPrefix("172.22.")  ||
+        address.hasPrefix("172.23.")  ||
+        address.hasPrefix("172.24.")  ||
+        address.hasPrefix("172.25.")  ||
+        address.hasPrefix("172.26.")  ||
+        address.hasPrefix("172.27.")  ||
+        address.hasPrefix("172.28.")  ||
+        address.hasPrefix("172.29.")  ||
+        address.hasPrefix("172.30.")  ||
+        address.hasPrefix("172.31.")
     }
 }

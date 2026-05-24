@@ -153,6 +153,22 @@ final class SecurityEngine {
             alerts = decoded.filter { !dismissedAlertKeys.contains($0.deduplicationKey) }
             logger.info("Restored \(self.alerts.count) persisted alert(s)")
         }
+
+        // One-time purge: remove false-positive raw-IP alerts produced before the
+        // private-network / bogus-address filters were added (v2 filter set).
+        // The flag is set permanently so this runs exactly once per install.
+        if !ud.bool(forKey: "nickRawIPFalsePositivePurgedV2") {
+            let before = alerts.count
+            alerts.removeAll { $0.title == "Outbound connection to raw IP address" }
+            if alerts.count != before {
+                logger.info("Purged \(before - self.alerts.count) stale raw-IP false-positive alert(s)")
+                // Persist the cleaned list immediately.
+                if let encoded = try? JSONEncoder().encode(alerts) {
+                    ud.set(encoded, forKey: "nickPersistedAlerts")
+                }
+            }
+            ud.set(true, forKey: "nickRawIPFalsePositivePurgedV2")
+        }
     }
 
     // MARK: - Public API
