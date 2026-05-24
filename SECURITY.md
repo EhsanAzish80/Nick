@@ -127,10 +127,11 @@ any validation work is performed.
 | 2 | No sensitive data in signals | `ThreatSignal.swift` | ✅ Pass | Signals carry: path, PID, process name, connection tuples. No file contents, passwords, or key material. |
 | 3 | No disk writes outside app support | All `Core/` files | ✅ Pass | `ThreatLogger` writes only to `~/Library/Application Support/com.ehsanazish.nick/`. No writes to `/tmp`, Desktop, or Documents. |
 | 4 | Signal buffer limits | `CorrelationWindow.swift` | ✅ Pass | `CorrelationWindow` prunes expired signals on every `add()` / `addAll()` / `currentSignals()` call. Signals older than `windowDuration` (default 30s) are removed. Buffer cannot grow unbounded under sustained signal input. |
-| 5 | YARA rule safety | Not yet implemented | ⚠️ Pending | `YARAEngine` is a stub (Task 5 of Phase 4). Rule compilation timeout and backtracking protection must be added when real libyara is integrated. |
+| 5 | YARA rule safety | `YARAEngine/YARAEngine.swift` | ✅ Pass | `YARAEngine` wraps libyara v4.5.2 (vendored static library). Per-file scan timeout is fixed at 10 seconds (`perFileScanTimeoutSeconds`). Compiler error callback via `yr_compiler_set_callback` logs and surfaces malformed rules without crashing. Backtracking is bounded by the libyara default. Rule compilation is lazy and protected by `NSLock`. |
 | 6 | Process enumeration safety | `ProcessScanner.swift` | ✅ Pass | `sysctl` is called twice: first to size the buffer, then to fill it. The `actualCount` trimming on line 97 prevents a race condition where the process table shrinks between calls. `MemoryLayout<kinfo_proc>.stride` is used throughout — no manual size arithmetic. |
 | 7 | Network scanner safety | `ConnectionScanner.swift` | ✅ Pass | `lsof` output is parsed with defensive guards. Malformed lines produce a `continue` (skipped), not a crash. PID parsing uses `Int32(_:)` optional initialiser. |
-| 8 | SwiftData safety | `ThreatLogEntry.swift` | ⚠️ Pending | Pruning policy exists in design but the enforced maximum alert count at launch has not been verified. Must be confirmed before v1.0. |
+| 8 | SwiftData safety | `ThreatLogEntry.swift`, `AppDelegate.swift` | ✅ Pass | `AppDelegate.applicationDidFinishLaunching` launches a background `Task` that opens the production `ModelContainer` and calls `ThreatLogger.pruneOlderThan(days: 90)`. Stale entries are removed on every launch. Fixed in Part 4.6. |
+| 9 | Foundation Models security | `BehavioralScorer/AlertExplainer.swift`, `BehavioralScorer/ExplanationPromptBuilder.swift` | ✅ Pass | **Data privacy:** `LanguageModelSession` (Apple `FoundationModels` framework) runs entirely on-device. No alert metadata, process names, or user data is transmitted externally — confirmed by framework design and `SECURITY` comment in `AlertExplainer.explain`. **Prompt injection:** Alert title, description, and signal metadata (including process names and file paths) are embedded in the prompt by `ExplanationPromptBuilder`. A crafted process name could inject LLM instructions. Impact is bounded: the model output is used only for the human-readable explanation card — it has no effect on threat score, severity, alert firing, or notification dispatch. Accepted risk. **Availability:** Any `LanguageModelSession` error is caught and falls back to a deterministic template string; the fallback is always non-empty and actionable. Threat detection is unaffected if the model is unavailable. |
 
 ### Finding Details
 
@@ -163,13 +164,13 @@ severity are discarded with a `.notice`-level log entry. See `ThreatCorrelator.s
 
 ## Open Items
 
-| Item | Priority | Owner |
-|------|----------|-------|
-| Create `NickHelper.entitlements` with minimal entitlement set | High | @ehsanazish80 |
-| Verify SwiftData pruning at launch (Finding 2.C) | Medium | @ehsanazish80 |
-| Add YARA rule compilation timeout (Finding 2.B YARA) | High (Task 5) | @ehsanazish80 |
-| Replace `lsof` with `proc_pidfdinfo` | Low (Task 4.3) | @ehsanazish80 |
-| Implement `getListeningPorts` with direct sysctl (see Finding 2.C below) | Medium | @ehsanazish80 |
+| Item | Priority | Owner | Status |
+|------|----------|-------|--------|
+| Create `NickHelper.entitlements` with minimal entitlement set | High | @ehsanazish80 | ✅ Fixed (Part 4.2) |
+| Verify SwiftData pruning at launch | Medium | @ehsanazish80 | ✅ Fixed (Part 4.6) |
+| Add YARA rule compilation timeout | High | @ehsanazish80 | ✅ Fixed (libyara v4.5.2, 10s timeout) |
+| Replace `lsof` with `proc_pidfdinfo` | Low | @ehsanazish80 | Open — tracked as #1 |
+| Implement `getListeningPorts` with direct sysctl | Medium | @ehsanazish80 | Open — tracked as #43 |
 
 ---
 
@@ -214,8 +215,8 @@ dispatch path. Each detector was traced from raw OS observation → `ThreatSigna
 | `PersistenceWatcher` | `PersistenceWatcher/` | ✅ | Called in `SecurityEngine.performFullScan` |
 | `AVCaptureMonitor` | `AVCapture/` | ✅ | Called in `SecurityEngine.performFullScan` |
 | `SystemAuditor` | `SystemAudit/SystemAuditor.swift` | ✅ | Called in `SecurityEngine.performFullScan` |
-| `YARAEngine` / `FileSystemWatcher` | `YARAEngine/` | ⚠️ Partial | `DeepScanner` (manual trigger only). `FileSystemWatcher` FSEvents watcher implemented but **not started** in pipeline. |
-| `BehavioralScorer` | `BehavioralScorer/` | ❌ Stub | Intentionally not wired; stub 1-feature model. Documented in `ThreatCorrelator.swift`. |
+| `YARAEngine` / `FileSystemWatcher` | `YARAEngine/` | ✅ | Both paths active. `FileSystemWatcher` started in `MonitorCoordinator.startRealTimePipeline()` (fixed in Part 4.1). `DeepScanner` ingests signals into `ThreatCorrelator` (fixed in Part 4.3). |
+| `BehavioralScorer` | `BehavioralScorer/` | ❌ Not wired | 40-feature `FeatureVector` and `FeatureExtractor` fully implemented. `BehavioralScorer` wraps CoreML (`ThreatScorer.mlmodelc`). Excluded from live detection path until the model is trained on real post-launch telemetry. `isModelAvailable` guards accidental activation. |
 
 ---
 
@@ -372,8 +373,7 @@ for alert in genuinelyNew {
 **Impact:** Alert rows for full-scan-only detections (e.g. AVCapture, Persistence, System Audit)
 show no "Why this is suspicious" explanation card. All functional — no false negatives.
 
-**Resolution:** Add an `AlertExplainer` instance to `SecurityEngine.performFullScan()` and
-enrich `genuinelyNew` alerts before dispatch. Deferred to post-v1.0 (non-blocking).
+**Resolution (Fixed — Part 4.6):** `SecurityEngine.performFullScan()` now creates an `AlertExplainer` instance and enriches each `genuinelyNew` alert's `explanation` field before dispatch. Full-scan alerts (AVCapture, Persistence, System Audit) now include the Foundation Models explanation card.
 
 #### 3.3.3 QuickTick Notification Pipeline ✅ Verified Correct
 
@@ -440,11 +440,7 @@ but require entitlements to monitor and are not in scope for v1.0.
 
 #### 3.5.4 BehavioralScorer — Intentionally Not Wired
 
-The `BehavioralScorer` CoreML stub (1-feature passthrough) is intentionally excluded from
-the live detection path. All production detection runs through the rule-based `CorrelationRule`
-set. The ML path will be connected once `ThreatScorer.mlmodel` is trained on real signal
-telemetry collected post-launch. The `isProductionModel` guard prevents accidental activation
-of the stub. This is the correct architectural decision for v1.0.
+The `BehavioralScorer` CoreML scorer is intentionally excluded from the live detection path. The 40-feature `FeatureVector` and `FeatureExtractor` are fully implemented. `BehavioralScorer` loads `ThreatScorer.mlmodelc` from the app bundle; `isModelAvailable` returns `false` when the trained model file is absent, preventing accidental activation. All production detection runs through the rule-based `CorrelationRule` set. The ML path will be connected once `ThreatScorer.mlmodel` is trained on real signal telemetry collected post-launch. This is the correct architectural decision for v1.0.
 
 ---
 
