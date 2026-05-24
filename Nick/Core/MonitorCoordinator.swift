@@ -55,6 +55,8 @@ final class MonitorCoordinator {
     private var logger: ThreatLogger?
 
     private var pipelineTask: Task<Void, Never>?
+    /// Retains the FSEvents-backed YARA watcher for the lifetime of the pipeline.
+    private var fileSystemWatcher: FileSystemWatcher?
     /// Tracks when the last full monitor sweep ran. Initialised to `.distantPast`
     /// so the first tick always runs a deep scan.
     private var lastDeepScan: Date = .distantPast
@@ -100,6 +102,31 @@ final class MonitorCoordinator {
     /// Safe to call multiple times — a second call replaces the existing pipeline.
     func startRealTimePipeline() {
         pipelineTask?.cancel()
+
+        // Start FSEvents-backed YARA real-time scanner.
+        do {
+            let rulesDir = (Bundle.main.resourcePath ?? "") + "/Rules"
+            let yaraEngine = try YARAEngine(rulesDirectory: rulesDir)
+            let watcher = FileSystemWatcher(yaraEngine: yaraEngine) { [weak self] signal in
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.correlator.ingest([signal])
+                    let alerts = await self.correlator.correlateNew()
+                    guard !alerts.isEmpty else { return }
+                    for alert in alerts {
+                        await NotificationManager.shared.send(for: alert)
+                    }
+                    await MainActor.run { [engine = self.engine, alerts] in
+                        for alert in alerts { engine.addAlert(alert) }
+                    }
+                }
+            }
+            watcher.startWatching()
+            fileSystemWatcher = watcher
+        } catch {
+            Self.log.error("FileSystemWatcher: YARAEngine init failed — \(error.localizedDescription, privacy: .public)")
+        }
+
         pipelineTask = Task { [weak self] in
             guard let self else { return }
             Self.log.info("Real-time pipeline started (tick interval: \(Self.pipelineTickInterval)s)")
@@ -117,6 +144,8 @@ final class MonitorCoordinator {
 
     /// Stops the real-time pipeline.
     func stopPipeline() {
+        fileSystemWatcher?.stopWatching()
+        fileSystemWatcher = nil
         pipelineTask?.cancel()
         pipelineTask = nil
         Task { @MainActor [weak self] in

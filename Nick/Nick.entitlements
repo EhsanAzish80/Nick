@@ -2,9 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- YARA compiles rules into JIT-executed native code. This exception is
-	     required for Hardened Runtime notarization. Without it, YARA rule
-	     matching will crash with SIGKILL (code-signing violation). -->
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
 	<true/>
 </dict>

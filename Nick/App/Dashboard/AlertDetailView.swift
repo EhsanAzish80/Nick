@@ -28,9 +28,6 @@ struct AlertDetailView: View {
                     if !alert.contributingSignals.isEmpty {
                         signalsSection
                     }
-                    if let explanation = alert.explanation {
-                        explanationSection(explanation)
-                    }
                     actionSection
                 }
                 .padding(NickSpacing.xl)
@@ -85,7 +82,9 @@ struct AlertDetailView: View {
             Text("Description")
                 .font(.nickSubtitle)
                 .foregroundStyle(Color.textSecondary)
-            Text(alert.description)
+            // Prefer the Foundation Models explanation — it's tailored to the specific
+            // threat. Fall back to the generic rule description if not yet generated.
+            Text(alert.explanation ?? alert.description)
                 .font(.nickBody)
                 .foregroundStyle(Color.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -111,10 +110,23 @@ struct AlertDetailView: View {
                             Text(signal.title)
                                 .font(.nickBodyMedium)
                                 .foregroundStyle(Color.textPrimary)
-                            Text(signal.description)
-                                .font(.nickBodySmall)
-                                .foregroundStyle(Color.textSecondary)
-                                .lineLimit(2)
+                            // Show the concrete file path so the user knows exactly
+                            // which file to investigate.
+                            let displayPath = signal.metadata["script_path"]
+                                ?? signal.metadata["path"]
+                                ?? signal.processInfo?.path
+                            if let path = displayPath, !path.isEmpty {
+                                Text(path)
+                                    .font(.nickMono)
+                                    .foregroundStyle(Color.textTertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            if let pid = signal.processInfo?.pid {
+                                Text("PID \(pid)")
+                                    .font(.nickMonoSmall)
+                                    .foregroundStyle(Color.textTertiary)
+                            }
                         }
                     }
                     .padding(.vertical, NickSpacing.md)
@@ -167,10 +179,36 @@ struct AlertDetailView: View {
     // MARK: - Footer
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: NickSpacing.md) {
+            // Kill Process — only shown when the process is still alive.
+            if let pid = alert.contributingSignals.first?.processInfo?.pid,
+               ProcessScanner.isRunning(pid: pid) {
+                Button {
+                    kill(pid, SIGTERM)
+                } label: {
+                    Label("Kill Process", systemImage: "xmark.circle")
+                        .font(.nickButton)
+                }
+                .buttonStyle(.nickDestructive)
+            }
+
+            // Show in Finder — resolves script_path first, then process path.
+            let finderPath = alert.contributingSignals.first?.metadata["script_path"]
+                ?? alert.contributingSignals.first?.processInfo?.path
+            if let path = finderPath, !path.isEmpty {
+                Button {
+                    NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                        .font(.nickButton)
+                }
+                .buttonStyle(.nickSecondary)
+            }
+
+            Spacer()
+
             Button("Copy JSON") { copyJSON() }
                 .buttonStyle(.nickSecondary)
-            Spacer()
             Button("Dismiss") { dismiss() }
                 .buttonStyle(.nickPrimary)
         }

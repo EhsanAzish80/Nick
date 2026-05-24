@@ -98,7 +98,10 @@ enum ProcNetHelper {
         if processName.isEmpty {
             var pathBuf = [CChar](repeating: 0, count: 4096)
             if proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count)) > 0 {
-                processName = (String(cString: pathBuf) as NSString).lastPathComponent
+                let fullPath = pathBuf.withUnsafeBufferPointer { bp in
+                    String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+                }
+                processName = fullPath.components(separatedBy: "/").last ?? ""
             }
         }
 

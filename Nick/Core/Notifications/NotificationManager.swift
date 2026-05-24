@@ -82,7 +82,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         switch settings.authorizationStatus {
         case .notDetermined:
             do {
-                let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge, .timeSensitive])
+                let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
                 if granted {
                     Self.log.info("Notification permission granted")
                 } else {

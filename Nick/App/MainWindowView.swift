@@ -143,11 +143,13 @@ struct MainWindowView: View {
         }
         .onAppear {
             NSApp.setActivationPolicy(.regular)
-            // Forward the SwiftUI openSettings action to AppDelegate so the status-bar
-            // context-menu "Settings..." item can open the Settings scene without using
-            // the private showSettingsWindow: selector (which triggers a SwiftUI warning).
+            // Forward openSettings and openWindow actions to AppDelegate so status-bar
+            // menu items can open these scenes without private selectors.
             (NSApp.delegate as? AppDelegate)?.openSettingsAction = { [openSettings] in
                 openSettings()
+            }
+            (NSApp.delegate as? AppDelegate)?.openMainWindowAction = { [openWindow] in
+                openWindow(id: "main")
             }
         }
         .onDisappear {
@@ -184,6 +186,16 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+// MARK: - Focus / DND detection
+
+/// Returns `true` when macOS Do Not Disturb or any Focus mode is active.
+///
+/// Reads the `doNotDisturb` flag from the notification centre's shared defaults.
+/// This covers legacy DND and Focus modes on macOS 12+.
+private func isFocusModeActive() -> Bool {
+    UserDefaults(suiteName: "com.apple.notificationcenterui")?.bool(forKey: "doNotDisturb") ?? false
+}
+
 // MARK: - OverviewDetailView
 
 /// Redesigned overview with circular security gauge, sparkline monitor cards,
@@ -195,6 +207,7 @@ struct OverviewDetailView: View {
 
     @AppStorage("deepScanIntervalSeconds") private var scanIntervalSeconds: Int = 60
     @State private var now: Date = .now
+    @State private var focusModeActive = false
 
     private let columns = [GridItem(.flexible()), GridItem(.flexible())]
 
@@ -283,7 +296,8 @@ struct OverviewDetailView: View {
                         totalScans:      engine.totalScanCount,
                         threatsDetected: engine.totalThreatsDetected,
                         lastScanDate:    engine.lastScanDate,
-                        nextScanIn:      nextScanIn
+                        nextScanIn:      nextScanIn,
+                        focusModeActive: focusModeActive
                     )
                     .frame(maxWidth: .infinity)
 
@@ -302,9 +316,11 @@ struct OverviewDetailView: View {
         .navigationTitle("Overview")
         .task {
             // Tick every second so the "Next scan" countdown stays live.
+            // Also recheck Focus/DND state each tick (cheap UserDefaults read).
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 now = .now
+                focusModeActive = isFocusModeActive()
             }
         }
     }
@@ -393,6 +409,7 @@ private struct ProtectionSummaryView: View {
     let threatsDetected: Int
     let lastScanDate:    Date?
     let nextScanIn:      Int
+    let focusModeActive: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: NickSpacing.md) {
@@ -428,6 +445,18 @@ private struct ProtectionSummaryView: View {
             SummaryRow(icon: "timer",
                        label: "Next scan",
                        value: "\(nextScanIn) sec")
+
+            if focusModeActive {
+                HStack(spacing: NickSpacing.sm) {
+                    Image(systemName: "moon.fill")
+                        .frame(width: 16)
+                        .foregroundStyle(Color.statusYellow)
+                        .imageScale(.small)
+                    Text("Focus Mode is on — notifications are silenced")
+                        .font(.nickBodySmall)
+                        .foregroundStyle(Color.statusYellow)
+                }
+            }
         }
         .padding(NickSpacing.lg)
         .background(Color.backgroundSecondary)
@@ -899,6 +928,7 @@ struct ScannerDetailView: View {
                 showResults = true
             }
         }
+        .onAppear { scanner.engine = engine }
     }
 
     // MARK: - Drop zone (fills all available vertical space)
@@ -1030,6 +1060,7 @@ struct ScannerDetailView: View {
         showResults = false
         hasStarted  = false
         scanner     = DeepScanner()
+        scanner.engine = engine
     }
 
     private func addIgnored(_ path: String) {

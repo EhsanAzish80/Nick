@@ -20,10 +20,9 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
-	<key>SMPrivilegedExecutables</key>
-	<dict>
-		<key>com.ehsanazish.nick</key>
+	<key>SMAuthorizedClients</key>
+	<array>
 		<string>anchor apple generic and identifier "com.ehsanazish.nick" and certificate leaf[subject.OU] = "UXGW5V3BY6"</string>
-	</dict>
+	</array>
 </dict>
 </plist>

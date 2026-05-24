@@ -108,6 +108,7 @@ final class PersistenceWatcher: MonitorProtocol {
             all.append(contentsOf: found)
         }
         all.append(contentsOf: await scanCrontabs())
+        all.append(contentsOf: await scanLoginItems())
         return all
     }
 
@@ -215,6 +216,74 @@ final class PersistenceWatcher: MonitorProtocol {
             scope: scope,
             lastModified: modDate
         )
+    }
+
+    /// Returns Login Items registered with System Events.
+    ///
+    /// Requires Automation → System Events TCC permission.
+    /// Returns an empty array silently when access is denied so the rest of the
+    /// persistence scan continues unaffected.
+    private func scanLoginItems() async -> [PersistenceItem] {
+        // Each line: "<name>\t<posix path>"  — tab-delimited to avoid comma ambiguity.
+        let script = """
+            tell application "System Events"
+                set output to ""
+                repeat with li in every login item
+                    set output to output & (name of li) & tab & (path of li) & linefeed
+                end repeat
+                return output
+            end tell
+            """
+        guard let raw = try? await runAppleScript(script), !raw.isEmpty else { return [] }
+
+        var items: [PersistenceItem] = []
+        for line in raw.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let parts = trimmed.components(separatedBy: "\t")
+            let name     = parts.first ?? trimmed
+            let itemPath = parts.count > 1 ? parts[1] : ""
+            let execPath = itemPath.isEmpty ? nil : itemPath
+            items.append(PersistenceItem(
+                id: UUID(),
+                type: .loginItem,
+                name: name,
+                path: itemPath.isEmpty ? "Login Items" : itemPath,
+                executablePath: execPath,
+                isEnabled: true,
+                signingStatus: nil,
+                scope: .user,
+                lastModified: nil
+            ))
+        }
+        Self.logger.info("Login Items scan: found \(items.count) item(s)")
+        return items
+    }
+
+    /// Runs a hardcoded AppleScript string out-of-process and returns stdout.
+    ///
+    /// - Parameter script: A hardcoded AppleScript literal — never pass user input here.
+    /// - Returns: Trimmed stdout, or throws if the process cannot be launched.
+    private func runAppleScript(_ script: String) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+            let outputPipe = Pipe()
+            let errorPipe  = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError  = errorPipe
+            process.terminationHandler = { _ in
+                let data   = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                continuation.resume(returning: output.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 
     private func scanCrontabs() async -> [PersistenceItem] {

@@ -166,3 +166,24 @@ final class ThreatLogEntry {
         )
     }
 }
+
+// MARK: - Schema Versioning
+
+/// The v1.0 schema for `ThreatLogEntry`.
+///
+/// Defining a `VersionedSchema` now — even with no migrations yet — ensures that
+/// future releases can add `MigrationStage` entries here rather than silently
+/// deleting the user's persistent store on a schema change.
+enum ThreatLogSchemaV1: VersionedSchema {
+    static let versionIdentifier = Schema.Version(1, 0, 0)
+    static var models: [any PersistentModel.Type] { [ThreatLogEntry.self] }
+}
+
+/// Migration plan anchored to v1.0.
+///
+/// Add stages here for each subsequent release that changes `ThreatLogEntry`.
+enum ThreatLogMigrationPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [ThreatLogSchemaV1.self] }
+    /// No migrations needed for v1.0 — this is the initial schema.
+    static var stages: [MigrationStage] { [] }
+}

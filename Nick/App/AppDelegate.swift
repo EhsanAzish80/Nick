@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import AppKit
+import SwiftData
 
 // MARK: - AppDelegate
 
@@ -33,10 +34,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the official path instead of the private `showSettingsWindow:` selector.
     var openSettingsAction: (() -> Void)?
 
+    /// Injected by `MainWindowView.onAppear`. Calls SwiftUI's `openWindow(id:"main")`
+    /// action so the status-bar click can ask SwiftUI to (re)create the window when it
+    /// has been fully closed rather than just hidden.
+    var openMainWindowAction: (() -> Void)?
+
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Register defaults so first-run behaviour matches configured behaviour.
+        // Must run before any code that reads these keys.
+        UserDefaults.standard.register(defaults: [
+            "notificationThresholdRaw": SignalSeverity.high.rawValue,
+            "deepScanIntervalSeconds": 60
+        ])
         setupStatusItem()
+        // Prune stale threat log entries (> 90 days) on every launch.
+        Task.detached(priority: .background) {
+            if let container = try? ModelContainer(for: ThreatLogEntry.self, migrationPlan: ThreatLogMigrationPlan.self) {
+                let threatLogger = ThreatLogger(container: container)
+                await threatLogger.pruneOlderThan(days: 90)
+            }
+        }
         Task { @MainActor in
             engine.runFullScan()
             let coord = MonitorCoordinator(engine: engine, correlator: ThreatCorrelator())
@@ -60,7 +79,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// visible (i.e. ⌘Q is meaningful to the user).
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if forceQuit { return .terminateNow }
-        let windowVisible = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain })?.isVisible ?? false
+        // canBecomeMain is unreliable during .accessory→.regular transitions; filter by
+        // class instead. Prefer the titled "Nick" window over any other non-panel window.
+        let mainWindow = NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) && $0.title == "Nick" })
+                      ?? NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) })
+        let windowVisible = mainWindow?.isVisible ?? false
         return windowVisible ? .terminateNow : .terminateCancel
     }
 
@@ -99,19 +122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        // SwiftUI's SettingsLink sends showSettingsWindow: up the responder chain.
-        // Replicating that here keeps the Settings scene as the single source of truth.
-        let settingsItem = NSMenuItem(
-            title:         "Settings...",
-            action:        #selector(openSettings),
-            keyEquivalent: ","
-        )
-        settingsItem.keyEquivalentModifierMask = .command
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
-
         let quitItem = NSMenuItem(
             title:         "Quit Nick",
             action:        #selector(forceQuitApp),
@@ -131,8 +141,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Checks `isKeyWindow` so clicking the icon while Nick is in the background brings
     /// the window forward rather than hiding it.
     @objc private func toggleMainWindow() {
-        if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }),
-           window.isVisible && window.isKeyWindow {
+        // canBecomeMain is unreliable during .accessory→.regular transitions. Use the
+        // title-priority search used everywhere else, so an open Settings window is never
+        // mistakenly ordered out instead of the main "Nick" window.
+        let mainWindow = NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) && $0.title == "Nick" })
+                      ?? NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) })
+        if let window = mainWindow, window.isVisible && window.isKeyWindow {
             window.orderOut(nil)
             NSApp.setActivationPolicy(.accessory)
         } else {
@@ -149,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureMainWindowDelegate() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self else { return }
-            if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) {
+            if let window = NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) }) {
                 window.delegate = self.mainWindowDelegate
             }
         }
@@ -162,31 +176,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
 
-        // Step 2 — defer window ordering so the policy change has time to propagate
-        // through the window server before we raise the window. 100 ms is imperceptible.
+        // Step 2 — if SwiftUI gave us an openWindow action use it; this handles the
+        // rare case where SwiftUI fully released the NSWindow (e.g. after a scene reset).
+        openMainWindowAction?()
+
+        // Step 3 — defer window ordering.  canBecomeMain returns false while the app
+        // is still resolving the .accessory → .regular transition, so filter by class
+        // instead of canBecomeMain to reliably locate the window.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             guard let self else { return }
-            if let window = NSApp.windows.first(where: { !$0.isSheet && $0.canBecomeMain }) {
+            let window = NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) })
+            if let window {
                 window.delegate = self.mainWindowDelegate
                 window.makeKeyAndOrderFront(nil) // raise + key focus
                 window.orderFrontRegardless()    // force above any other app's windows
+                NSApp.activate()                 // re-activate after ordering so the OS
+                                                 // delivers keyboard focus to this window
             }
         }
     }
 
     /// Opens the SwiftUI Settings scene via the `openSettings` environment action injected
-    /// by `MainWindowView.onAppear`. Falls back to the sendAction path only if the action
-    /// has not been set yet (e.g., Settings tapped before the main window first appeared).
+    /// by `MainWindowView.onAppear`.
     @objc private func openSettings() {
-        if let action = openSettingsAction {
-            action()
-        } else {
-            // Fallback: fires only on very first launch before MainWindowView has appeared.
-            // SwiftUI will log a deprecation warning but Settings will still open.
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        // If the action hasn't been injected yet (Settings tapped before the main window
+        // ever appeared), open the main window so onAppear fires and registers it.
+        // Do NOT recurse — that creates an open/hide loop. The user can click Settings
+        // again once the main window is visible.
+        guard let action = openSettingsAction else {
+            openMainWindow()
+            return
         }
+
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
+        action()
+
+        // The Settings NSWindow is created lazily by SwiftUI — give it a tick to appear,
+        // then force it to the front exactly as openMainWindow does.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let settingsWindow = NSApp.windows.first(where: {
+                !$0.isSheet && !($0 is NSPanel) && $0.title != "Nick"
+            })
+            settingsWindow?.makeKeyAndOrderFront(nil)
+            settingsWindow?.orderFrontRegardless()
+            NSApp.activate()
+        }
     }
 
     /// Bypasses the `applicationShouldTerminate` window-visibility gate and quits immediately.

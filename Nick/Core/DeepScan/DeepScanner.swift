@@ -35,6 +35,9 @@ final class DeepScanner {
 
     private var scanTask: Task<Void, Never>?
     private var storedOnlyOnPower = false
+    /// Weak reference to the engine used to ingest YARA signals during a deep scan.
+    /// Set by the caller (e.g. `ScannerDetailView`) before calling `start()`.
+    weak var engine: SecurityEngine?
 
     private static let log = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -122,6 +125,33 @@ final class DeepScanner {
                 if !matches.isEmpty {
                     results.append(contentsOf: matches)
                     threatsFound += matches.count
+                    // Ingest YARA matches into the correlator so alerts appear in real time.
+                    if let eng = engine {
+                        var signals: [ThreatSignal] = []
+                        for match in matches {
+                            let severity: SignalSeverity = match.tags.contains("critical") ? .critical : .high
+                            signals.append(ThreatSignal(
+                                source: .yara,
+                                severity: severity,
+                                title: "YARA match: \(match.ruleName)",
+                                description: "\(match.metadata["description"] ?? match.ruleName) at \(match.filePath)",
+                                fileInfo: FileInfo(
+                                    path: match.filePath,
+                                    sha256Hash: nil,
+                                    entropy: nil,
+                                    signingStatus: nil,
+                                    sizeBytes: nil
+                                ),
+                                metadata: ["path": match.filePath, "rule": match.ruleName]
+                            ))
+                        }
+                        await eng.correlator.ingest(signals)
+                        let alerts = await eng.correlator.correlateNew()
+                        for alert in alerts {
+                            eng.addAlert(alert)
+                            await NotificationManager.shared.send(for: alert)
+                        }
+                    }
                 }
             } catch {
                 // Skip unreadable, timed-out, or otherwise failing files silently.

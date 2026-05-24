@@ -116,7 +116,7 @@ final class SecurityEngine {
     private let procMon    = ProcessMonitor()
     private let netMon     = NetworkAnalyzer()
     private let avCapture  = AVCaptureMonitor()
-    private let correlator = ThreatCorrelator()
+    let correlator = ThreatCorrelator()
 
     /// Historical scan snapshots powering sparkline charts in the Overview.
     let scanHistory = ScanHistory()
@@ -145,6 +145,14 @@ final class SecurityEngine {
         lastDeepScanFileCount = ud.integer(forKey: "nickLastDeepScanFileCount")
         let storedKeys        = ud.stringArray(forKey: "nickDismissedAlertKeys") ?? []
         dismissedAlertKeys    = Set(storedKeys)
+
+        // Restore alerts saved from the previous session.
+        if let data = ud.data(forKey: "nickPersistedAlerts"),
+           let decoded = try? JSONDecoder().decode([ThreatAlert].self, from: data) {
+            // Drop any that were later dismissed.
+            alerts = decoded.filter { !dismissedAlertKeys.contains($0.deduplicationKey) }
+            logger.info("Restored \(self.alerts.count) persisted alert(s)")
+        }
     }
 
     // MARK: - Public API
@@ -159,6 +167,7 @@ final class SecurityEngine {
         dismissedAlertKeys = []
         UserDefaults.standard.set(0, forKey: "nickTotalThreatsDetected")
         UserDefaults.standard.removeObject(forKey: "nickDismissedAlertKeys")
+        UserDefaults.standard.removeObject(forKey: "nickPersistedAlerts")
     }
 
     /// Launches a full security scan as an independent, stored task.
@@ -231,7 +240,31 @@ final class SecurityEngine {
         await correlator.resetEmittedRules()
         await correlator.ingest(allSignals)
         let newAlerts = await correlator.correlate()
+        // Capture existing keys before merge so we can detect genuinely new alerts.
+        let existingKeys = Set(alerts.map { $0.deduplicationKey })
         mergeAlerts(newAlerts)
+        // Notify for alerts whose deduplication key was not already present, preventing
+        // re-notification on every deep scan for a persistent threat (e.g. SIP still off).
+        var genuinelyNew = newAlerts.filter {
+            $0.severity != .info && !existingKeys.contains($0.deduplicationKey)
+        }
+        // Enrich new alerts with a plain-English explanation before surfacing them.
+        if !genuinelyNew.isEmpty {
+            let explainer = AlertExplainer()
+            for i in genuinelyNew.indices {
+                let topFeatures: [(name: String, contribution: Double)] = genuinelyNew[i]
+                    .contributingSignals.prefix(5).map {
+                        ($0.title, Double($0.severity.rawValue) / 4.0)
+                    }
+                genuinelyNew[i].explanation = await explainer.explain(
+                    alert: genuinelyNew[i],
+                    topFeatures: topFeatures
+                )
+            }
+        }
+        for alert in genuinelyNew {
+            await NotificationManager.shared.send(for: alert)
+        }
         isScanning = false
         scanTask = nil
         lastScanDate = Date()
@@ -331,6 +364,7 @@ final class SecurityEngine {
         let newIDs = Set(filtered.map { $0.id })
         alerts = alerts.filter { !newIDs.contains($0.id) } + filtered
         alerts.sort { $0.score > $1.score }
+        saveAlerts()
     }
 
     /// Removes a single alert by ID and persists its `deduplicationKey` so it
@@ -343,6 +377,15 @@ final class SecurityEngine {
         dismissedAlertKeys.insert(alert.deduplicationKey)
         alerts.removeAll { $0.id == id }
         UserDefaults.standard.set(Array(dismissedAlertKeys), forKey: "nickDismissedAlertKeys")
+        saveAlerts()
+    }
+
+    /// Removes a resolved alert (threat was killed / deleted) without adding its
+    /// `deduplicationKey` to `dismissedAlertKeys`.  The same threat pattern will
+    /// reappear in the alert list if the binary is re-run.
+    func resolveAlert(_ id: UUID) {
+        alerts.removeAll { $0.id == id }
+        saveAlerts()
     }
 
     /// Cancels an in-progress scan, clearing all progress state immediately.
@@ -355,6 +398,15 @@ final class SecurityEngine {
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
+    }
+
+    // MARK: - Private Helpers
+
+    /// Encodes the current alerts array to JSON and writes it to UserDefaults
+    /// so they survive app restarts.
+    private func saveAlerts() {
+        guard let data = try? JSONEncoder().encode(alerts) else { return }
+        UserDefaults.standard.set(data, forKey: "nickPersistedAlerts")
     }
 
     /// Records the completion of a YARA deep scan and persists the stats.

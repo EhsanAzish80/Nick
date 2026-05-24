@@ -84,7 +84,7 @@ final class ThreatLogExporter {
     /// - Returns: Encoded data.
     /// - Throws: `ThreatLoggerError.exportFailed` on encoding failure.
     func buildExportData(entries: [ThreatLogEntry], format: ExportFormat) throws -> Data {
-        let threatLogger = ThreatLogger(container: ThreatLogExporter.makeInMemoryContainer())
+        let threatLogger = ThreatLogger(container: try ThreatLogExporter.makeInMemoryContainer())
         switch format {
         case .json: return try threatLogger.exportJSON(entries: entries)
         case .csv:  return try threatLogger.exportCSV(entries: entries)
@@ -101,10 +101,15 @@ final class ThreatLogExporter {
     }
 
     /// Creates a throw-away in-memory container for building the export helper.
-    private static func makeInMemoryContainer() -> ModelContainer {
+    ///
+    /// - Throws: `ThreatLoggerError.exportFailed` if SwiftData cannot initialise an in-memory store.
+    private static func makeInMemoryContainer() throws -> ModelContainer {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
-        // swiftlint:disable force_try
-        return try! ModelContainer(for: ThreatLogEntry.self, configurations: config)
-        // swiftlint:enable force_try
+        do {
+            return try ModelContainer(for: ThreatLogEntry.self, configurations: config)
+        } catch {
+            Self.logger.error("Failed to create in-memory export container: \(error)")
+            throw error
+        }
     }
 }

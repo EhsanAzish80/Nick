@@ -37,6 +37,9 @@ final class FileSystemWatcher: @unchecked Sendable {
         "/private/tmp",
         NSString("~/Library/Application Support").expandingTildeInPath,
         NSString("~/.local/bin").expandingTildeInPath,
+        NSHomeDirectory(),                                     // shell profiles (.zshrc, .bashrc, …)
+        NSString("~/.ssh").expandingTildeInPath,              // SSH authorized_keys
+        "/etc",                                                // /etc/zshrc, /etc/zprofile, …
     ]
 
     /// Seconds of latency passed to FSEvents. Lower = faster detection but more CPU.
@@ -127,7 +130,9 @@ final class FileSystemWatcher: @unchecked Sendable {
             watchedPaths,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             Self.fsEventsLatency,
-            UInt32(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+            UInt32(kFSEventStreamCreateFlagFileEvents |
+                   kFSEventStreamCreateFlagNoDefer |
+                   kFSEventStreamCreateFlagUseCFTypes)
         ) else {
             Self.log.error("FileSystemWatcher: FSEventStreamCreate failed — YARA real-time scanning disabled")
             Unmanaged<FileSystemWatcher>.fromOpaque(selfPtr).release()
@@ -151,13 +156,68 @@ final class FileSystemWatcher: @unchecked Sendable {
 
     /// Called (on `callbackQueue`) for each FSEvents batch.
     fileprivate func handleEvents(paths: [String], flags: [UInt32]) {
-        let created: UInt32 = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemModified)
+        let createdOrModified = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemModified)
         for (path, flag) in zip(paths, flags) {
-            guard (flag & created) != 0 else { continue }
+            guard (flag & createdOrModified) != 0 else { continue }
+
+            // Detect shell profile modifications (Fix 4).
+            if isShellProfile(path) {
+                emitPersistenceSignal(
+                    for: path,
+                    reason: "shell_profile_modified",
+                    severity: .medium
+                )
+            }
+
+            // Detect SSH authorized_keys modifications (Fix 5).
+            if path.hasSuffix("/authorized_keys") {
+                emitPersistenceSignal(
+                    for: path,
+                    reason: "ssh_keys_modified",
+                    severity: .critical
+                )
+            }
+
             // SECURITY: Only queue files that are executable to avoid
             // scanning data files and wasting CPU budget.
             guard isExecutable(at: path) else { continue }
             queueYARAScan(for: path)
+        }
+    }
+
+    /// Returns `true` when `path` is one of the known shell startup/profile files.
+    private func isShellProfile(_ path: String) -> Bool {
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        let profiles: Set<String> = [
+            ".zshrc", ".zprofile", ".zlogin", ".zlogout", ".zshenv",
+            ".bash_profile", ".bashrc", ".bash_login", ".bash_logout",
+            ".profile",
+            "zshrc", "zprofile", "zshenv",   // /etc/zshrc, /etc/zprofile, /etc/zshenv
+        ]
+        return profiles.contains(name)
+    }
+
+    /// Emits a `.persistence` threat signal on the main actor.
+    ///
+    /// - Parameters:
+    ///   - path:   Absolute path of the modified file.
+    ///   - reason: Value written to `metadata["reason"]` for rule matching.
+    ///   - severity: Severity of the emitted signal.
+    private func emitPersistenceSignal(for path: String,
+                                       reason: String,
+                                       severity: SignalSeverity) {
+        let fileName = URL(fileURLWithPath: path).lastPathComponent
+        let signal = ThreatSignal(
+            source: .persistence,
+            severity: severity,
+            title: "Sensitive file modified: \(fileName)",
+            description: "'\(path)' was created or modified. This is a common persistence and privilege-escalation vector.",
+            metadata: ["reason": reason, "path": path]
+        )
+        Self.log.warning("Persistence signal: \(reason, privacy: .public) — \(path, privacy: .private)")
+        Task.detached(priority: .utility) { [weak self, signal] in
+            guard let self else { return }
+            await MainActor.run { self.onThreatSignal(signal) }
         }
     }
 
@@ -231,7 +291,9 @@ private let fileSystemEventCallback: FSEventStreamCallback = {
     guard let contextInfo else { return }
     let watcher = Unmanaged<FileSystemWatcher>.fromOpaque(contextInfo).takeUnretainedValue()
 
-    // eventPaths is UnsafeMutableRawPointer (non-optional) from FSEventStreamCallback.
+    // kFSEventStreamCreateFlagUseCFTypes ensures eventPaths is a CFArray of CFStrings,
+    // which toll-free bridges to NSArray of NSString. The unsafeBitCast below is valid
+    // only because that flag is set; without it eventPaths would be a plain char**.
     let pathsArray = unsafeBitCast(eventPaths, to: NSArray.self)
     var paths: [String] = []
     var flagsArray: [UInt32] = []

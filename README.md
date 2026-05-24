@@ -22,6 +22,7 @@
   <img src="https://img.shields.io/badge/swift-6.0-F05138?style=flat&logo=swift" alt="Swift 6.0">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat" alt="AGPL-3.0">
   <img src="https://img.shields.io/github/stars/EhsanAzish80/Nick?style=flat" alt="Stars">
+  <img src="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml/badge.svg" alt="CI">
 </p>
 
 ---

@@ -79,6 +79,10 @@ private struct AlertRow: View {
 
     let alert: ThreatAlert
     @Environment(SecurityEngine.self) private var engine
+    @State private var killingProcess = false
+    @State private var killFailed     = false
+    @State private var processKilled  = false   // confirmed dead this session
+    @State private var deleteFailed   = false
 
     /// Whether this alert represents trusted-app activity (severity == .info).
     private var isTrustedActivity: Bool { alert.severity == .info }
@@ -115,8 +119,8 @@ private struct AlertRow: View {
                 Spacer()
             }
 
-            // Description
-            Text(alert.description)
+            // Description — use Foundation Models explanation when available
+            Text(alert.explanation ?? alert.description)
                 .font(.nickBody)
                 .foregroundStyle(isTrustedActivity ? Color.textTertiary : Color.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -129,10 +133,27 @@ private struct AlertRow: View {
                             Text("▸")
                                 .font(.nickBodySmall)
                                 .foregroundStyle(Color.textTertiary)
-                            Text(signal.title)
-                                .font(.nickBodySmall)
-                                .foregroundStyle(Color.textSecondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(signal.title)
+                                    .font(.nickBodySmall)
+                                    .foregroundStyle(Color.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                let displayPath = signal.metadata["script_path"]
+                                    ?? signal.metadata["path"]
+                                    ?? signal.processInfo?.path
+                                if let path = displayPath, !path.isEmpty {
+                                    Text(path)
+                                        .font(.nickMono)
+                                        .foregroundStyle(Color.textTertiary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                if let pid = signal.processInfo?.pid {
+                                    Text("PID \(pid)")
+                                        .font(.nickMonoSmall)
+                                        .foregroundStyle(Color.textTertiary)
+                                }
+                            }
                         }
                     }
                     if alert.contributingSignals.count > 5 {
@@ -146,12 +167,100 @@ private struct AlertRow: View {
             }
 
             // Buttons
-            HStack {
+            HStack(spacing: NickSpacing.md) {
+                // Kill Process — visible while the process is alive (or mid-kill).
+                // Hidden once processKilled is set, making room for Delete File.
+                if !processKilled,
+                   let pid = alert.contributingSignals.first?.processInfo?.pid,
+                   killingProcess || ProcessScanner.isRunning(pid: pid) {
+                    Button {
+                        killingProcess = true
+                        killFailed = false
+                        Task { @MainActor in
+                            // SIGTERM first — polite termination.
+                            kill(pid, SIGTERM)
+                            try? await Task.sleep(for: .milliseconds(800))
+                            if ProcessScanner.isRunning(pid: pid) {
+                                // Escalate to SIGKILL if still alive.
+                                kill(pid, SIGKILL)
+                                try? await Task.sleep(for: .milliseconds(500))
+                            }
+                            if !ProcessScanner.isRunning(pid: pid) {
+                                // Confirmed dead.
+                                let fp = alert.contributingSignals.first?.metadata["script_path"]
+                                    ?? alert.contributingSignals.first?.processInfo?.path
+                                if let p = fp, !p.isEmpty {
+                                    // File path known — offer delete before dismissing.
+                                    killingProcess = false
+                                    processKilled  = true
+                                } else {
+                                    // No known path — resolve (not suppress) and rescan.
+                                    engine.resolveAlert(alert.id)
+                                    engine.runFullScan()
+                                }
+                            } else {
+                                killingProcess = false
+                                killFailed = true
+                            }
+                        }
+                    } label: {
+                        if killingProcess {
+                            Label("Terminating…", systemImage: "xmark.circle")
+                                .font(.nickButton)
+                        } else if killFailed {
+                            Label("Kill failed", systemImage: "xmark.octagon")
+                                .font(.nickButton)
+                        } else {
+                            Label("Kill Process", systemImage: "xmark.circle")
+                                .font(.nickButton)
+                        }
+                    }
+                    .buttonStyle(.nickDestructive)
+                    .disabled(killingProcess)
+                }
+
+                // Delete File — replaces Kill button after process is confirmed dead.
+                if processKilled {
+                    let fp = alert.contributingSignals.first?.metadata["script_path"]
+                        ?? alert.contributingSignals.first?.processInfo?.path
+                    if let path = fp, !path.isEmpty {
+                        Button {
+                            do {
+                                try FileManager.default.removeItem(atPath: path)
+                                engine.resolveAlert(alert.id)
+                                engine.runFullScan()
+                            } catch {
+                                deleteFailed = true
+                            }
+                        } label: {
+                            Label(
+                                deleteFailed ? "Delete failed" : "Delete File",
+                                systemImage: deleteFailed ? "trash.slash" : "trash"
+                            )
+                            .font(.nickButton)
+                        }
+                        .buttonStyle(.nickDestructive)
+                    }
+                }
+
+                // Show in Finder
+                let finderPath = alert.contributingSignals.first?.metadata["script_path"]
+                    ?? alert.contributingSignals.first?.processInfo?.path
+                if let path = finderPath, !path.isEmpty {
+                    Button {
+                        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+                    } label: {
+                        Label("Show in Finder", systemImage: "folder")
+                            .font(.nickButton)
+                    }
+                    .buttonStyle(.nickSecondary)
+                }
+
+                Spacer()
                 Button("Copy JSON") { copyJSON() }
                     .buttonStyle(.plain)
                     .font(.nickButton)
                     .foregroundStyle(Color.textSecondary)
-                Spacer()
                 Button("Dismiss") { engine.dismissAlert(alert.id) }
                     .buttonStyle(.nickPrimary)
             }

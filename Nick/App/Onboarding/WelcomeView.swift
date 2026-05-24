@@ -4,139 +4,120 @@
 
 import AppKit
 import SwiftUI
-import UserNotifications
 
 // MARK: - WelcomeView
 
 /// First-run onboarding screen shown to new users.
 ///
-/// Explains what Nick does, lists the permissions it uses, and lets the user
-/// grant notification access before proceeding. Tapping "Get Started" sets
-/// `hasCompletedOnboarding` in `UserDefaults` via `@AppStorage`, which causes
-/// `MainWindowView` to replace this screen with the main navigation UI.
+/// Presents the Doberman app icon, a 2-column feature grid, and a single CTA
+/// that requests notification permission before handing off to the main window.
 struct WelcomeView: View {
 
     @Binding var hasCompletedOnboarding: Bool
 
     var body: some View {
-        VStack(spacing: NickSpacing.xl) {
-
-            // App icon + headline
-            VStack(spacing: NickSpacing.md) {
-                Image(systemName: "shield.checkered")
-                    .font(.system(size: 64, weight: .thin))
-                    .foregroundStyle(Color.statusGreen)
-
-                Text("Welcome to Nick")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
-
-                Text("Open-source macOS security monitoring with on-device AI.\nAll analysis runs entirely on your Mac — nothing leaves your machine.")
-                    .font(.nickBody)
-                    .foregroundStyle(Color.textSecondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            Divider()
-
-            // What Nick monitors
-            VStack(alignment: .leading, spacing: NickSpacing.sm) {
-                Text("What Nick monitors")
-                    .font(.nickSubtitle)
-                    .foregroundStyle(Color.textPrimary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                OnboardingRow(icon: "cpu",                       text: "Processes — detects unsigned or suspicious executables")
-                OnboardingRow(icon: "network",                   text: "Network — flags unexpected outbound connections")
-                OnboardingRow(icon: "arrow.triangle.2.circlepath", text: "Persistence — watches launch agents and daemons for changes")
-                OnboardingRow(icon: "checkmark.shield",          text: "System — audits SIP, firewall, and Gatekeeper status")
-                OnboardingRow(icon: "camera",                    text: "Camera & Microphone — alerts if activated unexpectedly")
-            }
-
-            Divider()
-
-            // Permissions
-            VStack(alignment: .leading, spacing: NickSpacing.sm) {
-                Text("Permissions")
-                    .font(.nickSubtitle)
-                    .foregroundStyle(Color.textPrimary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                PermissionRow(
-                    icon: "bell",
-                    title: "Notifications",
-                    description: "Nick sends alerts when it detects a threat. You can adjust the severity threshold in Settings."
-                )
-
-                PermissionRow(
-                    icon: "lock.shield",
-                    title: "Privileged Helper",
-                    description: "Nick installs a small helper tool to read system state (SIP, firewall, launch daemons) that requires administrator approval."
-                )
-            }
-
+        VStack(spacing: 0) {
             Spacer()
 
-            // CTA
-            Button {
-                // Permission is requested by MainWindowView's .task once the main
-                // navigation UI is on screen — do not call requestPermission() here.
-                hasCompletedOnboarding = true
-            } label: {
-                Text("Get Started")
-                    .font(.nickBodyMedium)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, NickSpacing.sm)
+            // Hero — app icon + name
+            VStack(spacing: NickSpacing.lg) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 96, height: 96)
+
+                Text("Nick")
+                    .font(.system(size: 36, weight: .bold))
+
+                Text("macOS Security Suite")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Color.textSecondary)
             }
-            .buttonStyle(NickPrimaryButtonStyle())
+
+            Spacer().frame(height: 40)
+
+            // Feature grid — 2 columns
+            LazyVGrid(
+                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                spacing: 20
+            ) {
+                FeatureCard(icon: "cpu",
+                            title: "Process Monitor",
+                            description: "Detects unsigned and suspicious executables in real-time")
+                FeatureCard(icon: "network",
+                            title: "Network Watchdog",
+                            description: "Flags unexpected outbound connections and reverse shells")
+                FeatureCard(icon: "arrow.triangle.2.circlepath",
+                            title: "Persistence Watch",
+                            description: "Monitors LaunchAgents and daemons for unauthorized changes")
+                FeatureCard(icon: "checkmark.shield",
+                            title: "System Audit",
+                            description: "Verifies SIP, FileVault, Gatekeeper, and firewall status")
+                FeatureCard(icon: "doc.text.magnifyingglass",
+                            title: "YARA Scanner",
+                            description: "Scans files with industry-standard malware detection rules")
+                FeatureCard(icon: "brain",
+                            title: "AI Scoring",
+                            description: "Correlates signals with on-device Foundation Models")
+            }
+            .padding(.horizontal, 40)
+
+            Spacer().frame(height: 40)
+
+            // Permissions note — subtle, not alarming
+            Text("Nick will ask for notification permission and may request administrator access to install a system monitor.")
+                .font(.nickBodySmall)
+                .foregroundStyle(Color.textTertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 60)
+
+            Spacer().frame(height: 24)
+
+            // CTA button
+            Button(action: {
+                Task {
+                    await NotificationManager.shared.requestPermission()
+                }
+                hasCompletedOnboarding = true
+                UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+            }) {
+                Text("Get Started")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(maxWidth: 280)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.statusBlue)
+
+            Spacer()
         }
-        .padding(NickSpacing.xxl)
-        .frame(maxWidth: 520, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.backgroundPrimary)
     }
 }
 
-// MARK: - OnboardingRow
+// MARK: - FeatureCard
 
-private struct OnboardingRow: View {
-    let icon: String
-    let text: String
-
-    var body: some View {
-        HStack(spacing: NickSpacing.md) {
-            Image(systemName: icon)
-                .frame(width: 20)
-                .foregroundStyle(Color.statusGreen)
-                .imageScale(.medium)
-            Text(text)
-                .font(.nickBodySmall)
-                .foregroundStyle(Color.textSecondary)
-        }
-    }
-}
-
-// MARK: - PermissionRow
-
-private struct PermissionRow: View {
+private struct FeatureCard: View {
     let icon:        String
     let title:       String
     let description: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: NickSpacing.md) {
+        HStack(alignment: .top, spacing: NickSpacing.lg) {
             Image(systemName: icon)
-                .frame(width: 20)
-                .foregroundStyle(Color.textTertiary)
-                .imageScale(.medium)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
+                .font(.system(size: 20))
+                .foregroundStyle(Color.statusGreen)
+                .frame(width: 32, height: 32)
+
+            VStack(alignment: .leading, spacing: NickSpacing.xs) {
                 Text(title)
                     .font(.nickBodyMedium)
-                    .foregroundStyle(Color.textPrimary)
                 Text(description)
                     .font(.nickBodySmall)
                     .foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

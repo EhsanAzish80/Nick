@@ -568,4 +568,11 @@ struct ProcessScanner {
         }
         return args
     }
+
+    /// Returns `true` if the process with the given PID is still alive.
+    ///
+    /// Uses `kill(pid, 0)` — sends no signal, just checks for process existence.
+    static func isRunning(pid: Int32) -> Bool {
+        kill(pid, 0) == 0
+    }
 }
