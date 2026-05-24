@@ -27,6 +27,7 @@ final class AlertExplainer: @unchecked Sendable {
 
     // MARK: - Init
 
+    /// Creates a new instance. No configuration required.
     init() {}
 
     // MARK: - Public API
@@ -60,4 +61,3 @@ final class AlertExplainer: @unchecked Sendable {
         }
     }
 }
-

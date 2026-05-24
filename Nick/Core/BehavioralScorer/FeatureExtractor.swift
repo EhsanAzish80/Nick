@@ -29,6 +29,7 @@ final class FeatureExtractor: Sendable {
 
     // MARK: - Init
 
+    /// Creates a new instance. No configuration required.
     init() {}
 
     // MARK: - Public API
