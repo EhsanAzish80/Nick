@@ -9,6 +9,15 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/platform-macOS%2014%2B-000000?style=flat&logo=apple" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/swift-6.0-F05138?style=flat&logo=swift" alt="Swift 6.0">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat" alt="AGPL-3.0">
+  <img src="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml/badge.svg" alt="CI">
+  <a href="https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick"><img src="https://sonarcloud.io/api/project_badges/measure?project=EhsanAzish80_Nick&metric=alert_status" alt="Quality Gate"></a>
+  <img src="https://img.shields.io/github/stars/EhsanAzish80/Nick?style=flat" alt="Stars">
+</p>
+
+<p align="center">
   <a href="#features">Features</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#installation">Installation</a> •
