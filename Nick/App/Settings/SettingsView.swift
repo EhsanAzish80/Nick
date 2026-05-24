@@ -213,7 +213,9 @@ struct SettingsView: View {
                 Button("Remove", role: .destructive) {
                     if let n = nameToRemove { removeProcess(n) }
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Cancel", role: .cancel) {
+                     // No configuration required.
+                }
             }
         }
 
