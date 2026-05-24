@@ -260,11 +260,13 @@ private struct SignalRow: View {
 #Preview {
     AlertDetailView(alert: ThreatAlert(
         score: 0.91,
-        title: "Reverse shell detected",
-        description: "A shell process has established an outbound TCP connection.",
-        severity: .critical,
-        contributingSignals: [],
-        recommendedAction: "Terminate the process and investigate its parent chain."
+        content: AlertContent(
+            title: "Reverse shell detected",
+            description: "A shell process has established an outbound TCP connection.",
+            severity: .critical,
+            recommendedAction: "Terminate the process and investigate its parent chain."
+        ),
+        contributingSignals: []
     ))
 }
 
