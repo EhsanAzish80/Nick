@@ -21,8 +21,9 @@ final class ExplanationPromptBuilder {
 
     // MARK: - Init
 
-    /// Creates a new instance. No configuration required.
-    init() {}
+    init() {
+        // Creates a new instance. No configuration required.
+    }
 
     // MARK: - Public API
 

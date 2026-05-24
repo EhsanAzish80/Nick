@@ -44,8 +44,9 @@ final class SignatureValidator: @unchecked Sendable {
 
     // MARK: - Init
 
-    /// Creates a new instance. No configuration required.
-    private init() {}
+    private init() {
+        // Creates a new instance. No configuration required.
+    }
 
     // MARK: - Public API
 
