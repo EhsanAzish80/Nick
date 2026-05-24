@@ -27,8 +27,7 @@ final class ThreatSignalTests: XCTestCase {
     }
 
     func test_signalSeverity_comparable_mediumIsNotLessThanMedium() {
-        let severity = SignalSeverity.medium
-        XCTAssertFalse(severity < severity)
+        XCTAssertFalse(SignalSeverity.medium < SignalSeverity.medium)
     }
 
     // MARK: - ThreatSignal Creation
