@@ -669,10 +669,9 @@ struct ProcessListView: View {
     static func threatLabel(_ p: NickProcessInfo) -> String? {
         let path = p.path.lowercased()
         // Unsigned binary in a temp directory
-        if p.signingStatus == .unsigned {
-            if path.hasPrefix("/tmp") || path.hasPrefix("/var/tmp") || path.hasPrefix("/private/tmp") {
-                return "Temp Path"
-            }
+        if p.signingStatus == .unsigned,
+           path.hasPrefix("/tmp") || path.hasPrefix("/var/tmp") || path.hasPrefix("/private/tmp") {
+            return "Temp Path"
         }
         // Common LOLBin names running without a valid signature
         let lolBins: Set<String> = ["bash", "sh", "zsh", "python", "python3", "perl",

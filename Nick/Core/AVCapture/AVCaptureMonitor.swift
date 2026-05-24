@@ -464,23 +464,10 @@ enum CaptureProcessScanner: Sendable {
             let pid = kp.kp_proc.p_pid
             guard pid > 0 else { return nil }
 
-            // Process name from kp_proc.p_comm (fixed-size char tuple)
-            var comm = kp.kp_proc.p_comm
-            let commSize = MemoryLayout.size(ofValue: comm)
-            let name = withUnsafeMutablePointer(to: &comm) { ptr in
-                ptr.withMemoryRebound(to: UInt8.self, capacity: commSize) { uPtr in
-                    let buf = UnsafeBufferPointer(start: uPtr, count: commSize)
-                    return String(decoding: buf.prefix(while: { $0 != 0 }), as: UTF8.self)
-                }
-            }
+            let name = processName(from: kp)
             guard !name.isEmpty else { return nil }
 
-            // Full path via proc_pidpath
-            var pathBuf = [Int8](repeating: 0, count: Int(MAXPATHLEN))
-            proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
-            let path = pathBuf.withUnsafeBufferPointer { bp in
-                String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
-            }
+            let path = processPath(for: pid)
 
             let tv = kp.kp_proc.p_starttime
             let startTime: Date? = tv.tv_sec > 0
@@ -489,5 +476,19 @@ enum CaptureProcessScanner: Sendable {
 
             return ProcessSnapshot(pid: pid, name: name, path: path, startTime: startTime)
         }
+    }
+
+    private static func processName(from kp: kinfo_proc) -> String {
+        var comm = kp.kp_proc.p_comm
+        return withUnsafeBytes(of: &comm) { bytes in
+            let utf8 = bytes.prefix(while: { $0 != 0 })
+            return String(decoding: utf8, as: UTF8.self)
+        }
+    }
+
+    private static func processPath(for pid: Int32) -> String {
+        var pathBuf = [Int8](repeating: 0, count: Int(MAXPATHLEN))
+        proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
+        return String(cString: pathBuf)
     }
 }

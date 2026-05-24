@@ -15,7 +15,8 @@ struct NickPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        let fillOpacity: Double = configuration.isPressed ? 0.7 : (isEnabled ? 1.0 : 0.4)
+        let enabledOpacity: Double = isEnabled ? 1.0 : 0.4
+        let fillOpacity: Double = configuration.isPressed ? 0.7 : enabledOpacity
         return configuration.label
             .font(.nickButton)
             .foregroundStyle(Color.textInverse)
@@ -75,7 +76,8 @@ struct NickDestructiveButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        let fillOpacity: Double = configuration.isPressed ? 0.7 : (isEnabled ? 1.0 : 0.4)
+        let enabledOpacity: Double = isEnabled ? 1.0 : 0.4
+        let fillOpacity: Double = configuration.isPressed ? 0.7 : enabledOpacity
         return configuration.label
             .font(.nickButton)
             .foregroundStyle(Color.textInverse)

@@ -198,34 +198,14 @@ struct ThreatLogContent {
 /// Groups the eight optional forensic context fields of a `ThreatLogEntry`,
 /// reducing the designated initialiser's parameter count.
 struct ThreatLogForensics {
-    var contributingSignalIDs: [UUID]
-    var contributingSignalSummaries: [String]
-    var processPath: String?
-    var processName: String?
-    var processPID: Int32?
-    var remoteAddress: String?
-    var remotePort: Int?
-    var filePath: String?
-
-    init(
-        contributingSignalIDs: [UUID] = [],
-        contributingSignalSummaries: [String] = [],
-        processPath: String? = nil,
-        processName: String? = nil,
-        processPID: Int32? = nil,
-        remoteAddress: String? = nil,
-        remotePort: Int? = nil,
-        filePath: String? = nil
-    ) {
-        self.contributingSignalIDs = contributingSignalIDs
-        self.contributingSignalSummaries = contributingSignalSummaries
-        self.processPath = processPath
-        self.processName = processName
-        self.processPID = processPID
-        self.remoteAddress = remoteAddress
-        self.remotePort = remotePort
-        self.filePath = filePath
-    }
+    var contributingSignalIDs: [UUID] = []
+    var contributingSignalSummaries: [String] = []
+    var processPath: String? = nil
+    var processName: String? = nil
+    var processPID: Int32? = nil
+    var remoteAddress: String? = nil
+    var remotePort: Int? = nil
+    var filePath: String? = nil
 }
 
 /// Migration plan anchored to v1.0.
