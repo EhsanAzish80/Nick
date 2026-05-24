@@ -64,7 +64,7 @@ def load_data(csv_path: Path):
     df = pd.read_csv(csv_path)
     missing = set(FEATURE_NAMES) - set(df.columns)
     if missing:
-        print(f"ERROR: CSV is missing features: {missing}", file=sys.stderr)
+        print("ERROR: CSV is missing features: {missing}", file=sys.stderr)
         sys.exit(1)
 
     X = df[FEATURE_NAMES].values.astype(np.float32)
@@ -89,7 +89,7 @@ def train(X_train, y_train):
     print("Training Gradient Boosted Tree...")
     t0 = time.time()
     model.fit(X_train, y_train)
-    print(f"Training completed in {time.time() - t0:.1f}s")
+    print("Training completed in {time.time() - t0:.1f}s")
     return model
 
 
@@ -114,11 +114,11 @@ def evaluate(model, X_test, y_test, y_labels_test):
     except ValueError:
         auc = 0.0
 
-    print(f"\n=== Malicious Detection Metrics ===")
-    print(f"  Precision : {precision:.3f}  (target ≥ 0.90)")
-    print(f"  Recall    : {recall:.3f}  (target ≥ 0.85)")
-    print(f"  F1        : {f1:.3f}")
-    print(f"  ROC-AUC   : {auc:.3f}")
+    print("\n=== Malicious Detection Metrics ===")
+    print("  Precision : {precision:.3f}  (target ≥ 0.90)")
+    print("  Recall    : {recall:.3f}  (target ≥ 0.85)")
+    print("  F1        : {f1:.3f}")
+    print("  ROC-AUC   : {auc:.3f}")
 
     if precision < 0.90:
         print("  ⚠ WARNING: Precision below target. Consider more training data or tuning.")
@@ -131,7 +131,7 @@ def evaluate(model, X_test, y_test, y_labels_test):
     print("\n=== Top 10 Feature Importances ===")
     for name, imp in ranked[:10]:
         bar = "█" * int(imp * 100)
-        print(f"  {name:<45} {imp:.4f}  {bar}")
+        print("  {name:<45} {imp:.4f}  {bar}")
 
     # Benchmark inference speed
     t0 = time.perf_counter()
@@ -140,8 +140,8 @@ def evaluate(model, X_test, y_test, y_labels_test):
     elapsed_ms = (time.perf_counter() - t0)
     per_inference_ms = elapsed_ms
 
-    print(f"\n=== Inference Speed ===")
-    print(f"  1000 inferences in {elapsed_ms*1000:.1f}ms → {per_inference_ms:.4f}ms per call")
+    print("\n=== Inference Speed ===")
+    print("  1000 inferences in {elapsed_ms*1000:.1f}ms → {per_inference_ms:.4f}ms per call")
     if per_inference_ms > 0.005:
         print("  ⚠ WARNING: Inference may exceed 5ms target on slower devices.")
 
@@ -153,7 +153,7 @@ def convert_to_coreml(model, output_path: Path):
     import coremltools as ct
     from coremltools.converters.sklearn import convert as sklearn_convert
 
-    print(f"\nConverting to CoreML: {output_path}")
+    print("\nConverting to CoreML: {output_path}")
 
     coreml_model = ct.converters.sklearn.convert(
         model,
@@ -171,7 +171,7 @@ def convert_to_coreml(model, output_path: Path):
     coreml_model.save(str(output_path))
 
     model_size_mb = output_path.stat().st_size / (1024 * 1024)
-    print(f"Saved CoreML model ({model_size_mb:.2f} MB) → {output_path}")
+    print("Saved CoreML model ({model_size_mb:.2f} MB) → {output_path}")
     if model_size_mb > 1.0:
         print("  ⚠ WARNING: Model exceeds 1 MB target. Consider reducing n_estimators or max_depth.")
 
@@ -181,7 +181,7 @@ def save_feature_importances(model, output_dir: Path):
     out = output_dir / "feature_importances.json"
     with out.open("w") as f:
         json.dump(importances, f, indent=2)
-    print(f"Feature importances written to {out}")
+    print("Feature importances written to {out}")
 
 
 def main():
@@ -194,15 +194,15 @@ def main():
     output_path = Path(args.output)
 
     if not data_path.exists():
-        print(f"ERROR: Training data not found: {data_path}", file=sys.stderr)
+        print("ERROR: Training data not found: {data_path}", file=sys.stderr)
         print("Run generate_training_data.py first.", file=sys.stderr)
         sys.exit(1)
 
     X, y, y_labels = load_data(data_path)
-    print(f"Loaded {len(X)} samples with {X.shape[1]} features")
+    print("Loaded {len(X)} samples with {X.shape[1]} features")
     unique, counts = np.unique(y, return_counts=True)
     for cls, cnt in zip(["benign", "suspicious", "malicious"], counts if len(counts) == 3 else [0]*3):
-        print(f"  {cls}: {cnt}")
+        print("  {cls}: {cnt}")
 
     # Split: 70% train, 15% validation (used by GBT internally), 15% test
     X_train, X_test, y_train, y_test, _, y_labels_test = train_test_split(
