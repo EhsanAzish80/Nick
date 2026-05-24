@@ -288,12 +288,10 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 - [x] Threat log with forensic detail
 - [x] Camera and microphone activity monitoring (AVCaptureMonitor)
 
-### v1.0 — Public Release (In Progress)
-- [ ] Third-party security audit of privileged helper and detection engine
-- [ ] False positive tuning across diverse Mac configurations
-- [ ] Performance optimization (< 1% CPU, < 50MB RAM)
-- [ ] Homebrew cask distribution
-- [ ] Comprehensive documentation
+### v1.0 — Public Release ✅ Complete
+- [x] Third-party security audit of privileged helper and detection engine
+- [x] False positive tuning across diverse Mac configurations
+- [x] Performance optimization (< 1% CPU, < 50MB RAM)
 
 ### Future
 - [ ] DNS-over-HTTPS tunnel detection
