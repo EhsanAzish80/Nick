@@ -85,7 +85,7 @@ final class ProcessMonitor: MonitorProtocol {
         backfillTask = Task.detached(priority: .background) { [weak self] in
             guard let self else { return }
             await SignatureValidator.shared.backfill(processes: scanned) { [weak self] updated in
-                await self?.handleBackfilledProcess(updated)
+                self?.handleBackfilledProcess(updated)
             }
         }
     }
