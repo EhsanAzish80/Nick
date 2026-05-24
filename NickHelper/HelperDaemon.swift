@@ -227,6 +227,7 @@ final class HelperProtocolImplementation: NSObject, NickHelperProtocol {
         }
     }
 
+    /// TODO stub — returns no listening ports until secure sysctl-based enumeration is implemented (SECURITY.md Finding 2.C).
     func getListeningPorts(reply: @escaping ([String: Int32]) -> Void) {
         // Enumerate listening ports via sysctl KERN_PROC_ALL + socket inspection.
         // TODO(ehsan): Implement direct sysctl enumeration. See #43.
