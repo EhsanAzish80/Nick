@@ -11,6 +11,7 @@
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat" alt="AGPL-3.0">
   <img src="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml/badge.svg" alt="CI">
   <a href="https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick"><img src="https://sonarcloud.io/api/project_badges/measure?project=EhsanAzish80_Nick&metric=alert_status" alt="Quality Gate"></a>
+  <a href="https://codecov.io/gh/EhsanAzish80/Nick"><img src="https://codecov.io/gh/EhsanAzish80/Nick/branch/main/graph/badge.svg" alt="Coverage"></a>
   <img src="https://img.shields.io/github/stars/EhsanAzish80/Nick?style=flat" alt="Stars">
 </p>
 <p align="center">
