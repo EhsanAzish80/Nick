@@ -112,8 +112,8 @@ enum ParentChainAnalyzer {
     ) -> ThreatSignal? {
         guard let leaf = chain.leaf, chain.depth >= 2 else { return nil }
 
-        // If the chain's root is trusted, suppress — intentional user activity.
-        if let root = chain.root, trustedProcessList.isTrusted(root.name) { return nil }
+        // If the chain's root is a trusted, signed process — suppress as intentional user activity.
+        if let root = chain.root, trustedProcessList.isTrusted(root.name, pid: root.pid) { return nil }
 
         let chainNames = chain.processes.map { $0.name }
         let leafIsShellOrInterpreter = shellNames.contains(leaf.name.lowercased())

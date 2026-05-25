@@ -137,6 +137,42 @@ struct TrustedProcessList {
             || userTrusted.contains { $0.lowercased().hasPrefix(nameLower) }
     }
 
+    /// Returns `true` only when `processName` is in the trusted list **and** the running
+    /// process at `pid` carries a valid code signature.
+    ///
+    /// This overload prevents impersonation attacks where a malicious binary uses the name
+    /// of a trusted process (e.g. "Code Helper") to bypass behavioural detection.
+    /// If the process has already exited and its path cannot be resolved, this returns
+    /// `false` — callers that need a softer fallback should use `isTrusted(_:)`.
+    ///
+    /// - Parameters:
+    ///   - processName: Process name to check (e.g. `"bash"`, `"Xcode"`).
+    ///   - pid:         PID of the running process to verify.
+    /// - Returns: `true` if the name is trusted **and** the binary is signed.
+    func isTrusted(_ processName: String, pid: pid_t) -> Bool {
+        // PID 1 is always launchd — the root of all processes on macOS.
+        // SecCodeCopyGuestWithAttributes cannot validate PID 1, so trust it unconditionally.
+        if pid == 1 { return true }
+        // Name must be in the trusted list first.
+        guard isTrusted(processName) else { return false }
+        // Resolve the on-disk path of the running process.
+        let maxSize = 4096
+        var buffer = [CChar](repeating: 0, count: maxSize)
+        let ret = proc_pidpath(pid, &buffer, UInt32(maxSize))
+        guard ret > 0 else { return false }
+        let path = buffer.withUnsafeBufferPointer { bp in
+            String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
+        guard !path.isEmpty else { return false }
+        // Verify the binary is actually signed — reject unsigned impersonators.
+        let status = SignatureValidator.shared.evaluate(binaryPath: path)
+        if case .signed = status { return true }
+        Self.logger.warning(
+            "Trusted-name process '\(processName, privacy: .public)' (PID \(pid)) failed signature check — treating as untrusted"
+        )
+        return false
+    }
+
     /// Adds `processName` to the user-trusted set.
     ///
     /// Changes are not automatically persisted — call `AppSettings.shared.save()` after.

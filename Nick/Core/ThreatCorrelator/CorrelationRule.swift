@@ -420,9 +420,9 @@ struct CorrelationRule: Sendable {
             score: 0.35,
             content: AlertContent(
                 title: "Outbound connection to raw IP address",
-                description: "Process(es) '\(processNames)' connected to a raw IP address without DNS resolution\(ips.isEmpty ? "" : ": \(ips)"). Malware often uses raw IPs to avoid DNS-based blocking.",
+                description: "Process(es) '\(processNames)' connected to IP address(es) without DNS resolution\(ips.isEmpty ? "" : ": \(ips)"). This is common for local network services, VPNs, and peer-to-peer connections. It may also indicate a process bypassing DNS-based security controls.",
                 severity: .low,
-                recommendedAction: "Check whether the destination IP is legitimate for the process involved. Consider blocking the connection via the firewall if unexpected."
+                recommendedAction: "If you recognise these connections (local network devices, VPN, development servers), this alert is safe to dismiss. Investigate only if you see unfamiliar IP addresses on unusual ports."
             ),
             contributingSignals: matches
         )

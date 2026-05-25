@@ -49,22 +49,66 @@ struct AlertListView: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
-        // Change 3: centered vertically in available space.
-        VStack(spacing: NickSpacing.lg) {
-            Image(systemName: "bell.slash")
-                .font(.system(size: 32))
-                .foregroundStyle(Color.textTertiary)
-            Text("No alerts")
-                .font(.nickSubtitle)
-                .foregroundStyle(Color.textPrimary)
-            Text(engine.isScanning
-                 ? "Scan in progress…"
-                 : "No threats detected in the last scan.")
-                .font(.nickBodySmall)
-                .foregroundStyle(Color.textSecondary)
-                .multilineTextAlignment(.center)
+        ScrollView {
+            VStack(spacing: 20) {
+                Spacer(minLength: 40)
+
+                // Green shield IconTile (72px)
+                IconTile(
+                    systemImage: "checkmark.shield.fill",
+                    tint: .green,
+                    size: 72
+                )
+
+                VStack(spacing: 8) {
+                    Text("All clear")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+                    Text(engine.isScanning
+                         ? "Scan in progress…"
+                         : "No threats or suspicious activity detected.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                // Two pill buttons
+                HStack(spacing: 12) {
+                    Button("Run Scan") { engine.runFullScan() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(engine.isScanning)
+
+                    Toggle("Show trusted activity", isOn: $showTrustedAlerts)
+                        .toggleStyle(.button)
+                }
+
+                // Footnote card
+                HStack(spacing: 10) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.textTertiary)
+                    Text("Nick continuously monitors your Mac. Alerts appear here when suspicious activity is detected.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.backgroundSecondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+                )
+                .padding(.horizontal, 40)
+                .padding(.top, 8)
+
+                Spacer(minLength: 40)
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.backgroundPrimary)
     }
 }

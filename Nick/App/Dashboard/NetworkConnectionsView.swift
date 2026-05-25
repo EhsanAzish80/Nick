@@ -43,30 +43,71 @@ struct NetworkConnectionsView: View {
 
     // MARK: - Body
 
+    private var totalConnections: Int { engine.connections.count }
+
     var body: some View {
-        VStack(spacing: 0) {
+        Group {
             if grouped.isEmpty {
                 emptyState
             } else {
                 ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(grouped, id: \.key) { group in
-                            ProcessGroup(
-                                processName: group.key,
-                                connections: group.value,
-                                isExpanded: expandedProcesses.contains(group.key),
-                                onToggle: { toggle(group.key) }
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Hero row
+                        HStack(spacing: 14) {
+                            IconTile(systemImage: "network", tint: Color(NSColor.systemBlue), size: 56)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Network")
+                                    .font(.system(size: 18, weight: .semibold))
+                                    .foregroundStyle(Color.textPrimary)
+                                Text("\(grouped.count) app\(grouped.count == 1 ? "" : "s") with active connections · \(totalConnections) total")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 20)
+                        .padding(.bottom, 16)
+
+                        // Section + card
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("ACTIVE APPS · \(grouped.count)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.textTertiary)
+                                .tracking(0.5)
+                                .padding(.horizontal, 20)
+
+                            VStack(spacing: 0) {
+                                ForEach(Array(grouped.enumerated()), id: \.element.key) { index, group in
+                                    ProcessGroup(
+                                        processName: group.key,
+                                        connections: group.value,
+                                        isExpanded: expandedProcesses.contains(group.key),
+                                        onToggle: { toggle(group.key) }
+                                    )
+                                    if index < grouped.count - 1 {
+                                        Divider().padding(.leading, 60)
+                                    }
+                                }
+                            }
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color(NSColor.controlBackgroundColor))
                             )
-                            Rectangle()
-                                .fill(Color.borderSubtle)
-                                .frame(height: 0.5)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+                            )
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 24)
                         }
                     }
                 }
+                .background(Color.backgroundPrimary)
             }
         }
-        // Change 4: native toolbar search replaces the custom NickSearchField.
-        .searchable(text: $searchText, placement: .toolbar, prompt: "Search process or address...")
+        .searchable(text: $searchText, placement: .toolbar, prompt: "Search process or address…")
+        .navigationTitle("Network")
     }
 
     // MARK: - Private
@@ -80,21 +121,27 @@ struct NetworkConnectionsView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: NickSpacing.lg) {
-            Image(systemName: "network.slash")
-                .font(.system(size: 32))
-                .foregroundStyle(Color.textTertiary)
-            Text("No connections")
-                .font(.nickSubtitle)
-                .foregroundStyle(Color.textPrimary)
-            Text(searchText.isEmpty
-                 ? "Run a scan to view network connections."
-                 : "No connections match '\(searchText)'.")
-                .font(.nickBodySmall)
-                .foregroundStyle(Color.textSecondary)
-                .multilineTextAlignment(.center)
+        ScrollView {
+            VStack(spacing: 20) {
+                Spacer(minLength: 40)
+                IconTile(systemImage: "network.slash", tint: Color(NSColor.systemGray), size: 64)
+                VStack(spacing: 6) {
+                    Text("No active connections")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+                    Text(searchText.isEmpty
+                         ? "Network connections will appear here when apps are active."
+                         : "No connections match \"\(searchText)\".")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                Spacer(minLength: 40)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(40)
         }
-        .padding(NickSpacing.xxl)
+        .background(Color.backgroundPrimary)
     }
 }
 
@@ -111,32 +158,63 @@ private struct ProcessGroup: View {
         connections.contains { $0.isShellProcess && $0.isOutbound }
     }
 
+    /// Deterministic accent color based on first character of process name.
+    private var avatarColor: Color {
+        let palette: [Color] = [.blue, .purple, .green, .orange, .red,
+                                Color(NSColor.systemTeal), Color(NSColor.systemIndigo),
+                                Color(NSColor.systemBrown), Color(NSColor.systemPink)]
+        let idx = abs(processName.unicodeScalars.first.map { Int($0.value) } ?? 0) % palette.count
+        return isSuspicious ? .red : palette[idx]
+    }
+
+    private var avatarLetter: String {
+        String(processName.first ?? "?").uppercased()
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header row
             Button(action: onToggle) {
-                HStack(spacing: NickSpacing.md) {
-                    Circle()
-                        .fill(isSuspicious ? Color.statusRed : Color.statusGreen)
-                        .frame(width: 8, height: 8)
+                HStack(spacing: 12) {
+                    // Letter avatar tile
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(LinearGradient(
+                                colors: [avatarColor.opacity(0.75), avatarColor],
+                                startPoint: .top, endPoint: .bottom
+                            ))
+                            .frame(width: 32, height: 32)
+                            .shadow(color: avatarColor.opacity(0.27), radius: 5, y: 2)
+                        Text(avatarLetter)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
 
                     Text(processName)
-                        .font(.nickBodyMedium)
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(isSuspicious ? Color.statusRed : Color.textPrimary)
                         .lineLimit(1)
 
                     Spacer()
 
-                    Text("\(connections.count)")
-                        .font(.nickMono)
-                        .foregroundStyle(Color.textSecondary)
+                    // Status dot
+                    Circle()
+                        .fill(isSuspicious ? Color.statusRed : Color.statusGreen)
+                        .frame(width: 7, height: 7)
 
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10, weight: .medium))
+                    Text("\(connections.count)")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.textSecondary)
+                        .frame(minWidth: 20, alignment: .trailing)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(Color.textTertiary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .animation(.easeInOut(duration: 0.2), value: isExpanded)
                 }
-                .padding(.horizontal, NickSpacing.lg)
-                .frame(minHeight: NickLayout.rowHeight)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -145,13 +223,10 @@ private struct ProcessGroup: View {
             if isExpanded {
                 VStack(spacing: 0) {
                     ForEach(connections) { conn in
+                        Divider().padding(.leading, 60)
                         ConnectionDetailRow(connection: conn)
-                        if conn.id != connections.last?.id {
-                            Divider().padding(.leading, NickSpacing.xxl)
-                        }
                     }
                 }
-                .background(Color.backgroundTertiary)
             }
         }
     }
@@ -168,18 +243,18 @@ private struct ConnectionDetailRow: View {
     }
 
     var body: some View {
-        HStack(spacing: NickSpacing.md) {
+        HStack(spacing: 10) {
             // Protocol badge
             Text(connection.transportProtocol.rawValue)
-                .font(.nickCaption)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.textSecondary)
-                .padding(.horizontal, NickSpacing.sm)
-                .padding(.vertical, NickSpacing.xs)
-                .background(Color.backgroundSecondary, in: RoundedRectangle(cornerRadius: NickLayout.badgeCornerRadius))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.backgroundPrimary, in: RoundedRectangle(cornerRadius: 4))
 
             // Address line — drop [UNKNOWN] DNS labels, show raw IP
             Text(addressLine)
-                .font(.nickMono)
+                .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(isLocalhost ? Color.textTertiary : Color.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -189,12 +264,14 @@ private struct ConnectionDetailRow: View {
             // Remote port: highlight non-standard ports
             if let port = connection.remotePort {
                 Text(":\(port)")
-                    .font(.nickMonoSmall)
-                    .foregroundStyle(isStandardPort(port) ? Color.textTertiary : Color.statusYellow)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(isStandardPort(port) ? Color.textTertiary : Color.statusOrange)
             }
         }
-        .padding(.horizontal, NickSpacing.xl)
-        .padding(.vertical, NickSpacing.md)
+        .padding(.horizontal, 16)
+        .padding(.leading, 44)  // indent under avatar
+        .padding(.vertical, 9)
+        .background(Color.backgroundPrimary.opacity(0.6))
     }
 
     // MARK: - Private
@@ -211,37 +288,6 @@ private struct ConnectionDetailRow: View {
     private func isStandardPort(_ port: Int) -> Bool {
         let standard = [80, 443, 22, 53, 25, 587, 993, 465, 8080, 8443]
         return standard.contains(port)
-    }
-}
-
-// MARK: - NickSearchField
-
-private struct NickSearchField: View {
-    @Binding var text: String
-
-    var body: some View {
-        HStack(spacing: NickSpacing.md) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(Color.textTertiary)
-                .font(.system(size: NickLayout.iconSize))
-            TextField("Search process or address…", text: $text)
-                .font(.nickBody)
-                .textFieldStyle(.plain)
-                .foregroundStyle(Color.textPrimary)
-            if !text.isEmpty {
-                Button { text = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Color.textTertiary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(NickSpacing.md)
-        .background(Color.backgroundTertiary, in: RoundedRectangle(cornerRadius: NickLayout.badgeCornerRadius))
-        .overlay(
-            RoundedRectangle(cornerRadius: NickLayout.badgeCornerRadius)
-                .strokeBorder(Color.borderMedium, lineWidth: 0.5)
-        )
     }
 }
 

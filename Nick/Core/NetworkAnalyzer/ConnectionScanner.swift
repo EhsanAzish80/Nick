@@ -239,10 +239,10 @@ struct ConnectionScanner {
 
     // MARK: - Signal Generation
 
-    /// Names of trusted network processes that should never trigger raw-IP alerts.
-    /// These are known-signed apps (Spotify, Xcode, etc.) that routinely connect
-    /// to CDN or Apple infrastructure by IP.
-    private static let trustedNetworkProcesses: Set<String> = [
+    /// Process names that may legitimately connect to raw IPs (CDN, Apple infrastructure, etc.).
+    /// A name match alone is insufficient — the running binary must also carry a valid
+    /// Developer ID signature before trust is granted (see `isTrustedNetworkProcess`).
+    private static let trustedNetworkProcessNames: Set<String> = [
         "Spotify", "Spotify Helper",
         "Xcode", "xcodebuild", "com.apple.dt.GitHubHostBuiltInExtension",
         "Claude Helper", "Code Helper", "Code Helper (Plugin)",
@@ -251,6 +251,31 @@ struct ConnectionScanner {
         "HueSync", "Mail", "Safari", "WeatherWidget",
         "mDNSResponder", "trustd", "cloudd"
     ]
+
+    /// Returns `true` only if `name` is in the pre-screened list **and** the running process
+    /// at `pid` carries a valid Developer ID signature.
+    ///
+    /// Name-only checks are insufficient because an attacker can name their binary
+    /// "Spotify Helper" and gain trusted status without this verification.
+    private static func isTrustedNetworkProcess(name: String, pid: Int32) -> Bool {
+        guard trustedNetworkProcessNames.contains(name) else { return false }
+        // Resolve the on-disk path of the running process via proc_pidpath.
+        let maxSize = 4096
+        var buffer = [CChar](repeating: 0, count: maxSize)
+        let ret = proc_pidpath(pid, &buffer, UInt32(maxSize))
+        guard ret > 0 else { return false }
+        let processPath = buffer.withUnsafeBufferPointer { bp in
+            String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
+        guard !processPath.isEmpty else { return false }
+        let status = SignatureValidator.shared.evaluate(binaryPath: processPath)
+        if case .signed = status { return true }
+        // Name matches but process is unsigned — potential impersonation attack.
+        logger.warning(
+            "Trusted-name network process '\(name, privacy: .public)' (PID \(pid)) failed signature check — not trusted"
+        )
+        return false
+    }
 
     /// Placeholder addresses produced when `ProcNetHelper` fails to resolve a
     /// peer address — these are not real connections and must never raise alerts.
@@ -293,7 +318,10 @@ struct ConnectionScanner {
                let remote = conn.remoteAddress,
                !Self.bogusRemoteAddresses.contains(remote),               // skip ProcNetHelper failures
                !remote.hasPrefix("fe80:"),                                // skip IPv6 link-local
-               !Self.trustedNetworkProcesses.contains(conn.processName),  // skip known-signed apps
+               !remote.hasPrefix("fd"),                                    // skip ULA IPv6 (fd00::/8)
+               !remote.hasPrefix("fc"),                                    // skip ULA IPv6 (fc00::/8)
+               !remote.hasPrefix("::1"),                                   // skip IPv6 loopback
+               !Self.isTrustedNetworkProcess(name: conn.processName, pid: conn.pid),  // verify name + signature
                isRawIP(remote),
                !isLoopback(remote),
                !isPrivateAddress(remote) {                                 // skip LAN / RFC-1918 traffic
@@ -344,6 +372,8 @@ struct ConnectionScanner {
         address.hasPrefix("172.28.")  ||
         address.hasPrefix("172.29.")  ||
         address.hasPrefix("172.30.")  ||
-        address.hasPrefix("172.31.")
+        address.hasPrefix("172.31.")  ||
+        address.hasPrefix("fc")       ||   // IPv6 ULA (fc00::/8)
+        address.hasPrefix("fd")            // IPv6 ULA (fd00::/8)
     }
 }

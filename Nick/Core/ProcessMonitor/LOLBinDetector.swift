@@ -166,8 +166,8 @@ enum LOLBinDetector {
         parentName: String?,
         trustedProcessList: TrustedProcessList = TrustedProcessList()
     ) -> ThreatSignal? {
-        // Skip if parent is a trusted terminal — user intentionally running a shell command.
-        if let parent = parentName, trustedProcessList.isTrusted(parent) { return nil }
+        // Skip if parent is a trusted, signed process — user intentionally running a shell command.
+        if let parent = parentName, trustedProcessList.isTrusted(parent, pid: proc.parentPID) { return nil }
 
         // Include parentName in the search string so pipe-based patterns
         // (e.g., `curl … | bash`) are detected via the parent process name.

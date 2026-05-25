@@ -219,14 +219,29 @@ actor ThreatCorrelator {
     /// - All contributing signals from trusted processes → severity becomes `.info`
     /// - Some signals from trusted processes → severity downgraded by one level
     /// - No trusted signals → severity unchanged
+    ///
+    /// **Persistence signals are never downgraded**, regardless of what other processes
+    /// are in the correlation window. This prevents the supply-chain attack scenario where
+    /// a signed, trusted app (e.g. VS Code compromised via a malicious extension) installs
+    /// a LaunchAgent for persistence. Even if VS Code process signals are in the same
+    /// 30-second window, the persistence alert must fire at full severity.
     private func applyTrustedDowngrade(to alert: ThreatAlert) -> ThreatAlert {
         let signals = alert.contributingSignals
         guard !signals.isEmpty else { return alert }
 
+        // NEVER downgrade alerts that include persistence signals (LaunchAgent/Daemon,
+        // shell profile, SSH keys). Trusted process status is irrelevant to persistence
+        // detection — a trusted app installing an unsigned LaunchAgent is exactly the
+        // supply-chain compromise scenario this detector exists to catch.
+        if signals.contains(where: { $0.source == .persistence }) {
+            return alert
+        }
+
         let trustedCount = signals.filter { signal in
-            // Check the signal's own process (leaf)
-            if let name = signal.processInfo?.name,
-               trustedProcessList.isTrusted(name) { return true }
+            // Check the signal's own process (leaf) — use PID-aware check when available
+            // to prevent impersonation attacks where a malicious process uses a trusted name.
+            if let proc = signal.processInfo,
+               trustedProcessList.isTrusted(proc.name, pid: proc.pid) { return true }
             // Check parent process from metadata (stored by ProcessScanner for LOLBin signals)
             if let parent = signal.metadata["parent"], !parent.isEmpty,
                trustedProcessList.isTrusted(parent) { return true }

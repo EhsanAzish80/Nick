@@ -42,9 +42,9 @@
 			</dict>
 			<key>NSMessage</key>
 			<string>scanWithNick</string>
-			<key>NSSendTypes</key>
+			<key>NSSendFileTypes</key>
 			<array>
-				<string>NSFilenamesPboardType</string>
+				<string>public.item</string>
 			</array>
 		</dict>
 	</array>

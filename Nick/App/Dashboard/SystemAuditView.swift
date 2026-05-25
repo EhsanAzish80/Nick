@@ -17,42 +17,170 @@ struct SystemAuditView: View {
 
     @Environment(SecurityEngine.self) private var engine
 
+    // Separate XProtect result from the rest so it gets its own section.
+    private var xprotectResult: SystemCheckResult? {
+        engine.auditResults.first { $0.check == .xprotect }
+    }
+    private var securityResults: [SystemCheckResult] {
+        engine.auditResults.filter { $0.check != .xprotect }
+    }
+    private var passCount: Int { engine.auditResults.filter { $0.status == .pass }.count }
+    private var issueCount: Int { engine.auditResults.filter { $0.status != .pass && $0.status != .unknown }.count }
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 if engine.auditResults.isEmpty {
                     emptyState
                 } else {
-                    ForEach(engine.auditResults) { result in
-                        if result.check == .firewall {
-                            FirewallAuditRow(result: result, allowlist: engine.firewallAllowlist)
-                        } else {
-                            AuditResultRow(result: result)
+                    // Hero row
+                    HStack(spacing: 14) {
+                        IconTile(
+                            systemImage: issueCount > 0 ? "exclamationmark.shield.fill" : "checkmark.shield.fill",
+                            tint: issueCount > 0 ? .orange : .green,
+                            size: 56
+                        )
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("System Audit")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(Color.textPrimary)
+                            Text(heroSubtitle)
+                                .font(.system(size: 13))
+                                .foregroundStyle(Color.textSecondary)
                         }
-                        Divider()
-                            .padding(.leading, NickLayout.separatorInset)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+                    .padding(.bottom, 16)
+
+                    // Security Settings section
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("SECURITY SETTINGS")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.textTertiary)
+                            .tracking(0.5)
+                            .padding(.horizontal, 20)
+
+                        VStack(spacing: 0) {
+                            ForEach(Array(securityResults.enumerated()), id: \.offset) { idx, result in
+                                if idx > 0 { Divider().padding(.leading, 56) }
+                                if result.check == .firewall {
+                                    FirewallAuditRow(result: result, allowlist: engine.firewallAllowlist)
+                                } else {
+                                    AuditResultRow(result: result)
+                                }
+                            }
+                        }
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.backgroundSecondary)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+                        )
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 20)
+                    }
+
+                    // XProtect Definitions section
+                    if let xp = xprotectResult {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("XPROTECT DEFINITIONS")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.textTertiary)
+                                .tracking(0.5)
+                                .padding(.horizontal, 20)
+
+                            VStack(spacing: 0) {
+                                ForEach(Array(xprotectRows(from: xp).enumerated()), id: \.offset) { idx, row in
+                                    if idx > 0 { Divider().padding(.leading, 20) }
+                                    HStack {
+                                        Text(row.label)
+                                            .font(.system(size: 13))
+                                            .foregroundStyle(Color.textPrimary)
+                                        Spacer()
+                                        Text(row.value)
+                                            .font(.system(size: 13))
+                                            .foregroundStyle(
+                                                xp.status == .warning && row.label == "Last updated"
+                                                    ? Color.statusOrange
+                                                    : Color.textSecondary
+                                            )
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                }
+                            }
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.backgroundSecondary)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+                            )
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 24)
+                        }
                     }
                 }
             }
         }
+        .background(Color.backgroundPrimary)
+        .navigationTitle("System Audit")
+    }
+
+    // MARK: - Helpers
+
+    private var heroSubtitle: String {
+        guard !engine.auditResults.isEmpty else { return "Run a scan to check your system." }
+        if issueCount == 0 {
+            return "\(passCount) settings verified. All hardened."
+        } else {
+            return "\(passCount) settings verified · \(issueCount) issue\(issueCount == 1 ? "" : "s") found."
+        }
+    }
+
+    private func xprotectRows(from result: SystemCheckResult) -> [(label: String, value: String)] {
+        // currentValue format: "Version 5345 (updated 9d ago)" or "Unreadable"
+        let parts = result.currentValue.components(separatedBy: " ")
+        var version = result.currentValue
+        var lastUpdated = "—"
+        if parts.count >= 4, parts[0] == "Version" {
+            version = parts[1]
+            let dStr = parts[3].replacingOccurrences(of: "d", with: "")
+            if let days = Int(dStr) {
+                lastUpdated = days == 0 ? "Today" : days == 1 ? "Yesterday" : "\(days) days ago"
+            }
+        }
+        return [
+            ("Definition version", version),
+            ("Last updated", lastUpdated),
+            ("Provider", "Apple")
+        ]
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: NickSpacing.lg) {
-            Image(systemName: "checkmark.shield")
-                .font(.system(size: 32))
-                .foregroundStyle(Color.textTertiary)
-            Text("No audit data")
-                .font(.nickSubtitle)
-                .foregroundStyle(Color.textPrimary)
-            Text("Run a scan to check your system configuration.")
-                .font(.nickBodySmall)
-                .foregroundStyle(Color.textSecondary)
-                .multilineTextAlignment(.center)
+        VStack(spacing: 16) {
+            Spacer(minLength: 40)
+            IconTile(systemImage: "checkmark.shield", tint: .green, size: 56)
+            VStack(spacing: 6) {
+                Text("No audit data")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                Text("Run a scan to verify your system configuration.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            Spacer(minLength: 40)
         }
-        .padding(NickSpacing.xxl)
+        .frame(maxWidth: .infinity)
+        .padding()
     }
 }
 
