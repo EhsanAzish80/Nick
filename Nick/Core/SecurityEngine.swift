@@ -94,6 +94,19 @@ final class SecurityEngine {
         }
     }
 
+    /// Active suppression rules. Persisted to UserDefaults as JSON.
+    var suppressionRules: [SuppressionRule] = {
+        guard let data = UserDefaults.standard.data(forKey: "suppressionRulesData"),
+              let rules = try? JSONDecoder().decode([SuppressionRule].self, from: data) else { return [] }
+        return rules
+    }() {
+        didSet {
+            if let data = try? JSONEncoder().encode(suppressionRules) {
+                UserDefaults.standard.set(data, forKey: "suppressionRulesData")
+            }
+        }
+    }
+
     // MARK: - Overall Health Score (0–100)
 
     /// Computed security health score: 100 = all clear, 0 = critical issues.
@@ -117,6 +130,10 @@ final class SecurityEngine {
     private let netMon     = NetworkAnalyzer()
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
+
+    /// Shared Foundation Models explainer — used by both the full scan path and
+    /// the real-time pipeline so every new alert gets an AI explanation.
+    let explainer = AlertExplainer()
 
     /// Historical scan snapshots powering sparkline charts in the Overview.
     let scanHistory = ScanHistory()
@@ -209,6 +226,7 @@ final class SecurityEngine {
         // Propagate the current trusted process configuration to monitors.
         procMon.trustedProcessList = trustedProcessList
         await correlator.updateTrustedProcessList(trustedProcessList)
+        await correlator.updateSuppressionRules(suppressionRules)
 
         await startAuditor()
         guard isScanning else { return }
@@ -266,7 +284,6 @@ final class SecurityEngine {
         }
         // Enrich new alerts with a plain-English explanation before surfacing them.
         if !genuinelyNew.isEmpty {
-            let explainer = AlertExplainer()
             for i in genuinelyNew.indices {
                 let topFeatures: [(name: String, contribution: Double)] = genuinelyNew[i]
                     .contributingSignals.prefix(5).map {
@@ -280,6 +297,8 @@ final class SecurityEngine {
         }
         for alert in genuinelyNew {
             await NotificationManager.shared.send(for: alert)
+            let (fmt, outs) = buildPipeline()
+            await emitAlert(alert, formatter: fmt, outputs: outs)
         }
         isScanning = false
         scanTask = nil
@@ -390,6 +409,8 @@ final class SecurityEngine {
             alerts.removeAll { $0.id == id }
             return
         }
+        // Record as false positive for optional local training data.
+        SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
         dismissedAlertKeys.insert(alert.deduplicationKey)
         alerts.removeAll { $0.id == id }
         UserDefaults.standard.set(Array(dismissedAlertKeys), forKey: "nickDismissedAlertKeys")
@@ -400,6 +421,10 @@ final class SecurityEngine {
     /// `deduplicationKey` to `dismissedAlertKeys`.  The same threat pattern will
     /// reappear in the alert list if the binary is re-run.
     func resolveAlert(_ id: UUID) {
+        if let alert = alerts.first(where: { $0.id == id }) {
+            // Record as true positive for optional local training data.
+            SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .truePositive)
+        }
         alerts.removeAll { $0.id == id }
         saveAlerts()
     }

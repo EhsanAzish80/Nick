@@ -43,6 +43,7 @@ actor ThreatCorrelator {
     private var signalBuffer: [ThreatSignal] = []
     private var rules: [CorrelationRule]
     private var trustedProcessList: TrustedProcessList = TrustedProcessList()
+    private var suppressionRules: [SuppressionRule] = []
 
     /// Tracks which rule names have already fired since the last `resetEmittedRules()` call.
     /// Prevents the same rule from re-firing every 5-second tick while its contributing
@@ -82,6 +83,13 @@ actor ThreatCorrelator {
     /// - Parameter list: The current trusted process configuration from `SecurityEngine`.
     func updateTrustedProcessList(_ list: TrustedProcessList) {
         trustedProcessList = list
+    }
+
+    /// Replaces the active suppression rules.
+    ///
+    /// Called by `SecurityEngine` whenever the user edits the suppression list.
+    func updateSuppressionRules(_ rules: [SuppressionRule]) {
+        suppressionRules = rules
     }
 
     /// Adds new signals to the correlation buffer.
@@ -163,6 +171,11 @@ actor ThreatCorrelator {
             guard !emittedRuleNames.contains(rule.name) else { continue }
             if let alert = rule.evaluate(window) {
                 let adjusted = applyTrustedDowngrade(to: alert)
+                if isSuppressed(adjusted) {
+                    Self.logger.info("Rule '\(rule.name)' suppressed by active suppression rule")
+                    emittedRuleNames.insert(rule.name)
+                    continue
+                }
                 alerts.append(adjusted)
                 emittedRuleNames.insert(rule.name)
                 Self.logger.info("Rule '\(rule.name)' fired (new) — score: \(adjusted.score), severity: \(adjusted.severity.displayName)")
@@ -260,5 +273,27 @@ actor ThreatCorrelator {
             return alert.with(severity: alert.severity.downgraded)
         }
         return alert
+    }
+
+    // MARK: - Suppression
+
+    /// Returns `true` if any active suppression rule matches the given alert.
+    private func isSuppressed(_ alert: ThreatAlert) -> Bool {
+        guard !suppressionRules.isEmpty else { return false }
+        for rule in suppressionRules {
+            let needle = rule.value.lowercased()
+            guard !needle.isEmpty else { continue }
+            switch rule.type {
+            case .ruleName:
+                if alert.title.lowercased().contains(needle) { return true }
+            case .processName:
+                let names = alert.contributingSignals.compactMap { $0.processInfo?.name.lowercased() }
+                if names.contains(where: { $0.contains(needle) }) { return true }
+            case .path:
+                let paths = alert.contributingSignals.compactMap { $0.fileInfo?.path.lowercased() }
+                if paths.contains(where: { $0.hasPrefix(needle) || $0.contains(needle) }) { return true }
+            }
+        }
+        return false
     }
 }

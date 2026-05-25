@@ -5,6 +5,14 @@
 import AppKit
 import SwiftUI
 
+// MARK: - AppAppearance
+
+enum AppAppearance: String, CaseIterable {
+    case system = "System"
+    case light  = "Light"
+    case dark   = "Dark"
+}
+
 // MARK: - NickApp
 
 /// Menu bar application entry point.

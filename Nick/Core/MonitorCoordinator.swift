@@ -51,7 +51,6 @@ final class MonitorCoordinator {
 
     private let engine: SecurityEngine
     private let correlator: ThreatCorrelator
-    private let explainer = AlertExplainer()
     private var logger: ThreatLogger?
 
     private var pipelineTask: Task<Void, Never>?
@@ -269,10 +268,12 @@ final class MonitorCoordinator {
         guard !newAlerts.isEmpty else { return }
 
         for var alert in newAlerts {
-            let explanation = await explainer.explain(alert: alert, topFeatures: [])
+            let explanation = await engine.explainer.explain(alert: alert, topFeatures: [])
             alert.explanation = explanation
             await logger?.log(alert: alert, explanation: explanation)
             await NotificationManager.shared.send(for: alert)
+            let (fmt, outs) = buildPipeline()
+            await emitAlert(alert, formatter: fmt, outputs: outs)
             Self.log.info("Quick tick alert: \(alert.title) score=\(alert.score)")
         }
 

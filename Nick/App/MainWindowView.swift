@@ -34,6 +34,7 @@ struct MainWindowView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var selectedSection: SidebarSection? = .overview
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
     @State private var notificationsDenied = false
 
     // Alert count for sidebar badge (info-severity are trusted-app activity, not actionable).
@@ -151,8 +152,7 @@ struct MainWindowView: View {
                 .disabled(engine.isScanning)
             }
         }
-        // Apple-native Aqua (light) appearance
-        .preferredColorScheme(.light)
+        .preferredColorScheme(appAppearance == .dark ? .dark : appAppearance == .light ? .light : nil)
         .onAppear {
             NSApp.setActivationPolicy(.regular)
             (NSApp.delegate as? AppDelegate)?.openSettingsAction = {
@@ -293,7 +293,7 @@ struct OverviewDetailView: View {
                     .padding(.top, 20)
                     .padding(.bottom, 16)
 
-                scoreCard
+                scoreBreakdown
                     .padding(.horizontal, 20)
                     .padding(.bottom, 16)
 
@@ -332,92 +332,59 @@ struct OverviewDetailView: View {
             )
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(totalIssues == 0 ? "Your Mac is protected" : "Attention needed")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color.textPrimary)
-                    // Score pill
                     if engine.healthScore == -1 {
-                        Text("Scanning…")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.textSecondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.textTertiary.opacity(0.12)))
+                        Text("—")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.textTertiary)
                     } else {
-                        Text("\(engine.healthScore)/100")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(totalIssues == 0 ? .green : .orange)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(
-                                Capsule()
-                                    .fill(totalIssues == 0 ? Color.green.opacity(0.12) : Color.orange.opacity(0.12))
-                            )
+                        Text("\(engine.healthScore)")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(totalIssues == 0 ? Color.statusGreen : Color.statusOrange)
+                        Text("/100")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Color.textSecondary)
                     }
+                    Spacer()
                 }
-                Text(engine.isScanning
-                     ? "Scan in progress…"
-                     : (engine.lastScanDate.map { "Last scan \($0.formatted(.relative(presentation: .named))). No threats found." }
-                        ?? "No scan completed yet."))
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.textSecondary)
+                HStack {
+                    Text(engine.isScanning
+                         ? "Scan in progress…"
+                         : (engine.lastScanDate.map { "Last scan \($0.formatted(.relative(presentation: .named))). No threats found." }
+                            ?? "No scan completed yet."))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.textSecondary)
+                    Spacer()
+                    Button(engine.isScanning ? "Scanning…" : "Run Scan") {
+                        engine.runFullScan()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(engine.isScanning)
+                }
             }
-
-            Spacer()
-
-            Button(engine.isScanning ? "Scanning…" : "Run Scan") {
-                engine.runFullScan()
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(engine.isScanning)
         }
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.backgroundSecondary)
+                .fill(totalIssues == 0 ? Color.statusGreen.opacity(0.06) : Color.backgroundSecondary)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+                .strokeBorder(
+                    totalIssues == 0 ? Color.statusGreen.opacity(0.15) : Color.borderSubtle,
+                    lineWidth: totalIssues == 0 ? 1 : 0.5
+                )
         )
     }
 
-    // MARK: - Score card
+    // MARK: - Score breakdown (segmented bars)
 
-    private var scoreCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("SECURITY SCORE")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.textTertiary)
-                .tracking(0.5)
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if engine.healthScore == -1 {
-                        Text("—")
-                            .font(.system(size: 36, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.textTertiary)
-                        Text("Scanning…")
-                            .font(.system(size: 15))
-                            .foregroundStyle(Color.textSecondary)
-                    } else {
-                        Text("\(engine.healthScore)")
-                            .font(.system(size: 36, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.textPrimary)
-                        Text("of 100")
-                            .font(.system(size: 15))
-                            .foregroundStyle(Color.textSecondary)
-                    }
-                    Spacer()
-                    let issuesSummary: String = totalIssues == 0
-                        ? "All four areas healthy"
-                        : "\(totalIssues) issue\(totalIssues == 1 ? "" : "s") found"
-                    Text(issuesSummary)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textSecondary)
-                }
-
+    private var scoreBreakdown: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(spacing: 10) {
                 // Segmented color bar
                 GeometryReader { geo in
                     HStack(spacing: 2) {
@@ -456,7 +423,7 @@ struct OverviewDetailView: View {
             Text("STATUS")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.textTertiary)
-                .tracking(0.5)
+                .tracking(1)
 
             VStack(spacing: 0) {
                 OverviewStatusRow(
@@ -511,7 +478,7 @@ struct OverviewDetailView: View {
             Text("PROTECTION SUMMARY")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.textTertiary)
-                .tracking(0.5)
+                .tracking(1)
 
             VStack(spacing: 0) {
                 summaryRow(label: "Monitoring since", value: engine.monitoringSince.formatted(date: .abbreviated, time: .omitted))
@@ -578,7 +545,7 @@ struct OverviewDetailView: View {
                 Text("RECENT ACTIVITY")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.textTertiary)
-                    .tracking(0.5)
+                    .tracking(1)
                 Spacer()
                 Button("View all") { selectedSection = .alerts }
                     .font(.system(size: 12))
@@ -618,7 +585,7 @@ struct OverviewDetailView: View {
                                     .foregroundStyle(Color.textTertiary)
                             }
                             Spacer()
-                            Text(event.timestamp, format: .relative(presentation: .named))
+                            Text(relativeTimestamp(event.timestamp))
                                 .font(.system(size: 11))
                                 .foregroundStyle(Color.textTertiary)
                         }
@@ -652,6 +619,14 @@ struct OverviewDetailView: View {
         case "red":    return .statusRed
         default:       return .textTertiary
         }
+    }
+
+    private func relativeTimestamp(_ date: Date) -> String {
+        let age = Date().timeIntervalSince(date)
+        if age < 60 {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        return date.formatted(.relative(presentation: .named))
     }
 }
 
@@ -1300,7 +1275,7 @@ struct ScannerDetailView: View {
             Text("SCAN")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.textTertiary)
-                .tracking(0.5)
+                .tracking(1)
 
             VStack(spacing: 0) {
                 // Quick Scan row
@@ -1355,7 +1330,7 @@ struct ScannerDetailView: View {
             Text("DEEP SCAN PROGRESS")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.textTertiary)
-                .tracking(0.5)
+                .tracking(1)
 
             VStack(alignment: .leading, spacing: 10) {
                 if scanner.isPaused {
@@ -1431,7 +1406,7 @@ struct ScannerDetailView: View {
             Text("OPTIONS")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.textTertiary)
-                .tracking(0.5)
+                .tracking(1)
 
             VStack(spacing: 0) {
                 // AC power toggle

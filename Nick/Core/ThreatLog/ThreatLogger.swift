@@ -130,6 +130,31 @@ final class ThreatLogger: Sendable {
         }
     }
 
+    /// Exports entries as KV (key=value) data, one record per line.
+    ///
+    /// Format matches `AlertFormatters.kv` for SIEM compatibility.
+    ///
+    /// - Parameter entries: The entries to encode.
+    /// - Returns: UTF-8 encoded KV lines.
+    /// - Throws: `ThreatLoggerError.exportFailed` if encoding fails.
+    func exportKV(entries: [ThreatLogEntry]) throws -> Data {
+        let iso = ISO8601DateFormatter()
+        let lines = entries.map { entry -> String in
+            let ts = iso.string(from: entry.timestamp)
+            let rule = entry.alertTitle.replacingOccurrences(of: " ", with: "_")
+            let desc = entry.alertDescription.replacingOccurrences(of: "\"", with: "'")
+            let signals = entry.contributingSignalSummaries
+                .map { $0.replacingOccurrences(of: " ", with: "_") }
+                .joined(separator: ",")
+            return "timestamp=\(ts) severity=\(entry.severity.uppercased()) score=\(String(format: "%.2f", entry.score)) rule=\(rule) signals=\(signals) description=\"\(desc)\""
+        }
+        let content = lines.joined(separator: "\n")
+        guard let data = content.data(using: .utf8) else {
+            throw ThreatLoggerError.exportFailed(nil)
+        }
+        return data
+    }
+
     /// Exports entries as CSV data.
     ///
     /// - Parameter entries: The entries to encode.

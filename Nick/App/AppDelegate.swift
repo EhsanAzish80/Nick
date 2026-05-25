@@ -65,7 +65,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.servicesProvider = NickServicesProvider()
             NSUpdateDynamicServices()
             configureMainWindowDelegate()
+            checkPendingFinderScan()
+            checkScheduledDeepScan()
         }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationWillBecomeActive),
+            name: NSApplication.willBecomeActiveNotification,
+            object: nil
+        )
     }
 
     /// Keep Nick alive in the background when the last window closes.
@@ -229,6 +237,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func forceQuitApp() {
         forceQuit = true
         NSApp.terminate(nil)
+    }
+
+    // MARK: - Finder Sync Integration
+
+    /// Checks App Group UserDefaults for a pending "Scan with Nick" URL posted by
+    /// the NickFinderSync extension and launches a deep scan on that path.
+    @objc func applicationWillBecomeActive() {
+        checkPendingFinderScan()
+    }
+
+    private func checkPendingFinderScan() {
+        let sharedDefaults = UserDefaults(suiteName: "group.com.ehsanazish.nick")
+        guard let urlString = sharedDefaults?.string(forKey: "pendingFinderScanURL"),
+              !urlString.isEmpty else { return }
+        sharedDefaults?.removeObject(forKey: "pendingFinderScanURL")
+        sharedDefaults?.synchronize()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            engine.runFullScan()
+            openMainWindow()
+        }
+    }
+
+    // MARK: - Scheduled Deep Scan
+
+    /// Called on launch to fire a background deep scan if enough time has elapsed
+    /// since the last one, based on the user's scheduled interval preference.
+    ///
+    /// Interval values: 0 = disabled, 1 = daily (86400s), 2 = weekly (604800s), 3 = monthly (2592000s).
+    private func checkScheduledDeepScan() {
+        let intervalChoice = UserDefaults.standard.integer(forKey: "scheduledDeepScanInterval")
+        guard intervalChoice > 0 else { return }
+
+        let intervalSeconds: TimeInterval
+        switch intervalChoice {
+        case 1: intervalSeconds = 86_400      // daily
+        case 2: intervalSeconds = 604_800     // weekly
+        case 3: intervalSeconds = 2_592_000   // monthly (~30 days)
+        default: return
+        }
+
+        let lastScanDate = UserDefaults.standard.object(forKey: "nickLastScheduledDeepScanDate") as? Date
+        let elapsed = lastScanDate.map { Date().timeIntervalSince($0) } ?? .infinity
+
+        guard elapsed >= intervalSeconds else { return }
+
+        UserDefaults.standard.set(Date(), forKey: "nickLastScheduledDeepScanDate")
+        Task.detached(priority: .background) { [weak self] in
+            await self?.engine.runFullScan()
+        }
     }
 }
 

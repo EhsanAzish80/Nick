@@ -25,6 +25,7 @@ final class ThreatLogExporter {
     enum ExportFormat {
         case json
         case csv
+        case keyValue  // timestamp=... severity=... rule=...
     }
 
     // MARK: - Private
@@ -54,7 +55,13 @@ final class ThreatLogExporter {
         let panel = NSSavePanel()
         panel.title = "Export Threat Log"
         panel.nameFieldStringValue = exportFilename(format: format)
-        panel.allowedContentTypes = format == .json ? [.json] : [.commaSeparatedText]
+        panel.allowedContentTypes = {
+            switch format {
+            case .json:     return [.json]
+            case .csv:      return [.commaSeparatedText]
+            case .keyValue: return [.plainText]
+            }
+        }()
         panel.canCreateDirectories = true
 
         guard panel.runModal() == .OK, let url = panel.url else {
@@ -88,8 +95,9 @@ final class ThreatLogExporter {
     func buildExportData(entries: [ThreatLogEntry], format: ExportFormat) throws -> Data {
         let threatLogger = ThreatLogger(container: try ThreatLogExporter.makeInMemoryContainer())
         switch format {
-        case .json: return try threatLogger.exportJSON(entries: entries)
-        case .csv:  return try threatLogger.exportCSV(entries: entries)
+        case .json:     return try threatLogger.exportJSON(entries: entries)
+        case .csv:      return try threatLogger.exportCSV(entries: entries)
+        case .keyValue: return try threatLogger.exportKV(entries: entries)
         }
     }
 
@@ -99,7 +107,11 @@ final class ThreatLogExporter {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         let date = formatter.string(from: Date())
-        return "nick-threat-log-\(date).\(format == .json ? "json" : "csv")"
+        switch format {
+        case .json:     return "nick-threat-log-\(date).json"
+        case .csv:      return "nick-threat-log-\(date).csv"
+        case .keyValue: return "nick-threat-log-\(date).log"
+        }
     }
 
     /// Creates a throw-away in-memory container for building the export helper.

@@ -68,4 +68,15 @@ enum SignalSeverity: Int, Codable, Sendable, Comparable, CaseIterable {
     var downgraded: SignalSeverity {
         SignalSeverity(rawValue: max(rawValue - 1, SignalSeverity.info.rawValue)) ?? .info
     }
+
+    /// CEF (Common Event Format) severity integer, 0–10.
+    var cefSeverity: Int {
+        switch self {
+        case .info:     return 1
+        case .low:      return 3
+        case .medium:   return 5
+        case .high:     return 7
+        case .critical: return 10
+        }
+    }
 }

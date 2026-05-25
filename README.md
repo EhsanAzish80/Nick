@@ -9,6 +9,7 @@
   <img src="https://img.shields.io/badge/platform-macOS%2026%2B-000000?style=flat&logo=apple" alt="macOS 26+">
   <img src="https://img.shields.io/badge/swift-6.0-F05138?style=flat&logo=swift" alt="Swift 6.0">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat" alt="AGPL-3.0">
+  <img src="https://img.shields.io/badge/tests-273%20passing-brightgreen?style=flat" alt="273 tests passing">
   <img src="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml/badge.svg" alt="CI">
   <a href="https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick"><img src="https://sonarcloud.io/api/project_badges/measure?project=EhsanAzish80_Nick&metric=alert_status" alt="Quality Gate"></a>
   <a href="https://codecov.io/gh/EhsanAzish80/Nick"><img src="https://codecov.io/gh/EhsanAzish80/Nick/branch/main/graph/badge.svg" alt="Coverage"></a>
@@ -95,6 +96,14 @@ Detects unauthorized access to your camera and microphone in real time:
 - Elevates severity to high when an unsigned binary is found accessing media hardware
 - Baseline-delta approach: only alerts on new activations, not ongoing expected usage
 
+### 📡 Logging & SIEM Integration (v1.2)
+Nick's functional logging pipeline sends alerts to your existing security infrastructure with zero configuration overhead:
+- **Formats:** Key=Value, JSON, CEF — pick one or pipe them yourself
+- **Outputs:** Local log file with daily rotation, HTTP POST webhook (Splunk HEC, AWS, PagerDuty, any HTTPS endpoint), stdout
+- **MDM-configurable** — all settings readable from the managed defaults domain (`com.ehsanazish.nick`)
+
+No syslog. No OpenTelemetry. No dedicated developer required.
+
 ### 🧠 AI Behavioral Scoring (The Differentiator)
 On-device CoreML pipeline for behavioral threat correlation. v0.9 ships with rule-based scoring; the ML model activates once trained on real-world signal data.
 - Individual signals are noisy. Correlated signals are actionable.
@@ -109,25 +118,28 @@ On-device CoreML pipeline for behavioral threat correlation. v0.9 ships with rul
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│              Nick.app (SwiftUI)              │
-│         Menu Bar + Dashboard + Alerts        │
-├─────────────────────────────────────────────┤
-│             Threat Correlator                │
+┌──────────────────────────────────────────────┐  ┌───────────────────────────┐
+│               Nick.app (SwiftUI)             │  │  NickFinderSync.appex     │
+│          Menu Bar + Dashboard + Alerts       │◄─│  Finder context menu      │
+├──────────────────────────────────────────────┤  │  App Group UserDefaults   │
+│     NickLogging  (functional pipeline)       │  └───────────────────────────┘
+│   KV / JSON / CEF  →  file / HTTP / stdout   │
+├──────────────────────────────────────────────┤
+│              Threat Correlator               │
 │    Combines signals → CoreML threat score    │
-├──────────┬──────────┬───────────┬───────────┤
-│ Process  │ Persist- │ Network   │ File      │
-│ Auditor  │ ence     │ Watchdog  │ System    │
-│          │ Monitor  │           │ Watcher   │
-├──────────┴──────────┴───────────┴───────────┤
-│              YARA Engine (libyara)           │
-│         + Heuristic Analysis Layer           │
-├─────────────────────────────────────────────┤
-│         AI Behavioral Scorer (CoreML)        │
-├─────────────────────────────────────────────┤
-│          Privileged Helper (XPC)             │
-│     SMAppService · Elevated Operations       │
-└─────────────────────────────────────────────┘
+├──────────┬──────────┬───────────┬────────────┤
+│ Process  │ Persist- │ Network   │ File       │
+│ Auditor  │ ence     │ Watchdog  │ System     │
+│          │ Monitor  │ + Baseline│ Watcher    │
+├──────────┴──────────┴───────────┴────────────┤
+│              YARA Engine (libyara)            │
+│          + Heuristic Analysis Layer           │
+├──────────────────────────────────────────────┤
+│          AI Behavioral Scorer (CoreML)        │
+├──────────────────────────────────────────────┤
+│           Privileged Helper (XPC)             │
+│      SMAppService · Elevated Operations       │
+└──────────────────────────────────────────────┘
 ```
 
 ### Project Structure
@@ -139,8 +151,9 @@ Nick/
 │   ├── BehavioralScorer/        # CoreML inference engine
 │   ├── DeepScan/                # Full-system YARA deep scan driver
 │   ├── Helper/                  # Privileged helper client interface
+│   ├── Logging/                 # Functional alert logging pipeline (KV/JSON/CEF)
 │   ├── Models/                  # Core-layer model types
-│   ├── NetworkAnalyzer/         # Connection monitoring and tunnel detection
+│   ├── NetworkAnalyzer/         # Connection monitoring, tunnel detection, and baseline
 │   ├── Notifications/           # NotificationManager
 │   ├── PersistenceWatcher/      # LaunchAgent/Daemon/Login Item surveillance
 │   ├── ProcessMonitor/          # Process auditing and anomaly detection
@@ -148,7 +161,7 @@ Nick/
 │   ├── Services/                # macOS Services menu provider
 │   ├── Settings/                # AppSettings
 │   ├── SystemAudit/             # SIP, FileVault, Gatekeeper, firewall checks
-│   ├── ThreatCorrelator/        # Multi-signal correlation and scoring
+│   ├── ThreatCorrelator/        # Multi-signal correlation, scoring, and suppression
 │   ├── ThreatLog/               # Persistent threat log
 │   ├── YARAEngine/              # C interop wrapper for libyara + FSEvents watcher
 │   ├── SecurityEngine.swift     # Top-level observable state model
@@ -165,6 +178,8 @@ Nick/
 │   └── AppDelegate.swift        # NSStatusItem and engine bootstrap
 │
 ├── NickHelper/                  # Privileged helper tool (XPC + SMAppService)
+│
+├── NickFinderSync/              # Finder Sync Extension — right-click "Scan with Nick"
 │
 ├── Models/                      # Shared Swift model types
 │   └── Training/                # CoreML training pipeline (Python)
@@ -218,7 +233,7 @@ cd Nick
 ## Open in Xcode (requires Xcode 16+)
 open Nick.xcodeproj
 
-## Build
+## Build (includes Nick.app + NickFinderSync.appex + NickHelper)
 xcodebuild -scheme Nick -configuration Release
 
 ## Run tests
@@ -229,6 +244,8 @@ xcodebuild -scheme Nick CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN
 ```
 
 > The checked-in project uses the maintainer's signing team. Override with your own team in Xcode → Signing & Capabilities, or build unsigned using the command above.
+
+> **Finder Sync Extension:** `NickFinderSync` requires both `Nick.app` and `NickFinderSync.appex` to share the App Group `group.com.ehsanazish.nick`. Add this entitlement in **Signing & Capabilities → App Groups** for both targets before building a signed release.
 
 ### Dependencies
 Nick uses zero third-party Swift dependencies. The only external dependency is `libyara` (C library, vendored).
@@ -255,6 +272,8 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 | Behavioral AI scoring | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Correlated threat detection | ✅ | ❌ | ❌ | ❌ | ❌ |
 | System hardening audit | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Log export (KV/JSON/CEF) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| SIEM webhook | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Open source | ✅ | ✅ | ❌ | ❌ | ❌ |
 | No cloud dependency | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Single app | ✅ | ❌ (6 separate apps) | ✅ | ✅ | ✅ |
@@ -264,40 +283,30 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 
 ## Roadmap
 
-### v0.1 — Foundation ✅ Complete
-- [x] System integrity audit (SIP, FileVault, Gatekeeper, firewall, XProtect)
-- [x] LaunchAgent/Daemon monitoring with change detection
-- [x] Process auditor (unsigned binaries, suspicious locations, parent-child chains)
-- [x] Network connection viewer with process mapping
-- [x] SwiftUI menu bar app with dashboard
+### ✅ v1.0 — Public Release
+### ✅ v1.1 — Detection Hardening
 
-### v0.5 — Active Detection ✅ Complete
-- [x] FSEvents watcher on critical directories
-- [x] YARA engine integration with curated rule set
-- [x] On-demand file/directory scanner
-- [x] Heuristic analysis (entropy, code signing, Mach-O inspection)
-- [x] Real-time notification system
-- [x] Privileged helper for elevated operations
+### ✅ v1.2 — AI & Reporting
+- Functional logging pipeline (KV/JSON/CEF → file/webhook/stdout)
+- Foundation Models explanations on all alert paths
+- Network baseline anomaly detection
+- Finder Sync Extension (right-click without user opt-in)
+- Scheduled Deep Scan
+- `getListeningPorts` via `sysctl`
+- `proc_pidfdinfo` replacing `lsof`
+- MDM configuration profile support
+- Configurable alert suppression rules
 
-### v0.9 — AI Behavioral Scoring ✅ Complete
-- [x] Threat correlation engine (multi-signal scoring)
-- [x] CoreML behavioral scoring model
-  > CoreML pipeline implemented and tested; shipping with rule-based scoring until trained model replaces stub
-- [x] Foundation Models alert explanations (macOS 26+)
-- [x] Real-time behavioral monitoring
-- [x] Threat log with forensic detail
-- [x] Camera and microphone activity monitoring (AVCaptureMonitor)
+### 🔄 v1.3 — Enterprise & Community
+- Homebrew cask distribution
+- Community YARA rule submission pipeline
+- CoreML behavioral model (trained on opt-in telemetry from v1.2)
+- Alert aggregation view (group related alerts)
 
-### v1.0 — Public Release ✅ Complete
-- [x] Third-party security audit of privileged helper and detection engine
-- [x] False positive tuning across diverse Mac configurations
-- [x] Performance optimization (< 1% CPU, < 50MB RAM)
-
-### Future
-- [ ] DNS-over-HTTPS tunnel detection
-- [ ] Community rule marketplace
-- [ ] Automated incident response actions
-- [ ] Enterprise deployment support
+### 🔮 v2.0 — Prevention (pending Apple entitlements)
+- Endpoint Security framework (process interception before exec)
+- Network Extension (outbound connection blocking)
+- Real-time DNS monitoring
 
 ---
 

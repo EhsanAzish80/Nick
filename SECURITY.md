@@ -595,3 +595,93 @@ findings documented in Parts 1–3 of this audit. No new privileged code was
 added. All detection changes operate in the main app's unprivileged context.
 
 — Ehsan Azish, May 24, 2026
+
+---
+
+## Part 5 — v1.2 Security Review (May 25, 2026)
+
+### 5.1 Functional Logging Pipeline — Security Analysis
+
+The v1.2 logging system is a pure functional pipeline with no persistent
+state. Each formatter and output is an isolated `@Sendable` closure with no
+shared mutable state.
+
+**Threat model:**
+- **HTTP output:** Webhook URL is user-configured and stored in UserDefaults.
+  Nick does not validate the destination — the user is responsible for ensuring
+  the endpoint is trusted. Alerts may contain process names, file paths, and
+  PIDs. No keychain data, passwords, or file contents are ever included.
+- **File output:** Log files written to `~/Library/Logs/Nick/` are readable by
+  the user only (0600). Daily rotation with 30-day retention. No sensitive
+  data beyond what appears in the alert UI.
+- **CEF/KV/JSON formatters:** Output contains only alert metadata (timestamp,
+  severity, score, rule name, signal titles). No raw file contents, no
+  process arguments, no network payload data.
+
+**Decision:** No new privileged code. All logging runs in the main app's
+unprivileged context. NickHelper is not involved.
+
+### 5.2 Finder Sync Extension — Security Analysis
+
+`NickFinderSync` is a separate sandboxed process (App Extension sandbox).
+Communication with the main app uses a shared App Group UserDefaults
+(`group.com.ehsanazish.nick`) — a read/write key-value store.
+
+**Threat model:**
+- The extension receives file URLs from Finder via `FIFinderSyncProtocol`.
+  These URLs are validated before being written to the App Group store.
+- The main app reads pending scan URLs from the App Group store on
+  foreground activation. URLs are validated before being passed to `YARAEngine`.
+- No XPC between the extension and main app — App Group UserDefaults is
+  sufficient for the URL-passing use case and avoids additional IPC surface.
+
+**Decision:** Extension runs in its own sandbox. Cannot access the privileged
+helper directly. YARA scan is performed by the main app, not the extension.
+
+### 5.3 Network Baseline — Security Analysis
+
+`NetworkBaseline` stores per-process connection fingerprints on disk at
+`~/Library/Application Support/com.ehsanazish.nick/network-baseline.json`.
+This file contains process names and connection tuples (address, port, protocol).
+
+**Threat model:**
+- **Baseline poisoning:** If an attacker modifies the baseline file before
+  detection, Nick may not flag their connections as anomalous. Mitigated by
+  the fact that persistence detection would catch the file modification, and
+  the baseline is rebuilt from scratch on any integrity check failure.
+- **Privacy:** Baseline contains connection metadata only, not payload data.
+  It is not included in any log output or export.
+
+### 5.4 Configurable Alert Suppression — Security Analysis
+
+Suppression rules are stored in UserDefaults as JSON. An attacker with local
+user access could add suppression rules to hide their activity.
+
+**Decision:** Accepted risk — an attacker with local user access can already
+modify LaunchAgents, shell profiles, and application data. Suppression rules do
+not expand the attack surface meaningfully. Suppressed alerts are still logged at
+`.notice` level in the system log, creating an audit trail.
+
+### 5.5 Updated Open Items
+
+| Item | Priority | Status |
+|------|----------|--------|
+| Endpoint Security entitlement | High | Submitted to Apple, awaiting approval |
+| Network Extension entitlement | Medium | Not yet applied |
+| CoreML model training | Medium | Deferred until v1.2 telemetry data is sufficient |
+| `getListeningPorts` implementation | Low | ✅ Closed in v1.2 (proc_pidfdinfo) |
+| Replace `lsof` with `proc_pidfdinfo` | Low | ✅ Closed in v1.2 |
+
+**Test count:** 273 tests, 0 failures, TEST SUCCEEDED. Codebase clean for v1.2.
+
+---
+
+## Updated Sign-off
+
+v1.2 adds a functional logging pipeline, Finder Sync Extension, network baseline
+detection, and configurable suppression rules. No new privileged code was added.
+All new features run in the main app's unprivileged context or in a sandboxed
+extension. The logging pipeline emits only alert metadata — no sensitive data,
+no file contents, no credentials.
+
+— Ehsan Azish, May 25, 2026

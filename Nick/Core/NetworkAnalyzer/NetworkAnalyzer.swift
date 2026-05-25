@@ -31,6 +31,7 @@ final class NetworkAnalyzer: MonitorProtocol {
 
     private var pendingSignals: [ThreatSignal] = []
     private let scanner = ConnectionScanner()
+    private let baseline = NetworkBaseline()
 
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -54,8 +55,12 @@ final class NetworkAnalyzer: MonitorProtocol {
         }
 
         connections = scanned
-        pendingSignals = scanner.signals(from: scanned)
-        Self.logger.info("Network snapshot: \(scanned.count) connections, \(self.pendingSignals.count) signals")
+
+        // Update baseline first, then detect anomalies.
+        baseline.update(connections: scanned)
+        let baselineSignals = baseline.anomalies(for: scanned)
+        pendingSignals = scanner.signals(from: scanned) + baselineSignals
+        Self.logger.info("Network snapshot: \(scanned.count) connections, \(self.pendingSignals.count) signals (\(baselineSignals.count) baseline anomalies)")
     }
 
     func stop() async {

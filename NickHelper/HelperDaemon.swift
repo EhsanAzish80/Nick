@@ -2,6 +2,7 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
+import Darwin
 import Foundation
 import Security
 import os
@@ -227,11 +228,90 @@ final class HelperProtocolImplementation: NSObject, NickHelperProtocol {
         }
     }
 
-    /// TODO stub — returns no listening ports until secure sysctl-based enumeration is implemented (SECURITY.md Finding 2.C).
+    /// Enumerates all listening TCP and bound UDP ports, mapped to owning process name.
+    ///
+    /// Uses `proc_listallpids` + `proc_pidinfo(PROC_PIDLISTFDS)` + `proc_pidfdinfo(PROC_PIDFDSOCKETINFO)`
+    /// to inspect socket FDs for every process. Returns a dictionary of processName → port
+    /// for TCP sockets in LISTEN state and all bound UDP sockets with port > 0.
     func getListeningPorts(reply: @escaping ([String: Int32]) -> Void) {
-        // Enumerate listening ports via sysctl KERN_PROC_ALL + socket inspection.
-        // TODO(ehsan): Implement direct sysctl enumeration. See #43.
-        reply([:])
+        // libproc constants (macros — not exported to Swift directly)
+        let kPROC_PIDLISTFDS: Int32      = 1
+        let kPROX_FDTYPE_SOCKET: UInt32  = 2
+        let kPROC_PIDFDSOCKETINFO: Int32 = 3
+        let kTCPS_LISTEN: Int32          = 1
+
+        var result: [String: Int32] = [:]
+
+        // 1. Collect all PIDs.
+        let estimatedCount = proc_listallpids(nil, 0)
+        guard estimatedCount > 0 else { reply([:]); return }
+        var pids = [Int32](repeating: 0, count: Int(estimatedCount) + 16)
+        let filled = proc_listallpids(&pids, Int32(pids.count) * Int32(MemoryLayout<Int32>.size))
+        guard filled > 0 else { reply([:]); return }
+
+        for pid in pids.prefix(Int(filled)) where pid > 0 {
+            // 2. Resolve process name.
+            var nameBuf = [CChar](repeating: 0, count: 4096)
+            let nameLen = proc_pidpath(pid, &nameBuf, UInt32(nameBuf.count))
+            let fullPath: String
+            if nameLen > 0 {
+                fullPath = String(decoding: nameBuf.prefix(Int(nameLen)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            } else {
+                fullPath = ""
+            }
+            let processName = fullPath.isEmpty ? "pid:\(pid)" : URL(fileURLWithPath: fullPath).lastPathComponent
+
+            // 3. List open FDs for this PID.
+            let fdBufBytes = proc_pidinfo(pid, kPROC_PIDLISTFDS, 0, nil, 0)
+            guard fdBufBytes > 0 else { continue }
+            let fdCount = Int(fdBufBytes) / MemoryLayout<proc_fdinfo>.size
+            var fdInfos = [proc_fdinfo](repeating: proc_fdinfo(), count: fdCount + 8)
+            let actualBytes = proc_pidinfo(
+                pid, kPROC_PIDLISTFDS, 0,
+                &fdInfos,
+                Int32(fdCount * MemoryLayout<proc_fdinfo>.size)
+            )
+            guard actualBytes > 0 else { continue }
+            let actualFdCount = Int(actualBytes) / MemoryLayout<proc_fdinfo>.size
+
+            for fdInfo in fdInfos.prefix(actualFdCount) {
+                guard fdInfo.proc_fdtype == kPROX_FDTYPE_SOCKET else { continue }
+
+                // 4. Fetch socket info for this FD.
+                var sockInfo = socket_fdinfo()
+                let got = proc_pidfdinfo(
+                    pid, fdInfo.proc_fd, kPROC_PIDFDSOCKETINFO,
+                    &sockInfo, Int32(MemoryLayout<socket_fdinfo>.size)
+                )
+                guard got == MemoryLayout<socket_fdinfo>.size else { continue }
+
+                let family = sockInfo.psi.soi_family
+                guard family == AF_INET || family == AF_INET6 else { continue }
+
+                // Extract local port and filter by listening/bound state.
+                let insi: in_sockinfo = withUnsafeBytes(of: sockInfo.psi.soi_proto) { raw in
+                    raw.load(fromByteOffset: 0, as: in_sockinfo.self)
+                }
+                let localPort = Int32(UInt16(bigEndian: UInt16(truncatingIfNeeded: insi.insi_lport)))
+                guard localPort > 0 else { continue }
+
+                let sockType = sockInfo.psi.soi_type
+                if sockType == SOCK_STREAM {
+                    // TCP: only emit LISTEN state.
+                    let tcpState = withUnsafeBytes(of: sockInfo.psi.soi_proto) { raw -> Int32 in
+                        let offset = MemoryLayout<in_sockinfo>.size
+                        guard raw.count >= offset + MemoryLayout<Int32>.size else { return -1 }
+                        return raw.load(fromByteOffset: offset, as: Int32.self)
+                    }
+                    guard tcpState == kTCPS_LISTEN else { continue }
+                }
+                // UDP sockets with a bound local port are included unconditionally.
+
+                result[processName] = localPort
+            }
+        }
+
+        reply(result)
     }
 }
 
