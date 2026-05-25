@@ -48,7 +48,7 @@ final class NickFinderSyncExtension: FIFinderSync {
     override var toolbarItemToolTip: String { "Scan this item with Nick" }
     override var toolbarItemImage: NSImage { NSImage(systemSymbolName: "shield", accessibilityDescription: nil) ?? NSImage() }
 
-    override func menu(for menuKind: FIMenuKind) -> NSMenu {
+    override func menu(for _: FIMenuKind) -> NSMenu {
         let menu = NSMenu(title: "")
         let item = NSMenuItem(
             title: "Scan with Nick",
@@ -60,7 +60,7 @@ final class NickFinderSyncExtension: FIFinderSync {
         return menu
     }
 
-    @objc private func scanSelectedItems(_ sender: AnyObject?) {
+    @objc private func scanSelectedItems(_: AnyObject?) {
         guard let items = FIFinderSyncController.default().selectedItemURLs(),
               let first = items.first else { return }
 

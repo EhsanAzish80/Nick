@@ -37,6 +37,14 @@ struct MainWindowView: View {
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
     @State private var notificationsDenied = false
 
+    private var resolvedColorScheme: ColorScheme? {
+        switch appAppearance {
+        case .dark:   return .dark
+        case .light:  return .light
+        case .system: return nil
+        }
+    }
+
     // Alert count for sidebar badge (info-severity are trusted-app activity, not actionable).
     private var activeAlertCount: Int {
         engine.alerts.filter { $0.severity != .info }.count
@@ -152,7 +160,7 @@ struct MainWindowView: View {
                 .disabled(engine.isScanning)
             }
         }
-        .preferredColorScheme(appAppearance == .dark ? .dark : appAppearance == .light ? .light : nil)
+        .preferredColorScheme(resolvedColorScheme)
         .onAppear {
             NSApp.setActivationPolicy(.regular)
             (NSApp.delegate as? AppDelegate)?.openSettingsAction = {

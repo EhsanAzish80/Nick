@@ -11,7 +11,7 @@ import FinderSync
 /// Registered in the extension's Info.plist as NSExtensionPrincipalClass.
 @NSApplicationMain
 class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_: Notification) {
         let controller = FIFinderSyncController.default()
         if !controller.isSyncingEnabled {
             NSLog("NickFinderSync: Finder Sync is not enabled for this extension.")
