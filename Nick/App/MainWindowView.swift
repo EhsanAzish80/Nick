@@ -99,7 +99,7 @@ struct MainWindowView: View {
                         .tag(section)
                     }
                 }
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220)
+                .navigationSplitViewColumnWidth(min: 210, ideal: 250)
                 .navigationTitle("Nick")
                 .onChange(of: activeAlertCount) { _, count in
                     if count == 0 && selectedSection == .alerts {
@@ -251,6 +251,7 @@ private struct SidebarNavItem: View {
         } icon: {
             IconTile(systemImage: section.icon, tint: section.tint, size: 26)
         }
+        .padding(.vertical, 5)
         .disabled(isDisabled)
     }
 }
@@ -1768,82 +1769,14 @@ private struct DeepScanResultsView: View {
         var result: [String: ThreatVerdict] = [:]
         for match in scanner.results {
             let verdict = await Task.detached(priority: .utility) {
-                DeepScanResultsView.classify(match: match)
+                DeepScanner.classify(match: match)
             }.value
             result[match.filePath] = verdict
         }
         verdicts = result
     }
 
-    nonisolated private static func classify(match: YARAMatch) -> ThreatVerdict {
-        let path = match.filePath.lowercased()
-
-        // Category A: Build artifacts — path check is safe (build system output, not app data).
-        let buildArtifacts = ["deriveddata", "workspacestorage", ".git/", "node_modules",
-                              "__pycache__", ".build/"]
-        if buildArtifacts.contains(where: { path.contains($0) }) { return .developmentArtifact }
-
-        // Category B: Application runtime data — verify the parent app is signed before trusting.
-        // This replaces all hardcoded cache/app-name exclusions. An attacker cannot gain trusted
-        // status by mimicking a known app name without a corresponding signed .app bundle.
-        if isInsideSignedAppData(path: match.filePath) { return .applicationData }
-
-        let signing = SignatureValidator.shared.evaluate(binaryPath: match.filePath)
-        if case .signed = signing { return .likelySafe }
-
-        let suspiciousPrefixes = ["/tmp", "/var/tmp", "/private/tmp"]
-        if suspiciousPrefixes.contains(where: { match.filePath.hasPrefix($0) }) { return .suspicious }
-
-        return .suspicious
-    }
-
-    /// Returns `true` when `path` is inside the data container of a signed `.app` bundle.
-    ///
-    /// Extracts the app name from paths containing `/Application Support/`, `/Caches/`, or
-    /// `/WebKit/`, then locates a matching `.app` bundle in standard install directories and
-    /// verifies it carries a valid Developer ID signature.
-    ///
-    /// This replaces all hardcoded path-based exclusions for browser caches, IDE workspaces,
-    /// editing sessions, GPU caches, and other app runtime data. An attacker cannot gain
-    /// trusted status simply by placing files under a path named after a known application.
-    nonisolated private static func isInsideSignedAppData(path: String) -> Bool {
-        let markers = ["/Application Support/", "/Caches/", "/WebKit/"]
-        guard markers.contains(where: { path.range(of: $0, options: .caseInsensitive) != nil }) else {
-            return false
-        }
-
-        for marker in markers {
-            guard let range = path.range(of: marker, options: .caseInsensitive) else { continue }
-            let afterMarker = String(path[range.upperBound...])
-            let appName = afterMarker.components(separatedBy: "/").first ?? ""
-            guard !appName.isEmpty else { continue }
-
-            // Search standard install locations for a matching signed .app bundle.
-            // These directories are the canonical macOS app installation roots; extracted
-            // as a static constant so they can be updated in one place.
-            let candidates = DeepScanResultsView.appBundleSearchDirectories(for: appName)
-            let fm = FileManager.default
-            for candidate in candidates {
-                guard fm.fileExists(atPath: candidate) else { continue }
-                let status = SignatureValidator.shared.evaluate(binaryPath: candidate)
-                if case .signed = status { return true }
-            }
-        }
-        return false
-    }
-
     // MARK: - Export (Change 10)
-
-    /// Returns the canonical app bundle paths to search for a given app name.
-    /// Centralised here so callers don't embed raw path strings inline.
-    nonisolated private static func appBundleSearchDirectories(for appName: String) -> [String] {
-        [
-            "/Applications/\(appName).app",
-            "/Applications/\(appName) Desktop.app",
-            "/System/Applications/\(appName).app",
-            NSHomeDirectory() + "/Applications/\(appName).app",
-        ]
-    }
 
     private func exportReport() {
         struct ExportResult: Encodable {

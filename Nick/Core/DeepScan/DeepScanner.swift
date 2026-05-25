@@ -125,10 +125,17 @@ final class DeepScanner {
                 if !matches.isEmpty {
                     results.append(contentsOf: matches)
                     threatsFound += matches.count
-                    // Ingest YARA matches into the correlator so alerts appear in real time.
+                    // Ingest only actionable YARA matches (.threat / .suspicious) into the
+                    // correlator. Safe verdicts (.applicationData, .developmentArtifact,
+                    // .likelySafe) still appear in the Deep Scan results view for transparency
+                    // but do not create alerts or fire notifications.
                     if let eng = engine {
                         var signals: [ThreatSignal] = []
                         for match in matches {
+                            let verdict = await Task.detached(priority: .utility) {
+                                DeepScanner.classify(match: match)
+                            }.value
+                            guard verdict == .threat || verdict == .suspicious else { continue }
                             let severity: SignalSeverity = match.tags.contains("critical") ? .critical : .high
                             signals.append(ThreatSignal(
                                 source: .yara,
@@ -147,11 +154,13 @@ final class DeepScanner {
                                 )
                             ))
                         }
-                        await eng.correlator.ingest(signals)
-                        let alerts = await eng.correlator.correlateNew()
-                        for alert in alerts {
-                            eng.addAlert(alert)
-                            await NotificationManager.shared.send(for: alert)
+                        if !signals.isEmpty {
+                            await eng.correlator.ingest(signals)
+                            let alerts = await eng.correlator.correlateNew()
+                            for alert in alerts {
+                                eng.addAlert(alert)
+                                await NotificationManager.shared.send(for: alert)
+                            }
                         }
                     }
                 }
@@ -251,6 +260,67 @@ final class DeepScanner {
         }
 
         return files
+    }
+
+    // MARK: - Power Source
+
+    // MARK: - Verdict Classification
+
+    /// Classifies a YARA match into a `ThreatVerdict` using path heuristics and
+    /// code-signature verification. Marked `nonisolated` so it can run inside
+    /// `Task.detached` without holding the main actor.
+    nonisolated static func classify(match: YARAMatch) -> ThreatVerdict {
+        let path = match.filePath.lowercased()
+
+        // Category A: Build / dev artifacts — path check is safe (build system output).
+        let buildArtifacts = ["deriveddata", "workspacestorage", ".git/", "node_modules",
+                              "__pycache__", ".build/"]
+        if buildArtifacts.contains(where: { path.contains($0) }) { return .developmentArtifact }
+
+        // Category B: Application runtime data — only trust if the parent .app is signed.
+        // An attacker cannot gain trusted status by placing files under a path named after
+        // a known application without the corresponding signed bundle.
+        if isInsideSignedAppData(path: match.filePath) { return .applicationData }
+
+        let signing = SignatureValidator.shared.evaluate(binaryPath: match.filePath)
+        if case .signed = signing { return .likelySafe }
+
+        return .suspicious
+    }
+
+    /// Returns `true` when `path` is inside the data container of a signed `.app` bundle.
+    ///
+    /// Extracts the app name from paths containing `/Application Support/`, `/Caches/`, or
+    /// `/WebKit/`, locates a matching `.app` in standard install directories, and verifies
+    /// it carries a valid Developer ID signature.
+    nonisolated static func isInsideSignedAppData(path: String) -> Bool {
+        let markers = ["/Application Support/", "/Caches/", "/WebKit/"]
+        guard markers.contains(where: { path.range(of: $0, options: .caseInsensitive) != nil }) else {
+            return false
+        }
+        for marker in markers {
+            guard let range = path.range(of: marker, options: .caseInsensitive) else { continue }
+            let afterMarker = String(path[range.upperBound...])
+            let appName = afterMarker.components(separatedBy: "/").first ?? ""
+            guard !appName.isEmpty else { continue }
+            let fm = FileManager.default
+            for candidate in appBundleSearchDirectories(for: appName) {
+                guard fm.fileExists(atPath: candidate) else { continue }
+                let status = SignatureValidator.shared.evaluate(binaryPath: candidate)
+                if case .signed = status { return true }
+            }
+        }
+        return false
+    }
+
+    /// Returns the canonical app bundle paths to search for a given app name.
+    nonisolated static func appBundleSearchDirectories(for appName: String) -> [String] {
+        [
+            "/Applications/\(appName).app",
+            "/Applications/\(appName) Desktop.app",
+            "/System/Applications/\(appName).app",
+            NSHomeDirectory() + "/Applications/\(appName).app",
+        ]
     }
 
     // MARK: - Power Source

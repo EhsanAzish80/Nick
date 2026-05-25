@@ -37,7 +37,6 @@ struct IconTile: View {
                         endPoint: .bottom
                     )
                 )
-                .shadow(color: tint.opacity(0.27), radius: 7, x: 0, y: 4)
 
             // Inset highlight: bright top stroke, subtle bottom shade
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
