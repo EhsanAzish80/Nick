@@ -1315,14 +1315,6 @@ struct ScannerDetailView: View {
                 Divider().padding(.leading, 58)
 
                 // Deep Scan row
-                let deepScanButtonLabel: String
-                if scanner.isScanning {
-                    deepScanButtonLabel = "Scanning…"
-                } else if scanner.isPaused {
-                    deepScanButtonLabel = "Paused"
-                } else {
-                    deepScanButtonLabel = "Start"
-                }
                 ScanActionRow(
                     icon: "doc.text.magnifyingglass", tint: .blue,
                     title: "Deep Scan",
@@ -1510,6 +1502,16 @@ struct ScannerDetailView: View {
     private var deepScanPaused: some View { Color.clear }
 
     // MARK: - Helpers
+
+    private var deepScanButtonLabel: String {
+        if scanner.isScanning {
+            return "Scanning…"
+        } else if scanner.isPaused {
+            return "Paused"
+        } else {
+            return "Start"
+        }
+    }
 
     private func resetDeepScan() {
         showResults = false
