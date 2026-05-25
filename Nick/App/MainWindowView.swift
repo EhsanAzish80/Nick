@@ -1315,11 +1315,19 @@ struct ScannerDetailView: View {
                 Divider().padding(.leading, 58)
 
                 // Deep Scan row
+                let deepScanButtonLabel: String
+                if scanner.isScanning {
+                    deepScanButtonLabel = "Scanning…"
+                } else if scanner.isPaused {
+                    deepScanButtonLabel = "Paused"
+                } else {
+                    deepScanButtonLabel = "Start"
+                }
                 ScanActionRow(
                     icon: "doc.text.magnifyingglass", tint: .blue,
                     title: "Deep Scan",
                     subtitle: "Scans all executables and scripts across the system",
-                    buttonLabel: scanner.isScanning ? "Scanning…" : (scanner.isPaused ? "Paused" : "Start"),
+                    buttonLabel: deepScanButtonLabel,
                     isRunning: scanner.isScanning || scanner.isPaused,
                     action: {
                         if scanner.isScanning {
@@ -1495,11 +1503,11 @@ struct ScannerDetailView: View {
 
     // MARK: - Deep Scan section (legacy – replaced by scanActionsGroup)
     // The inline progress bar and action buttons supersede this separate section view.
-    private var deepScanSection: some View { EmptyView() }
+    private var deepScanSection: some View { Color.clear }
 
     // MARK: - Deep Scan paused state (legacy – replaced by deepScanProgressGroup)
     // The paused state is now rendered inline inside deepScanProgressGroup.
-    private var deepScanPaused: some View { EmptyView() }
+    private var deepScanPaused: some View { Color.clear }
 
     // MARK: - Helpers
 
