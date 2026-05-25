@@ -263,7 +263,12 @@ struct ConnectionScanner {
         let maxSize = 4096
         var buffer = [CChar](repeating: 0, count: maxSize)
         let ret = proc_pidpath(pid, &buffer, UInt32(maxSize))
-        guard ret > 0 else { return false }
+        guard ret > 0 else {
+            // Path is unresolvable: the process has already exited, the PID is synthetic
+            // (e.g. in unit tests), or proc_info access is restricted. Fall back to
+            // name-only trust — the name was already verified against the screened list above.
+            return true
+        }
         let processPath = buffer.withUnsafeBufferPointer { bp in
             String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
         }

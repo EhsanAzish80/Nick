@@ -150,9 +150,11 @@ struct TrustedProcessList {
     ///   - pid:         PID of the running process to verify.
     /// - Returns: `true` if the name is trusted **and** the binary is signed.
     func isTrusted(_ processName: String, pid: pid_t) -> Bool {
-        // PID 1 is always launchd — the root of all processes on macOS.
-        // SecCodeCopyGuestWithAttributes cannot validate PID 1, so trust it unconditionally.
-        if pid == 1 { return true }
+        // PID 1 is exclusively launchd on macOS. SecCodeCopyGuestWithAttributes cannot
+        // validate PID 1, so skip the signature check and fall back to name-only trust.
+        // We do NOT grant blanket trust to every process whose parentPID happens to be 1 —
+        // only names that are in the trusted list are accepted.
+        if pid == 1 { return isTrusted(processName) }
         // Name must be in the trusted list first.
         guard isTrusted(processName) else { return false }
         // Resolve the on-disk path of the running process.

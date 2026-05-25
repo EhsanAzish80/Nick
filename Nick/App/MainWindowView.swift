@@ -12,7 +12,12 @@ extension NickProcessInfo: Identifiable {
     public var id: Int32 { pid }
 }
 
-// MARK: - MainWindowView
+// MARK: - System Preferences URLs
+// Extracted as constants so they can be updated in one place if Apple changes the scheme.
+private enum SystemPrefsURL {
+    /// Opens the Notifications pane in System Settings.
+    static let notifications = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings")!
+}
 
 /// Full application window opened from the menu bar "Open Nick" button.
 ///
@@ -50,9 +55,7 @@ struct MainWindowView: View {
                             .foregroundStyle(Color.textSecondary)
                         Spacer()
                         Button("Enable") {
-                            NSWorkspace.shared.open(
-                                URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings")!
-                            )
+                            NSWorkspace.shared.open(SystemPrefsURL.notifications)
                         }
                         .font(.nickCaption)
                         Button("Dismiss") {
@@ -406,7 +409,10 @@ struct OverviewDetailView: View {
                             .foregroundStyle(Color.textSecondary)
                     }
                     Spacer()
-                    Text(totalIssues == 0 ? "All four areas healthy" : "\(totalIssues) issue\(totalIssues == 1 ? "" : "s") found")
+                    let issuesSummary: String = totalIssues == 0
+                        ? "All four areas healthy"
+                        : "\(totalIssues) issue\(totalIssues == 1 ? "" : "s") found"
+                    Text(issuesSummary)
                         .font(.system(size: 13))
                         .foregroundStyle(Color.textSecondary)
                 }
@@ -687,7 +693,11 @@ private struct OverviewStatusRow: View {
     }
 
     private var statusLabel: String {
-        issues > 0 ? "\(issues) issue\(issues == 1 ? "" : "s")" : "All clear"
+        if issues > 0 {
+            let plural = issues == 1 ? "" : "s"
+            return "\(issues) issue\(plural)"
+        }
+        return "All clear"
     }
 
     var body: some View {
@@ -772,6 +782,8 @@ private struct ProtectionSummaryView: View {
     let nextScanIn:      Int
     let focusModeActive: Bool
 
+    // Deprecated stub — rendering is handled directly inside OverviewDetailView.
+    // Retained so that any existing call sites continue to compile without changes.
     var body: some View { EmptyView() }
 }
 
@@ -779,12 +791,14 @@ private struct SummaryRow: View {
     let icon:  String
     let label: String
     let value: String
+    // Deprecated stub — use the `summaryRow(label:value:)` helper on OverviewDetailView instead.
     var body: some View { EmptyView() }
 }
 
 private struct RecentActivityView: View {
     let events:    [ActivityEvent]
     let onViewAll: () -> Void
+    // Deprecated stub — rendering is handled directly inside OverviewDetailView.recentActivityGroup.
     var body: some View { EmptyView() }
 }
 
@@ -1474,13 +1488,15 @@ struct ScannerDetailView: View {
     }
 
     // MARK: - Drop zone (kept for DeepScanResultsView – no longer used as main UI)
-
+    // Legacy: drag-and-drop target was replaced by the ScanActionRow quick-scan button.
     private var dropZone: some View { EmptyView() }
 
-    // MARK: - Deep Scan section (legacy – replaced by action rows)
-
+    // MARK: - Deep Scan section (legacy – replaced by scanActionsGroup)
+    // The inline progress bar and action buttons supersede this separate section view.
     private var deepScanSection: some View { EmptyView() }
 
+    // MARK: - Deep Scan paused state (legacy – replaced by deepScanProgressGroup)
+    // The paused state is now rendered inline inside deepScanProgressGroup.
     private var deepScanPaused: some View { EmptyView() }
 
     // MARK: - Helpers
@@ -1791,12 +1807,9 @@ private struct DeepScanResultsView: View {
             guard !appName.isEmpty else { continue }
 
             // Search standard install locations for a matching signed .app bundle.
-            let candidates = [
-                "/Applications/\(appName).app",
-                "/Applications/\(appName) Desktop.app",
-                "/System/Applications/\(appName).app",
-                NSHomeDirectory() + "/Applications/\(appName).app"
-            ]
+            // These directories are the canonical macOS app installation roots; extracted
+            // as a static constant so they can be updated in one place.
+            let candidates = DeepScanResultsView.appBundleSearchDirectories(for: appName)
             let fm = FileManager.default
             for candidate in candidates {
                 guard fm.fileExists(atPath: candidate) else { continue }
@@ -1808,6 +1821,17 @@ private struct DeepScanResultsView: View {
     }
 
     // MARK: - Export (Change 10)
+
+    /// Returns the canonical app bundle paths to search for a given app name.
+    /// Centralised here so callers don't embed raw path strings inline.
+    nonisolated private static func appBundleSearchDirectories(for appName: String) -> [String] {
+        [
+            "/Applications/\(appName).app",
+            "/Applications/\(appName) Desktop.app",
+            "/System/Applications/\(appName).app",
+            NSHomeDirectory() + "/Applications/\(appName).app",
+        ]
+    }
 
     private func exportReport() {
         struct ExportResult: Encodable {

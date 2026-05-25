@@ -11,6 +11,16 @@ import SwiftUI
 import ServiceManagement
 
 // ════════════════════════════════════════════════════════════════
+// MARK: - System Preferences URLs
+// Extracted as a single location so scheme changes affect all buttons at once.
+// ════════════════════════════════════════════════════════════════
+
+private enum SettingsPrefsURL {
+    /// Opens the Keyboard Shortcuts pane so the user can enable the Services entry.
+    static let keyboardShortcuts = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts")!
+}
+
+// ════════════════════════════════════════════════════════════════
 // MARK: - SettingsView
 // ════════════════════════════════════════════════════════════════
 
@@ -252,7 +262,10 @@ struct SettingsView: View {
                 Button("Remove", role: .destructive) {
                     if let n = nameToRemove { removeProcess(n) }
                 }
-                Button("Cancel", role: .cancel) {}
+               
+                Button("Cancel", role: .cancel) {
+                     // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
+                }
             }
         } header: {
             Text("Trusted Processes")
@@ -316,9 +329,7 @@ struct SettingsView: View {
                 subtitle: "Go to System Settings → Keyboard → Keyboard Shortcuts → Services → Files and Folders, then tick \"Scan with Nick\"."
             ) {
                 Button("Open Keyboard Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts") {
-                        NSWorkspace.shared.open(url)
-                    }
+                    NSWorkspace.shared.open(SettingsPrefsURL.keyboardShortcuts)
                 }
                 .controlSize(.small)
             }
@@ -349,7 +360,10 @@ struct SettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Clear", role: .destructive) { engine.clearAlertHistory() }
-                Button("Cancel", role: .cancel) {}
+                
+                Button("Cancel", role: .cancel) {
+                    // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
+                }
             }
 
             LabeledTile(
@@ -368,7 +382,10 @@ struct SettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Reset", role: .destructive) { engine.scanHistory.clear() }
-                Button("Cancel", role: .cancel) {}
+                
+                Button("Cancel", role: .cancel) {
+                    // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
+                }
             }
         }
     }
@@ -391,7 +408,10 @@ struct SettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Remove", role: .destructive) { removeHelper() }
-                Button("Cancel", role: .cancel) {}
+                
+                Button("Cancel", role: .cancel) {
+                    // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
+                }
             }
         } header: {
             Text("Maintenance")

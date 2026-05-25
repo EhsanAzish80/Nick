@@ -152,7 +152,13 @@ struct SystemAuditView: View {
             version = parts[1]
             let dStr = parts[3].replacingOccurrences(of: "d", with: "")
             if let days = Int(dStr) {
-                lastUpdated = days == 0 ? "Today" : days == 1 ? "Yesterday" : "\(days) days ago"
+                if days == 0 {
+                    lastUpdated = "Today"
+                } else if days == 1 {
+                    lastUpdated = "Yesterday"
+                } else {
+                    lastUpdated = "\(days) days ago"
+                }
             }
         }
         return [
