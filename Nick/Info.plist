@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>1.1</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSApplicationCategoryType</key>
@@ -53,7 +53,7 @@
 	<key>SMPrivilegedExecutables</key>
 	<dict>
 		<key>com.ehsanazish.nick.helper</key>
-		<string>anchor apple generic and identifier "com.ehsanazish.nick.helper" and certificate leaf[subject.OU] = "UXGW5V3BY6"</string>
+		<string>anchor apple generic and identifier &quot;com.ehsanazish.nick.helper&quot; and certificate leaf[subject.OU] = &quot;UXGW5V3BY6&quot;</string>
 	</dict>
 </dict>
 </plist>
