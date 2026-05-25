@@ -1031,7 +1031,9 @@ struct PersistenceDetailView: View {
             Button("Remove \"\(item.name)\"", role: .destructive) {
                 removeLaunchItem(item)
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                ///no need to do anythig
+            }
         } message: { item in
             Text("This will delete the launch item and prevent it from running at startup. This cannot be undone.")
         }
