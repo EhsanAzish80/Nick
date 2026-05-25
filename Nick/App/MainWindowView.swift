@@ -173,6 +173,9 @@ struct MainWindowView: View {
         .onDisappear {
             NSApp.setActivationPolicy(.accessory)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .nickScanFileRequest)) { _ in
+            selectedSection = .scanner
+        }
     }
 }
 
@@ -1219,6 +1222,15 @@ struct ScannerDetailView: View {
     @State private var showResults  = false
     @AppStorage("scanNotifyOnCompletion") private var notifyOnCompletion = true
 
+    // MARK: - Scan File (specific file/folder picker) state
+    @State private var fileScanURL:       URL?          = nil
+    @State private var fileScanResults:   [YARAMatch]   = []
+    @State private var isFileScanRunning: Bool          = false
+    @State private var fileScanError:     String?       = nil
+    @State private var fileScanSummary:   FileScanSummary? = nil
+    @State private var fileScanDuration:  TimeInterval  = 0
+    @State private var showFileScanSheet: Bool          = false
+
     // MARK: - Ignore list (newline-delimited paths persisted in UserDefaults)
     @AppStorage("deepScanIgnoredPaths") private var ignoredPathsRaw: String = ""
 
@@ -1274,6 +1286,22 @@ struct ScannerDetailView: View {
             }
         }
         .onAppear { scanner.engine = engine }
+        .onReceive(NotificationCenter.default.publisher(for: .nickScanFileRequest)) { note in
+            guard let url = note.object as? URL else { return }
+            startFileScan(url: url)
+        }
+        .sheet(isPresented: $showFileScanSheet) {
+            if let url = fileScanURL {
+                FileScanResultsView(
+                    url:        url,
+                    results:    fileScanResults,
+                    isScanning: isFileScanRunning,
+                    error:      fileScanError,
+                    summary:    fileScanSummary,
+                    duration:   fileScanDuration
+                )
+            }
+        }
     }
 
     // MARK: - Scan actions group
@@ -1294,6 +1322,18 @@ struct ScannerDetailView: View {
                     buttonLabel: engine.isScanning ? "Scanning…" : "Run Scan",
                     isRunning: engine.isScanning,
                     action: { engine.runFullScan() }
+                )
+
+                Divider().padding(.leading, 58)
+
+                // Scan File row
+                ScanActionRow(
+                    icon: "doc.viewfinder", tint: .purple,
+                    title: "Scan File",
+                    subtitle: "Pick any file or folder and scan it with YARA rules",
+                    buttonLabel: isFileScanRunning ? "Scanning…" : "Choose…",
+                    isRunning: isFileScanRunning,
+                    action: { openFilePicker() }
                 )
 
                 Divider().padding(.leading, 58)
@@ -1508,6 +1548,43 @@ struct ScannerDetailView: View {
         var paths = ignoredPaths
         paths.insert(path)
         ignoredPathsRaw = paths.joined(separator: "\n")
+    }
+
+    // MARK: - Scan File helpers
+
+    private func openFilePicker() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a file or folder to scan with YARA rules"
+        panel.prompt = "Scan"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        startFileScan(url: url)
+    }
+
+    private func startFileScan(url: URL) {
+        fileScanURL       = url
+        fileScanResults   = []
+        fileScanError     = nil
+        fileScanSummary   = nil
+        fileScanDuration  = 0
+        isFileScanRunning = true
+        showFileScanSheet = true
+        let start = Date()
+        Task { @MainActor in
+            do {
+                async let resultsTask = engine.scanFile(at: url)
+                async let summaryTask = FileScanSummary.analyze(url: url)
+                let (results, summary) = try await (resultsTask, summaryTask)
+                fileScanResults = results
+                fileScanSummary = summary
+            } catch {
+                fileScanError = error.localizedDescription
+            }
+            fileScanDuration  = Date().timeIntervalSince(start)
+            isFileScanRunning = false
+        }
     }
 
     private func formatTime(_ t: TimeInterval) -> String {

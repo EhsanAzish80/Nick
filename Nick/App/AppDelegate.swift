@@ -253,10 +253,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               !urlString.isEmpty else { return }
         sharedDefaults?.removeObject(forKey: "pendingFinderScanURL")
         sharedDefaults?.synchronize()
+        guard let url = URL(string: urlString) else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            engine.runFullScan()
             openMainWindow()
+            // Small delay so the window and ScannerDetailView are in the view hierarchy
+            // before the notification fires, ensuring the observer is registered.
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            NotificationCenter.default.post(name: .nickScanFileRequest, object: url)
         }
     }
 
