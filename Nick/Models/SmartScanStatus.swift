@@ -206,23 +206,21 @@ final class SmartScanChecker {
     }
 
     private func checkNetworkMonitor() -> ProtectionCheck {
-        let isActive = UserDefaults.standard.bool(forKey: "networkMonitorEnabled")
-
+        // NickNetFilter requires the `content-filter-provider` entitlement, which
+        // is pending Apple approval. The NickNetFilter target is excluded from the
+        // build scheme until that entitlement is granted.
+        // Nick's NetworkAnalyzer already monitors connections passively via
+        // lsof / NWPathMonitor — active blocking will be added in a future update.
         return ProtectionCheck(
             id: "network_monitor",
             title: "Network Monitor",
-            status: isActive ? .protected : .critical,
-            headline: isActive
-                ? "Your network is being monitored for threats"
-                : "Your network isn't being monitored for threats",
-            explanation: isActive
-                ? "Nick is watching all network connections for suspicious activity, C2 callbacks, and data exfiltration."
-                : "Someone could piggyback off your Wi-Fi or apps could connect to malicious servers without detection. "
-                    + "Enable the Network Monitor to watch all connections.",
+            status: .warning,
+            headline: "Network blocking is coming soon",
+            explanation: "Nick monitors your network connections for suspicious activity. "
+                + "Active blocking of malicious connections will be enabled in a future update "
+                + "once the required Apple entitlement is approved.",
             icon: "network.badge.shield.half.filled",
-            resolution: isActive
-                ? .none
-                : .installExtension(extensionName: "NickNetFilter")
+            resolution: .none
         )
     }
 

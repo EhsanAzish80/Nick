@@ -62,6 +62,7 @@ struct SettingsView: View {
     @State private var showClearAlertsConfirmation = false
     @State private var showResetHistoryConfirmation = false
     @State private var showRemoveHelperConfirmation = false
+    @AppStorage("autoCheckUpdates") private var autoCheckUpdates: Bool = true
 
     // MARK: Body
 
@@ -81,6 +82,7 @@ struct SettingsView: View {
                     suppressionRulesSection
                     finderIntegrationSection
                     dataSection
+                    updatesSection
                     maintenanceSection
                 }
                 .formStyle(.grouped)
@@ -664,6 +666,38 @@ struct SettingsView: View {
                     // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
                 }
             }
+        }
+    }
+
+    // MARK: Updates Section
+
+    private var updatesSection: some View {
+        Section {
+            LabeledTile(
+                icon: "arrow.down.circle.fill", tint: .blue,
+                title: "Automatically check for updates",
+                subtitle: "Nick will check for new versions periodically."
+            ) {
+                Toggle("", isOn: $autoCheckUpdates)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+            LabeledTile(
+                icon: "network", tint: .indigo,
+                title: "Check for Updates Now",
+                subtitle: "Fetch the latest available version from the server."
+            ) {
+                Button("Check Now") {
+                    (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                }
+                .controlSize(.small)
+            }
+        } header: {
+            Text("Updates")
+        } footer: {
+            Text("Update feed: https://3nsofts.com/nick/appcast.xml")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
         }
     }
 

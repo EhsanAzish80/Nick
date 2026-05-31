@@ -286,6 +286,11 @@ struct OverviewDetailView: View {
     @State private var now: Date = .now
     @State private var focusModeActive = false
 
+    // Smart Scan state
+    @State private var showSmartScan = false
+    @State private var smartScanStatus: SmartScanStatus? = nil
+    @State private var isRunningSmart = false
+
     // MARK: - Derived counts
 
     private var auditIssues:       Int { engine.auditResults.filter { $0.status != .pass }.count }
@@ -329,6 +334,18 @@ struct OverviewDetailView: View {
         }
         .background(Color.backgroundPrimary)
         .navigationTitle("Overview")
+        .sheet(isPresented: $showSmartScan) {
+            SmartScanSheetView(status: smartScanStatus, onFixAll: {
+                Task { @MainActor in
+                    let checker = SmartScanChecker()
+                    checker.securityEngine = engine
+                    if let s = smartScanStatus {
+                        smartScanStatus = await checker.resolveAll(status: s)
+                    }
+                }
+            })
+            .environment(engine)
+        }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -375,6 +392,18 @@ struct OverviewDetailView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Color.textSecondary)
                     Spacer()
+                    Button(isRunningSmart ? "Checking…" : "Smart Scan") {
+                        isRunningSmart = true
+                        Task { @MainActor in
+                            let checker = SmartScanChecker()
+                            checker.securityEngine = engine
+                            smartScanStatus = checker.runScan()
+                            isRunningSmart = false
+                            showSmartScan = true
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isRunningSmart)
                     Button(engine.isScanning ? "Scanning…" : "Run Scan") {
                         engine.runFullScan()
                     }

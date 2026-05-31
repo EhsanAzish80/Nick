@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import AppKit
+import Sparkle
 import SwiftData
 
 // MARK: - AppDelegate
@@ -24,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let mainWindowDelegate = MainWindowDelegate()
     private var coordinator: MonitorCoordinator?
+    private var updaterController: SPUStandardUpdaterController?
     /// Set to `true` before calling `NSApp.terminate` from an explicit user action
     /// (right-click → Quit Nick) so `applicationShouldTerminate` allows the quit
     /// even when the main window is hidden.
@@ -48,6 +50,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "notificationThresholdRaw": SignalSeverity.high.rawValue,
             "deepScanIntervalSeconds": 60
         ])
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
         setupStatusItem()
         // Prune stale threat log entries (> 90 days) on every launch.
         Task.detached(priority: .background) {
@@ -127,6 +134,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let openItem = NSMenuItem(title: "Open Nick", action: #selector(openMainWindow), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
+
+        menu.addItem(.separator())
+
+        let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        updateItem.target = self
+        menu.addItem(updateItem)
 
         menu.addItem(.separator())
 
@@ -237,6 +250,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func forceQuitApp() {
         forceQuit = true
         NSApp.terminate(nil)
+    }
+
+    @objc func checkForUpdates() {
+        updaterController?.checkForUpdates(nil)
     }
 
     // MARK: - Finder Sync Integration

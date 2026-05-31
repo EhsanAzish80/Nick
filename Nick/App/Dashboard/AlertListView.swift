@@ -123,6 +123,7 @@ private struct AlertRow: View {
 
     let alert: ThreatAlert
     @Environment(SecurityEngine.self) private var engine
+    @AppStorage("simpleAlertMode") private var simpleAlertMode: Bool = true
     @State private var killingProcess = false
     @State private var killFailed     = false
     @State private var processKilled  = false   // confirmed dead this session
@@ -139,7 +140,7 @@ private struct AlertRow: View {
                 Image(systemName: alert.severity.systemImage)
                     .font(.system(size: NickLayout.iconSizeLarge))
                     .foregroundStyle(isTrustedActivity ? Color.textTertiary : alert.severity.statusColor)
-                Text(alert.title)
+                Text(simpleMode_title)
                     .font(.nickBodyMedium)
                     .foregroundStyle(isTrustedActivity ? Color.textTertiary : Color.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -151,26 +152,28 @@ private struct AlertRow: View {
                 Text("·")
                     .font(.nickCaption)
                     .foregroundStyle(Color.textTertiary)
-                Text(String(format: "%.0f%% confidence", alert.score * 100))
-                    .font(.nickMono)
-                    .foregroundStyle(Color.textSecondary)
-                Text("·")
-                    .font(.nickCaption)
-                    .foregroundStyle(Color.textTertiary)
+                if !simpleAlertMode {
+                    Text(String(format: "%.0f%% confidence", alert.score * 100))
+                        .font(.nickMono)
+                        .foregroundStyle(Color.textSecondary)
+                    Text("·")
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textTertiary)
+                }
                 Text(alert.timestamp.formatted(date: .omitted, time: .shortened))
                     .font(.nickMonoSmall)
                     .foregroundStyle(Color.textTertiary)
                 Spacer()
             }
 
-            // Description — use Foundation Models explanation when available
-            Text(alert.explanation ?? alert.description)
+            // Description
+            Text(simpleMode_explanation)
                 .font(.nickBody)
                 .foregroundStyle(isTrustedActivity ? Color.textTertiary : Color.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Contributing signals — flat list, ▸ prefix, 20pt indent
-            if !alert.contributingSignals.isEmpty {
+            // Contributing signals — only in technical mode
+            if !simpleAlertMode, !alert.contributingSignals.isEmpty {
                 VStack(alignment: .leading, spacing: NickSpacing.sm) {
                     ForEach(alert.contributingSignals.prefix(5)) { signal in
                         HStack(alignment: .top, spacing: NickSpacing.sm) {
@@ -314,6 +317,20 @@ private struct AlertRow: View {
     }
 
     // MARK: - Private
+
+    private var simpleMode_title: String {
+        if simpleAlertMode {
+            return UserFacingAlertBuilder.shared.build(from: alert).headline
+        }
+        return alert.title
+    }
+
+    private var simpleMode_explanation: String {
+        if simpleAlertMode {
+            return UserFacingAlertBuilder.shared.build(from: alert).explanation
+        }
+        return alert.explanation ?? alert.description
+    }
 
     private func copyJSON() {
         let encoder = JSONEncoder()

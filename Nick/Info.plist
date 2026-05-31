@@ -26,6 +26,10 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>SUFeedURL</key>
+	<string>https://3nsofts.com/nick/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>E6zQr5EZrhFKhIni4yUt6dq8+bVJhiszfBcdd/6IcNo=</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Nick monitors camera access to detect unauthorized activation by malicious software.</string>
 	<key>NSHumanReadableCopyright</key>

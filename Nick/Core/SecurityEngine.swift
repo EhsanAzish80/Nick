@@ -136,6 +136,14 @@ final class SecurityEngine {
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
 
+    /// Phase 7 — Performance / disk-cleanup engine.
+    private(set) var performanceMonitor: PerformanceMonitor?
+
+    /// Consumer-friendly wrappers around every active `ThreatAlert`.
+    /// Rebuilt automatically whenever `mergeAlerts` is called.
+    /// Use this in simple-mode UI instead of reading `alerts` directly.
+    private(set) var userFacingAlerts: [UserFacingAlert] = []
+
     /// Shared Foundation Models explainer — used by both the full scan path and
     /// the real-time pipeline so every new alert gets an AI explanation.
     let explainer = AlertExplainer()
@@ -191,6 +199,9 @@ final class SecurityEngine {
             }
             ud.set(true, forKey: "nickRawIPFalsePositivePurgedV2")
         }
+
+        // Phase 7: initialise performance monitor
+        performanceMonitor = PerformanceMonitor()
     }
 
     // MARK: - Public API
@@ -405,6 +416,12 @@ final class SecurityEngine {
         alerts = alerts.filter { !newIDs.contains($0.id) } + filtered
         alerts.sort { $0.score > $1.score }
         saveAlerts()
+        rebuildUserFacingAlerts()
+    }
+
+    private func rebuildUserFacingAlerts() {
+        let builder = UserFacingAlertBuilder.shared
+        userFacingAlerts = alerts.map { builder.build(from: $0) }
     }
 
     /// Removes a single alert by ID and persists its `deduplicationKey` so it
@@ -420,6 +437,7 @@ final class SecurityEngine {
         alerts.removeAll { $0.id == id }
         UserDefaults.standard.set(Array(dismissedAlertKeys), forKey: "nickDismissedAlertKeys")
         saveAlerts()
+        rebuildUserFacingAlerts()
     }
 
     /// Removes a resolved alert (threat was killed / deleted) without adding its
@@ -432,6 +450,7 @@ final class SecurityEngine {
         }
         alerts.removeAll { $0.id == id }
         saveAlerts()
+        rebuildUserFacingAlerts()
     }
 
     /// Cancels an in-progress scan, clearing all progress state immediately.
