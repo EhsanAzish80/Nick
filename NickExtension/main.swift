@@ -45,6 +45,11 @@ let ransomwareDetector = RansomwareDetector(behaviorTracker: behaviorTracker)
 // Plant canary files in common user directories
 ransomwareDetector.canaryManager.deployCanaries()
 
+// MARK: Phase 5 — Privacy & USB protection
+
+let privacyGuard = PrivacyGuard()
+let usbScanner   = USBScanner(fileScanner: fileScanner)
+
 // MARK: Object graph
 
 let eventHandler = ESEventHandler()
@@ -60,6 +65,18 @@ eventHandler.fileIntegrityMonitor = fileIntegrityMonitor
 eventHandler.behaviorTracker      = behaviorTracker
 eventHandler.threatPredictor      = threatPredictor
 eventHandler.ransomwareDetector   = ransomwareDetector
+eventHandler.privacyGuard         = privacyGuard
+eventHandler.usbScanner           = usbScanner
+
+// Wire USB threat callback through XPC
+usbScanner.onThreatFound = { threat in
+    if let data = try? JSONEncoder().encode(threat) {
+        xpcServer.sendUSBThreatToApp(data)
+    }
+}
+
+// Expose FIM monitor for on-demand baseline rebuilds (Phase 5)
+ESXPCServer.fimMonitorRef = fileIntegrityMonitor
 
 // Start XPC listener first — container app can connect as soon as the extension launches
 xpcServer.start()
@@ -90,6 +107,10 @@ let phase4Events: [es_event_type_t] = [
     ES_EVENT_TYPE_NOTIFY_UNLINK,     // invalidate cache on delete
     ES_EVENT_TYPE_NOTIFY_FORK,       // process lifecycle
     ES_EVENT_TYPE_NOTIFY_EXIT,       // process lifecycle
+
+    // --- Phase 5: Network & Privacy ---
+    ES_EVENT_TYPE_NOTIFY_MOUNT,      // external volume mounted → USB scan
+    ES_EVENT_TYPE_NOTIFY_TCC_MODIFY, // TCC permission changed → privacy alert
 ]
 
 guard esClient.subscribe(to: phase4Events) else {
@@ -101,7 +122,7 @@ guard esClient.subscribe(to: phase4Events) else {
 // MARK: Mute high-volume trusted paths (reduces noise ~80%)
 MuteManager.applyMutes(to: esClient)
 
-logger.info("NickExtension Phase 4 running — behavioral analysis, ML prediction, ransomware detection active")
+logger.info("NickExtension Phase 5 running — privacy monitoring, USB scanning, network filter active")
 xpcServer.sendStatusChange(isActive: true)
 
 // Block the main thread indefinitely

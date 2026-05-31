@@ -13,6 +13,8 @@
 		AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */; };
 		AA11223344556677AABB0013 /* NickExtensionConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0003 /* NickExtensionConstants.swift */; };
 		AA11223344556677AABB0014 /* QuarantineTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0004 /* QuarantineTypes.swift */; };
+		BB55CC11DDEEFF00AA220061 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */; };
+		BB55CC11DDEEFF00AA220050 /* NickNetFilter.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220001 /* NickNetFilter.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +46,13 @@
 			remoteGlobalIDString = 8805B7A02FCC246600AA4FBA;
 			remoteInfo = NickExtension;
 		};
+		BB55CC11DDEEFF00AA220030 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A7B63905B7F834888F9EACCE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BB55CC11DDEEFF00AA220020;
+			remoteInfo = NickNetFilter;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -54,6 +63,7 @@
 			dstSubfolderSpec = 16;
 			files = (
 				8805B7AC2FCC246600AA4FBA /* NickExtension.systemextension in Embed System Extensions */,
+				BB55CC11DDEEFF00AA220050 /* NickNetFilter.systemextension in Embed System Extensions */,
 			);
 			name = "Embed System Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -71,6 +81,8 @@
 		AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionXPCProtocol.swift; path = NickExtension/Shared/NickExtensionXPCProtocol.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0003 /* NickExtensionConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionConstants.swift; path = NickExtension/Shared/NickExtensionConstants.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0004 /* QuarantineTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineTypes.swift; path = NickExtension/Shared/QuarantineTypes.swift; sourceTree = SOURCE_ROOT; };
+		BB55CC11DDEEFF00AA220001 /* NickNetFilter.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = NickNetFilter.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -87,6 +99,14 @@
 				Info.plist,
 			);
 			target = A7068781809A7A01D520A3F7 /* Nick */;
+		};
+		BB55CC11DDEEFF00AA220003 /* Exceptions for NickNetFilter target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				NickNetFilter.entitlements,
+			);
+			target = BB55CC11DDEEFF00AA220020 /* NickNetFilter */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -122,6 +142,14 @@
 			path = NickTests;
 			sourceTree = "<group>";
 		};
+		BB55CC11DDEEFF00AA220002 /* NickNetFilter */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				BB55CC11DDEEFF00AA220003 /* Exceptions for NickNetFilter target */,
+			);
+			path = NickNetFilter;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -130,6 +158,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				8805B7A42FCC246600AA4FBA /* libEndpointSecurity.tbd in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BB55CC11DDEEFF00AA220011 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB55CC11DDEEFF00AA220061 /* NetworkExtension.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -152,6 +188,7 @@
 			isa = PBXGroup;
 			children = (
 				8805B7A32FCC246600AA4FBA /* libEndpointSecurity.tbd */,
+				BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -175,6 +212,7 @@
 				885ADC792FBFAFA600664E7B /* NickIntegrationTests */,
 				885ADC842FBFAFA900664E7B /* NickTests */,
 				8805B7A52FCC246600AA4FBA /* NickExtension */,
+				BB55CC11DDEEFF00AA220002 /* NickNetFilter */,
 				8805B7A22FCC246600AA4FBA /* Frameworks */,
 				428C90590A8B2419274FDF24 /* Products */,
 				8805BB8F2FCC3A3200AA4FBA /* Recovered References */,
@@ -240,6 +278,7 @@
 			dependencies = (
 				535A0CC3BF4FE0A60C515DAF /* PBXTargetDependency */,
 				8805B7AB2FCC246600AA4FBA /* PBXTargetDependency */,
+				BB55CC11DDEEFF00AA220031 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				885ADC512FBFAF9E00664E7B /* Nick */,
@@ -293,6 +332,28 @@
 			productReference = 1E8F435E967C1E411C4372EE /* NickTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		BB55CC11DDEEFF00AA220020 /* NickNetFilter */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BB55CC11DDEEFF00AA220040 /* Build configuration list for PBXNativeTarget "NickNetFilter" */;
+			buildPhases = (
+				BB55CC11DDEEFF00AA220010 /* Sources */,
+				BB55CC11DDEEFF00AA220011 /* Frameworks */,
+				BB55CC11DDEEFF00AA220012 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				BB55CC11DDEEFF00AA220002 /* NickNetFilter */,
+			);
+			name = NickNetFilter;
+			packageProductDependencies = (
+			);
+			productName = NickNetFilter;
+			productReference = BB55CC11DDEEFF00AA220001 /* NickNetFilter.systemextension */;
+			productType = "com.apple.product-type.system-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -327,6 +388,7 @@
 				EFAE930A65D7BB016CE44088 /* NickIntegrationTests */,
 				F41503E0B5121344E9E560D5 /* NickTests */,
 				8805B7A02FCC246600AA4FBA /* NickExtension */,
+				BB55CC11DDEEFF00AA220020 /* NickNetFilter */,
 			);
 		};
 /* End PBXProject section */
@@ -340,6 +402,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		8805B79F2FCC246600AA4FBA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BB55CC11DDEEFF00AA220012 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -411,6 +480,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BB55CC11DDEEFF00AA220010 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -433,6 +509,11 @@
 			isa = PBXTargetDependency;
 			target = A7068781809A7A01D520A3F7 /* Nick */;
 			targetProxy = 48A832D3FA3AB4C7031A0EE0 /* PBXContainerItemProxy */;
+		};
+		BB55CC11DDEEFF00AA220031 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BB55CC11DDEEFF00AA220020 /* NickNetFilter */;
+			targetProxy = BB55CC11DDEEFF00AA220030 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -887,6 +968,46 @@
 			};
 			name = Debug;
 		};
+		BB55CC11DDEEFF00AA220041 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = NickNetFilter/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ehsanazish.nick.NickNetFilter";
+				PRODUCT_NAME = NickNetFilter;
+				SCREEN_EXTENSION_POINT_NAME = "com.apple.networkextension.content-filter";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = "6.0";
+			};
+			name = Debug;
+		};
+		BB55CC11DDEEFF00AA220042 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = NickNetFilter/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.ehsanazish.nick.NickNetFilter";
+				PRODUCT_NAME = NickNetFilter;
+				SCREEN_EXTENSION_POINT_NAME = "com.apple.networkextension.content-filter";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = "6.0";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -940,6 +1061,15 @@
 			buildConfigurations = (
 				E087517E56371321A5DC4CFD /* Debug */,
 				DE616AE26C6DA38F897B9777 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BB55CC11DDEEFF00AA220040 /* Build configuration list for PBXNativeTarget "NickNetFilter" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BB55CC11DDEEFF00AA220041 /* Debug */,
+				BB55CC11DDEEFF00AA220042 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

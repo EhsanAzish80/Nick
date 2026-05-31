@@ -1,0 +1,90 @@
+// MARK: - Nick
+// Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
+// Licensed under AGPL-3.0. See LICENSE for details.
+
+import NetworkExtension
+import os
+
+// MARK: - FilterDataProvider
+
+/// `NEFilterDataProvider` subclass that evaluates outbound network flows
+/// against multiple detection layers:
+///
+/// 1. **Blocklist** (`NetworkBlocklist`) — known malware C2 domains and IPs.
+/// 2. **Suspicious port check** — allow-list of well-known safe ports; flag unknown.
+/// 3. **ScamGuardian** — phishing / typosquat heuristics.
+/// 4. **ConnectionTracker** — per-app connection-rate anomaly detection.
+///
+/// Flows that pass all checks are allowed; flows that fail any check are
+/// dropped and logged.
+final class FilterDataProvider: NEFilterDataProvider {
+
+    // MARK: - Private Properties
+
+    private let blocklist      = NetworkBlocklist.shared
+    private let tracker        = ConnectionTracker()
+    private let scamGuardian   = ScamGuardian()
+
+    private static let logger = Logger(
+        subsystem: "com.ehsanazish.nick.NickNetFilter",
+        category:  "FilterDataProvider"
+    )
+
+    /// Well-known ports that are considered "normal" outbound traffic.
+    private let allowlistedPorts: Set<Int> = [
+        80, 443, 53, 22, 587, 465, 993, 995, 143, 110, 25, 8080, 8443
+    ]
+
+    // MARK: - NEFilterDataProvider
+
+    override func startFilter(completionHandler: @escaping (Error?) -> Void) {
+        Self.logger.info("NickNetFilter: content filter starting")
+        completionHandler(nil)
+    }
+
+    override func stopFilter(with reason: NEProviderStopReason,
+                             completionHandler: @escaping () -> Void) {
+        Self.logger.info("NickNetFilter: content filter stopping (reason: \(reason.rawValue))")
+        completionHandler()
+    }
+
+    override func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
+        // Extract host name and remote endpoint
+        guard let socketFlow = flow as? NEFilterSocketFlow,
+              let remoteEndpoint = socketFlow.remoteEndpoint as? NWHostEndpoint else {
+            return .allow()
+        }
+
+        let host       = remoteEndpoint.hostname
+        let portString = remoteEndpoint.port
+        let port       = Int(portString) ?? -1
+        let appID      = flow.sourceAppAuditToken.map { "\($0)" } ?? "unknown"
+
+        // ── Layer 1: Static blocklist ─────────────────────────────────────
+        if blocklist.isBlocked(host: host) {
+            Self.logger.warning("NickNetFilter: BLOCKED (blocklist) \(appID) → \(host):\(portString)")
+            return .drop()
+        }
+
+        // ── Layer 2: Suspicious port ──────────────────────────────────────
+        if port > 1024 && !allowlistedPorts.contains(port) {
+            Self.logger.info("NickNetFilter: suspicious port \(port) from \(appID) → \(host)")
+            // Warn but do not block — not all high-port traffic is malicious.
+            // ConnectionTracker will escalate if rates are abnormal.
+        }
+
+        // ── Layer 3: ScamGuardian ─────────────────────────────────────────
+        if scamGuardian.isSuspicious(host: host) {
+            Self.logger.warning("NickNetFilter: BLOCKED (scam guardian) \(appID) → \(host):\(portString)")
+            return .drop()
+        }
+
+        // ── Layer 4: Connection-rate tracking ─────────────────────────────
+        if tracker.shouldBlock(appID: appID, remoteHost: host) {
+            Self.logger.warning("NickNetFilter: BLOCKED (rate limit) \(appID) → \(host):\(portString)")
+            return .drop()
+        }
+
+        return .allow()
+    }
+}

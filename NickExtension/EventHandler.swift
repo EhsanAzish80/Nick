@@ -51,6 +51,12 @@ final class ESEventHandler {
     /// Phase 4 — ransomware-specific heuristics + canary monitoring.
     var ransomwareDetector: RansomwareDetector?
 
+    /// Phase 5 — TCC privacy permission monitoring.
+    var privacyGuard: PrivacyGuard?
+
+    /// Phase 5 — external/removable media scanning.
+    var usbScanner: USBScanner?
+
     // MARK: - Private
 
     private static let logger = Logger(
@@ -353,6 +359,33 @@ final class ESEventHandler {
                 parentPid:   parentPid,
                 decision:    .notApplicable
             ))
+
+        // MARK: NOTIFY_MOUNT — Phase 5: scan external volumes
+
+        case ES_EVENT_TYPE_NOTIFY_MOUNT:
+            // Extract mount point from the statfs struct.
+            // f_mntonname is a fixed-size C char array — read via pointer bytes.
+            let mountPoint: String = withUnsafeBytes(of: msg.event.mount.statfs.pointee.f_mntonname) { ptr in
+                String(cString: ptr.baseAddress!.assumingMemoryBound(to: CChar.self))
+            }
+            usbScanner?.handleMount(volumePath: mountPoint)
+
+        // MARK: NOTIFY_TCC_MODIFY — Phase 5: privacy permission changes (macOS 15.4+)
+
+        case ES_EVENT_TYPE_NOTIFY_TCC_MODIFY:
+            let service     = esString(msg.event.tcc_modify.service)
+            let appPath     = esString(msg.event.tcc_modify.target.pointee.executable.pointee.path)
+            let appBundleID = esString(msg.event.tcc_modify.target.pointee.signing_id)
+            let isGranted   = (msg.event.tcc_modify.access == ES_TCC_ACCESS_GRANTED)
+
+            if let alert = privacyGuard?.handleTCCChange(
+                service:       service,
+                appBundleID:   appBundleID,
+                appPath:       appPath,
+                accessGranted: isGranted
+            ), let data = try? JSONEncoder().encode(alert) {
+                xpcServer?.sendPrivacyAlertToApp(data)
+            }
 
         default:
             // For any unhandled AUTH event, allow immediately.

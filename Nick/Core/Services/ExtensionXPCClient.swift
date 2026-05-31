@@ -41,6 +41,12 @@ public final class ExtensionXPCClient: NSObject {
     /// File Integrity Monitor violations reported by the extension (Phase 3+).
     public private(set) var integrityViolations: [IntegrityViolation] = []
 
+    /// TCC privacy permission changes reported by the extension (Phase 5+).
+    public private(set) var privacyAlerts: [PrivacyAlert] = []
+
+    /// Threats found on external/removable volumes (Phase 5+).
+    public private(set) var usbThreats: [USBThreat] = []
+
     // MARK: - Configuration
 
     /// Maximum number of events kept in `events`. Older events are discarded.
@@ -120,6 +126,15 @@ public final class ExtensionXPCClient: NSObject {
         }
         proxy.requestScan(path: path, reply: completion)
     }
+
+    /// Instructs the extension to rebuild the FIM baseline (Phase 5+).
+    public func requestRebuildFIMBaseline(completion: @escaping (Bool) -> Void) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.requestRebuildFIMBaseline(reply: completion)
+    }
 }
 
 // MARK: - NickAppXPCProtocol (Inbound from Extension)
@@ -179,4 +194,31 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             self?.isConnected = isActive
         }
     }
-}
+
+    public nonisolated func reportPrivacyAlert(_ alertData: Data) {
+        guard let alert = try? JSONDecoder().decode(PrivacyAlert.self, from: alertData) else {
+            Self.logger.error("Failed to decode PrivacyAlert")
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            privacyAlerts.insert(alert, at: 0)
+            if privacyAlerts.count > maxEventCount {
+                privacyAlerts.removeLast(privacyAlerts.count - maxEventCount)
+            }
+        }
+    }
+
+    public nonisolated func reportUSBThreat(_ threatData: Data) {
+        guard let threat = try? JSONDecoder().decode(USBThreat.self, from: threatData) else {
+            Self.logger.error("Failed to decode USBThreat")
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            usbThreats.insert(threat, at: 0)
+            if usbThreats.count > maxEventCount {
+                usbThreats.removeLast(usbThreats.count - maxEventCount)
+            }
+        }
+    }

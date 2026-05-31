@@ -95,3 +95,29 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ehsanazish.nick.integration-tests
+
+  # ── Network Content Filter System Extension ───────────────────────────────
+  # ⚠️  NOTE: xcodegen does not support PBXFileSystemSynchronizedRootGroup.
+  # This entry documents the target configuration. The actual pbxproj entries
+  # are added manually (see DOCS/PHASE_5_GUIDE.md and the BB55CC UUID block).
+  NickNetFilter:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: NickNetFilter
+        excludes:
+          - Info.plist
+          - NickNetFilter.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ehsanazish.nick.NickNetFilter
+        INFOPLIST_FILE: NickNetFilter/Info.plist
+        CODE_SIGN_ENTITLEMENTS: NickNetFilter/NickNetFilter.entitlements
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        ENABLE_HARDENED_RUNTIME: "YES"
+        ENABLE_APP_SANDBOX: "NO"
+        SKIP_INSTALL: "YES"
+        SWIFT_VERSION: "6.0"
+        OTHER_SWIFT_FLAGS: "-strict-concurrency=complete"

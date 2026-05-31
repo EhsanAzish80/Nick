@@ -40,6 +40,8 @@ struct SettingsView: View {
     @AppStorage("scheduledDeepScanInterval") private var scheduledDeepScanInterval: Int = 0
     @AppStorage("telemetryEnabled") private var telemetryEnabled: Bool = false
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
+    /// Phase 4 — simple vs technical alert presentation
+    @AppStorage("simpleAlertMode") private var simpleAlertMode: Bool = true
 
     // MARK: Private State
 
@@ -166,12 +168,25 @@ struct SettingsView: View {
                 .labelsHidden()
                 .frame(width: 130)
             }
+            LabeledTile(
+                icon: "person.fill", tint: .purple,
+                title: "Simple alerts",
+                subtitle: "Show plain-English headlines instead of technical details"
+            ) {
+                Toggle("", isOn: $simpleAlertMode)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
         } header: {
             Text("Notifications")
         } footer: {
-            Text("Alerts below this severity are logged but won't trigger a notification.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
+            Text(
+                simpleAlertMode
+                    ? "Alerts show plain-English headlines. Tap \"Show Details\" to see process paths, PIDs, and scores."
+                    : "Alerts show full technical details inline, including process paths, PIDs, and confidence scores."
+            )
+            .font(.system(size: 11.5))
+            .foregroundStyle(.secondary)
         }
     }
 

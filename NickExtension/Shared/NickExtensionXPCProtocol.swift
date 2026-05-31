@@ -23,6 +23,11 @@ import Foundation
     ///   - path: Absolute path to the file or directory to scan.
     ///   - reply: `(success, errorDescription)` — `errorDescription` is `nil` on success.
     func requestScan(path: String, reply: @escaping (Bool, String?) -> Void)
+
+    /// Instructs the extension to rebuild the FIM baseline from the current
+    /// state of monitored paths. Used by the "Rebuild Baseline" button in
+    /// `IntegrityView`.
+    func requestRebuildFIMBaseline(reply: @escaping (Bool) -> Void)
 }
 
 // MARK: - NickAppXPCProtocol (Extension → Container App)
@@ -55,4 +60,14 @@ import Foundation
     /// Called by the extension when its running state changes.
     /// - Parameter isActive: `true` if the ES client is running.
     func reportStatusChange(_ isActive: Bool)
+
+    /// Called by the extension when a TCC privacy permission is granted or
+    /// revoked for a sensitive service (Phase 5+).
+    /// - Parameter alertData: JSON-encoded `PrivacyAlert`.
+    func reportPrivacyAlert(_ alertData: Data)
+
+    /// Called by the extension when a threat is found on an external/removable
+    /// volume during a background USB scan (Phase 5+).
+    /// - Parameter threatData: JSON-encoded `USBThreat`.
+    func reportUSBThreat(_ threatData: Data)
 }

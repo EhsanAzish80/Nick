@@ -76,6 +76,20 @@ final class ESXPCServer: NSObject {
         }
     }
 
+    /// Pushes a JSON-encoded `PrivacyAlert` to the container app (Phase 5+).
+    func sendPrivacyAlertToApp(_ alertData: Data) {
+        withAppProxy { proxy in
+            proxy.reportPrivacyAlert(alertData)
+        }
+    }
+
+    /// Pushes a JSON-encoded `USBThreat` to the container app (Phase 5+).
+    func sendUSBThreatToApp(_ threatData: Data) {
+        withAppProxy { proxy in
+            proxy.reportUSBThreat(threatData)
+        }
+    }
+
     /// Notifies the container app that the extension's running state changed.
     func sendStatusChange(isActive: Bool) {
         withAppProxy { proxy in
@@ -181,4 +195,24 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         // TODO: Phase 2 — on-demand file scanning via ES or YARA.
         reply(false, "On-demand scan not yet implemented (Phase 2)")
     }
+
+    func requestRebuildFIMBaseline(reply: @escaping (Bool) -> Void) {
+        // Delegate to the FileIntegrityMonitor that was wired in at startup.
+        // The extension does not keep a strong reference to the monitor here,
+        // so we use a module-level accessor set during main.swift initialisation.
+        guard let monitor = ESXPCServer.fimMonitorRef else {
+            reply(false)
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            monitor.buildBaseline()
+            reply(true)
+        }
+    }
+
+    // MARK: - FIM monitor back-reference (set by main.swift)
+
+    /// Weak reference to the `FileIntegrityMonitor` used to service
+    /// `requestRebuildFIMBaseline` calls from the container app.
+    nonisolated(unsafe) static weak var fimMonitorRef: FileIntegrityMonitor?
 }
