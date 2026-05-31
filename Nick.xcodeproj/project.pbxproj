@@ -13,8 +13,8 @@
 		AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */; };
 		AA11223344556677AABB0013 /* NickExtensionConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0003 /* NickExtensionConstants.swift */; };
 		AA11223344556677AABB0014 /* QuarantineTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0004 /* QuarantineTypes.swift */; };
-		BB55CC11DDEEFF00AA220050 /* NickNetFilter.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220001 /* NickNetFilter.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		BB55CC11DDEEFF00AA220061 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */; };
+		CC7788AA11223344BBEE0001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 88C895112FCC7FC100617073 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,7 +63,6 @@
 			dstSubfolderSpec = 16;
 			files = (
 				8805B7AC2FCC246600AA4FBA /* NickExtension.systemextension in Embed System Extensions */,
-				BB55CC11DDEEFF00AA220050 /* NickNetFilter.systemextension in Embed System Extensions */,
 			);
 			name = "Embed System Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -168,6 +167,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CC7788AA11223344BBEE0002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CC7788AA11223344BBEE0001 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -249,6 +256,7 @@
 				8805B79D2FCC246600AA4FBA /* Sources */,
 				8805B79E2FCC246600AA4FBA /* Frameworks */,
 				8805B79F2FCC246600AA4FBA /* Resources */,
+				AA9900BB11CC2233DDEE0001 /* Strip XAttrs */,
 			);
 			buildRules = (
 			);
@@ -268,6 +276,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0FAF328DF60C4A225367D977 /* Build configuration list for PBXNativeTarget "Nick" */;
 			buildPhases = (
+				CC7788AA11223344BBEE0002 /* Frameworks */,
 				FD3030CD51A6F9759B07888B /* Sources */,
 				1E5C0074F6A2B9D1CE8EFCDE /* Resources */,
 				CC1AABB4D5E6F78900002300 /* Copy YARA Rules */,
@@ -298,6 +307,7 @@
 				BB55CC11DDEEFF00AA220010 /* Sources */,
 				BB55CC11DDEEFF00AA220011 /* Frameworks */,
 				BB55CC11DDEEFF00AA220012 /* Resources */,
+				AA9900BB11CC2233DDEE0002 /* Strip XAttrs */,
 			);
 			buildRules = (
 			);
@@ -422,6 +432,44 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		AA9900BB11CC2233DDEE0001 /* Strip XAttrs */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Strip XAttrs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "xattr -cr \"${CODESIGNING_FOLDER_PATH}\" 2>/dev/null || true\n";
+		};
+		AA9900BB11CC2233DDEE0002 /* Strip XAttrs */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Strip XAttrs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "xattr -cr \"${CODESIGNING_FOLDER_PATH}\" 2>/dev/null || true\n";
+		};
 		CC1AABB4D5E6F78900002300 /* Copy YARA Rules */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -591,6 +639,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = NickHelper/NickHelper.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -616,10 +665,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = NickIcon;
 				CODE_SIGN_ENTITLEMENTS = Nick/Nick.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Mac Developer";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -779,7 +828,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application: ehsan azish (UXGW5V3BY6)";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -819,10 +868,10 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_ENTITLEMENTS = NickExtension/NickExtension.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development: ehsan azish (53W3MGVP3H)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -847,7 +896,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickExtension;
 				PRODUCT_NAME = "$(inherited)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "nickextention\\";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = nickExtentiondistribute;
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -869,7 +918,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;

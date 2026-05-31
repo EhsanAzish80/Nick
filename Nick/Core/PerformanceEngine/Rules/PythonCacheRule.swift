@@ -17,7 +17,6 @@ struct PythonCacheRule: ScanRule {
     ]
 
     func scan() async -> [JunkItem] {
-        let fm = FileManager.default
         var items: [JunkItem] = []
 
         // pip/pip3 cache

@@ -81,8 +81,8 @@ private struct IntegrityRowView: View {
                 // Show hash delta when available
                 if let expected = violation.expectedHash, let actual = violation.actualHash {
                     Group {
-                        Text("was: ") + Text(expected.prefix(12) + "…").monospaced()
-                        Text("now: ") + Text(actual.prefix(12) + "…").monospaced()
+                        Text("was: \(expected.prefix(12))…").monospaced()
+                        Text("now: \(actual.prefix(12))…").monospaced()
                     }
                     .font(.caption2)
                     .foregroundStyle(.tertiary)

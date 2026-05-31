@@ -65,7 +65,7 @@ struct ProcessTreeView: View {
 
         // Attach children to parents
         var roots: [TreeNode] = []
-        for var node in nodeMap.values {
+        for node in nodeMap.values {
             if nodeMap[node.parentPID] != nil {
                 nodeMap[node.parentPID]!.children = (nodeMap[node.parentPID]!.children ?? []) + [node]
             } else {

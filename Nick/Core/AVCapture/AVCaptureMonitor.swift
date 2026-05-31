@@ -212,7 +212,7 @@ final class AVCaptureMonitor: MonitorProtocol {
             object:  nil,
             queue:   .main
         ) { [weak self] _ in
-            self?.handleDeviceConnected()
+            MainActor.assumeIsolated { self?.handleDeviceConnected() }
         }
 
         let onDisconnect = center.addObserver(
@@ -220,7 +220,7 @@ final class AVCaptureMonitor: MonitorProtocol {
             object:  nil,
             queue:   .main
         ) { [weak self] _ in
-            self?.handleDeviceDisconnected()
+            MainActor.assumeIsolated { self?.handleDeviceDisconnected() }
         }
 
         deviceObservers = [onConnect, onDisconnect]
@@ -489,6 +489,7 @@ enum CaptureProcessScanner: Sendable {
     private static func processPath(for pid: Int32) -> String {
         var pathBuf = [Int8](repeating: 0, count: Int(MAXPATHLEN))
         proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
-        return String(cString: pathBuf)
+        let bytes = pathBuf.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 }

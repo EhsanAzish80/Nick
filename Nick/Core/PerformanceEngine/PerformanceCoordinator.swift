@@ -91,7 +91,7 @@ final class PerformanceCoordinator {
         Task {
             let plan = planner.plan(from: foundItems, selectedIDs: selectedItemIDs)
             guard plan.itemsToClean.isEmpty == false else { return }
-            let runningBrowsers = await browserDetector.runningBrowsers()
+            let runningBrowsers = browserDetector.runningBrowsers()
             scanState = .cleaning(progress: 0, freedSize: 0)
             try? await executor.execute(plan, runningBrowsers: runningBrowsers)
             let freed = executor.freedBytes
