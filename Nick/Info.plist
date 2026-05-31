@@ -50,10 +50,12 @@
 	</array>
 	<key>NSSystemAdministrationUsageDescription</key>
 	<string>Nick requires administrator access to monitor system security state.</string>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>Nick requires administrator access to monitor system security state.</string>
 	<key>SMPrivilegedExecutables</key>
 	<dict>
 		<key>com.ehsanazish.nick.helper</key>
-		<string>anchor apple generic and identifier &quot;com.ehsanazish.nick.helper&quot; and certificate leaf[subject.OU] = &quot;UXGW5V3BY6&quot;</string>
+		<string>anchor apple generic and identifier "com.ehsanazish.nick.helper" and certificate leaf[subject.OU] = "UXGW5V3BY6"</string>
 	</dict>
 </dict>
 </plist>
