@@ -2,6 +2,7 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
+import AppKit
 import Foundation
 
 // MARK: - SmartScanStatus
@@ -110,6 +111,9 @@ final class SmartScanChecker {
     /// Set by SecurityEngine on init — provides access to module states.
     weak var securityEngine: SecurityEngine?
 
+    /// Required to trigger system-extension installation.
+    weak var extensionManager: ExtensionManager?
+
     // MARK: - Public API
 
     func runScan() -> SmartScanStatus {
@@ -160,7 +164,7 @@ final class SmartScanChecker {
     // MARK: - Individual Checks
 
     private func checkEndpointSecurity() -> ProtectionCheck {
-        let isActive = securityEngine?.extensionIsActive ?? false
+        let isActive = securityEngine?.activePipelineStatus == .running
 
         return ProtectionCheck(
             id: "endpoint_security",
@@ -202,7 +206,7 @@ final class SmartScanChecker {
     }
 
     private func checkNetworkMonitor() -> ProtectionCheck {
-        let isActive = securityEngine?.networkMonitorActive ?? false
+        let isActive = UserDefaults.standard.bool(forKey: "networkMonitorEnabled")
 
         return ProtectionCheck(
             id: "network_monitor",
@@ -325,7 +329,7 @@ final class SmartScanChecker {
     private func checkSystemSettings() -> ProtectionCheck {
         // Check SIP, FileVault, Firewall, Gatekeeper
         let auditResults = securityEngine?.auditResults ?? []
-        let failedChecks = auditResults.filter { !$0.passed }
+        let failedChecks = auditResults.filter { $0.status == .fail }
 
         if failedChecks.isEmpty {
             return ProtectionCheck(
@@ -339,7 +343,7 @@ final class SmartScanChecker {
             )
         }
 
-        let issueNames = failedChecks.map(\.name).joined(separator: ", ")
+        let issueNames = failedChecks.map { $0.check.displayName }.joined(separator: ", ")
         return ProtectionCheck(
             id: "system_settings",
             title: "System Security",
@@ -388,6 +392,6 @@ final class SmartScanChecker {
     }
 
     private func installExtension(name: String) async {
-        securityEngine?.installExtension()
+        extensionManager?.installExtension()
     }
 }

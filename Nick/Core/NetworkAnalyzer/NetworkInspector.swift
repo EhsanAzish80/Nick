@@ -29,6 +29,7 @@ import os
 /// }
 /// ```
 @Observable
+@MainActor
 final class NetworkInspector {
 
     // MARK: - Types
@@ -91,8 +92,8 @@ final class NetworkInspector {
     ///
     /// Updates `devices`, `isScanning`, and `lastScanDate` on the main actor.
     func discoverAndScan() async {
-        await MainActor.run { isScanning = true }
-        defer { Task { @MainActor in self.isScanning = false } }
+        isScanning = true
+        defer { isScanning = false }
 
         let hosts = await discoverHosts()
         Self.logger.info("NetworkInspector: discovered \(hosts.count) host(s)")
@@ -114,10 +115,8 @@ final class NetworkInspector {
 
         scannedDevices.sort { $0.riskLevel > $1.riskLevel }
 
-        await MainActor.run {
-            devices = scannedDevices
-            lastScanDate = Date()
-        }
+        devices = scannedDevices
+        lastScanDate = Date()
     }
 
     // MARK: - Private: Host Discovery

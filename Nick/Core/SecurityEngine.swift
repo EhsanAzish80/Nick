@@ -53,6 +53,11 @@ final class SecurityEngine {
     /// The last error thrown during a scan, if any.
     private(set) var lastError: Error?
 
+    /// URL from Finder "Scan with Nick" context menu. The scanner view
+    /// consumes this on appear and starts a targeted scan. Set by the
+    /// `.nickScanFileRequest` notification handler in `MainWindowView`.
+    var pendingFinderScanURL: URL?
+
     /// The most recent threat score from the real-time ML pipeline (0.0–1.0).
     var currentThreatScore: Double = 0.0
 

@@ -14,7 +14,9 @@ import Foundation
 /// IP addresses in the headline or explanation — those stay in `technicalDetail`.
 ///
 /// Thread-safe and stateless — safe to call from any queue.
-final class UserFacingAlertBuilder {
+final class UserFacingAlertBuilder: Sendable {
+
+    static let shared = UserFacingAlertBuilder()
 
     // MARK: - Public API
 
@@ -44,10 +46,11 @@ final class UserFacingAlertBuilder {
     private func detectPattern(from alert: ThreatAlert) -> AlertPattern {
         let signals   = alert.contributingSignals
         let monitors  = Set(signals.map(\.source))
-        let features  = Set(signals.compactMap(\.processInfo).flatMap { p -> [String] in
+        let features  = Set(signals.compactMap(\.processInfo).flatMap { (p: NickProcessInfo) -> [String] in
             var flags: [String] = []
             if p.signingStatus == .unsigned || p.signingStatus == .invalid { flags.append("unsigned") }
-            if p.isShell      { flags.append("shell") }
+            let shellNames: Set<String> = ["bash", "sh", "zsh", "fish", "tcsh", "csh", "dash", "ksh"]
+            if shellNames.contains(p.name) || shellNames.contains((p.path as NSString).lastPathComponent) { flags.append("shell") }
             if p.path.hasPrefix("/tmp") || p.path.hasPrefix("/private/tmp") { flags.append("tmp") }
             return flags
         })

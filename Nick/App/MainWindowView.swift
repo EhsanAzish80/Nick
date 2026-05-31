@@ -173,7 +173,13 @@ struct MainWindowView: View {
         .onDisappear {
             NSApp.setActivationPolicy(.accessory)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .nickScanFileRequest)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .nickScanFileRequest)) { note in
+            // Store the URL on the engine so the scanner view can pick it up
+            // when it appears — avoids the race where the scanner view's
+            // .onReceive hasn't registered yet during sidebar navigation.
+            if let url = note.object as? URL {
+                engine.pendingFinderScanURL = url
+            }
             selectedSection = .scanner
         }
     }
@@ -1285,7 +1291,15 @@ struct ScannerDetailView: View {
                 showResults = true
             }
         }
-        .onAppear { scanner.engine = engine }
+        .onAppear {
+            scanner.engine = engine
+            // Consume any pending Finder "Scan with Nick" URL that was stored
+            // before this view appeared (fixes race with notification timing).
+            if let pendingURL = engine.pendingFinderScanURL {
+                engine.pendingFinderScanURL = nil
+                startFileScan(url: pendingURL)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .nickScanFileRequest)) { note in
             guard let url = note.object as? URL else { return }
             startFileScan(url: url)
