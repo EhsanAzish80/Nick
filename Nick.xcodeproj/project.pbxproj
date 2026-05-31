@@ -285,6 +285,7 @@
 			);
 			name = Nick;
 			packageProductDependencies = (
+				88C895112FCC7FC100617073 /* Sparkle */,
 			);
 			productName = Nick;
 			productReference = 8B8901B2276260484B8A6A0C /* Nick.app */;
@@ -378,6 +379,9 @@
 			);
 			mainGroup = BCABA6CBA60235CC5F3E0F78;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				88C895102FCC7FC100617073 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 428C90590A8B2419274FDF24 /* Products */;
 			projectDirPath = "";
@@ -630,8 +634,12 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 3.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
@@ -786,8 +794,12 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 3.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
@@ -830,7 +842,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 3.0;
 				OTHER_LDFLAGS = "-lbsm";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickExtension;
 				PRODUCT_NAME = "$(inherited)";
@@ -873,7 +885,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 3.0;
 				OTHER_LDFLAGS = "-lbsm";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickExtension;
 				PRODUCT_NAME = "$(inherited)";
@@ -917,18 +929,16 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Mac Developer";
-				CODE_SIGN_STYLE = Manual;
-				DEVELOPMENT_TEAM = "";
-				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickNetFilter/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickNetFilter;
 				PRODUCT_NAME = NickNetFilter;
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = NickNetFilter;
 				SCREEN_EXTENSION_POINT_NAME = "com.apple.networkextension.content-filter";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -942,11 +952,12 @@
 				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickNetFilter/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickNetFilter;
 				PRODUCT_NAME = NickNetFilter;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1080,6 +1091,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		88C895102FCC7FC100617073 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		88C895112FCC7FC100617073 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 88C895102FCC7FC100617073 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A7B63905B7F834888F9EACCE /* Project object */;
 }

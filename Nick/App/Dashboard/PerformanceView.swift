@@ -77,7 +77,7 @@ struct PerformanceView: View {
             VStack(alignment: .leading, spacing: 4) {
                 ProgressView(value: progress)
                 if let category {
-                    Text("Scanning \(category.displayName)…")
+                    Text("Scanning \(category)…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

@@ -25,11 +25,11 @@ struct ProcessTreeView: View {
     // MARK: - Tree Construction
 
     /// A lightweight node built from `ESEvent` data.
-    private struct TreeNode: Identifiable {
+    fileprivate struct TreeNode: Identifiable {
         let id: Int32              // PID
         let processPath: String
         let parentPID: Int32
-        var children: [TreeNode]
+        var children: [TreeNode]?
         var isThreat: Bool
         var eventCount: Int
         var lastEventTime: Date
@@ -55,7 +55,7 @@ struct ProcessTreeView: View {
                     id: pid,
                     processPath: event.processPath,
                     parentPID: event.parentPid,
-                    children: [],
+                    children: nil,
                     isThreat: isThreat,
                     eventCount: 1,
                     lastEventTime: event.timestamp
@@ -66,8 +66,8 @@ struct ProcessTreeView: View {
         // Attach children to parents
         var roots: [TreeNode] = []
         for var node in nodeMap.values {
-            if let _ = nodeMap[node.parentPID] {
-                nodeMap[node.parentPID]?.children.append(node)
+            if nodeMap[node.parentPID] != nil {
+                nodeMap[node.parentPID]!.children = (nodeMap[node.parentPID]!.children ?? []) + [node]
             } else {
                 roots.append(node)
             }
@@ -86,7 +86,7 @@ struct ProcessTreeView: View {
                     description: Text("Process lineage will appear here once the extension is active and events arrive.")
                 )
             } else {
-                List(forest, children: \.childrenOrNil) { node in
+                List(forest, children: \.children) { node in
                     ProcessNodeRow(node: node)
                 }
                 .listStyle(.inset)
@@ -112,15 +112,7 @@ struct ProcessTreeView: View {
 
     private func collectThreatPIDs(_ node: TreeNode) {
         if node.isThreat { expandedPIDs.insert(node.id) }
-        for child in node.children { collectThreatPIDs(child) }
-    }
-}
-
-// MARK: - TreeNode Children Helper
-
-private extension ProcessTreeView.TreeNode {
-    var childrenOrNil: [ProcessTreeView.TreeNode]? {
-        children.isEmpty ? nil : children
+        for child in node.children ?? [] { collectThreatPIDs(child) }
     }
 }
 

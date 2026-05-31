@@ -7,7 +7,7 @@ import Foundation
 // MARK: - JunkCategory
 
 /// Top-level grouping for scan-rule results displayed in the performance UI.
-enum JunkCategory: String, Codable, Sendable, CaseIterable, Identifiable {
+public enum JunkCategory: String, Codable, Sendable, CaseIterable, Identifiable {
 
     case developerCache      = "developerCache"
     case simulatorData       = "simulatorData"

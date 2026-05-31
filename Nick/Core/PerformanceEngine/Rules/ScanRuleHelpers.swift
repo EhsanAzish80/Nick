@@ -9,7 +9,7 @@ import Foundation
 /// Shared FileManager utilities used by multiple `ScanRule` implementations.
 enum ScanRuleHelpers {
 
-    static let fm = FileManager.default
+    nonisolated(unsafe) static let fm = FileManager.default
     static let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
 
     /// Resolves a path relative to `~` and returns a URL.

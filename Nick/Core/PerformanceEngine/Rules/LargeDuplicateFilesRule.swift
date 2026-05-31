@@ -31,7 +31,7 @@ struct LargeDuplicateFilesRule: ScanRule {
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
             ) else { continue }
 
-            for case let url as URL in enumerator {
+            while let item = enumerator.nextObject(), let url = item as? URL {
                 guard let rv = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey]),
                       rv.isDirectory == false else { continue }
                 let size = Int64(rv.fileSize ?? 0)

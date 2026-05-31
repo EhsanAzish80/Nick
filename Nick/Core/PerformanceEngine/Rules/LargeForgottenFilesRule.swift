@@ -30,7 +30,7 @@ struct LargeForgottenFilesRule: ScanRule {
         let cutoff = Date().addingTimeInterval(-Self.ageCutoff)
         var items: [JunkItem] = []
 
-        for case let url as URL in enumerator {
+        while let item = enumerator.nextObject(), let url = item as? URL {
             // Skip known-junk subtrees handled by other rules
             let rel = url.path.replacingOccurrences(of: home.path + "/", with: "")
             if Self.skipPrefixes.contains(where: { rel.hasPrefix($0) }) {

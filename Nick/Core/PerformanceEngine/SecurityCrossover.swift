@@ -28,7 +28,7 @@ final class SecurityCrossover: Sendable {
     func crossReference(threat: ThreatAlert) -> CrossoverAlert? {
         // Extract process paths from contributing signal contexts
         let processPath = threat.contributingSignals
-            .compactMap { $0.context.processInfo?.path }
+            .compactMap { $0.processInfo?.path }
             .first ?? ""
         guard !processPath.isEmpty else { return nil }
 

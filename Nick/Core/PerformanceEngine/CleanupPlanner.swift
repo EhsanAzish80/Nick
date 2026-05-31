@@ -8,7 +8,6 @@ import Foundation
 final class CleanupPlanner: Sendable {
     func plan(from items: [JunkItem], selectedIDs: Set<UUID>) -> CleanupPlan {
         let selected = items.filter { selectedIDs.contains($0.id) }
-        let totalBytes = selected.reduce(0) { $0 + $1.size }
-        return CleanupPlan(itemsToClean: selected, totalBytes: totalBytes)
+        return CleanupPlan(items: selected)
     }
 }

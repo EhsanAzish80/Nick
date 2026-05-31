@@ -55,7 +55,7 @@ struct DiskUsageView: View {
         HStack {
             legendDot(.red.opacity(0.7), "Used: \(ByteCountFormatter.string(fromByteCount: storageMonitor.usedDiskBytes, countStyle: .file))")
             legendDot(.orange.opacity(0.8), "Reclaimable: \(reclaimableLabel)")
-            legendDot(.quaternary, "Free: \(ByteCountFormatter.string(fromByteCount: storageMonitor.freeDiskBytes, countStyle: .file))")
+            legendDot(.gray.opacity(0.35), "Free: \(ByteCountFormatter.string(fromByteCount: storageMonitor.freeDiskBytes, countStyle: .file))")
         }
         .font(.caption2)
         .padding(.horizontal, 8)

@@ -63,7 +63,7 @@ final class PerformanceCoordinator {
                     completed += 1
                     let progress = Double(completed) / Double(ruleCount)
                     let currentCategory = batch.first?.category
-                    scanState = .scanning(progress: progress, currentCategory: currentCategory)
+                    scanState = .scanning(progress: progress, currentCategory: currentCategory?.displayName)
                 }
             }
 
