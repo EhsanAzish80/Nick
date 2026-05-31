@@ -44,8 +44,7 @@ final class NetworkBlocklist: @unchecked Sendable {
     func isBlocked(host: String) -> Bool {
         let lower = host.lowercased()
 
-        // Fast IP check
-        lock.withLock {
+        return lock.withLock {
             if blockedIPs.contains(lower) { return true }
             // Domain check: walk up the label hierarchy
             var labels = lower.components(separatedBy: ".")

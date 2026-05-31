@@ -68,7 +68,7 @@ final class USBScanner {
     func handleMount(volumePath: String) {
         guard isExternalVolumePath(volumePath) else { return }
 
-        lock.withLock { mountedVolumes.insert(volumePath) }
+        lock.withLock { _ = mountedVolumes.insert(volumePath) }
         Self.logger.notice("External volume mounted — starting background scan: \(volumePath)")
 
         DispatchQueue.global(qos: .utility).async { [weak self] in

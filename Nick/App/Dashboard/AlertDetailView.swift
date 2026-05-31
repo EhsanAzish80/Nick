@@ -212,6 +212,8 @@ struct AlertDetailView: View {
     }
 
     // MARK: - Technical Mode Header
+
+    private var header: some View {
         HStack(alignment: .top, spacing: NickSpacing.md) {
             VStack(alignment: .leading, spacing: NickSpacing.sm) {
                 Text(alert.title)

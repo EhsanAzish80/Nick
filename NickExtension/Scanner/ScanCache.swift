@@ -83,7 +83,7 @@ final class ScanCache {
 
     /// Removes the entry for `path`, forcing a fresh scan on next access.
     func invalidate(path: String) {
-        lock.withLock { store.removeValue(forKey: path) }
+        lock.withLock { _ = store.removeValue(forKey: path) }
     }
 
     /// Removes all entries from the cache.

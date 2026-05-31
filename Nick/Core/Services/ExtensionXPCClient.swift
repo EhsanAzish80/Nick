@@ -222,3 +222,4 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             }
         }
     }
+}

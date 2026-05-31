@@ -228,7 +228,7 @@ final class NetworkInspector {
         return await withCheckedContinuation { continuation in
             let lock = NSLock()
             var resumed = false
-            let finish: (Bool) -> Void = { result in
+            let finish: @Sendable (Bool) -> Void = { result in
                 lock.withLock {
                     guard !resumed else { return }
                     resumed = true

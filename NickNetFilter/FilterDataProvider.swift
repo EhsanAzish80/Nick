@@ -2,7 +2,6 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
-import Network
 import NetworkExtension
 import os
 
@@ -54,15 +53,16 @@ final class FilterDataProvider: NEFilterDataProvider {
             return .allow()
         }
 
-        // Extract remote host + port using the macOS 15+ API.
-        // remoteFlowEndpoint is nw_endpoint_t; fall back to remoteHostname
-        // if the endpoint is not yet resolved when the flow is first seen.
+        // Extract remote host + port.
+        // remoteFlowEndpoint returns NWEndpoint (Swift enum) on macOS 15+.
+        // Fall back to remoteHostname when the endpoint isn't resolved yet.
         let host: String
         let port: Int
 
-        if let endpoint = socketFlow.remoteFlowEndpoint {
-            host = String(cString: nw_endpoint_get_hostname(endpoint))
-            port = Int(nw_endpoint_get_port(endpoint))
+        if let endpoint = socketFlow.remoteFlowEndpoint,
+           case .hostPort(let h, let p) = endpoint {
+            host = "\(h)"
+            port = Int(p.rawValue)
         } else if let hostname = socketFlow.remoteHostname {
             host = hostname
             port = -1
