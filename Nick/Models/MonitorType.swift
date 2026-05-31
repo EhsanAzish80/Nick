@@ -39,6 +39,9 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
     /// Signals from `AVCaptureMonitor` — camera and microphone activation by unexpected processes.
     case avCapture = "avCapture"
 
+    /// Performance-engine signals — large caches, reclaimable disk space, junk files.
+    case performance = "performance"
+
     // MARK: - Display Helpers
 
     /// Human-readable label suitable for UI presentation.
@@ -52,6 +55,7 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
         case .systemAudit: return "System Audit"
         case .behavioral:  return "AI Behavioral Scorer"
         case .avCapture:   return "Camera & Microphone"
+        case .performance: return "Performance Engine"
         }
     }
 
@@ -66,6 +70,7 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
         case .systemAudit: return "checkmark.shield"
         case .behavioral:  return "brain"
         case .avCapture:   return "camera"
+        case .performance: return "speedometer"
         }
     }
 }

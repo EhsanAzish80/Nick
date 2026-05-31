@@ -917,8 +917,10 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Mac Developer";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickNetFilter/Info.plist;
@@ -926,6 +928,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickNetFilter;
 				PRODUCT_NAME = NickNetFilter;
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = NickNetFilter;
 				SCREEN_EXTENSION_POINT_NAME = "com.apple.networkextension.content-filter";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -938,8 +941,10 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UXGW5V3BY6;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application: ehsan azish (UXGW5V3BY6)";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = "";
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickNetFilter/Info.plist;
@@ -947,6 +952,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickNetFilter;
 				PRODUCT_NAME = NickNetFilter;
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = NickNetFilterDistribute;
 				SCREEN_EXTENSION_POINT_NAME = "com.apple.networkextension.content-filter";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;

@@ -57,6 +57,15 @@ final class ESEventHandler {
     /// Phase 5 — external/removable media scanning.
     var usbScanner: USBScanner?
 
+    /// Phase 6 — process genealogy tracker.
+    var processTree: ProcessTree?
+
+    /// Phase 6 — email attachment monitor.
+    var emailAttachmentMonitor: EmailAttachmentMonitor?
+
+    /// Phase 6 — tamper protection for Nick's own files.
+    var tamperProtection: TamperProtection?
+
     // MARK: - Private
 
     private static let logger = Logger(
@@ -119,6 +128,10 @@ final class ESEventHandler {
                 pid: pid, processPath: processPath,
                 eventType: .processExec, detail: targetPath
             )
+            // Phase 6: record in process tree
+            processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: [])
+            // Phase 6: watch for systemextensionsctl (tamper vector)
+            tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid)
 
             esClient?.respond(to: message, allow: !isThreat)
 
@@ -214,6 +227,28 @@ final class ESEventHandler {
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
 
+                // --- Phase 6: Email attachment detection ---
+                if let emailEvent = self.emailAttachmentMonitor?.evaluate(filePath: filePath) {
+                    Self.logger.info("Email attachment: \(emailEvent.source) — \(filePath)")
+                    if emailEvent.isDangerousExtension {
+                        // Treat dangerous email attachments like discovered threats
+                        let threat = ESEvent(
+                            eventType:    .notifyWrite,
+                            processPath:  processPath,
+                            pid:          pid,
+                            parentPid:    parentPid,
+                            filePath:     filePath,
+                            decision:     .notApplicable,
+                            threatName:   "Dangerous Email Attachment",
+                            threatFamily: "EmailThreat"
+                        )
+                        self.pushEvent(threat)
+                        if let data = try? self.encoder.encode(threat) {
+                            self.xpcServer?.sendThreatToApp(data)
+                        }
+                    }
+                }
+
                 // --- File Integrity Monitoring ---
                 if let violation = self.fileIntegrityMonitor?.check(path: filePath),
                    let data = try? JSONEncoder().encode(violation) {
@@ -242,8 +277,8 @@ final class ESEventHandler {
                 if let data = try? self.encoder.encode(threat) {
                     self.xpcServer?.sendThreatToApp(data)
                 }
-
-                // Run full remediation pipeline
+                // Phase 6: mark the writing process as a threat in the process tree
+                self.processTree?.markAsThreat(pid: pid)
                 if let engine = self.remediationEngine {
                     let report = engine.remediate(
                         threatPath:  filePath,
@@ -311,10 +346,17 @@ final class ESEventHandler {
 
         // MARK: NOTIFY_RENAME — invalidate cache; track rename for ransomware detection
 
-        case ES_EVENT_TYPE_NOTIFY_RENAME:
+        // MARK: AUTH_RENAME — block tampering with Nick's own files; track renames
+
+        case ES_EVENT_TYPE_AUTH_RENAME:
             let srcPath = esString(msg.event.rename.source.pointee.path)
+            let renameBlocked = tamperProtection?.shouldBlock(
+                targetPath: srcPath, actorPath: processPath, actorPid: pid
+            ) ?? false
+            tamperProtection?.handleRenameEvent(srcPath: srcPath, actorPath: processPath, actorPid: pid)
+            esClient?.respond(to: message, allow: !renameBlocked)
+            // Fall-through side effects handled below regardless of auth decision
             fileScanner?.cache.invalidate(path: srcPath)
-            // Record rename in behavioral tracker (mass-rename is the primary ransomware signal)
             let destPath: String
             if msg.event.rename.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE {
                 destPath = esString(msg.event.rename.destination.existing_file.pointee.path)
@@ -327,6 +369,40 @@ final class ESEventHandler {
                 pid: pid, processPath: processPath,
                 eventType: .fileRename, detail: destPath
             )
+            // Phase 6: record in process tree
+            processTree?.recordFileAccess(pid: pid, path: srcPath, operation: "rename")
+
+        // MARK: NOTIFY_RENAME — (non-auth) cache invalidation only
+
+        case ES_EVENT_TYPE_NOTIFY_RENAME:
+            let notifySrcPath = esString(msg.event.rename.source.pointee.path)
+            fileScanner?.cache.invalidate(path: notifySrcPath)
+            let notifyDestPath: String
+            if msg.event.rename.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE {
+                notifyDestPath = esString(msg.event.rename.destination.existing_file.pointee.path)
+            } else {
+                let dir  = esString(msg.event.rename.destination.new_path.dir.pointee.path)
+                let name = esString(msg.event.rename.destination.new_path.filename)
+                notifyDestPath = dir + "/" + name
+            }
+            behaviorTracker?.record(
+                pid: pid, processPath: processPath,
+                eventType: .fileRename, detail: notifyDestPath
+            )
+            processTree?.recordFileAccess(pid: pid, path: notifySrcPath, operation: "rename")
+
+        // MARK: AUTH_UNLINK — block deletion of Nick's protected files
+
+        case ES_EVENT_TYPE_AUTH_UNLINK:
+            let unlinkTarget = esString(msg.event.unlink.target.pointee.path)
+            let unlinkBlocked = tamperProtection?.shouldBlock(
+                targetPath: unlinkTarget, actorPath: processPath, actorPid: pid
+            ) ?? false
+            tamperProtection?.handleUnlinkEvent(targetPath: unlinkTarget, actorPath: processPath, actorPid: pid)
+            esClient?.respond(to: message, allow: !unlinkBlocked)
+            if !unlinkBlocked {
+                fileScanner?.cache.invalidate(path: unlinkTarget)
+            }
 
         // MARK: NOTIFY_UNLINK — invalidate cache for deleted files
 
@@ -341,6 +417,8 @@ final class ESEventHandler {
             behaviorTracker?.recordFork(
                 parentPid: pid, childPid: childPid, processPath: processPath
             )
+            // Phase 6: record child exec in process tree
+            processTree?.recordExec(pid: childPid, ppid: pid, path: processPath, args: [])
             pushEvent(ESEvent(
                 eventType:   .notifyFork,
                 processPath: processPath,
@@ -352,6 +430,9 @@ final class ESEventHandler {
         case ES_EVENT_TYPE_NOTIFY_EXIT:
             // Clean up timeline to prevent unbounded memory growth
             behaviorTracker?.cleanupExited(pid: pid)
+            // Phase 6: mark process exit in tree
+            let exitCode: Int32 = 0  // exit code not provided by notify_exit in this binding
+            processTree?.recordExit(pid: pid, exitCode: exitCode)
             pushEvent(ESEvent(
                 eventType:   .notifyExit,
                 processPath: processPath,
