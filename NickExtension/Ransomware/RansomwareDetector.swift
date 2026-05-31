@@ -122,8 +122,7 @@ final class RansomwareDetector {
         )
 
         Self.logger.notice(
-            "Ransomware alert pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) " +
-            "action=\(String(describing: alert.recommendation))"
+            "Ransomware alert pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) action=\(String(describing: alert.recommendation))"
         )
         return alert
     }

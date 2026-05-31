@@ -223,7 +223,8 @@ final class ESEventHandler {
                 // --- Threat Detection + Remediation ---
                 guard let scanner = self.fileScanner else { return }
                 let result = scanner.scan(filePath: filePath)
-                guard result.isThreat, let hash = result.hash else { return }
+                guard result.isThreat else { return }
+                let hash = result.hash
 
                 // Report raw threat event
                 let threat = ESEvent(
@@ -289,8 +290,7 @@ final class ESEventHandler {
                     filePath: filePath, fileData: fileData
                 ) {
                     Self.logger.warning(
-                        "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) " +
-                        "action=\(String(describing: alert.recommendation))"
+                        "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) action=\(String(describing: alert.recommendation))"
                     )
                     // If high-confidence, trigger remediation
                     if alert.recommendation == .block,
@@ -373,10 +373,13 @@ final class ESEventHandler {
         // MARK: NOTIFY_TCC_MODIFY — Phase 5: privacy permission changes (macOS 15.4+)
 
         case ES_EVENT_TYPE_NOTIFY_TCC_MODIFY:
-            let service     = esString(msg.event.tcc_modify.service)
-            let appPath     = esString(msg.event.tcc_modify.target.pointee.executable.pointee.path)
-            let appBundleID = esString(msg.event.tcc_modify.target.pointee.signing_id)
-            let isGranted   = (msg.event.tcc_modify.access == ES_TCC_ACCESS_GRANTED)
+            let tcc         = msg.event.tcc_modify.pointee
+            let service     = esString(tcc.service)
+            let identity    = esString(tcc.identity)
+            // identity_type tells us whether identity is a bundle ID or executable path
+            let appBundleID = tcc.identity_type == ES_TCC_IDENTITY_TYPE_BUNDLE_ID ? identity : ""
+            let appPath     = tcc.identity_type == ES_TCC_IDENTITY_TYPE_EXECUTABLE_PATH ? identity : ""
+            let isGranted   = (tcc.right == ES_TCC_AUTHORIZATION_RIGHT_ALLOWED)
 
             if let alert = privacyGuard?.handleTCCChange(
                 service:       service,

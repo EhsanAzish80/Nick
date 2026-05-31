@@ -2,6 +2,7 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
+import Network
 import NetworkExtension
 import os
 
@@ -49,15 +50,27 @@ final class FilterDataProvider: NEFilterDataProvider {
     }
 
     override func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
-        // Extract host name and remote endpoint
-        guard let socketFlow = flow as? NEFilterSocketFlow,
-              let remoteEndpoint = socketFlow.remoteEndpoint as? NWHostEndpoint else {
+        guard let socketFlow = flow as? NEFilterSocketFlow else {
             return .allow()
         }
 
-        let host       = remoteEndpoint.hostname
-        let portString = remoteEndpoint.port
-        let port       = Int(portString) ?? -1
+        // Extract remote host + port using the macOS 15+ API.
+        // remoteFlowEndpoint is nw_endpoint_t; fall back to remoteHostname
+        // if the endpoint is not yet resolved when the flow is first seen.
+        let host: String
+        let port: Int
+
+        if let endpoint = socketFlow.remoteFlowEndpoint {
+            host = String(cString: nw_endpoint_get_hostname(endpoint))
+            port = Int(nw_endpoint_get_port(endpoint))
+        } else if let hostname = socketFlow.remoteHostname {
+            host = hostname
+            port = -1
+        } else {
+            return .allow()  // no destination info yet; allow and re-evaluate later
+        }
+
+        let portString = port >= 0 ? "\(port)" : "?"
         let appID      = flow.sourceAppAuditToken.map { "\($0)" } ?? "unknown"
 
         // ── Layer 1: Static blocklist ─────────────────────────────────────
