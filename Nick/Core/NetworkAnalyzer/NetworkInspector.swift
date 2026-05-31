@@ -226,15 +226,16 @@ final class NetworkInspector {
         )
 
         return await withCheckedContinuation { continuation in
-            let lock = NSLock()
-            var resumed = false
+            let resumed = OSAllocatedUnfairLock(initialState: false)
             let finish: @Sendable (Bool) -> Void = { result in
-                lock.withLock {
-                    guard !resumed else { return }
-                    resumed = true
-                    connection.cancel()
-                    continuation.resume(returning: result)
+                let shouldResume = resumed.withLock { alreadyResumed -> Bool in
+                    guard !alreadyResumed else { return false }
+                    alreadyResumed = true
+                    return true
                 }
+                guard shouldResume else { return }
+                connection.cancel()
+                continuation.resume(returning: result)
             }
             connection.stateUpdateHandler = { state in
                 switch state {

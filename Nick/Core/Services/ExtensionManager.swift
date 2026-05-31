@@ -45,7 +45,7 @@ public final class ExtensionManager: NSObject {
 
     // MARK: - Private
 
-    private nonisolated(unsafe) static let logger = Logger(
+    private nonisolated static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
         category: "ExtensionManager"
     )

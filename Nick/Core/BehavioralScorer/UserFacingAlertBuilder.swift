@@ -46,7 +46,7 @@ final class UserFacingAlertBuilder {
         let monitors  = Set(signals.map(\.source))
         let features  = Set(signals.compactMap(\.processInfo).flatMap { p -> [String] in
             var flags: [String] = []
-            if !p.isSigned    { flags.append("unsigned") }
+            if p.signingStatus == .unsigned || p.signingStatus == .invalid { flags.append("unsigned") }
             if p.isShell      { flags.append("shell") }
             if p.path.hasPrefix("/tmp") || p.path.hasPrefix("/private/tmp") { flags.append("tmp") }
             return flags
