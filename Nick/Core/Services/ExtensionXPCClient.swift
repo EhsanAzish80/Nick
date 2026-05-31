@@ -135,6 +135,15 @@ public final class ExtensionXPCClient: NSObject {
         }
         proxy.requestRebuildFIMBaseline(reply: completion)
     }
+
+    /// Instructs the extension to deploy ransomware canary files into common user directories.
+    public func requestDeployCanaries(completion: @escaping (Bool) -> Void) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.requestDeployCanaries(reply: completion)
+    }
 }
 
 // MARK: - NickAppXPCProtocol (Inbound from Extension)

@@ -28,6 +28,11 @@ import Foundation
     /// state of monitored paths. Used by the "Rebuild Baseline" button in
     /// `IntegrityView`.
     func requestRebuildFIMBaseline(reply: @escaping (Bool) -> Void)
+
+    /// Instructs the extension to deploy ransomware canary files into the
+    /// user's common directories (Desktop, Documents, Downloads, Pictures).
+    /// Useful when the user manually enables the Ransomware Shield from Smart Scan.
+    func requestDeployCanaries(reply: @escaping (Bool) -> Void)
 }
 
 // MARK: - NickAppXPCProtocol (Extension → Container App)

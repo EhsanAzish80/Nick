@@ -50,6 +50,10 @@ ransomwareDetector.canaryManager.deployCanaries()
 let privacyGuard = PrivacyGuard()
 let usbScanner   = USBScanner(fileScanner: fileScanner)
 
+// MARK: Phase 6 — Email attachment monitoring
+
+let emailAttachmentMonitor = EmailAttachmentMonitor()
+
 // MARK: Object graph
 
 let eventHandler = ESEventHandler()
@@ -57,16 +61,17 @@ let xpcServer    = ESXPCServer()
 let esClient     = EndpointSecurityClient(eventHandler: eventHandler)
 
 // Wire cross-references
-eventHandler.xpcServer            = xpcServer
-eventHandler.esClient             = esClient
-eventHandler.fileScanner          = fileScanner
-eventHandler.remediationEngine    = remediationEngine
-eventHandler.fileIntegrityMonitor = fileIntegrityMonitor
-eventHandler.behaviorTracker      = behaviorTracker
-eventHandler.threatPredictor      = threatPredictor
-eventHandler.ransomwareDetector   = ransomwareDetector
-eventHandler.privacyGuard         = privacyGuard
-eventHandler.usbScanner           = usbScanner
+eventHandler.xpcServer               = xpcServer
+eventHandler.esClient                = esClient
+eventHandler.fileScanner             = fileScanner
+eventHandler.remediationEngine       = remediationEngine
+eventHandler.fileIntegrityMonitor    = fileIntegrityMonitor
+eventHandler.behaviorTracker         = behaviorTracker
+eventHandler.threatPredictor         = threatPredictor
+eventHandler.ransomwareDetector      = ransomwareDetector
+eventHandler.privacyGuard            = privacyGuard
+eventHandler.usbScanner              = usbScanner
+eventHandler.emailAttachmentMonitor  = emailAttachmentMonitor
 
 // Wire USB threat callback through XPC
 usbScanner.onThreatFound = { threat in
@@ -77,6 +82,8 @@ usbScanner.onThreatFound = { threat in
 
 // Expose FIM monitor for on-demand baseline rebuilds (Phase 5)
 ESXPCServer.fimMonitorRef = fileIntegrityMonitor
+// Expose ransomware detector for on-demand canary deployment from Smart Scan
+ESXPCServer.ransomwareDetectorRef = ransomwareDetector
 
 // Start XPC listener first — container app can connect as soon as the extension launches
 xpcServer.start()

@@ -18,6 +18,7 @@ struct NetworkConnectionsView: View {
     @Environment(SecurityEngine.self) private var engine
     @State private var searchText = ""
     @State private var expandedProcesses: Set<String> = []
+    @State private var viewMode = 0
 
     // MARK: - Filtering + Grouping
 
@@ -46,6 +47,25 @@ struct NetworkConnectionsView: View {
     private var totalConnections: Int { engine.connections.count }
 
     var body: some View {
+        VStack(spacing: 0) {
+            // View mode picker
+            HStack {
+                Picker("View", selection: $viewMode) {
+                    Text("Connections").tag(0)
+                    Text("Inspector").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 230)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            if viewMode == 1 {
+                NetworkInspectorView()
+            } else {
         Group {
             if grouped.isEmpty {
                 emptyState
@@ -107,6 +127,9 @@ struct NetworkConnectionsView: View {
             }
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "Search process or address…")
+        .navigationTitle("Network")
+        } // end else (Connections mode)
+        } // end outer VStack
         .navigationTitle("Network")
     }
 

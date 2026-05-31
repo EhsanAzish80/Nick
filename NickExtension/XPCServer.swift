@@ -210,9 +210,24 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         }
     }
 
-    // MARK: - FIM monitor back-reference (set by main.swift)
+    func requestDeployCanaries(reply: @escaping (Bool) -> Void) {
+        guard let detector = ESXPCServer.ransomwareDetectorRef else {
+            reply(false)
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            detector.canaryManager.deployCanaries()
+            reply(true)
+        }
+    }
+
+    // MARK: - Module back-references (set by main.swift)
 
     /// Weak reference to the `FileIntegrityMonitor` used to service
     /// `requestRebuildFIMBaseline` calls from the container app.
     nonisolated(unsafe) static weak var fimMonitorRef: FileIntegrityMonitor?
+
+    /// Weak reference to the `RansomwareDetector` used to service
+    /// `requestDeployCanaries` calls from the container app.
+    nonisolated(unsafe) static weak var ransomwareDetectorRef: RansomwareDetector?
 }

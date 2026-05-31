@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Single SecurityEngine instance shared across all scenes.
     let engine = SecurityEngine()
 
+    /// XPC client that bridges the container app to NickExtension.
+    let xpcClient = ExtensionXPCClient()
+
     // MARK: - Private
 
     private var statusItem: NSStatusItem?
@@ -65,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Task { @MainActor in
             engine.runFullScan()
+            xpcClient.connect()
             let coord = MonitorCoordinator(engine: engine, correlator: ThreatCorrelator())
             coordinator = coord
             coord.startRealTimePipeline()

@@ -18,7 +18,9 @@ import SwiftUI
 struct AlertListView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
     @AppStorage("showTrustedAlerts") private var showTrustedAlerts: Bool = false
+    @State private var viewMode = 0
 
     private var visibleAlerts: [ThreatAlert] {
         showTrustedAlerts
@@ -28,7 +30,24 @@ struct AlertListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if visibleAlerts.isEmpty {
+            // View mode picker (Active alerts / Timeline)
+            HStack {
+                Picker("View", selection: $viewMode) {
+                    Text("Active").tag(0)
+                    Text("Timeline").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            if viewMode == 1 {
+                ThreatTimelineView()
+            } else if visibleAlerts.isEmpty {
                 emptyState
             } else {
                 ScrollView {

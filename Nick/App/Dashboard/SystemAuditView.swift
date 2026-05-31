@@ -16,6 +16,7 @@ import SwiftUI
 struct SystemAuditView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
 
     // Separate XProtect result from the rest so it gets its own section.
     private var xprotectResult: SystemCheckResult? {
@@ -124,12 +125,142 @@ struct SystemAuditView: View {
                             .padding(.horizontal, 20)
                             .padding(.bottom, 24)
                         }
+
+                        // MARK: - Privacy Monitor section
+                        privacySection
+
+                        // MARK: - File Integrity section
+                        integritySection
                     }
                 }
             }
         }
         .background(Color.backgroundPrimary)
         .navigationTitle("System Audit")
+    }
+
+    // MARK: - Privacy Monitor section
+
+    private static let compactDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    @ViewBuilder
+    private var privacySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("PRIVACY MONITOR")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.textTertiary)
+                .tracking(0.5)
+                .padding(.horizontal, 20)
+
+            if xpcClient.privacyAlerts.isEmpty {
+                Text("No privacy events — no unauthorized permission changes detected.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.textTertiary)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 16)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(xpcClient.privacyAlerts.prefix(5).enumerated()), id: \.element.id) { idx, alert in
+                        if idx > 0 { Divider().padding(.leading, 44) }
+                        HStack(spacing: 10) {
+                            Image(systemName: alert.changeType == .revoked ? "xmark.shield" : "checkmark.shield.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(alert.changeType == .revoked ? Color.statusOrange : Color.statusGreen)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(alert.appBundleID) → \(alert.service)")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Color.textPrimary)
+                                    .lineLimit(1)
+                                Text(alert.changeType.rawValue.capitalized)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+                            Spacer()
+                            Text(Self.compactDateFormatter.string(from: alert.timestamp))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Color.textTertiary)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.backgroundSecondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+                )
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+            }
+        }
+    }
+
+    // MARK: - File Integrity section
+
+    @ViewBuilder
+    private var integritySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("FILE INTEGRITY")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.textTertiary)
+                .tracking(0.5)
+                .padding(.horizontal, 20)
+
+            if xpcClient.integrityViolations.isEmpty {
+                Text("No integrity violations — all monitored paths are unchanged.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.textTertiary)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 24)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(xpcClient.integrityViolations.prefix(5).enumerated()), id: \.element.id) { idx, v in
+                        if idx > 0 { Divider().padding(.leading, 44) }
+                        HStack(spacing: 10) {
+                            Image(systemName: v.violationType == .deleted ? "trash" : (v.violationType == .created ? "plus.circle" : "pencil"))
+                                .font(.system(size: 14))
+                                .foregroundStyle(Color.statusOrange)
+                                .frame(width: 28)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(v.path)
+                                    .font(.system(size: 13, design: .monospaced))
+                                    .foregroundStyle(Color.textPrimary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(v.violationType.rawValue.capitalized)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+                            Spacer()
+                            Text(Self.compactDateFormatter.string(from: v.timestamp))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Color.textTertiary)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.backgroundSecondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+                )
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+            }
+        }
     }
 
     // MARK: - Helpers

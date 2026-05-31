@@ -4,17 +4,39 @@
 
 import SwiftUI
 
-// MARK: - SmartScanSheetView
+// MARK: - SmartScanContentView
 
-/// Sheet presented when the user taps "Smart Scan" on the Overview.
-/// Shows every `ProtectionCheck` with its icon, headline, explanation and a
-/// "Fix" / "Open Settings" / "Install" button where applicable.
-struct SmartScanSheetView: View {
+/// Self-contained Smart Scan results view. Manages its own checker, runs the
+/// scan on appear (unless `initialStatus` is provided), and handles both
+/// individual-check fixes and Fix All.
+///
+/// Used as the body of `SmartScanSheetView` (sheet) and `SmartScanDetailView`
+/// (sidebar detail area).
+struct SmartScanContentView: View {
 
-    let status: SmartScanStatus?
-    let onFixAll: () -> Void
+    /// Optional pre-computed status from the caller. If `nil`, the view runs
+    /// its own scan on appear.
+    var initialStatus: SmartScanStatus?
 
+    /// When `true` the "Done" dismiss button is shown in the header and the
+    /// view is given a fixed sheet-friendly size.
+    var showDismiss: Bool = false
+
+    @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
     @Environment(\.dismiss) private var dismiss
+
+    @State private var status: SmartScanStatus?
+    @State private var isFixingAll = false
+    @State private var fixAllSummary: FixAllSummary?
+    @State private var checker = SmartScanChecker()
+    @State private var extensionManager = ExtensionManager()
+
+    init(initialStatus: SmartScanStatus? = nil, showDismiss: Bool = false) {
+        self.initialStatus = initialStatus
+        self.showDismiss = showDismiss
+        self._status = State(initialValue: initialStatus)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,18 +54,28 @@ struct SmartScanSheetView: View {
                     }
                 }
                 Spacer()
-                Button("Done") { dismiss() }
+                if showDismiss {
+                    Button("Done") { dismiss() }
+                }
             }
             .padding(20)
 
             Divider()
 
+            // ── Fix All summary banner ────────────────────────────────
+            if let summary = fixAllSummary {
+                summaryBanner(summary)
+                Divider()
+            }
+
             // ── Check list ───────────────────────────────────────────────
-            if let status {
+            if let s = status {
                 ScrollView {
                     VStack(spacing: 0) {
-                        ForEach(status.checks) { check in
-                            ProtectionCheckRow(check: check)
+                        ForEach(s.checks) { check in
+                            ProtectionCheckRow(check: check) {
+                                await handleResolve(check)
+                            }
                             Divider().padding(.horizontal, 20)
                         }
                     }
@@ -53,16 +85,16 @@ struct SmartScanSheetView: View {
 
                 // ── Footer ─────────────────────────────────────────────
                 HStack {
-                    Text("Scanned \(status.scanTimestamp.formatted(.relative(presentation: .named)))")
+                    Text("Scanned \(s.scanTimestamp.formatted(.relative(presentation: .named)))")
                         .font(.caption)
                         .foregroundStyle(Color.textSecondary)
                     Spacer()
-                    if status.issueCount > 0 {
-                        Button("Fix All") {
-                            onFixAll()
-                            dismiss()
+                    if s.issueCount > 0 {
+                        Button(isFixingAll ? "Fixing…" : "Fix All") {
+                            handleFixAll(currentStatus: s)
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(isFixingAll)
                     }
                 }
                 .padding(20)
@@ -72,8 +104,82 @@ struct SmartScanSheetView: View {
                 Spacer()
             }
         }
-        .frame(width: 560, height: 520)
         .background(Color.backgroundPrimary)
+        .task {
+            checker.securityEngine = engine
+            checker.xpcClient = xpcClient
+            checker.extensionManager = extensionManager
+            if status == nil {
+                status = checker.runScan()
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func handleResolve(_ check: ProtectionCheck) async {
+        await checker.resolve(check: check)
+        if let updated = checker.rescanCheck(id: check.id) {
+            status = status?.replacing(check: updated)
+        }
+    }
+
+    private func handleFixAll(currentStatus: SmartScanStatus) {
+        isFixingAll = true
+        fixAllSummary = nil
+        Task { @MainActor in
+            let newStatus = await checker.resolveAll(status: currentStatus)
+            status = newStatus
+            fixAllSummary = checker.lastFixAllSummary
+            isFixingAll = false
+        }
+    }
+
+    @ViewBuilder
+    private func summaryBanner(_ summary: FixAllSummary) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: summary.fixedCount > 0 ? "checkmark.circle.fill" : "info.circle.fill")
+                .foregroundStyle(summary.fixedCount > 0 ? Color.statusGreen : Color.statusOrange)
+                .font(.system(size: 16))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(summaryTitle(summary))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                if !summary.skippedChecks.isEmpty {
+                    Text("Still needs attention: " + summary.skippedChecks.map(\.title).joined(separator: ", "))
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.textSecondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(Color.backgroundSecondary)
+    }
+
+    private func summaryTitle(_ summary: FixAllSummary) -> String {
+        if summary.fixedCount == 0 {
+            return "No items could be fixed automatically."
+        } else if summary.skippedChecks.isEmpty {
+            return "Fixed all \(summary.fixedCount) issue\(summary.fixedCount == 1 ? "" : "s") automatically."
+        } else {
+            return "Fixed \(summary.fixedCount) of \(summary.totalAutoFixable) issue\(summary.totalAutoFixable == 1 ? "" : "s")."
+        }
+    }
+}
+
+// MARK: - SmartScanSheetView
+
+/// Sheet wrapper around `SmartScanContentView`. Applies a fixed sheet frame
+/// and adds a "Done" dismiss button via `showDismiss: true`.
+struct SmartScanSheetView: View {
+
+    let initialStatus: SmartScanStatus?
+
+    var body: some View {
+        SmartScanContentView(initialStatus: initialStatus, showDismiss: true)
+            .frame(width: 560, height: 520)
     }
 }
 
@@ -82,6 +188,9 @@ struct SmartScanSheetView: View {
 private struct ProtectionCheckRow: View {
 
     let check: ProtectionCheck
+    let onResolve: () async -> Void
+
+    @State private var isResolving = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -104,12 +213,12 @@ private struct ProtectionCheckRow: View {
 
             Spacer()
 
-            if check.status != .protected {
-                resolutionButton
-            } else {
+            if check.status == .protected {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(Color.statusGreen)
                     .font(.system(size: 18))
+            } else {
+                resolutionButton
             }
         }
         .padding(.horizontal, 20)
@@ -133,14 +242,37 @@ private struct ProtectionCheckRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+
         case .installExtension:
-            Button("Install") { /* handled via Fix All */ }
+            Button(isResolving ? "Installing…" : "Install") {
+                isResolving = true
+                Task {
+                    await onResolve()
+                    isResolving = false
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(isResolving)
+
+        case .autoEnable:
+            Button(isResolving ? "Enabling…" : "Enable") {
+                isResolving = true
+                Task {
+                    await onResolve()
+                    isResolving = false
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(isResolving)
+
+        case .pendingApproval:
+            Button(check.resolution.buttonLabel) { }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-        case .autoEnable:
-            Button("Enable") { /* handled via Fix All */ }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .disabled(true)
+
         case .none:
             EmptyView()
         }

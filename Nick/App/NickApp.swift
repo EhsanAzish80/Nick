@@ -30,6 +30,7 @@ struct NickApp: App {
         Window("Nick", id: "main") {
             MainWindowView()
                 .environment(appDelegate.engine)
+                .environment(appDelegate.xpcClient)
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
@@ -39,6 +40,7 @@ struct NickApp: App {
         Settings {
             SettingsView()
                 .environment(appDelegate.engine)
+                .environment(appDelegate.xpcClient)
         }
     }
 }

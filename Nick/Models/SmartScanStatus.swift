@@ -78,6 +78,10 @@ struct ProtectionCheck: Identifiable, Sendable {
         /// Nick needs to install a system extension (user approval dialog).
         case installExtension(extensionName: String)
 
+        /// Feature is pending platform approval (e.g. Apple entitlement review).
+        /// Shows a disabled informational button — no user action possible.
+        case pendingApproval(reason: String)
+
         /// Already protected — no action needed.
         case none
 
@@ -86,6 +90,7 @@ struct ProtectionCheck: Identifiable, Sendable {
             case .autoEnable:           return "Enable"
             case .requiresPermission:   return "Open Settings"
             case .installExtension:     return "Install"
+            case .pendingApproval:      return "Pending Approval"
             case .none:                 return "Protected"
             }
         }
@@ -94,6 +99,31 @@ struct ProtectionCheck: Identifiable, Sendable {
             if case .autoEnable = self { return true }
             return false
         }
+    }
+}
+
+// MARK: - FixAllSummary
+
+/// Summary of a "Fix All" operation: how many items were auto-fixed and
+/// which still require manual action.
+struct FixAllSummary {
+    let fixedCount: Int
+    let totalAutoFixable: Int
+    let skippedChecks: [ProtectionCheck]  // items still needing attention after fix all
+}
+
+// MARK: - SmartScanStatus + Helpers
+
+extension SmartScanStatus {
+    /// Returns a new `SmartScanStatus` with the given check replaced by `check`.
+    func replacing(check updatedCheck: ProtectionCheck) -> SmartScanStatus {
+        var newChecks = checks
+        if let idx = newChecks.firstIndex(where: { $0.id == updatedCheck.id }) {
+            newChecks[idx] = updatedCheck
+        }
+        let protectedCount = newChecks.filter { $0.status == .protected }.count
+        let score = (protectedCount * 100) / max(newChecks.count, 1)
+        return SmartScanStatus(checks: newChecks, overallScore: score, scanTimestamp: scanTimestamp)
     }
 }
 
@@ -113,6 +143,13 @@ final class SmartScanChecker {
 
     /// Required to trigger system-extension installation.
     weak var extensionManager: ExtensionManager?
+
+    /// XPC client used to wire Smart Scan fix actions to the running extension.
+    weak var xpcClient: ExtensionXPCClient?
+
+    // MARK: - Summary of last Fix All run
+
+    private(set) var lastFixAllSummary: FixAllSummary?
 
     // MARK: - Public API
 
@@ -140,11 +177,23 @@ final class SmartScanChecker {
 
     /// Attempts to auto-resolve all checks that support it.
     func resolveAll(status: SmartScanStatus) async -> SmartScanStatus {
-        for check in status.checks where check.resolution.canAutoResolve {
+        let autoFixable = status.checks.filter { $0.resolution.canAutoResolve }
+        for check in autoFixable {
             await resolve(check: check)
         }
         // Re-scan to get updated state
-        return runScan()
+        let newStatus = runScan()
+        // Compute summary: how many moved to .protected vs still need attention
+        let fixedCount = autoFixable.filter { old in
+            newStatus.checks.first(where: { $0.id == old.id })?.status == .protected
+        }.count
+        let skipped = newStatus.checks.filter { $0.status != .protected }
+        lastFixAllSummary = FixAllSummary(
+            fixedCount: fixedCount,
+            totalAutoFixable: autoFixable.count,
+            skippedChecks: skipped
+        )
+        return newStatus
     }
 
     /// Resolves a single check.
@@ -156,7 +205,7 @@ final class SmartScanChecker {
             openSystemSettings(url: url)
         case .installExtension(let name):
             await installExtension(name: name)
-        case .none:
+        case .pendingApproval, .none:
             break
         }
     }
@@ -220,7 +269,7 @@ final class SmartScanChecker {
                 + "Active blocking of malicious connections will be enabled in a future update "
                 + "once the required Apple entitlement is approved.",
             icon: "network.badge.shield.half.filled",
-            resolution: .none
+            resolution: .pendingApproval(reason: "Requires Apple content-filter entitlement")
         )
     }
 
@@ -336,7 +385,7 @@ final class SmartScanChecker {
                 status: .protected,
                 headline: "Your Mac's built-in security is properly configured",
                 explanation: "SIP, FileVault, Firewall, and Gatekeeper are all enabled.",
-                icon: "gearshape.shield",
+                icon: "gearshape",
                 resolution: .none
             )
         }
@@ -362,7 +411,11 @@ final class SmartScanChecker {
     private func performAutoEnable(action: String) async {
         switch action {
         case "deploy_ransomware_canaries":
-            // Tell extension via XPC to deploy canary files
+            // Ask the running extension to (re-)deploy canary files, then record the flag.
+            await withCheckedContinuation { continuation in
+                xpcClient?.requestDeployCanaries { _ in continuation.resume() }
+                    ?? { continuation.resume() }()
+            }
             UserDefaults.standard.set(true, forKey: "ransomwareCanariesDeployed")
 
         case "enable_scam_guardian":
@@ -372,8 +425,11 @@ final class SmartScanChecker {
             UserDefaults.standard.set(true, forKey: "emailGuardEnabled")
 
         case "build_fim_baseline":
-            // Tell extension via XPC to build FIM baseline
-            break
+            // Ask the running extension to rebuild the FIM baseline on disk.
+            await withCheckedContinuation { continuation in
+                xpcClient?.requestRebuildFIMBaseline { _ in continuation.resume() }
+                    ?? { continuation.resume() }()
+            }
 
         case "enable_privacy_guard":
             UserDefaults.standard.set(true, forKey: "privacyGuardEnabled")
@@ -391,5 +447,23 @@ final class SmartScanChecker {
 
     private func installExtension(name: String) async {
         extensionManager?.installExtension()
+    }
+
+    // MARK: - Single-check rescan
+
+    /// Re-evaluates the check with the given `id` and returns the updated result.
+    /// Used to refresh a single row after an individual "Enable" action.
+    func rescanCheck(id: String) -> ProtectionCheck? {
+        switch id {
+        case "endpoint_security":  return checkEndpointSecurity()
+        case "ransomware_shield":  return checkRansomwareShield()
+        case "network_monitor":    return checkNetworkMonitor()
+        case "scam_guardian":      return checkScamGuardian()
+        case "email_guard":        return checkEmailGuard()
+        case "file_integrity":     return checkFileIntegrity()
+        case "privacy_guard":      return checkPrivacyGuard()
+        case "system_settings":    return checkSystemSettings()
+        default:                   return nil
+        }
     }
 }

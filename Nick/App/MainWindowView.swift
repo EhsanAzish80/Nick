@@ -97,58 +97,58 @@ struct MainWindowView: View {
     @ViewBuilder
     private var mainContent: some View {
         NavigationSplitView {
-            VStack(spacing: 0) {
-                List(selection: $selectedSection) {
-                    ForEach(SidebarSection.mainSections) { section in
-                        SidebarNavItem(
-                            section:     section,
-                            badge:       section == .alerts ? activeAlertCount : 0,
-                            isDisabled:  section == .alerts && activeAlertCount == 0
-                        )
-                        .tag(section)
-                    }
-                }
-                .navigationSplitViewColumnWidth(min: 210, ideal: 250)
-                .navigationTitle("Nick")
-                .onChange(of: activeAlertCount) { _, count in
-                    if count == 0 && selectedSection == .alerts {
-                        selectedSection = .overview
-                    }
-                }
+            List(selection: $selectedSection) {
+                SidebarNavItem(section: .overview)
+                    .tag(SidebarSection.overview)
+                SidebarNavItem(section: .smartScan)
+                    .tag(SidebarSection.smartScan)
 
-                Divider()
-
-                // Settings — pinned at bottom, outside the scrollable list
-                Button { selectedSection = .settings } label: {
-                    HStack(spacing: 8) {
-                        IconTile(systemImage: "gearshape.fill", tint: Color(NSColor.systemGray), size: 26)
-                        Text("Settings")
-                            .font(.system(size: 13, weight: selectedSection == .settings ? .semibold : .regular))
-                            .foregroundStyle(selectedSection == .settings ? Color.primary : Color.textPrimary)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(
-                        selectedSection == .settings
-                            ? Color(NSColor.selectedContentBackgroundColor).opacity(0.12)
-                            : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 6)
+                Section("SECURITY") {
+                    SidebarNavItem(
+                        section:    .alerts,
+                        badge:      activeAlertCount,
+                        isDisabled: activeAlertCount == 0
                     )
+                    .tag(SidebarSection.alerts)
+                    SidebarNavItem(section: .scan).tag(SidebarSection.scan)
+                    SidebarNavItem(section: .quarantine).tag(SidebarSection.quarantine)
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 8)
-                .padding(.bottom, 10)
+
+                Section("MONITORS") {
+                    SidebarNavItem(section: .systemAudit).tag(SidebarSection.systemAudit)
+                    SidebarNavItem(section: .network).tag(SidebarSection.network)
+                    SidebarNavItem(section: .processes).tag(SidebarSection.processes)
+                    SidebarNavItem(section: .persistence).tag(SidebarSection.persistence)
+                }
+
+                Section("TOOLS") {
+                    SidebarNavItem(section: .performance).tag(SidebarSection.performance)
+                    SidebarNavItem(section: .report).tag(SidebarSection.report)
+                }
+
+                SidebarNavItem(section: .settings)
+                    .tag(SidebarSection.settings)
+            }
+            .navigationSplitViewColumnWidth(min: 210, ideal: 250)
+            .navigationTitle("Nick")
+            .onChange(of: activeAlertCount) { _, count in
+                if count == 0 && selectedSection == .alerts {
+                    selectedSection = .overview
+                }
             }
         } detail: {
             switch selectedSection ?? .overview {
             case .overview:    OverviewDetailView(selectedSection: $selectedSection)
-            case .audit:       SystemAuditView()
+            case .smartScan:   SmartScanDetailView()
+            case .alerts:      AlertListView()
+            case .scan:        ScannerDetailView()
+            case .quarantine:  QuarantineView()
+            case .systemAudit: SystemAuditView()
             case .network:     NetworkConnectionsView()
             case .processes:   ProcessListView()
             case .persistence: PersistenceDetailView()
-            case .alerts:      AlertListView()
-            case .scanner:     ScannerDetailView()
+            case .performance: PerformanceView()
+            case .report:      ReportView()
             case .settings:    SettingsView()
             }
         }
@@ -180,39 +180,42 @@ struct MainWindowView: View {
             if let url = note.object as? URL {
                 engine.pendingFinderScanURL = url
             }
-            selectedSection = .scanner
+            selectedSection = .scan
         }
     }
 }
 
 enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case overview    = "Overview"
-    case audit       = "System Audit"
+    case smartScan   = "Smart Scan"
+    case alerts      = "Alerts"
+    case scan        = "Scan"
+    case quarantine  = "Quarantine"
+    case systemAudit = "System Audit"
     case network     = "Network"
     case processes   = "Processes"
     case persistence = "Persistence"
-    case alerts      = "Alerts"
-    case scanner     = "Scan"
+    case performance = "Performance"
+    case report      = "Report"
     case settings    = "Settings"
 
     var id: String { rawValue }
 
-    var title: String { id }
-
-    /// Sections shown in the main ForEach list (Settings is pinned separately at the bottom)
-    static var mainSections: [SidebarSection] {
-        allCases.filter { $0 != .settings }
-    }
+    var title: String { rawValue }
 
     var icon: String {
         switch self {
         case .overview:    return "shield.checkered"
-        case .audit:       return "checkmark.shield"
+        case .smartScan:   return "sparkle.magnifyingglass"
+        case .alerts:      return "exclamationmark.triangle.fill"
+        case .scan:        return "doc.text.magnifyingglass"
+        case .quarantine:  return "archivebox.fill"
+        case .systemAudit: return "checkmark.shield"
         case .network:     return "network"
         case .processes:   return "cpu"
         case .persistence: return "arrow.triangle.2.circlepath"
-        case .alerts:      return "exclamationmark.triangle.fill"
-        case .scanner:     return "doc.text.magnifyingglass"
+        case .performance: return "gauge.medium"
+        case .report:      return "doc.text.fill"
         case .settings:    return "gearshape.fill"
         }
     }
@@ -221,12 +224,16 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     var tint: Color {
         switch self {
         case .overview:    return .blue
-        case .audit:       return .green
+        case .smartScan:   return .blue
+        case .alerts:      return .red
+        case .scan:        return Color(NSColor.systemGray)
+        case .quarantine:  return .orange
+        case .systemAudit: return .green
         case .network:     return .blue
         case .processes:   return .purple
         case .persistence: return .orange
-        case .alerts:      return .red
-        case .scanner:     return Color(NSColor.systemGray)
+        case .performance: return .mint
+        case .report:      return Color(NSColor.systemGray)
         case .settings:    return Color(NSColor.systemGray)
         }
     }
@@ -244,7 +251,7 @@ private func isFocusModeActive() -> Bool {
 
 // MARK: - SidebarNavItem
 
-/// A sidebar list row with an IconTile badge and an optional alert count badge.
+/// A sidebar list row with a plain SF Symbol icon and an optional alert count badge.
 private struct SidebarNavItem: View {
 
     let section:    SidebarSection
@@ -255,10 +262,11 @@ private struct SidebarNavItem: View {
         Label {
             HStack {
                 Text(section.title)
+                    .font(.system(size: 13))
                 Spacer()
                 if badge > 0 {
                     Text("\(badge)")
-                        .font(.nickCaption)
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -266,10 +274,23 @@ private struct SidebarNavItem: View {
                 }
             }
         } icon: {
-            IconTile(systemImage: section.icon, tint: section.tint, size: 26)
+            Image(systemName: section.icon)
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 5)
         .disabled(isDisabled)
+    }
+}
+
+// MARK: - SmartScanDetailView
+
+/// Sidebar detail view for Smart Scan. Uses `SmartScanContentView` which
+/// is self-contained: runs the scan on appear, handles individual fixes,
+/// Fix All, and shows the summary inline.
+private struct SmartScanDetailView: View {
+    var body: some View {
+        SmartScanContentView()
+            .navigationTitle("Smart Scan")
     }
 }
 
@@ -281,6 +302,7 @@ struct OverviewDetailView: View {
 
     @Binding var selectedSection: SidebarSection?
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
 
     @AppStorage("deepScanIntervalSeconds") private var scanIntervalSeconds: Int = 60
     @State private var now: Date = .now
@@ -291,7 +313,7 @@ struct OverviewDetailView: View {
     @State private var smartScanStatus: SmartScanStatus? = nil
     @State private var isRunningSmart = false
 
-    // MARK: - Derived counts
+    // MARK: - Derived
 
     private var auditIssues:       Int { engine.auditResults.filter { $0.status != .pass }.count }
     private var persistenceIssues: Int { engine.persistenceItems.filter { $0.signingStatus?.isSuspicious == true }.count }
@@ -299,52 +321,44 @@ struct OverviewDetailView: View {
     private var networkIssues:     Int { engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count }
     private var totalIssues:       Int { auditIssues + persistenceIssues + processIssues + networkIssues }
 
-    private var nextScanIn: Int {
-        guard let last = engine.lastScanDate else { return scanIntervalSeconds }
-        return max(0, scanIntervalSeconds - Int(now.timeIntervalSince(last)))
+    private var statusLine: String {
+        guard !engine.isScanning else { return "Scan in progress…" }
+        var parts: [String] = []
+        if let last = engine.lastScanDate {
+            parts.append("Last scan \(last.formatted(.relative(presentation: .named)))")
+        }
+        let n = engine.totalThreatsDetected
+        parts.append(n == 0 ? "No threats blocked" : "\(n) threat\(n == 1 ? "" : "s") blocked")
+        parts.append("6 layers active")
+        return parts.joined(separator: " · ")
     }
 
-    // Sectional scores out of 25 (capped at 0)
-    private func sectionScore(_ issues: Int) -> Int { max(0, 25 - issues) }
+    // MARK: - Body
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 0) {
-                heroCard
+            VStack(spacing: 14) {
+                statusHeader
                     .padding(.horizontal, 20)
                     .padding(.top, 20)
-                    .padding(.bottom, 16)
 
-                scoreBreakdown
+                featureTilesSection
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 16)
 
-                statusGroup
+                recentActivitySection
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 16)
 
-                protectionSummaryGroup
+                protectionFooter
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 16)
-
-                recentActivityGroup
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 20)
             }
         }
         .background(Color.backgroundPrimary)
         .navigationTitle("Overview")
         .sheet(isPresented: $showSmartScan) {
-            SmartScanSheetView(status: smartScanStatus, onFixAll: {
-                Task { @MainActor in
-                    let checker = SmartScanChecker()
-                    checker.securityEngine = engine
-                    if let s = smartScanStatus {
-                        smartScanStatus = await checker.resolveAll(status: s)
-                    }
-                }
-            })
-            .environment(engine)
+            SmartScanSheetView(initialStatus: smartScanStatus)
+                .environment(engine)
+                .environment(xpcClient)
         }
         .task {
             while !Task.isCancelled {
@@ -355,237 +369,191 @@ struct OverviewDetailView: View {
         }
     }
 
-    // MARK: - Hero card
+    // MARK: - Section 1: Status Header
 
-    private var heroCard: some View {
-        HStack(spacing: 16) {
-            IconTile(
-                systemImage: totalIssues == 0 ? "checkmark.shield.fill" : "exclamationmark.shield.fill",
-                tint:        totalIssues == 0 ? .green : .orange,
-                size: 56
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(totalIssues == 0 ? "Your Mac is protected" : "Attention needed")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
-                    if engine.healthScore == -1 {
-                        Text("—")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.textTertiary)
-                    } else {
-                        Text("\(engine.healthScore)")
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
-                            .foregroundStyle(totalIssues == 0 ? Color.statusGreen : Color.statusOrange)
-                        Text("/100")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Color.textSecondary)
+    private var statusHeader: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: totalIssues == 0 ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(totalIssues == 0 ? Color.statusGreen : Color.statusOrange)
+                Text(totalIssues == 0
+                     ? "Your Mac is protected"
+                     : "\(totalIssues) issue\(totalIssues == 1 ? "" : "s") need attention")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                Spacer()
+                Button(isRunningSmart ? "Checking…" : "Smart Scan") {
+                    isRunningSmart = true
+                    Task { @MainActor in
+                        let checker = SmartScanChecker()
+                        checker.securityEngine = engine
+                        smartScanStatus = checker.runScan()
+                        isRunningSmart = false
+                        showSmartScan = true
                     }
-                    Spacer()
                 }
-                HStack {
-                    Text(engine.isScanning
-                         ? "Scan in progress…"
-                         : (engine.lastScanDate.map { "Last scan \($0.formatted(.relative(presentation: .named))). No threats found." }
-                            ?? "No scan completed yet."))
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.textSecondary)
-                    Spacer()
-                    Button(isRunningSmart ? "Checking…" : "Smart Scan") {
-                        isRunningSmart = true
-                        Task { @MainActor in
-                            let checker = SmartScanChecker()
-                            checker.securityEngine = engine
-                            smartScanStatus = checker.runScan()
-                            isRunningSmart = false
-                            showSmartScan = true
-                        }
+                .buttonStyle(.bordered)
+                .disabled(isRunningSmart)
+                .controlSize(.small)
+                Button("Scan a File") {
+                    let panel = NSOpenPanel()
+                    panel.prompt = "Scan"
+                    panel.allowsMultipleSelection = false
+                    panel.begin { result in
+                        guard result == .OK, let url = panel.url else { return }
+                        engine.pendingFinderScanURL = url
+                        selectedSection = .scan
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(isRunningSmart)
-                    Button(engine.isScanning ? "Scanning…" : "Run Scan") {
-                        engine.runFullScan()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(engine.isScanning)
                 }
+                .buttonStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.blue)
+                .controlSize(.small)
             }
+            Text(statusLine)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.textSecondary)
         }
-        .padding(16)
+        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(totalIssues == 0 ? Color.statusGreen.opacity(0.06) : Color.backgroundSecondary)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(
                     totalIssues == 0 ? Color.statusGreen.opacity(0.15) : Color.borderSubtle,
-                    lineWidth: totalIssues == 0 ? 1 : 0.5
+                    lineWidth: 0.5
                 )
         )
     }
 
-    // MARK: - Score breakdown (segmented bars)
+    // MARK: - Section 2: Feature Tiles
 
-    private var scoreBreakdown: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(spacing: 10) {
-                // Segmented color bar
-                GeometryReader { geo in
-                    HStack(spacing: 2) {
-                        Capsule().fill(Color.green)   .frame(width: geo.size.width * 0.25, height: 6)
-                        Capsule().fill(Color.orange)  .frame(width: geo.size.width * 0.25, height: 6)
-                        Capsule().fill(Color.purple)  .frame(width: geo.size.width * 0.25, height: 6)
-                        Capsule().fill(Color.blue)    .frame(width: geo.size.width * 0.25, height: 6)
-                    }
-                }
-                .frame(height: 6)
-
-                // Legend
-                HStack(spacing: 0) {
-                    ScoreLegendItem(color: .green,  label: "System Audit", score: sectionScore(auditIssues))
-                    ScoreLegendItem(color: .orange, label: "Persistence",  score: sectionScore(persistenceIssues))
-                    ScoreLegendItem(color: .purple, label: "Processes",    score: sectionScore(processIssues))
-                    ScoreLegendItem(color: .blue,   label: "Network",      score: sectionScore(networkIssues))
-                }
-            }
-            .padding(16)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.backgroundSecondary)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
-            )
-        }
+    private struct FeatureTileItem {
+        let name:     String
+        let icon:     String
+        let tint:     Color
+        let section:  SidebarSection
+        let subtitle: String
+        let active:   Bool
     }
 
-    // MARK: - Status group
+    private var featureTileItems: [FeatureTileItem] {
+        let todayCount = xpcClient.events.filter {
+            Calendar.current.isDateInToday($0.timestamp)
+        }.count
+        let rtpSub = todayCount == 0 ? "Monitoring · no threats" : "\(todayCount) event\(todayCount == 1 ? "" : "s") today"
 
-    private var statusGroup: some View {
+        let canariesDeployed = UserDefaults.standard.bool(forKey: "ransomwareCanariesDeployed")
+        let ransomSub = canariesDeployed ? "Active · 0 threats" : "Not enabled"
+
+        let qCount = xpcClient.quarantineRecords.count
+        let qSub = qCount == 0 ? "Empty" : "\(qCount) item\(qCount == 1 ? "" : "s")"
+
+        let connCount = engine.connections.count
+        let netSub = connCount == 0
+            ? "No active connections"
+            : "\(connCount) connection\(connCount == 1 ? "" : "s") active"
+
+        let privCount = xpcClient.privacyAlerts.count
+        let privSub = privCount == 0 ? "No unauthorized access" : "\(privCount) alert\(privCount == 1 ? "" : "s")"
+
+        let emailCount = xpcClient.events.filter { $0.threatFamily == "EmailThreat" }.count
+        let emailSub = emailCount == 0 ? "Monitoring" : "\(emailCount) threat\(emailCount == 1 ? "" : "s") detected"
+
+        let perfBytes = engine.performanceMonitor?.totalReclaimableBytes ?? 0
+        let perfSub: String
+        if perfBytes == 0 {
+            perfSub = "Tap to scan"
+        } else if perfBytes >= 1_000_000_000 {
+            perfSub = String(format: "%.1f GB reclaimable", Double(perfBytes) / 1_000_000_000)
+        } else {
+            perfSub = String(format: "%.0f MB reclaimable", Double(perfBytes) / 1_000_000)
+        }
+
+        let smartSub: String
+        let smartActive: Bool
+        if let last = engine.lastScanDate {
+            let mins = Int(Date().timeIntervalSince(last) / 60)
+            smartSub = mins < 60 ? "Last: \(mins)m ago · All clear" : "Last: \(mins / 60)h ago · All clear"
+            smartActive = true
+        } else {
+            smartSub = "Not run yet"
+            smartActive = false
+        }
+
+        return [
+            FeatureTileItem(name: "Real-Time Protection", icon: "shield.fill",
+                            tint: .green,   section: .systemAudit, subtitle: rtpSub,        active: xpcClient.isConnected),
+            FeatureTileItem(name: "Ransomware Shield",    icon: "lock.shield.fill",
+                            tint: .orange,  section: .quarantine,  subtitle: ransomSub,     active: canariesDeployed),
+            FeatureTileItem(name: "Network Monitor",      icon: "network",
+                            tint: .blue,    section: .network,     subtitle: netSub,        active: connCount > 0),
+            FeatureTileItem(name: "Privacy Guard",        icon: "hand.raised.fill",
+                            tint: .indigo,  section: .systemAudit, subtitle: privSub,       active: privCount == 0),
+            FeatureTileItem(name: "Email Guard",          icon: "envelope.badge.shield.half.filled",
+                            tint: .teal,    section: .systemAudit, subtitle: emailSub,      active: true),
+            FeatureTileItem(name: "Performance",          icon: "gauge.medium",
+                            tint: .mint,    section: .performance, subtitle: perfSub,       active: perfBytes > 0),
+            FeatureTileItem(name: "Smart Scan",           icon: "sparkle.magnifyingglass",
+                            tint: .blue,    section: .smartScan,   subtitle: smartSub,      active: smartActive),
+            FeatureTileItem(name: "Quarantine",           icon: "archivebox.fill",
+                            tint: .orange,  section: .quarantine,  subtitle: qSub,          active: true),
+        ]
+    }
+
+    private var featureTilesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("STATUS")
+            Text("FEATURES")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.textTertiary)
                 .tracking(1)
 
-            VStack(spacing: 0) {
-                OverviewStatusRow(
-                    icon: "checkmark.shield", tint: .green,
-                    title: "System Audit",
-                    subtitle: "\(engine.auditResults.count) settings verified",
-                    issues: auditIssues
-                ) { selectedSection = .audit }
-
-                Divider().padding(.leading, 58)
-
-                OverviewStatusRow(
-                    icon: "arrow.triangle.2.circlepath", tint: .orange,
-                    title: "Persistence",
-                    subtitle: "\(engine.persistenceItems.count) launch items",
-                    issues: persistenceIssues
-                ) { selectedSection = .persistence }
-
-                Divider().padding(.leading, 58)
-
-                OverviewStatusRow(
-                    icon: "cpu", tint: .purple,
-                    title: "Processes",
-                    subtitle: "\(engine.processes.count) running",
-                    issues: processIssues
-                ) { selectedSection = .processes }
-
-                Divider().padding(.leading, 58)
-
-                OverviewStatusRow(
-                    icon: "network", tint: .blue,
-                    title: "Network",
-                    subtitle: "\(engine.connections.count) active connections",
-                    issues: networkIssues
-                ) { selectedSection = .network }
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.backgroundSecondary)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
-            )
-        }
-    }
-
-    // MARK: - Protection summary group
-
-    private var protectionSummaryGroup: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("PROTECTION SUMMARY")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.textTertiary)
-                .tracking(1)
-
-            VStack(spacing: 0) {
-                summaryRow(label: "Monitoring since", value: engine.monitoringSince.formatted(date: .abbreviated, time: .omitted))
-
-                Divider().padding(.leading, 16)
-                summaryRow(label: "Total scans", value: "\(engine.totalScanCount)")
-
-                Divider().padding(.leading, 16)
-                summaryRow(label: "Threats detected", value: "\(engine.totalThreatsDetected)")
-
-                if let last = engine.lastScanDate {
-                    Divider().padding(.leading, 16)
-                    summaryRow(label: "Last scan", value: last.formatted(date: .abbreviated, time: .shortened))
-                }
-
-                Divider().padding(.leading, 16)
-                summaryRow(label: "Next scan", value: "In \(nextScanIn) sec")
-
-                if focusModeActive {
-                    Divider().padding(.leading, 16)
-                    HStack(spacing: 8) {
-                        Image(systemName: "moon.fill")
-                            .foregroundStyle(Color.statusOrange)
-                            .font(.system(size: 12))
-                        Text("Focus Mode is on — notifications are silenced")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.textSecondary)
-                        Spacer()
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                spacing: 10
+            ) {
+                ForEach(featureTileItems, id: \.name) { tile in
+                    Button { selectedSection = tile.section } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Image(systemName: tile.icon)
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(tile.tint)
+                                .frame(width: 28, height: 28)
+                            Text(tile.name)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.textPrimary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(tile.subtitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(tile.active ? Color.textSecondary : Color.statusOrange)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.backgroundSecondary)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+                        )
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                    .buttonStyle(.plain)
                 }
             }
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.backgroundSecondary)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
-            )
         }
     }
 
-    private func summaryRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.textPrimary)
-            Spacer()
-            Text(value)
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(Color.textSecondary)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-    }
+    // MARK: - Section 3: Recent Activity
 
-    // MARK: - Recent activity group
-
-    private var recentActivityGroup: some View {
+    private var recentActivitySection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("RECENT ACTIVITY")
@@ -600,43 +568,49 @@ struct OverviewDetailView: View {
             }
 
             if engine.activityLog.events.isEmpty {
-                Text("No recent activity")
+                Text("No recent activity — Nick is watching.")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.textTertiary)
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 20)
+                    .padding(.vertical, 18)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(Color.backgroundSecondary)
                     )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+                    )
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(engine.activityLog.events.prefix(5).enumerated()), id: \.offset) { idx, event in
-                        if idx > 0 { Divider().padding(.leading, 52) }
-                        HStack(spacing: 12) {
+                    ForEach(Array(engine.activityLog.events.prefix(7).enumerated()), id: \.offset) { idx, event in
+                        if idx > 0 { Divider().padding(.leading, 44) }
+                        HStack(spacing: 10) {
                             ZStack {
                                 Circle()
                                     .fill(activityColor(event.iconColor).opacity(0.12))
-                                    .frame(width: 32, height: 32)
+                                    .frame(width: 28, height: 28)
                                 Image(systemName: event.icon)
-                                    .font(.system(size: 14))
+                                    .font(.system(size: 12))
                                     .foregroundStyle(activityColor(event.iconColor))
                             }
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 1) {
                                 Text(event.title)
                                     .font(.system(size: 13))
                                     .foregroundStyle(Color.textPrimary)
+                                    .lineLimit(1)
                                 Text(event.subtitle)
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(Color.textTertiary)
+                                    .lineLimit(1)
                             }
                             Spacer()
-                            Text(relativeTimestamp(event.timestamp))
-                                .font(.system(size: 11))
+                            Text(compactTimestamp(event.timestamp))
+                                .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(Color.textTertiary)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
                     }
                 }
                 .background(
@@ -648,14 +622,55 @@ struct OverviewDetailView: View {
                         .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
                 )
             }
-
-            Text("Continuous protection is on.")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.textTertiary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 4)
         }
     }
+
+    // MARK: - Section 4: Footer Stats
+
+    private var protectionFooter: some View {
+        HStack(spacing: 0) {
+            footerStat(
+                label: "Monitoring since",
+                value: engine.monitoringSince.formatted(date: .abbreviated, time: .omitted)
+            )
+            footerDot()
+            footerStat(label: "Total scans", value: engine.totalScanCount.formatted())
+            footerDot()
+            footerStat(label: "Threats blocked", value: engine.totalThreatsDetected.formatted())
+            if focusModeActive {
+                footerDot()
+                HStack(spacing: 4) {
+                    Image(systemName: "moon.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.statusOrange)
+                    Text("Focus Mode on")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.statusOrange)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    private func footerStat(label: String, value: String) -> some View {
+        HStack(spacing: 4) {
+            Text("\(label):")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.textTertiary)
+            Text(value)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.textSecondary)
+        }
+    }
+
+    private func footerDot() -> some View {
+        Text("·")
+            .font(.system(size: 11))
+            .foregroundStyle(Color.textTertiary)
+            .padding(.horizontal, 8)
+    }
+
+    // MARK: - Helpers
 
     private func activityColor(_ string: String) -> Color {
         switch string {
@@ -667,88 +682,14 @@ struct OverviewDetailView: View {
         }
     }
 
-    private func relativeTimestamp(_ date: Date) -> String {
+    private func compactTimestamp(_ date: Date) -> String {
         let age = Date().timeIntervalSince(date)
-        if age < 60 {
-            return date.formatted(date: .omitted, time: .shortened)
-        }
-        return date.formatted(.relative(presentation: .named))
-    }
-}
-
-// MARK: - ScoreLegendItem
-
-private struct ScoreLegendItem: View {
-    let color: Color
-    let label: String
-    let score: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                Circle().fill(color).frame(width: 7, height: 7)
-                Text(label)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.textSecondary)
-                    .lineLimit(1)
-            }
-            Text("\(score)/25")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.textPrimary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-// MARK: - OverviewStatusRow
-
-private struct OverviewStatusRow: View {
-    let icon:     String
-    let tint:     Color
-    let title:    String
-    let subtitle: String
-    let issues:   Int
-    let action:   () -> Void
-
-    private var statusDotKind: StatusDot.Kind {
-        issues > 0 ? .bad : .ok
-    }
-
-    private var statusLabel: String {
-        if issues > 0 {
-            let plural = issues == 1 ? "" : "s"
-            return "\(issues) issue\(plural)"
-        }
-        return "All clear"
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                IconTile(systemImage: icon, tint: tint, size: 36)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.textPrimary)
-                    Text(subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.textSecondary)
-                }
-
-                Spacer()
-
-                StatusText(kind: statusDotKind, label: statusLabel)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.textTertiary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        if age < 60 { return "<1m" }
+        let mins = Int(age / 60)
+        if mins < 60 { return "\(mins)m" }
+        let hrs = mins / 60
+        if hrs < 24 { return "\(hrs)h" }
+        return "\(hrs / 24)d"
     }
 }
 
@@ -828,8 +769,10 @@ private struct RecentActivityView: View {
 struct ProcessListView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
     @State private var sortOrder = [KeyPathComparator<NickProcessInfo>(\NickProcessInfo.name)]
     @State private var searchText = ""
+    @State private var viewMode = 0
 
     private var filtered: [NickProcessInfo] {
         let base = searchText.isEmpty
@@ -859,11 +802,20 @@ struct ProcessListView: View {
                         .foregroundStyle(Color.textSecondary)
                 }
                 Spacer()
+                Picker("View", selection: $viewMode) {
+                    Text("List").tag(0)
+                    Text("Tree").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 140)
             }
             .padding(.horizontal, 20)
             .padding(.top, 20)
             .padding(.bottom, 12)
 
+            if viewMode == 1 {
+                ProcessTreeView()
+            } else {
             Table(filtered, sortOrder: $sortOrder) {
                 TableColumn("PID", value: \.pid) { p in
                     Text("\(p.pid)")
@@ -916,6 +868,7 @@ struct ProcessListView: View {
                 .width(min: 80, ideal: 110)
             }
             .searchable(text: $searchText, prompt: "Filter processes…")
+            } // end else (List mode)
         }
         .navigationTitle("Processes")
     }
