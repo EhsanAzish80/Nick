@@ -21,6 +21,8 @@ struct AlertListView: View {
     @Environment(ExtensionXPCClient.self) private var xpcClient
     @AppStorage("showTrustedAlerts") private var showTrustedAlerts: Bool = false
     @State private var viewMode = 0
+    @State private var timelineFilter: ThreatTimelineView.EventFilter = .all
+    @State private var timelineSearch = ""
 
     private var visibleAlerts: [ThreatAlert] {
         showTrustedAlerts
@@ -29,24 +31,9 @@ struct AlertListView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // View mode picker (Active alerts / Timeline)
-            HStack {
-                Picker("View", selection: $viewMode) {
-                    Text("Active").tag(0)
-                    Text("Timeline").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 200)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
-            Divider()
-
+        Group {
             if viewMode == 1 {
-                ThreatTimelineView()
+                ThreatTimelineView(selectedFilter: $timelineFilter, searchText: $timelineSearch)
             } else if visibleAlerts.isEmpty {
                 emptyState
             } else {
@@ -63,72 +50,48 @@ struct AlertListView: View {
                 }
             }
         }
+        .searchable(text: $timelineSearch, placement: .toolbar)
+        .navigationTitle(viewMode == 0 ? "Alerts" : "Threat Timeline")
+        .toolbar {
+            ToolbarItemGroup(placement: .automatic) {
+                Picker("View", selection: $viewMode) {
+                    Text("Active").tag(0)
+                    Text("Timeline").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                if viewMode == 1 {
+                    Picker("Filter", selection: $timelineFilter) {
+                        ForEach(ThreatTimelineView.EventFilter.allCases, id: \.self) {
+                            Text($0.rawValue).tag($0)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                }
+            }
+        }
     }
 
     // MARK: - Empty state
 
     private var emptyState: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                Spacer(minLength: 40)
-
-                // Green shield IconTile (72px)
-                IconTile(
-                    systemImage: "checkmark.shield.fill",
-                    tint: .green,
-                    size: 72
-                )
-
-                VStack(spacing: 8) {
-                    Text("All clear")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
-                    Text(engine.isScanning
-                         ? "Scan in progress…"
-                         : "No threats or suspicious activity detected.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textSecondary)
-                        .multilineTextAlignment(.center)
-                }
-
-                // Two pill buttons
-                HStack(spacing: 12) {
-                    Button("Run Scan") { engine.runFullScan() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(engine.isScanning)
-
-                    Toggle("Show trusted activity", isOn: $showTrustedAlerts)
-                        .toggleStyle(.button)
-                }
-
-                // Footnote card
-                HStack(spacing: 10) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textTertiary)
-                    Text("Nick continuously monitors your Mac. Alerts appear here when suspicious activity is detected.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.backgroundSecondary)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
-                )
-                .padding(.horizontal, 40)
-                .padding(.top, 8)
-
-                Spacer(minLength: 40)
+        VStack(spacing: 10) {
+            Image(systemName: "checkmark.shield")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text("No active alerts")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Toggle(isOn: $showTrustedAlerts) {
+                Text("Show dismissed")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity)
-            .padding()
+            .toggleStyle(.checkbox)
+            .padding(.top, 4)
         }
-        .background(Color.backgroundPrimary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

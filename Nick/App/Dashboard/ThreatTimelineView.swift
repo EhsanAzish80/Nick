@@ -13,10 +13,9 @@ import SwiftUI
 /// via XPC. Events are sorted newest-first and grouped by day.
 struct ThreatTimelineView: View {
 
+    @Binding var selectedFilter: EventFilter
+    @Binding var searchText: String
     @Environment(ExtensionXPCClient.self) private var xpcClient
-
-    @State private var searchText = ""
-    @State private var selectedFilter: EventFilter = .all
 
     // MARK: - Filters
 
@@ -66,50 +65,29 @@ struct ThreatTimelineView: View {
     // MARK: - Body
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Filter picker + search
-            HStack {
-                Picker("Filter", selection: $selectedFilter) {
-                    ForEach(EventFilter.allCases, id: \.self) {
-                        Text($0.rawValue).tag($0)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                Spacer()
-
-                TextField("Search", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 200)
+        if filtered.isEmpty {
+            VStack(spacing: 8) {
+                Text(xpcClient.events.isEmpty
+                    ? "No events yet. Events appear here once the extension is active."
+                    : "No events match the current filter.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-
-            Divider()
-
-            if filtered.isEmpty {
-                ContentUnavailableView(
-                    "No Events",
-                    systemImage: "clock.badge.checkmark",
-                    description: Text(xpcClient.events.isEmpty
-                        ? "No events received yet. Events will appear here once the extension is active."
-                        : "No events match the current filter.")
-                )
-            } else {
-                List {
-                    ForEach(grouped, id: \.day) { group in
-                        Section(header: Text(group.day).font(.headline)) {
-                            ForEach(group.events) { event in
-                                EventRow(event: event)
-                            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List {
+                ForEach(grouped, id: \.day) { group in
+                    Section(header: Text(group.day).font(.headline)) {
+                        ForEach(group.events) { event in
+                            EventRow(event: event)
                         }
                     }
                 }
-                .listStyle(.inset)
             }
+            .listStyle(.inset)
         }
-        .navigationTitle("Threat Timeline")
-        .navigationSubtitle("\(xpcClient.events.count) event(s) total")
     }
 }
 
@@ -212,7 +190,9 @@ private extension String {
 // MARK: - Preview
 
 #Preview {
-    ThreatTimelineView()
+    @State var filter = ThreatTimelineView.EventFilter.all
+    @State var search = ""
+    return ThreatTimelineView(selectedFilter: $filter, searchText: $search)
         .environment(ExtensionXPCClient())
         .frame(width: 700, height: 500)
 }

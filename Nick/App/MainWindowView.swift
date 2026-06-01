@@ -308,11 +308,6 @@ struct OverviewDetailView: View {
     @State private var now: Date = .now
     @State private var focusModeActive = false
 
-    // Smart Scan state
-    @State private var showSmartScan = false
-    @State private var smartScanStatus: SmartScanStatus? = nil
-    @State private var isRunningSmart = false
-
     // MARK: - Derived
 
     private var auditIssues:       Int { engine.auditResults.filter { $0.status != .pass }.count }
@@ -336,30 +331,33 @@ struct OverviewDetailView: View {
     // MARK: - Body
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 14) {
+        VStack(spacing: 0) {
+            // Fixed top: status headline + feature tiles
+            VStack(spacing: 12) {
                 statusHeader
                     .padding(.horizontal, 20)
-                    .padding(.top, 20)
-
+                    .padding(.top, 16)
                 featureTilesSection
                     .padding(.horizontal, 20)
+                    .padding(.bottom, 8)
+            }
+            .padding(.bottom)
 
+            //Divider()
+
+            // Expanding: activity table + footer
+            VStack(spacing: 0) {
                 recentActivitySection
                     .padding(.horizontal, 20)
-
+                    .padding(.top, 8)
                 protectionFooter
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
+                    .padding(.top, 4)
+                    .padding(.bottom, 12)
             }
         }
-        .background(Color.backgroundPrimary)
+        .background(Color(.windowBackgroundColor))
         .navigationTitle("Overview")
-        .sheet(isPresented: $showSmartScan) {
-            SmartScanSheetView(initialStatus: smartScanStatus)
-                .environment(engine)
-                .environment(xpcClient)
-        }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -372,29 +370,20 @@ struct OverviewDetailView: View {
     // MARK: - Section 1: Status Header
 
     private var statusHeader: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
                 Image(systemName: totalIssues == 0 ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.title2)
                     .foregroundStyle(totalIssues == 0 ? Color.statusGreen : Color.statusOrange)
                 Text(totalIssues == 0
                      ? "Your Mac is protected"
                      : "\(totalIssues) issue\(totalIssues == 1 ? "" : "s") need attention")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
+                    .font(.title2.bold())
                 Spacer()
-                Button(isRunningSmart ? "Checking…" : "Smart Scan") {
-                    isRunningSmart = true
-                    Task { @MainActor in
-                        let checker = SmartScanChecker()
-                        checker.securityEngine = engine
-                        smartScanStatus = checker.runScan()
-                        isRunningSmart = false
-                        showSmartScan = true
-                    }
+                Button("Smart Scan") {
+                    selectedSection = .smartScan
                 }
                 .buttonStyle(.bordered)
-                .disabled(isRunningSmart)
                 .controlSize(.small)
                 Button("Scan a File") {
                     let panel = NSOpenPanel()
@@ -412,21 +401,9 @@ struct OverviewDetailView: View {
                 .controlSize(.small)
             }
             Text(statusLine)
-                .font(.system(size: 12))
-                .foregroundStyle(Color.textSecondary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(totalIssues == 0 ? Color.statusGreen.opacity(0.06) : Color.backgroundSecondary)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(
-                    totalIssues == 0 ? Color.statusGreen.opacity(0.15) : Color.borderSubtle,
-                    lineWidth: 0.5
-                )
-        )
     }
 
     // MARK: - Section 2: Feature Tiles
@@ -486,15 +463,15 @@ struct OverviewDetailView: View {
 
         return [
             FeatureTileItem(name: "Real-Time Protection", icon: "shield.fill",
-                            tint: .green,   section: .systemAudit, subtitle: rtpSub,        active: xpcClient.isConnected),
+                            tint: .green,   section: .alerts,      subtitle: rtpSub,        active: xpcClient.isConnected),
             FeatureTileItem(name: "Ransomware Shield",    icon: "lock.shield.fill",
-                            tint: .orange,  section: .quarantine,  subtitle: ransomSub,     active: canariesDeployed),
+                            tint: .orange,  section: .alerts,      subtitle: ransomSub,     active: canariesDeployed),
             FeatureTileItem(name: "Network Monitor",      icon: "network",
                             tint: .blue,    section: .network,     subtitle: netSub,        active: connCount > 0),
             FeatureTileItem(name: "Privacy Guard",        icon: "hand.raised.fill",
                             tint: .indigo,  section: .systemAudit, subtitle: privSub,       active: privCount == 0),
             FeatureTileItem(name: "Email Guard",          icon: "envelope.badge.shield.half.filled",
-                            tint: .teal,    section: .systemAudit, subtitle: emailSub,      active: true),
+                            tint: .teal,    section: .alerts,      subtitle: emailSub,      active: true),
             FeatureTileItem(name: "Performance",          icon: "gauge.medium",
                             tint: .mint,    section: .performance, subtitle: perfSub,       active: perfBytes > 0),
             FeatureTileItem(name: "Smart Scan",           icon: "sparkle.magnifyingglass",
@@ -505,61 +482,49 @@ struct OverviewDetailView: View {
     }
 
     private var featureTilesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("FEATURES")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.textTertiary)
-                .tracking(1)
-
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
-                spacing: 10
-            ) {
-                ForEach(featureTileItems, id: \.name) { tile in
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+            spacing: 10
+        ) {
+            ForEach(featureTileItems, id: \.name) { tile in
                     Button { selectedSection = tile.section } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             Image(systemName: tile.icon)
-                                .font(.system(size: 20, weight: .medium))
-                                .foregroundStyle(tile.tint)
-                                .frame(width: 28, height: 28)
+                                .font(.title2)
+                                .foregroundStyle(.cyan)
                             Text(tile.name)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.headline)
                                 .foregroundStyle(Color.textPrimary)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
                             Text(tile.subtitle)
-                                .font(.system(size: 11))
-                                .foregroundStyle(tile.active ? Color.textSecondary : Color.statusOrange)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.backgroundSecondary)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
-                        )
+//                        .background(
+//                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+//                                .fill(Color.backgroundSecondary)
+//                        )
+//                        .overlay(
+//                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+//                                .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+//                        )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.glass)
                 }
             }
-        }
     }
 
     // MARK: - Section 3: Recent Activity
 
     private var recentActivitySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("RECENT ACTIVITY")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.textTertiary)
-                    .tracking(1)
                 Spacer()
                 Button("View all") { selectedSection = .alerts }
                     .font(.system(size: 12))
@@ -568,59 +533,40 @@ struct OverviewDetailView: View {
             }
 
             if engine.activityLog.events.isEmpty {
-                Text("No recent activity — Nick is watching.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.textTertiary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 18)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.backgroundSecondary)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
-                    )
+                Text("No activity yet — Nick is watching.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(engine.activityLog.events.prefix(7).enumerated()), id: \.offset) { idx, event in
-                        if idx > 0 { Divider().padding(.leading, 44) }
-                        HStack(spacing: 10) {
-                            ZStack {
-                                Circle()
-                                    .fill(activityColor(event.iconColor).opacity(0.12))
-                                    .frame(width: 28, height: 28)
-                                Image(systemName: event.icon)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(activityColor(event.iconColor))
-                            }
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(event.title)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(Color.textPrimary)
-                                    .lineLimit(1)
-                                Text(event.subtitle)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Color.textTertiary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            Text(compactTimestamp(event.timestamp))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(Color.textTertiary)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
+                Table(engine.activityLog.events) {
+                    TableColumn("Time") { entry in
+                        Text(compactTimestamp(entry.timestamp))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
                     }
+                    .width(min: 36, ideal: 46, max: 56)
+
+                    TableColumn("Event") { entry in
+                        Text(entry.repeatCount > 1 ? "\(entry.title) × \(entry.repeatCount)" : entry.title)
+                            .font(.caption)
+                    }
+                    .width(min: 140, ideal: 180)
+
+                    TableColumn("Detail") { entry in
+                        Text(entry.subtitle)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    TableColumn("") { entry in
+                        Image(systemName: entry.icon)
+                            .foregroundStyle(activityColor(entry.iconColor))
+                            .font(.caption2)
+                    }
+                    .width(18)
                 }
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.backgroundSecondary)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
-                )
+                .tableStyle(.bordered(alternatesRowBackgrounds: true))
             }
         }
     }

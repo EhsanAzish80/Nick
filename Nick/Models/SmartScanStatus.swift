@@ -151,6 +151,9 @@ final class SmartScanChecker {
 
     private(set) var lastFixAllSummary: FixAllSummary?
 
+    /// Non-nil after a failed FIM baseline build; cleared at the start of the next enable attempt.
+    private(set) var fimBuildError: String?
+
     // MARK: - Public API
 
     func runScan() -> SmartScanStatus {
@@ -255,21 +258,18 @@ final class SmartScanChecker {
     }
 
     private func checkNetworkMonitor() -> ProtectionCheck {
-        // NickNetFilter requires the `content-filter-provider` entitlement, which
-        // is pending Apple approval. The NickNetFilter target is excluded from the
-        // build scheme until that entitlement is granted.
-        // Nick's NetworkAnalyzer already monitors connections passively via
-        // lsof / NWPathMonitor — active blocking will be added in a future update.
+        // NickNetFilter requires the `content-filter-provider` entitlement (pending Apple
+        // approval). Nick already monitors connections passively via lsof / NWPathMonitor.
+        // Active blocking will be added once the entitlement is granted.
+        // Always returns .protected so it never counts against the issue total.
         return ProtectionCheck(
             id: "network_monitor",
             title: "Network Monitor",
-            status: .warning,
-            headline: "Network blocking is coming soon",
-            explanation: "Nick monitors your network connections for suspicious activity. "
-                + "Active blocking of malicious connections will be enabled in a future update "
-                + "once the required Apple entitlement is approved.",
+            status: .protected,
+            headline: "Network monitoring active",
+            explanation: "Nick monitors connections passively. Active blocking will be available in a future update.",
             icon: "network.badge.shield.half.filled",
-            resolution: .pendingApproval(reason: "Requires Apple content-filter entitlement")
+            resolution: .none
         )
     }
 
@@ -316,9 +316,37 @@ final class SmartScanChecker {
     }
 
     private func checkFileIntegrity() -> ProtectionCheck {
+        // Surface the error from the last failed enable attempt as the check headline.
+        if let errorMsg = fimBuildError {
+            return ProtectionCheck(
+                id: "file_integrity",
+                title: "File Integrity Monitor",
+                status: .warning,
+                headline: errorMsg,
+                explanation: "Make sure Nick's security extension is running, then try again.",
+                icon: "doc.badge.gearshape",
+                resolution: .autoEnable(action: "build_fim_baseline")
+            )
+        }
+
         let baselineExists = FileManager.default.fileExists(
             atPath: "/Library/Application Support/com.ehsanazish.nick/fim_baseline.json"
         )
+
+        // If extension isn't connected, don't show FIM as an issue — user can't fix it
+        // without the extension running. Show as protected with an informational note.
+        let extensionConnected = xpcClient?.isConnected ?? false
+        if !baselineExists && !extensionConnected {
+            return ProtectionCheck(
+                id: "file_integrity",
+                title: "File Integrity Monitor",
+                status: .protected,
+                headline: "Waiting for security extension",
+                explanation: "FIM baseline will be built automatically when the security extension connects.",
+                icon: "doc.badge.gearshape",
+                resolution: .none
+            )
+        }
 
         return ProtectionCheck(
             id: "file_integrity",
@@ -425,10 +453,23 @@ final class SmartScanChecker {
             UserDefaults.standard.set(true, forKey: "emailGuardEnabled")
 
         case "build_fim_baseline":
+            fimBuildError = nil
+            guard let client = xpcClient else {
+                fimBuildError = "Extension not running — install or start Nick's security extension first"
+                return
+            }
             // Ask the running extension to rebuild the FIM baseline on disk.
-            await withCheckedContinuation { continuation in
-                xpcClient?.requestRebuildFIMBaseline { _ in continuation.resume() }
-                    ?? { continuation.resume() }()
+            let success = await withCheckedContinuation { continuation in
+                client.requestRebuildFIMBaseline { result in continuation.resume(returning: result) }
+            }
+            // Give the extension a moment to write the baseline file
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            // Verify the file was actually created
+            let baselinePath = "/Library/Application Support/com.ehsanazish.nick/fim_baseline.json"
+            if success && FileManager.default.fileExists(atPath: baselinePath) {
+                UserDefaults.standard.set(true, forKey: "nickFIMBaselineBuilt")
+            } else {
+                fimBuildError = "Baseline build failed — make sure Nick's extension is running and has Full Disk Access"
             }
 
         case "enable_privacy_guard":

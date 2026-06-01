@@ -64,14 +64,14 @@ struct NetworkInspectorView: View {
     }
 
     private var emptyState: some View {
-        ContentUnavailableView(
-            "No Devices Found",
-            systemImage: "network",
-            description: Text(
-                "Nick will scan your local network for devices with insecure services. " +
-                "Tap \"Scan Network\" to start."
-            )
-        )
+        ContentUnavailableView {
+            Label("No Devices Found", systemImage: "network")
+        } description: {
+            Text("Nick will scan your local network for devices with insecure services.")
+        } actions: {
+            Button("Scan Network", action: startScan)
+                .buttonStyle(.borderedProminent)
+        }
     }
 
     private var deviceList: some View {

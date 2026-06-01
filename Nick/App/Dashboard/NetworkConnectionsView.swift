@@ -2,6 +2,7 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
+import AppKit
 import SwiftUI
 
 // MARK: - NetworkConnectionsView
@@ -47,22 +48,7 @@ struct NetworkConnectionsView: View {
     private var totalConnections: Int { engine.connections.count }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // View mode picker
-            HStack {
-                Picker("View", selection: $viewMode) {
-                    Text("Connections").tag(0)
-                    Text("Inspector").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 230)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
-            Divider()
-
+        Group {
             if viewMode == 1 {
                 NetworkInspectorView()
             } else {
@@ -71,26 +57,7 @@ struct NetworkConnectionsView: View {
                 emptyState
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // Hero row
-                        HStack(spacing: 14) {
-                            IconTile(systemImage: "network", tint: Color(NSColor.systemBlue), size: 56)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Network")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundStyle(Color.textPrimary)
-                                Text("\(grouped.count) app\(grouped.count == 1 ? "" : "s") with active connections · \(totalConnections) total")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(Color.textSecondary)
-                            }
-                            Spacer()
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.top, 20)
-                        .padding(.bottom, 16)
-
-                        // Section + card
-                        VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 8) {
                             Text("ACTIVE APPS · \(grouped.count)")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Color.textTertiary)
@@ -121,16 +88,27 @@ struct NetworkConnectionsView: View {
                             .padding(.horizontal, 20)
                             .padding(.bottom, 24)
                         }
-                    }
                 }
                 .background(Color.backgroundPrimary)
             }
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "Search process or address…")
-        .navigationTitle("Network")
         } // end else (Connections mode)
-        } // end outer VStack
+        } // end outer Group
         .navigationTitle("Network")
+        .navigationSubtitle(viewMode == 0
+            ? "\(grouped.count) app\(grouped.count == 1 ? "" : "s") · \(totalConnections) connections"
+            : "")
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Picker("View", selection: $viewMode) {
+                    Text("Connections").tag(0)
+                    Text("Inspector").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 200)
+            }
+        }
     }
 
     // MARK: - Private
@@ -181,37 +159,18 @@ private struct ProcessGroup: View {
         connections.contains { $0.isShellProcess && $0.isOutbound }
     }
 
-    /// Deterministic accent color based on first character of process name.
-    private var avatarColor: Color {
-        let palette: [Color] = [.blue, .purple, .green, .orange, .red,
-                                Color(NSColor.systemTeal), Color(NSColor.systemIndigo),
-                                Color(NSColor.systemBrown), Color(NSColor.systemPink)]
-        let idx = abs(processName.unicodeScalars.first.map { Int($0.value) } ?? 0) % palette.count
-        return isSuspicious ? .red : palette[idx]
-    }
-
-    private var avatarLetter: String {
-        String(processName.first ?? "?").uppercased()
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             // Header row
             Button(action: onToggle) {
                 HStack(spacing: 12) {
-                    // Letter avatar tile
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(LinearGradient(
-                                colors: [avatarColor.opacity(0.75), avatarColor],
-                                startPoint: .top, endPoint: .bottom
-                            ))
-                            .frame(width: 32, height: 32)
-                            .shadow(color: avatarColor.opacity(0.27), radius: 5, y: 2)
-                        Text(avatarLetter)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
+                    // App icon
+                    AppIconImage(
+                        pid: connections.first?.pid ?? -1,
+                        processName: processName
+                    )
+                    .frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                     Text(processName)
                         .font(.system(size: 13, weight: .medium))
@@ -251,6 +210,48 @@ private struct ProcessGroup: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// MARK: - AppIconImage
+
+/// Resolves the real app icon for a running process by PID.
+/// Falls back to a generic SF Symbol if the process can't be found.
+private struct AppIconImage: View {
+
+    let pid: Int32
+    let processName: String
+    @State private var nsIcon: NSImage?
+
+    var body: some View {
+        Group {
+            if let nsIcon {
+                Image(nsImage: nsIcon)
+                    .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
+            } else {
+                Image(systemName: "app.dashed")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+            }
+        }
+        .onAppear(perform: resolveIcon)
+    }
+
+    private func resolveIcon() {
+        // 1. Fast path: look up by PID (accurate for running processes).
+        if pid > 0, let app = NSRunningApplication(processIdentifier: pid) {
+            nsIcon = app.icon
+            return
+        }
+        // 2. Fallback: search by localized name.
+        if let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.localizedName?.lowercased() == processName.lowercased()
+        }) {
+            nsIcon = app.icon
         }
     }
 }
