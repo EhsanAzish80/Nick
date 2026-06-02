@@ -1,9 +1,9 @@
 # Nick — Security Audit
 
 **Auditor:** Ehsan Azish ([@ehsanazish80](https://github.com/EhsanAzish80))
-**Date:** May 22, 2026
-**Scope:** All files in `NickHelper/` (privileged helper) and `Nick/Core/` (detection engine)
-**Nick version audited:** `v0.9-rc` (commit prior to v1.0 tag)
+**Date:** June 2, 2026
+**Scope:** All files in `NickHelper/` (privileged helper), `NickExtension/` (ES system extension), and `Nick/Core/` (detection engine)
+**Nick version audited:** `v3.0 (build 1)`
 
 ---
 
@@ -54,7 +54,7 @@ Each section below documents the audit checklist, finding status, and any remedi
 | 6 | Input validation | `HelperDaemon.swift` | ✅ Pass | All string parameters are validated by `HelperPathAllowlist.validate(_:)` before use. The 7-step validation chain is documented in `HelperProtocol.swift`. |
 | 7 | Error handling | `HelperDaemon.swift` | ✅ Pass | `HelperProtocolImplementation` returns only `HelperError.operationFailed` ("Operation failed.") — no paths, errno values, or system information are included in error messages. |
 | 8 | Connection rate limit | `HelperDaemon.swift` | ✅ Pass | Sliding 1-second window per PID. Maximum 10 connections/second. Dictionary capped at 500 unique PIDs to prevent unbounded memory growth. |
-| 9 | Entitlements | `NickHelper.entitlements` | ⚠️ Pending | Entitlements file not yet created. Must be reviewed before notarization. Required: `com.apple.security.app-sandbox` = false, Hardened Runtime = ON. Only the minimal set needed for SMAppService registration and XPC. |
+| 9 | Entitlements | `NickHelper.entitlements` | ✅ Pass | Entitlements file present and reviewed. `com.apple.security.app-sandbox` = false, Hardened Runtime = ON. Minimal set for SMAppService registration and XPC only. |
 
 ### Finding Details
 
@@ -171,6 +171,8 @@ severity are discarded with a `.notice`-level log entry. See `ThreatCorrelator.s
 | Add YARA rule compilation timeout | High | @ehsanazish80 | ✅ Fixed (libyara v4.5.2, 10s timeout) |
 | Replace `lsof` with `proc_pidfdinfo` | Low | @ehsanazish80 | Open — tracked as #1 |
 | Implement `getListeningPorts` with direct sysctl | Medium | @ehsanazish80 | Open — tracked as #43 |
+| Audit `NickExtension/` ES event pipeline for path traversal and signal flooding | High | @ehsanazish80 | Open — v3.0 new surface |
+| Verify Sparkle EdDSA key rotation procedure | Medium | @ehsanazish80 | Open — pre-v3.1 |
 
 ---
 

@@ -44,7 +44,10 @@ Existing tools either cost $60+/year (Norton, Intego), require installing 5-6 se
 
 ## Features
 
-### 🔍 System Integrity Audit
+### �️ Endpoint Security Extension (v3.0)
+Nick's system extension uses Apple's Endpoint Security framework to intercept `AUTH_EXEC`, `AUTH_OPEN`, `AUTH_CREATE`, `AUTH_MMAP`, and `AUTH_COPYFILE` events at the kernel level — **blocking malicious files before they execute**, not after. Registered via `SMAppService`; communicates with the main app over a private XPC connection.
+
+### �🔍 System Integrity Audit
 Continuously verifies your Mac's security posture:
 - SIP (System Integrity Protection) status
 - FileVault encryption state
@@ -82,10 +85,12 @@ Identifies suspicious runtime behavior:
 
 ### 🧬 YARA Scanner
 On-demand and real-time file scanning:
-- Embedded YARA engine (libyara) with curated macOS-specific rule set
+- **libyara 4.5.2** static engine embedded directly in the ES event pipeline — every cache-miss file is evaluated before an allow/deny decision is made
+- Bundled macOS-specific rulesets: adware, backdoors, ransomware, stealers
 - Community-contributed rules via pull requests
-- Scheduled scans of critical directories
-- Drag-and-drop scanning of any file or folder
+- Deep Scanner: on-demand full-system YARA crawl, battery-aware, with live progress
+- USB/external media auto-scan on mount
+- Per-file scan timeout (10 s) prevents stalls on malformed files
 - Heuristic analysis: entropy scoring, Mach-O header inspection, embedded URL/IP extraction
 
 ### 📷 Camera & Microphone Sentinel
@@ -105,11 +110,12 @@ Nick's functional logging pipeline sends alerts to your existing security infras
 No syslog. No OpenTelemetry. No dedicated developer required.
 
 ### 🧠 AI Behavioral Scoring (The Differentiator)
-On-device CoreML pipeline for behavioral threat correlation. v0.9 ships with rule-based scoring; the ML model activates once trained on real-world signal data.
-- Individual signals are noisy. Correlated signals are actionable.
+On-device CoreML pipeline for behavioral threat correlation. Rule-based scoring is live; the CoreML inference model activates once trained on real-world signal data collected via opt-in telemetry.
+- Individual signals are noisy. Correlated behavioral signals are actionable.
 - `curl` downloading a binary to `/tmp` = medium risk
 - That binary executing unsigned 2 seconds later = high risk
 - That binary opening an outbound connection to a raw IP on port 443 = critical
+- **15 correlation rules** including `browser_to_shell`, `office_to_shell`, `raw_ip_outbound`, advanced LOLBin patterns, and more
 - Natural-language alert explanations powered by on-device Foundation Models (macOS 26+)
 - No data ever leaves your Mac
 
@@ -230,7 +236,7 @@ Nick never accesses your documents, photos, or personal files. Monitoring is lim
 git clone https://github.com/EhsanAzish80/Nick.git
 cd Nick
 
-## Open in Xcode (requires Xcode 16+)
+## Open in Xcode (requires Xcode 26+)
 open Nick.xcodeproj
 
 ## Build (includes Nick.app + NickFinderSync.appex + NickHelper)
@@ -248,15 +254,16 @@ xcodebuild -scheme Nick CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN
 > **Finder Sync Extension:** `NickFinderSync` requires both `Nick.app` and `NickFinderSync.appex` to share the App Group `group.com.ehsanazish.nick`. Add this entitlement in **Signing & Capabilities → App Groups** for both targets before building a signed release.
 
 ### Dependencies
-Nick uses zero third-party Swift dependencies. The only external dependency is `libyara` (C library, vendored).
+Nick uses zero third-party Swift dependencies. External dependencies:
 
 - **UI**: SwiftUI (Apple framework)
 - **Persistence detection**: FSEvents, Foundation (Apple frameworks)
 - **Network monitoring**: Network.framework, `sysctl` (Apple frameworks / POSIX)
 - **Process auditing**: `proc_info`, `sysctl` (POSIX)
-- **Scanning**: libyara (vendored, BSD license)
+- **Scanning**: libyara 4.5.2 (vendored, BSD license)
 - **AI scoring**: CoreML, Foundation Models (Apple frameworks)
 - **Privileged helper**: SMAppService, XPC (Apple frameworks)
+- **Automatic updates**: Sparkle 2 (Swift Package, MIT license)
 
 ---
 
@@ -292,21 +299,35 @@ Nick uses zero third-party Swift dependencies. The only external dependency is `
 - Network baseline anomaly detection
 - Finder Sync Extension (right-click without user opt-in)
 - Scheduled Deep Scan
-- `getListeningPorts` via `sysctl`
-- `proc_pidfdinfo` replacing `lsof`
 - MDM configuration profile support
 - Configurable alert suppression rules
 
-### 🔄 v1.3 — Enterprise & Community
+### ✅ v3.0 — Endpoint Security & Real-Time Prevention *(current)*
+- **Endpoint Security System Extension** — AUTH event interception; files blocked before execution
+- **YARA engine in ES pipeline** — every cache-miss file evaluated against libyara 4.5.2 before allow/deny
+- **15-rule behavioral correlator** — process genealogy + network correlation (added `parentChainRule`, `rawIpOutboundRule`)
+- **LOLBin detector** — `curl`, `osascript`, `python3`, `launchctl`, `base64`, and more
+- **Reverse shell detector** — shell process + outbound socket pattern matching
+- **AV/Capture monitor** — unauthorized camera/mic session detection
+- **Persistence watcher** — LaunchAgents/Daemons, Login Items, cron
+- **Deep Scanner** — full-system YARA crawl, battery-aware
+- **USB/external media auto-scan**
+- **Network Inspector** — LAN host discovery and port scanning
+- **Performance Engine** — 30+ disk cleanup rules (Xcode artifacts, caches, Docker, Steam, and more)
+- **Security Score** redesigned (4 components, 0–100)
+- **Export Security Report** — HTML report from System Audit toolbar
+- **Automatic updates** via Sparkle 2 (`https://3nsofts.com/nick/appcast.xml`)
+- Privileged helper migrated to `SMAppService` (modern API)
+
+### 🔄 v3.1 — Behavioral Model & Community
 - Homebrew cask distribution
+- CoreML behavioral model activated (trained on opt-in telemetry from v3.0)
 - Community YARA rule submission pipeline
-- CoreML behavioral model (trained on opt-in telemetry from v1.2)
 - Alert aggregation view (group related alerts)
 
-### 🔮 v2.0 — Prevention (pending Apple entitlements)
-- Endpoint Security framework (process interception before exec)
-- Network Extension (outbound connection blocking)
-- Real-time DNS monitoring
+### 🔮 v4.0 — Network Prevention
+- Network Extension (outbound connection blocking, DNS filtering)
+- Scam Guardian — URL/phishing detection via network filter
 
 ---
 
