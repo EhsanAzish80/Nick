@@ -735,30 +735,7 @@ struct ProcessListView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Hero row
-            HStack(spacing: 14) {
-                IconTile(systemImage: "cpu", tint: Color(NSColor.systemPurple), size: 56)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Processes")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
-                    Text("\(engine.processes.count) running · \(flaggedCount) flagged")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textSecondary)
-                }
-                Spacer()
-                Picker("View", selection: $viewMode) {
-                    Text("List").tag(0)
-                    Text("Tree").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 140)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 20)
-            .padding(.bottom, 12)
-
+        Group {
             if viewMode == 1 {
                 ProcessTreeView()
             } else {
@@ -817,6 +794,17 @@ struct ProcessListView: View {
             } // end else (List mode)
         }
         .navigationTitle("Processes")
+        .navigationSubtitle("\(engine.processes.count) running · \(flaggedCount) flagged")
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Picker("View", selection: $viewMode) {
+                    Text("List").tag(0)
+                    Text("Tree").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 140)
+            }
+        }
     }
 
     // MARK: - Process Helpers (static so Table closures can access them)
