@@ -80,7 +80,6 @@ struct SystemHealthScore: Sendable {
     ///
     /// - Parameters:
     ///   - extensionActive:     Whether the NickExtension is actively running.
-    ///   - signatureAgeDays:    Days since the last signature update (0 = today).
     ///   - threatsBlocked24h:   Threats blocked in the last 24 hours.
     ///   - quarantineCount:     Files currently in quarantine.
     ///   - fimViolations:       Open file-integrity violations.
@@ -88,7 +87,6 @@ struct SystemHealthScore: Sendable {
     ///   - privacyAlerts:       Open privacy-permission alerts.
     static func calculate(
         extensionActive: Bool,
-        signatureAgeDays: Int,
         threatsBlocked24h: Int,
         quarantineCount: Int,
         fimViolations: Int,
@@ -96,52 +94,34 @@ struct SystemHealthScore: Sendable {
         privacyAlerts: Int
     ) -> SystemHealthScore {
 
-        // ── Component 1: Extension active (30 points) ──────────────────────
-        let extPoints = extensionActive ? 30 : 0
+        // ── Component 1: Extension active (37 points) ──────────────────────
+        let extPoints = extensionActive ? 37 : 0
         let extDesc   = extensionActive
             ? "Real-time protection is active"
             : "Extension is not running — real-time protection is disabled"
 
-        // ── Component 2: Signature freshness (20 points) ───────────────────
-        let sigPoints: Int
-        let sigDesc: String
-        switch signatureAgeDays {
-        case 0:
-            sigPoints = 20
-            sigDesc   = "Signatures are up to date (updated today)"
-        case 1...3:
-            sigPoints = 15
-            sigDesc   = "Signatures are recent (\(signatureAgeDays) days old)"
-        case 4...7:
-            sigPoints = 10
-            sigDesc   = "Signatures are slightly out of date (\(signatureAgeDays) days old)"
-        default:
-            sigPoints = 0
-            sigDesc   = "Signatures are stale (\(signatureAgeDays) days old) — update recommended"
-        }
-
-        // ── Component 3: No active threats (25 points) ─────────────────────
-        let threatPenalty = min(threatsBlocked24h * 5, 25)
-        let threatPoints  = 25 - threatPenalty
+        // ── Component 2: No active threats (31 points) ─────────────────────
+        let threatPenalty = min(threatsBlocked24h * 6, 31)
+        let threatPoints  = 31 - threatPenalty
         let threatDesc    = threatsBlocked24h == 0
             ? "No threats detected in the last 24 hours"
             : "\(threatsBlocked24h) threat(s) blocked in the last 24 hours"
 
-        // ── Component 4: File integrity (15 points) ────────────────────────
-        let fimPenalty = min(fimViolations * 5, 15)
-        let fimPoints  = 15 - fimPenalty
+        // ── Component 3: File integrity (19 points) ────────────────────────
+        let fimPenalty = min(fimViolations * 6, 19)
+        let fimPoints  = 19 - fimPenalty
         let fimDesc    = fimViolations == 0
             ? "No file integrity violations"
             : "\(fimViolations) active file integrity violation(s)"
 
-        // ── Component 5: Privacy cleanliness (10 points) ──────────────────
-        let privacyPenalty = min(privacyAlerts * 3, 10)
-        let privacyPoints  = 10 - privacyPenalty
+        // ── Component 4: Privacy cleanliness (13 points) ──────────────────
+        let privacyPenalty = min(privacyAlerts * 4, 13)
+        let privacyPoints  = 13 - privacyPenalty
         let privacyDesc    = privacyAlerts == 0
             ? "No open privacy alerts"
             : "\(privacyAlerts) open privacy alert(s)"
 
-        let total = extPoints + sigPoints + threatPoints + fimPoints + privacyPoints
+        let total = extPoints + threatPoints + fimPoints + privacyPoints
         let clamped = max(0, min(100, total))
         let grade = Grade(score: clamped)
 
@@ -155,11 +135,10 @@ struct SystemHealthScore: Sendable {
         }
 
         let breakdown = [
-            Component(name: "Real-Time Protection", rawScore: extPoints,     maxScore: 30, description: extDesc),
-            Component(name: "Signature Freshness",  rawScore: sigPoints,     maxScore: 20, description: sigDesc),
-            Component(name: "Recent Threats",       rawScore: threatPoints,  maxScore: 25, description: threatDesc),
-            Component(name: "File Integrity",       rawScore: fimPoints,     maxScore: 15, description: fimDesc),
-            Component(name: "Privacy",              rawScore: privacyPoints, maxScore: 10, description: privacyDesc),
+            Component(name: "Real-Time Protection", rawScore: extPoints,     maxScore: 37, description: extDesc),
+            Component(name: "Recent Threats",       rawScore: threatPoints,  maxScore: 31, description: threatDesc),
+            Component(name: "File Integrity",       rawScore: fimPoints,     maxScore: 19, description: fimDesc),
+            Component(name: "Privacy",              rawScore: privacyPoints, maxScore: 13, description: privacyDesc),
         ]
 
         return SystemHealthScore(score: clamped, grade: grade, summary: summary, breakdown: breakdown)

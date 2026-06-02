@@ -68,6 +68,19 @@ final class YARAEngine: @unchecked Sendable {
 
     // MARK: - Public API
 
+    /// Synchronous scan — for use on background queues where async/await is unavailable.
+    ///
+    /// Identical to `scanFile(at:)` but runs synchronously on the calling thread.
+    /// Must NOT be called from the ES callback queue — only from a background
+    /// dispatch queue (e.g. `ESEventHandler.dispatchQueue`).
+    ///
+    /// - Parameter path: Absolute path to the file.
+    /// - Returns: Array of `YARAMatch` values — empty if no rules matched.
+    /// - Throws: `YARAError` on scan failure or timeout.
+    func scanFileBlocking(at path: String) throws -> [YARAMatch] {
+        try scanFileSync(at: path)
+    }
+
     /// Scans the file at `path` against all compiled YARA rules.
     ///
     /// Compiles rules on the first call (lazy initialisation). Each subsequent

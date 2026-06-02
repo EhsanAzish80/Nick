@@ -2,6 +2,7 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
+import AppKit
 import SwiftUI
 
 // MARK: - SystemAuditView
@@ -18,6 +19,9 @@ struct SystemAuditView: View {
     @Environment(SecurityEngine.self) private var engine
     @Environment(ExtensionXPCClient.self) private var xpcClient
 
+    @State private var isExporting   = false
+    @State private var exportMessage: String?
+
     // Separate XProtect result from the rest so it gets its own section.
     private var xprotectResult: SystemCheckResult? {
         engine.auditResults.first { $0.check == .xprotect }
@@ -27,6 +31,33 @@ struct SystemAuditView: View {
     }
     private var passCount: Int { engine.auditResults.filter { $0.status == .pass }.count }
     private var issueCount: Int { engine.auditResults.filter { $0.status != .pass && $0.status != .unknown }.count }
+
+    /// Days since last XProtect update — kept for the XProtect definitions display row only.
+    private var signatureAgeDays: Int {
+        guard let xp = xprotectResult else { return 0 }
+        let parts = xp.currentValue.components(separatedBy: " ")
+        if parts.count >= 4, parts[0] == "Version" {
+            let dStr = parts[3].replacingOccurrences(of: "d", with: "")
+            if let days = Int(dStr) { return days }
+        }
+        return 0
+    }
+
+    private var blockedLast24h: Int {
+        let cutoff = Date().addingTimeInterval(-86400)
+        return xpcClient.events.filter { $0.decision == .deny && $0.timestamp > cutoff }.count
+    }
+
+    private var healthScore: SystemHealthScore {
+        SystemHealthScore.calculate(
+            extensionActive:    engine.activePipelineStatus == .running,
+            threatsBlocked24h:  blockedLast24h,
+            quarantineCount:    xpcClient.quarantineRecords.count,
+            fimViolations:      xpcClient.integrityViolations.count,
+            networkBlocksCount: xpcClient.events.filter { $0.decision == .deny && $0.eventType == .authOpen }.count,
+            privacyAlerts:      xpcClient.privacyAlerts.count
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -54,6 +85,9 @@ struct SystemAuditView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 20)
                     .padding(.bottom, 16)
+
+                    // Security Score section
+                    scoreSection
 
                     // Security Settings section
                     VStack(alignment: .leading, spacing: 8) {
@@ -137,6 +171,206 @@ struct SystemAuditView: View {
         }
         .background(Color.backgroundPrimary)
         .navigationTitle("System Audit")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    exportHTML()
+                } label: {
+                    if isExporting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Export Report", systemImage: "square.and.arrow.up")
+                    }
+                }
+                .disabled(isExporting || engine.auditResults.isEmpty)
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let msg = exportMessage {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text(msg).font(.footnote)
+                    Spacer()
+                    Button("Dismiss") { exportMessage = nil }
+                        .buttonStyle(.borderless)
+                        .font(.footnote)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(.regularMaterial)
+            }
+        }
+    }
+
+    // MARK: - Security Score section
+
+    @ViewBuilder
+    private var scoreSection: some View {
+        let score = healthScore
+        VStack(alignment: .leading, spacing: 8) {
+            Text("SECURITY SCORE")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.textTertiary)
+                .tracking(0.5)
+                .padding(.horizontal, 20)
+
+            VStack(spacing: 0) {
+                ForEach(Array(score.breakdown.enumerated()), id: \.offset) { idx, component in
+                    if idx > 0 { Divider().padding(.leading, 56) }
+                    ScoreComponentRow(component: component)
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.backgroundSecondary)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+            )
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
+        }
+    }
+
+    // MARK: - Export
+
+    private func exportHTML() {
+        let html = buildHTMLReport()
+        let panel = NSSavePanel()
+        panel.title = "Save Security Report"
+        panel.allowedContentTypes = [.html]
+        panel.nameFieldStringValue = "NickSecurityReport_\(filenameDateStamp).html"
+        isExporting = true
+        panel.begin { response in
+            isExporting = false
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try html.write(to: url, atomically: true, encoding: .utf8)
+                exportMessage = "Report saved to \(url.lastPathComponent)"
+            } catch {
+                exportMessage = "Export failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func buildHTMLReport() -> String {
+        let score = healthScore
+        let gradeHex: String
+        switch score.grade {
+        case .a: gradeHex = "#22c55e"
+        case .b: gradeHex = "#3b82f6"
+        case .c: gradeHex = "#eab308"
+        case .d: gradeHex = "#f97316"
+        case .f: gradeHex = "#ef4444"
+        }
+
+        let breakdownRows = score.breakdown.map { c in
+            """
+            <tr>
+              <td>\(htmlEscape(c.name))</td>
+              <td><progress value="\(c.rawScore)" max="\(c.maxScore)" style="width:120px"></progress></td>
+              <td>\(c.rawScore)/\(c.maxScore)</td>
+              <td style="color:#666">\(htmlEscape(c.description))</td>
+            </tr>
+            """
+        }.joined()
+
+        let threatRows = xpcClient.events
+            .filter { $0.decision == .deny }
+            .prefix(50)
+            .map { e in
+                """
+                <tr>
+                  <td>\(htmlEscape(dateString(e.timestamp)))</td>
+                  <td>\(htmlEscape(((e.filePath ?? e.processPath) as NSString).lastPathComponent))</td>
+                  <td>\(htmlEscape(e.threatName ?? "—"))</td>
+                  <td>\(htmlEscape(e.eventType.rawValue))</td>
+                </tr>
+                """
+            }.joined()
+
+        let auditRows = engine.auditResults.map { r in
+            let color = r.status == .fail ? "#ef4444" : r.status == .warning ? "#f97316" : "#22c55e"
+            return """
+            <tr>
+              <td>\(htmlEscape(r.check.displayName))</td>
+              <td style="color:\(color)">\(r.status.rawValue.capitalized)</td>
+            </tr>
+            """
+        }.joined()
+
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+
+        return """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="UTF-8">
+        <title>Nick Security Report</title>
+        <style>
+        body { font-family: -apple-system, sans-serif; max-width: 900px; margin: 40px auto; color: #1a1a1a; }
+        h1 { color: #1a1a1a; } h2 { border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+        th { text-align: left; padding: 6px 8px; background: #f5f5f5; }
+        td { padding: 6px 8px; border-bottom: 1px solid #eee; }
+        .grade { font-size: 64px; font-weight: 700; color: \(gradeHex); }
+        .score { color: #666; }
+        </style>
+        </head>
+        <body>
+        <h1>Nick Security Report</h1>
+        <p class="score">Generated: \(formattedNow)</p>
+
+        <h2>Overall Score</h2>
+        <div class="grade">\(score.grade.rawValue)</div>
+        <p><strong>\(score.score)/100</strong> — \(htmlEscape(score.summary))</p>
+
+        <h2>Score Breakdown</h2>
+        <table><tr><th>Component</th><th>Progress</th><th>Score</th><th>Detail</th></tr>
+        \(breakdownRows)
+        </table>
+
+        <h2>Blocked Threats</h2>
+        <table><tr><th>Time</th><th>File</th><th>Threat Name</th><th>Event Type</th></tr>
+        \(threatRows.isEmpty ? "<tr><td colspan='4'>No blocked threats.</td></tr>" : threatRows)
+        </table>
+
+        <h2>System Audit</h2>
+        <table><tr><th>Check</th><th>Status</th></tr>
+        \(auditRows.isEmpty ? "<tr><td colspan='2'>No audit results. Run a full scan to populate.</td></tr>" : auditRows)
+        </table>
+
+        <p style="color:#aaa;font-size:12px">Nick \(appVersion) — \(formattedNow)</p>
+        </body>
+        </html>
+        """
+    }
+
+    private var formattedNow: String {
+        let f = DateFormatter()
+        f.dateStyle = .long
+        f.timeStyle = .short
+        return f.string(from: Date())
+    }
+
+    private var filenameDateStamp: String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
+    }
+
+    private func htmlEscape(_ str: String) -> String {
+        str.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    private func dateString(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f.string(from: date)
     }
 
     // MARK: - Privacy Monitor section
@@ -318,6 +552,82 @@ struct SystemAuditView: View {
         }
         .frame(maxWidth: .infinity)
         .padding()
+    }
+}
+
+// MARK: - ScoreComponentRow
+
+/// Audit-style row for a single `SystemHealthScore.Component`.
+/// Matches `AuditResultRow` visually and provides actionable fix links
+/// for components that are not at full score.
+private struct ScoreComponentRow: View {
+
+    let component: SystemHealthScore.Component
+
+    private var isFull: Bool { component.rawScore == component.maxScore }
+    private var isZero: Bool { component.rawScore == 0 }
+
+    private var statusIcon: String {
+        if isFull { return "checkmark.circle.fill" }
+        if isZero { return "xmark.circle.fill" }
+        return "exclamationmark.triangle.fill"
+    }
+
+    private var statusColor: Color {
+        if isFull { return .statusGreen }
+        if isZero { return .statusRed }
+        return .statusOrange
+    }
+
+    private var scoreLabel: String {
+        isFull ? "Good" : "\(component.rawScore)/\(component.maxScore) pts"
+    }
+
+    private var fixLink: (label: String, destination: AuditFixDestination)? {
+        guard !isFull else { return nil }
+        switch component.name {
+        case "Real-Time Protection":
+            return ("Open Privacy & Security settings",
+                    .url("x-apple.systempreferences:com.apple.preference.security"))
+        case "Signature Freshness":
+            return ("Check for updates in Software Update",
+                    .url("x-apple.systempreferences:com.apple.preference.softwareupdate"))
+        default:
+            return nil
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: NickSpacing.md) {
+            Image(systemName: statusIcon)
+                .font(.system(size: NickLayout.iconSize, weight: .medium))
+                .foregroundStyle(statusColor)
+                .frame(width: NickLayout.iconSizeLarge)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: NickSpacing.xs) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(component.name)
+                        .font(.nickBodyMedium)
+                        .foregroundStyle(Color.textPrimary)
+                    Spacer()
+                    Text(scoreLabel)
+                        .font(.nickMono)
+                        .foregroundStyle(statusColor)
+                        .lineLimit(1)
+                }
+                Text(component.description)
+                    .font(.nickBodySmall)
+                    .foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let fix = fixLink {
+                    AuditFixLink(label: fix.label, destination: fix.destination)
+                        .padding(.top, NickSpacing.xs)
+                }
+            }
+        }
+        .padding(.horizontal, NickSpacing.lg)
+        .padding(.vertical, NickSpacing.md)
     }
 }
 

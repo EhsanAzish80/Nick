@@ -9,8 +9,11 @@ import Security
 
 // MARK: - FileScanner
 
-/// Scans files by computing their SHA-256 hash and looking up the result in
-/// `SignatureDatabase`. Results are cached in `ScanCache` (TTL: 5 minutes).
+/// Scans files using SHA-256 signature matching AND YARA rule pattern scanning.
+///
+/// Both techniques run on every cache miss so that:
+/// - Known malware is caught by hash even if YARA rules don't cover it yet.
+/// - Novel/repacked malware is caught by YARA even when the hash is unknown.
 ///
 /// **Threading:** `scan(filePath:)` is synchronous and may be called from any
 /// background queue. Never call it from the ES callback queue directly —
@@ -45,6 +48,11 @@ final class FileScanner {
     let cache: ScanCache
     private let signatureDB: SignatureDatabase
 
+    /// Optional YARA engine for pattern-based scanning. When non-nil, every
+    /// cache-miss file is scanned with compiled YARA rules in addition to the
+    /// SHA-256 signature database lookup.
+    private let yaraEngine: YARAEngine?
+
     // MARK: - Private
 
     private static let logger = Logger(
@@ -57,9 +65,15 @@ final class FileScanner {
 
     // MARK: - Init
 
-    init(signatureDB: SignatureDatabase, cache: ScanCache) {
+    /// - Parameters:
+    ///   - signatureDB: SHA-256 hash database.
+    ///   - cache: Scan result cache (shared with `ESEventHandler`).
+    ///   - yaraEngine: Optional pre-initialised YARA engine. Pass `nil` to
+    ///     disable YARA scanning (e.g. if rules failed to compile at startup).
+    init(signatureDB: SignatureDatabase, cache: ScanCache, yaraEngine: YARAEngine? = nil) {
         self.signatureDB = signatureDB
         self.cache       = cache
+        self.yaraEngine  = yaraEngine
     }
 
     // MARK: - Public API
@@ -91,31 +105,53 @@ final class FileScanner {
                               threatName: nil, threatFamily: nil, isCodeSigned: nil)
         }
 
-        // 3. Signature DB lookup
-        let match = signatureDB.lookup(hash: hash)
+        // 3. Signature DB lookup (hash-based — catches known exact samples)
+        let hashMatch = signatureDB.lookup(hash: hash)
 
-        // 4. Code-signing check (only for executables — identified by .exec path heuristic)
+        // 4. YARA pattern scan — always runs regardless of hash result so that
+        //    repacked/modified variants are caught even when the hash is unknown.
+        var yaraMatches: [YARAMatch] = []
+        if let yaraEngine {
+            do {
+                yaraMatches = try yaraEngine.scanFileBlocking(at: filePath)
+            } catch YARAError.scanTimeout(let p) {
+                Self.logger.warning("YARA scan timeout — \(p, privacy: .private)")
+            } catch YARAError.fileNotReadable {
+                // Silently skip — file may have been deleted between hash and scan.
+            } catch {
+                Self.logger.error("YARA scan error for \(filePath, privacy: .private): \(error.localizedDescription)")
+            }
+        }
+
+        // 5. Merge results — threat if EITHER technique fires
+        let isThreat    = hashMatch != nil || !yaraMatches.isEmpty
+        let threatName  = hashMatch?.name  ?? yaraMatches.first.map { "YARA:\($0.ruleName)" }
+        let threatFamily = hashMatch?.family ?? yaraMatches.first?.tags.first
+
+        if let hashMatch {
+            Self.logger.notice("Hash threat: \(filePath, privacy: .private) → \(hashMatch.name) [\(hashMatch.family)]")
+        } else if let first = yaraMatches.first {
+            Self.logger.notice("YARA threat: \(filePath, privacy: .private) → rule:\(first.ruleName)")
+        }
+
+        // 6. Code-signing check
         let isSigned = evaluateCodeSigning(path: filePath)
 
-        // 5. Populate cache
+        // 7. Populate cache
         cache.store(
             path: filePath,
             hash: hash,
-            isThreat: match != nil,
-            threatName: match?.name,
-            threatFamily: match?.family
+            isThreat: isThreat,
+            threatName: threatName,
+            threatFamily: threatFamily
         )
-
-        if match != nil {
-            Self.logger.notice("Threat detected: \(filePath) → \(match!.name) [\(match!.family)]")
-        }
 
         return ScanResult(
             filePath: filePath,
             hash: hash,
-            isThreat: match != nil,
-            threatName: match?.name,
-            threatFamily: match?.family,
+            isThreat: isThreat,
+            threatName: threatName,
+            threatFamily: threatFamily,
             isCodeSigned: isSigned
         )
     }

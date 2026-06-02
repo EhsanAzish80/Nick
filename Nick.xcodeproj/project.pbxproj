@@ -13,6 +13,8 @@
 		AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */; };
 		AA11223344556677AABB0013 /* NickExtensionConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0003 /* NickExtensionConstants.swift */; };
 		AA11223344556677AABB0014 /* QuarantineTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0004 /* QuarantineTypes.swift */; };
+		AA11223344556677AABB0015 /* YARAEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0005 /* YARAEngine.swift */; };
+		AA11223344556677AABB0016 /* YARAMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0006 /* YARAMatch.swift */; };
 		BB55CC11DDEEFF00AA220061 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */; };
 		CC7788AA11223344BBEE0001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 88C895112FCC7FC100617073 /* Sparkle */; };
 /* End PBXBuildFile section */
@@ -80,6 +82,8 @@
 		AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionXPCProtocol.swift; path = NickExtension/Shared/NickExtensionXPCProtocol.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0003 /* NickExtensionConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionConstants.swift; path = NickExtension/Shared/NickExtensionConstants.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0004 /* QuarantineTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineTypes.swift; path = NickExtension/Shared/QuarantineTypes.swift; sourceTree = SOURCE_ROOT; };
+		AA11223344556677AABB0005 /* YARAEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAEngine.swift; path = Nick/Core/YARAEngine/YARAEngine.swift; sourceTree = SOURCE_ROOT; };
+		AA11223344556677AABB0006 /* YARAMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAMatch.swift; path = Nick/Core/YARAEngine/YARAMatch.swift; sourceTree = SOURCE_ROOT; };
 		BB55CC11DDEEFF00AA220001 /* NickNetFilter.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = NickNetFilter.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
@@ -511,6 +515,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA11223344556677AABB0015 /* YARAEngine.swift in Sources */,
+				AA11223344556677AABB0016 /* YARAMatch.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -886,7 +892,18 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 3.0;
-				OTHER_LDFLAGS = "-lbsm";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
+				);
+				OTHER_LDFLAGS = (
+					"-lbsm",
+					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickExtension;
 				PRODUCT_NAME = "$(inherited)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -896,6 +913,7 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = Nick/Core/YARAEngine/YARABridge.h;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -928,7 +946,18 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 3.0;
-				OTHER_LDFLAGS = "-lbsm";
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
+				);
+				OTHER_LDFLAGS = (
+					"-lbsm",
+					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickExtension;
 				PRODUCT_NAME = "$(inherited)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -938,6 +967,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = Nick/Core/YARAEngine/YARABridge.h;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};

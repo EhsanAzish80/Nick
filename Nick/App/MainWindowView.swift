@@ -123,7 +123,6 @@ struct MainWindowView: View {
 
                 Section("TOOLS") {
                     SidebarNavItem(section: .performance).tag(SidebarSection.performance)
-                    SidebarNavItem(section: .report).tag(SidebarSection.report)
                 }
 
                 SidebarNavItem(section: .settings)
@@ -148,7 +147,6 @@ struct MainWindowView: View {
             case .processes:   ProcessListView()
             case .persistence: PersistenceDetailView()
             case .performance: PerformanceView()
-            case .report:      ReportView()
             case .settings:    SettingsView()
             }
         }
@@ -196,7 +194,6 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case processes   = "Processes"
     case persistence = "Persistence"
     case performance = "Performance"
-    case report      = "Report"
     case settings    = "Settings"
 
     var id: String { rawValue }
@@ -215,7 +212,6 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .processes:   return "cpu"
         case .persistence: return "arrow.triangle.2.circlepath"
         case .performance: return "gauge.medium"
-        case .report:      return "doc.text.fill"
         case .settings:    return "gearshape.fill"
         }
     }
@@ -233,7 +229,6 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .processes:   return .purple
         case .persistence: return .orange
         case .performance: return .mint
-        case .report:      return Color(NSColor.systemGray)
         case .settings:    return Color(NSColor.systemGray)
         }
     }

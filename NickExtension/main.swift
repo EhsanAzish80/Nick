@@ -18,7 +18,32 @@ private let logger = Logger(
 let supportDir   = "/Library/Application Support/com.ehsanazish.nick"
 let signatureDB  = SignatureDatabase()
 let scanCache    = ScanCache()
-let fileScanner  = FileScanner(signatureDB: signatureDB, cache: scanCache)
+
+// Resolve the Rules directory from the host app bundle (NickExtension is nested
+// 3 levels inside Nick.app: .../Nick.app/Contents/Library/SystemExtensions/NickExtension.systemextension/).
+let appRulesDir: String = {
+    let extBundle = Bundle.main.bundleURL
+        .deletingLastPathComponent()  // SystemExtensions/
+        .deletingLastPathComponent()  // Library/
+        .deletingLastPathComponent()  // Contents/
+        .appendingPathComponent("Resources/Rules")
+        .path
+    // Fall back to support dir if the app bundle path isn't accessible.
+    return FileManager.default.fileExists(atPath: extBundle) ? extBundle : supportDir + "/Rules"
+}()
+
+let yaraEngine: YARAEngine? = {
+    do {
+        let engine = try YARAEngine(rulesDirectory: appRulesDir)
+        logger.info("YARAEngine ready — rules directory: \(appRulesDir, privacy: .public)")
+        return engine
+    } catch {
+        logger.error("YARAEngine init failed — YARA scanning disabled: \(error.localizedDescription, privacy: .public)")
+        return nil
+    }
+}()
+
+let fileScanner  = FileScanner(signatureDB: signatureDB, cache: scanCache, yaraEngine: yaraEngine)
 
 logger.info("Signature database ready — \(signatureDB.count) signature(s) loaded")
 

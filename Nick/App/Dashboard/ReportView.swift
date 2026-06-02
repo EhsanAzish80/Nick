@@ -23,10 +23,8 @@ struct ReportView: View {
     // MARK: - Computed State
 
     private var healthScore: SystemHealthScore {
-        let sigAge = signatureAgeDays
         return SystemHealthScore.calculate(
             extensionActive: engine.activePipelineStatus == .running,
-            signatureAgeDays: sigAge,
             threatsBlocked24h: blockedLast24h,
             quarantineCount: xpcClient.quarantineRecords.count,
             fimViolations: xpcClient.integrityViolations.count,
@@ -42,12 +40,6 @@ struct ReportView: View {
 
     private var networkBlockCount: Int {
         xpcClient.events.filter { $0.decision == .deny && $0.eventType == .authOpen }.count
-    }
-
-    private var signatureAgeDays: Int {
-        guard let str = UserDefaults.standard.string(forKey: "nickLastSignatureUpdate"),
-              let date = ISO8601DateFormatter().date(from: str) else { return 999 }
-        return Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
     }
 
     private var failedChecks: [SystemCheckResult] {
