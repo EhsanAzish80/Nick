@@ -208,7 +208,7 @@ final class NetworkInspector {
         }
 
         device.issues = issues
-        let riskWhenNotSafe: RiskLevel = issues.count >= 2 ? .risky : .review
+        let riskWhenNotSafe: NetworkDevice.RiskLevel = issues.count >= 2 ? .risky : .review
         device.riskLevel = issues.isEmpty ? .safe : riskWhenNotSafe
     }
 
@@ -229,7 +229,7 @@ final class NetworkInspector {
 
             // Nested function rather than a closure so the withLock call inside
             // does not add a third level of closure nesting.
-            func finish(_ result: Bool) {
+            @Sendable func finish(_ result: Bool) {
                 let shouldResume = resumed.withLock { alreadyResumed -> Bool in
                     guard !alreadyResumed else { return false }
                     alreadyResumed = true

@@ -78,7 +78,7 @@ final class PerformanceCoordinator {
                 allItems.append(contentsOf: batch)
                 completed += 1
                 let progress = Double(completed) / Double(ruleCount)
-                scanState = .scanning(progress: progress, currentCategory: batch.first?.category?.displayName)
+                scanState = .scanning(progress: progress, currentCategory: batch.first?.category.displayName)
             }
         }
         return allItems
