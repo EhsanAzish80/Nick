@@ -198,7 +198,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
 
     var id: String { rawValue }
 
-    var title: String { rawValue }
+    var title: String { id }
 
     var icon: String {
         switch self {

@@ -139,16 +139,18 @@ final class ESEventHandler {
             let locationSuspect = !isSigned && (fileScanner?.isUntrustedLocation(targetPath) ?? false)
 
             pushEvent(ESEvent(
-                eventType:    .authExec,
-                processPath:  processPath,
-                pid:          pid,
-                parentPid:    parentPid,
-                filePath:     targetPath,
-                decision:     isThreat ? .deny : .allow,
-                sha256:       cached?.hash,
-                threatName:   cached?.threatName,
-                threatFamily: cached?.threatFamily,
-                isCodeSigned: isSigned || !locationSuspect ? isSigned : false
+                eventType:   .authExec,
+                processPath: processPath,
+                pid:         pid,
+                parentPid:   parentPid,
+                filePath:    targetPath,
+                decision:    isThreat ? .deny : .allow,
+                threat:      ESEvent.ThreatContext(
+                    sha256:       cached?.hash,
+                    threatName:   cached?.threatName,
+                    threatFamily: cached?.threatFamily,
+                    isCodeSigned: isSigned || !locationSuspect ? isSigned : false
+                )
             ))
 
         // MARK: AUTH_OPEN — block opening of cached-threat files
@@ -161,15 +163,17 @@ final class ESEventHandler {
             esClient?.respond(to: message, allow: !isThreat)
 
             pushEvent(ESEvent(
-                eventType:    .authOpen,
-                processPath:  processPath,
-                pid:          pid,
-                parentPid:    parentPid,
-                filePath:     filePath,
-                decision:     isThreat ? .deny : .allow,
-                sha256:       cached?.hash,
-                threatName:   cached?.threatName,
-                threatFamily: cached?.threatFamily
+                eventType:   .authOpen,
+                processPath: processPath,
+                pid:         pid,
+                parentPid:   parentPid,
+                filePath:    filePath,
+                decision:    isThreat ? .deny : .allow,
+                threat:      ESEvent.ThreatContext(
+                    sha256:       cached?.hash,
+                    threatName:   cached?.threatName,
+                    threatFamily: cached?.threatFamily
+                )
             ))
 
         // MARK: AUTH_CREATE — heuristic-only (can't hash a file that doesn't exist yet)
@@ -233,14 +237,16 @@ final class ESEventHandler {
                     if emailEvent.isDangerousExtension {
                         // Treat dangerous email attachments like discovered threats
                         let threat = ESEvent(
-                            eventType:    .notifyWrite,
-                            processPath:  processPath,
-                            pid:          pid,
-                            parentPid:    parentPid,
-                            filePath:     filePath,
-                            decision:     .notApplicable,
-                            threatName:   "Dangerous Email Attachment",
-                            threatFamily: "EmailThreat"
+                            eventType:   .notifyWrite,
+                            processPath: processPath,
+                            pid:         pid,
+                            parentPid:   parentPid,
+                            filePath:    filePath,
+                            decision:    .notApplicable,
+                            threat:      ESEvent.ThreatContext(
+                                threatName:   "Dangerous Email Attachment",
+                                threatFamily: "EmailThreat"
+                            )
                         )
                         self.pushEvent(threat)
                         if let data = try? self.encoder.encode(threat) {
@@ -263,15 +269,17 @@ final class ESEventHandler {
 
                 // Report raw threat event
                 let threat = ESEvent(
-                    eventType:    .notifyWrite,
-                    processPath:  processPath,
-                    pid:          pid,
-                    parentPid:    parentPid,
-                    filePath:     filePath,
-                    decision:     .notApplicable,
-                    sha256:       hash,
-                    threatName:   result.threatName,
-                    threatFamily: result.threatFamily
+                    eventType:   .notifyWrite,
+                    processPath: processPath,
+                    pid:         pid,
+                    parentPid:   parentPid,
+                    filePath:    filePath,
+                    decision:    .notApplicable,
+                    threat:      ESEvent.ThreatContext(
+                        sha256:       hash,
+                        threatName:   result.threatName,
+                        threatFamily: result.threatFamily
+                    )
                 )
                 self.pushEvent(threat)
                 if let data = try? self.encoder.encode(threat) {

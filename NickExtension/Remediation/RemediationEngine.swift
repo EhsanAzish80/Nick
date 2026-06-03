@@ -119,7 +119,9 @@ final class RemediationEngine {
                 do {
                     try FileManager.default.removeItem(atPath: plistPath)
                     ok = true
-                } catch {}
+                } catch {
+                    Self.logger.warning("Failed to remove persistence plist \(plistPath): \(error.localizedDescription)")
+                }
 
                 actions.append(RemediationAction(
                     type:    .removeLaunchItem,

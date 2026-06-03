@@ -291,7 +291,8 @@ struct SystemAuditView: View {
             }.joined()
 
         let auditRows = engine.auditResults.map { r in
-            let color = r.status == .fail ? "#ef4444" : r.status == .warning ? "#f97316" : "#22c55e"
+            let nonFailColor = r.status == .warning ? "#f97316" : "#22c55e"
+            let color = r.status == .fail ? "#ef4444" : nonFailColor
             return """
             <tr>
               <td>\(htmlEscape(r.check.displayName))</td>
@@ -459,8 +460,10 @@ struct SystemAuditView: View {
                 VStack(spacing: 0) {
                     ForEach(Array(xpcClient.integrityViolations.prefix(5).enumerated()), id: \.element.id) { idx, v in
                         if idx > 0 { Divider().padding(.leading, 44) }
+                        let createdOrModifiedIcon = v.violationType == .created ? "plus.circle" : "pencil"
+                        let violationIcon = v.violationType == .deleted ? "trash" : createdOrModifiedIcon
                         HStack(spacing: 10) {
-                            Image(systemName: v.violationType == .deleted ? "trash" : (v.violationType == .created ? "plus.circle" : "pencil"))
+                            Image(systemName: violationIcon)
                                 .font(.system(size: 14))
                                 .foregroundStyle(Color.statusOrange)
                                 .frame(width: 28)

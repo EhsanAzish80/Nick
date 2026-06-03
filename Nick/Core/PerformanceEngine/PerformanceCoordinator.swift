@@ -46,26 +46,8 @@ final class PerformanceCoordinator {
 
         scanTask = Task {
             scanState = .scanning(progress: 0, currentCategory: nil)
-            var allItems: [JunkItem] = []
             let ruleCount = rules.count
-
-            await withTaskGroup(of: [JunkItem].self) { group in
-                for (index, rule) in rules.enumerated() {
-                    group.addTask {
-                        return await rule.scan()
-                    }
-                    _ = index // suppress warning
-                }
-                var completed = 0
-                for await batch in group {
-                    guard !Task.isCancelled else { break }
-                    allItems.append(contentsOf: batch)
-                    completed += 1
-                    let progress = Double(completed) / Double(ruleCount)
-                    let currentCategory = batch.first?.category
-                    scanState = .scanning(progress: progress, currentCategory: currentCategory?.displayName)
-                }
-            }
+            let allItems = await collectScanResults(ruleCount: ruleCount)
 
             guard !Task.isCancelled else {
                 scanState = .idle
@@ -78,6 +60,28 @@ final class PerformanceCoordinator {
             selectedItemIDs = Set(foundItems.filter { $0.riskLevel == .safe }.map(\.id))
             scanState = .readyToClean(totalSize: totalReclaimableSize, itemCount: foundItems.count)
         }
+    }
+
+    /// Runs all scan rules in parallel and returns their combined results.
+    /// Extracted into its own method so the `addTask` closure stays ≤ 2 levels
+    /// deep (one level inside `withTaskGroup`) rather than three levels deep
+    /// inside `startScan`'s `Task` closure.
+    private func collectScanResults(ruleCount: Int) async -> [JunkItem] {
+        var allItems: [JunkItem] = []
+        var completed = 0
+        await withTaskGroup(of: [JunkItem].self) { group in
+            for rule in rules {
+                group.addTask { await rule.scan() }
+            }
+            for await batch in group {
+                guard !Task.isCancelled else { break }
+                allItems.append(contentsOf: batch)
+                completed += 1
+                let progress = Double(completed) / Double(ruleCount)
+                scanState = .scanning(progress: progress, currentCategory: batch.first?.category?.displayName)
+            }
+        }
+        return allItems
     }
 
     func cancelScan() {

@@ -486,7 +486,7 @@ final class SmartScanChecker {
         }
     }
 
-    private func installExtension(name: String) async {
+    private func installExtension(name _: String) async {
         extensionManager?.installExtension()
     }
 

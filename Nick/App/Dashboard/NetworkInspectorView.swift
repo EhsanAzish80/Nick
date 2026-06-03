@@ -209,7 +209,7 @@ private struct PortBadge: View {
 private struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout Void) -> CGSize {
         let containerWidth = proposal.width ?? .infinity
         var currentX: CGFloat = 0
         var currentY: CGFloat = 0
@@ -231,7 +231,7 @@ private struct FlowLayout: Layout {
         return CGSize(width: containerWidth, height: totalHeight)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout Void) {
         var currentX = bounds.minX
         var currentY = bounds.minY
         var maxRowHeight: CGFloat = 0

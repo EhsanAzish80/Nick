@@ -191,12 +191,13 @@ struct ReportView: View {
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(engine.auditResults, id: \.id) { check in
+                        let nonFailIcon = check.status == .warning ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+                        let iconName = check.status == .fail ? "xmark.circle.fill" : nonFailIcon
+                        let nonFailColor: Color = check.status == .warning ? .orange : .green
+                        let statusColor: Color = check.status == .fail ? .red : nonFailColor
                         HStack {
-                            Image(systemName: check.status == .fail ? "xmark.circle.fill" :
-                                              check.status == .warning ? "exclamationmark.triangle.fill" :
-                                              "checkmark.circle.fill")
-                                .foregroundStyle(check.status == .fail ? .red :
-                                                 check.status == .warning ? .orange : .green)
+                            Image(systemName: iconName)
+                                .foregroundStyle(statusColor)
                             Text(check.check.displayName)
                             Spacer()
                             Text(check.status.rawValue.capitalized)
@@ -287,7 +288,8 @@ struct ReportView: View {
             }.joined()
 
         let auditRows = engine.auditResults.map { r in
-            let color = r.status == .fail ? "#ef4444" : r.status == .warning ? "#f97316" : "#22c55e"
+            let nonFailColor = r.status == .warning ? "#f97316" : "#22c55e"
+            let color = r.status == .fail ? "#ef4444" : nonFailColor
             return """
             <tr>
               <td>\(htmlEscape(r.check.displayName))</td>

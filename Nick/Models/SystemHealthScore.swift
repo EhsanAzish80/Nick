@@ -88,9 +88,9 @@ struct SystemHealthScore: Sendable {
     static func calculate(
         extensionActive: Bool,
         threatsBlocked24h: Int,
-        quarantineCount: Int,
+        quarantineCount _: Int,
         fimViolations: Int,
-        networkBlocksCount: Int,
+        networkBlocksCount _: Int,
         privacyAlerts: Int
     ) -> SystemHealthScore {
 

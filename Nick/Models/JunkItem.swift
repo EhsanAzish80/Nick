@@ -49,7 +49,6 @@ public struct JunkItem: Identifiable, Codable, Sendable, Hashable {
     public var isSelected: Bool
 
     public init(
-        id: UUID = UUID(),
         url: URL,
         size: Int64,
         category: JunkCategory,
@@ -58,7 +57,7 @@ public struct JunkItem: Identifiable, Codable, Sendable, Hashable {
         reason: String,
         isSelected: Bool = true
     ) {
-        self.id = id
+        self.id = UUID()
         self.url = url
         self.size = size
         self.category = category

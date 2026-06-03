@@ -208,8 +208,8 @@ final class NetworkInspector {
         }
 
         device.issues = issues
-        device.riskLevel = issues.isEmpty ? .safe
-                        : (issues.count >= 2 ? .risky : .review)
+        let riskWhenNotSafe: RiskLevel = issues.count >= 2 ? .risky : .review
+        device.riskLevel = issues.isEmpty ? .safe : riskWhenNotSafe
     }
 
     // MARK: - Private: TCP Probe
@@ -226,7 +226,10 @@ final class NetworkInspector {
 
         return await withCheckedContinuation { continuation in
             let resumed = OSAllocatedUnfairLock(initialState: false)
-            let finish: @Sendable (Bool) -> Void = { result in
+
+            // Nested function rather than a closure so the withLock call inside
+            // does not add a third level of closure nesting.
+            func finish(_ result: Bool) {
                 let shouldResume = resumed.withLock { alreadyResumed -> Bool in
                     guard !alreadyResumed else { return false }
                     alreadyResumed = true
@@ -236,9 +239,10 @@ final class NetworkInspector {
                 connection.cancel()
                 continuation.resume(returning: result)
             }
+
             connection.stateUpdateHandler = { state in
                 switch state {
-                case .ready:          finish(true)
+                case .ready:              finish(true)
                 case .failed, .cancelled: finish(false)
                 default: break
                 }

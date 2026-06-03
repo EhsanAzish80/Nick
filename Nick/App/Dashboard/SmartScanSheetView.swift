@@ -268,10 +268,17 @@ private struct ProtectionCheckRow: View {
             .disabled(isResolving)
 
         case .pendingApproval:
-            Button(check.resolution.buttonLabel) { }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(true)
+            Button(check.resolution.buttonLabel) {
+            // No action: the button is always disabled while approval is
+            // pending (e.g. a system extension awaiting user confirmation in
+            // System Settings). The UI surfaces the pending state for
+            // visibility only; the resolution is driven externally once the
+            // user grants approval, at which point a rescan promotes this
+            // check out of the pendingApproval state.
+             }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(true)
 
         case .none:
             EmptyView()

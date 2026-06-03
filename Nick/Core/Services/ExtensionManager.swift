@@ -90,7 +90,7 @@ public final class ExtensionManager: NSObject {
 extension ExtensionManager: OSSystemExtensionRequestDelegate {
 
     public nonisolated func request(
-        _ request: OSSystemExtensionRequest,
+        _: OSSystemExtensionRequest,
         actionForReplacingExtension existing: OSSystemExtensionProperties,
         withExtension ext: OSSystemExtensionProperties
     ) -> OSSystemExtensionRequest.ReplacementAction {
@@ -99,7 +99,7 @@ extension ExtensionManager: OSSystemExtensionRequestDelegate {
         return .replace
     }
 
-    public nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
+    public nonisolated func requestNeedsUserApproval(_: OSSystemExtensionRequest) {
         Task { @MainActor in
             Self.logger.notice("Extension requires user approval in System Settings")
             extensionState = .needsUserApproval
@@ -107,7 +107,7 @@ extension ExtensionManager: OSSystemExtensionRequestDelegate {
     }
 
     public nonisolated func request(
-        _ request: OSSystemExtensionRequest,
+        _: OSSystemExtensionRequest,
         didFinishWithResult result: OSSystemExtensionRequest.Result
     ) {
         Task { @MainActor in
@@ -126,7 +126,7 @@ extension ExtensionManager: OSSystemExtensionRequestDelegate {
     }
 
     public nonisolated func request(
-        _ request: OSSystemExtensionRequest,
+        _: OSSystemExtensionRequest,
         didFailWithError error: Error
     ) {
         Task { @MainActor in

@@ -21,6 +21,32 @@ import Foundation
 ///   avoids implicit conversions across the XPC boundary.
 public struct ESEvent: Codable, Identifiable, Sendable {
 
+    // MARK: - ThreatContext
+
+    /// Bundles the four optional threat-enrichment fields so `ESEvent.init`
+    /// stays within the 7-parameter limit while keeping a clean call site.
+    public struct ThreatContext: Codable, Sendable {
+        public let sha256: String?
+        public let threatName: String?
+        public let threatFamily: String?
+        public let isCodeSigned: Bool?
+
+        public init(
+            sha256: String? = nil,
+            threatName: String? = nil,
+            threatFamily: String? = nil,
+            isCodeSigned: Bool? = nil
+        ) {
+            self.sha256 = sha256
+            self.threatName = threatName
+            self.threatFamily = threatFamily
+            self.isCodeSigned = isCodeSigned
+        }
+
+        /// Convenience sentinel for events with no threat information.
+        public static let none = ThreatContext()
+    }
+
     // MARK: - Properties
 
     public let id: UUID
@@ -61,31 +87,26 @@ public struct ESEvent: Codable, Identifiable, Sendable {
     // MARK: - Init
 
     public init(
-        id: UUID = UUID(),
-        timestamp: Date = Date(),
         eventType: ESEventType,
         processPath: String,
         pid: Int32,
         parentPid: Int32,
         filePath: String? = nil,
         decision: ESDecision,
-        sha256: String? = nil,
-        threatName: String? = nil,
-        threatFamily: String? = nil,
-        isCodeSigned: Bool? = nil
+        threat: ThreatContext = .none
     ) {
-        self.id = id
-        self.timestamp = timestamp
+        self.id = UUID()
+        self.timestamp = Date()
         self.eventType = eventType
         self.processPath = processPath
         self.pid = pid
         self.parentPid = parentPid
         self.filePath = filePath
         self.decision = decision
-        self.sha256 = sha256
-        self.threatName = threatName
-        self.threatFamily = threatFamily
-        self.isCodeSigned = isCodeSigned
+        self.sha256 = threat.sha256
+        self.threatName = threat.threatName
+        self.threatFamily = threat.threatFamily
+        self.isCodeSigned = threat.isCodeSigned
     }
 }
 

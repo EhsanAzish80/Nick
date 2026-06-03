@@ -116,7 +116,7 @@ final class ESXPCServer: NSObject {
 extension ESXPCServer: NSXPCListenerDelegate {
 
     func listener(
-        _ listener: NSXPCListener,
+        _: NSXPCListener,
         shouldAcceptNewConnection newConnection: NSXPCConnection
     ) -> Bool {
         // Validate caller team ID before accepting.
@@ -191,7 +191,7 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         reply(true)
     }
 
-    func requestScan(path: String, reply: @escaping (Bool, String?) -> Void) {
+    func requestScan(path _: String, reply: @escaping (Bool, String?) -> Void) {
         // TODO: Phase 2 — on-demand file scanning via ES or YARA.
         reply(false, "On-demand scan not yet implemented (Phase 2)")
     }
