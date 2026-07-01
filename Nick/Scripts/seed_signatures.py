@@ -1,10 +1,14 @@
+# MARK: - Nick
+# Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
+# Licensed under AGPL-3.0. See LICENSE for details.
+
 #!/usr/bin/env python3
 # seed_signatures.py
 # Fetches macOS malware hashes from MalwareBazaar and seeds the Nick
 # signature database (SQLite at /Library/Application Support/com.ehsanazish.nick/signatures.db).
 #
 # Usage:
-#   python3 seed_signatures.py [--db PATH] [--limit N] [--dry-run]
+#   python3 seed_signatures.py [--db-name NAME.db] [--limit N] [--dry-run]
 #
 # Requirements:
 #   pip install requests
@@ -15,6 +19,7 @@
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -36,9 +41,47 @@ DEFAULT_LIMIT = 1000
 # Map MalwareBazaar confidence strings → Nick severity strings
 SEVERITY_MAP = {
     "100": "critical",
-    "75":  "high",
-    "50":  "medium",
+    "75": "high",
+    "50": "medium",
 }
+
+# ---------------------------------------------------------------------------
+# Path security helpers
+# ---------------------------------------------------------------------------
+
+def _allowed_db_dir() -> Path:
+    """App-owned directory where the signatures DB must live."""
+    return DEFAULT_DB.parent.resolve()
+
+
+def _sanitize_db_name(name: str) -> str:
+    """
+    Allow only a simple SQLite filename (no path separators, traversal, or URI).
+    Examples allowed: signatures.db, my-cache_01.db
+    """
+    base = Path(name).name  # strips any provided directories
+    if not re.fullmatch(r"[A-Za-z0-9._-]+\.db", base):
+        raise ValueError("Invalid --db-name. Use a simple filename ending in .db (e.g. signatures.db).")
+    return base
+
+
+def _resolve_and_validate_db_path(db_name: str) -> Path:
+    """
+    Build and validate DB path under the app-owned directory.
+    Prevents filesystem escape and CLI-driven arbitrary DB targets.
+    """
+    allowed_base = _allowed_db_dir()
+    safe_name = _sanitize_db_name(db_name)
+
+    candidate = (allowed_base / safe_name).resolve()
+
+    try:
+        candidate.relative_to(allowed_base)
+    except ValueError as exc:
+        raise ValueError(f"Database path escapes allowed directory: {candidate}") from exc
+
+    return candidate
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,7 +91,7 @@ def fetch_signatures(limit: int) -> list[dict]:
     """Fetch macOS-tagged signatures from MalwareBazaar."""
     payload = {
         "query": "get_taginfo",
-        "tag":   "macos",
+        "tag": "macos",
         "limit": str(limit),
     }
     try:
@@ -65,19 +108,19 @@ def fetch_signatures(limit: int) -> list[dict]:
 
 
 def map_entry(raw: dict) -> dict | None:
-    """Convert one MalwareBazaar entry to our schema.  Returns None to skip."""
+    """Convert one MalwareBazaar entry to our schema. Returns None to skip."""
     sha256 = raw.get("sha256_hash", "").strip().lower()
     if not sha256 or len(sha256) != 64:
         return None
-    name     = raw.get("signature") or raw.get("file_name") or "Unknown"
-    family   = raw.get("tags", ["Unknown"])[0] if raw.get("tags") else "Unknown"
+    name = raw.get("signature") or raw.get("file_name") or "Unknown"
+    family = raw.get("tags", ["Unknown"])[0] if raw.get("tags") else "Unknown"
     conf_str = str(raw.get("intelligence", {}).get("detections", {}).get("undetected", "50"))
     severity = SEVERITY_MAP.get(conf_str, "medium")
     return {"hash": sha256, "name": name, "family": family, "severity": severity}
 
 
 def seed_db(db_path: Path, entries: list[dict]) -> int:
-    """Bulk-upsert entries into the SQLite database.  Returns number inserted."""
+    """Bulk-upsert entries into the SQLite database. Returns number inserted."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(db_path))
     con.execute("PRAGMA journal_mode=WAL;")
@@ -111,8 +154,12 @@ def seed_db(db_path: Path, entries: list[dict]) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Seed Nick signature database from MalwareBazaar.")
-    parser.add_argument("--db",      default=str(DEFAULT_DB), help="Path to signatures.db")
-    parser.add_argument("--limit",   type=int, default=DEFAULT_LIMIT, help="Max entries to fetch (default 1000)")
+    parser.add_argument(
+        "--db-name",
+        default=DEFAULT_DB.name,
+        help=f"SQLite filename only (stored under {_allowed_db_dir()})",
+    )
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Max entries to fetch (default 1000)")
     parser.add_argument("--dry-run", action="store_true", help="Fetch and parse but do not write to DB")
     args = parser.parse_args()
 
@@ -132,7 +179,11 @@ def main() -> None:
         print("Dry-run mode — database NOT modified.")
         return
 
-    db_path = Path(args.db)
+    try:
+        db_path = _resolve_and_validate_db_path(args.db_name)
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
+
     total = seed_db(db_path, mapped)
     print(f"  ✓ Database updated: {total} total signatures in {db_path}")
 
