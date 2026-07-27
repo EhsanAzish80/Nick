@@ -15,11 +15,11 @@ build/
 *.dSYM
 *.xcresult/
 sonar-coverage.xml
+coverage.lcov
 
 # Swift Package Manager
 .build/
 .swiftpm/
-Package.resolved
 
 # macOS
 .DS_Store
@@ -51,7 +51,11 @@ AuthKey_*.p8
 *.certSigningRequest
 
 # Python training artifacts
+.venv/
 Scripts/__pycache__/
 Scripts/*.csv
 Scripts/*.joblib
+Models/Training/__pycache__/
+Models/Training/*.csv
+Models/Training/*.joblib
 *.pyc

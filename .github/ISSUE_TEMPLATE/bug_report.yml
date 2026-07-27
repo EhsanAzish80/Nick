@@ -1,0 +1,91 @@
+name: Bug report
+description: Report a reproducible crash, detection failure, or incorrect behavior.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private email content, signing material, or live malware. Security vulnerabilities must use private reporting.
+
+  - type: input
+    id: nick-version
+    attributes:
+      label: Nick version and build
+      placeholder: "4.0 (404)"
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "macOS 26.0 (build number if known)"
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Mac model
+      placeholder: "Mac Studio (2022), Apple silicon"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation source
+      options:
+        - Official installer package
+        - Sparkle update
+        - Xcode source build
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include the exact screen, check, or operation involved.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open…
+        2. Select…
+        3. Observe…
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Paste only logs you have reviewed and redacted.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for this behavior.
+          required: true
+        - label: I removed personal data, secrets, and malware samples.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

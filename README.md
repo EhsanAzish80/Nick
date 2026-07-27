@@ -10,7 +10,9 @@ Current release: **4.0 (build 404)**
 [CI](https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml) |
 [SonarCloud](https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick) |
 [Codecov](https://codecov.io/gh/EhsanAzish80/Nick) |
+[Changelog](CHANGELOG.md) |
 [Security policy](SECURITY.md) |
+[Support](SUPPORT.md) |
 [Contributing](CONTRIBUTING.md)
 
 ## What Nick 4.0 includes
@@ -199,6 +201,10 @@ GitHub Actions builds all shipping targets, runs the test suite with coverage,
 uploads the Xcode result bundle to Codecov, converts Xcode coverage for
 SonarCloud, and runs CI-based SonarCloud analysis.
 
+Project coverage is a required gate. Patch coverage is reported as an
+informational signal while the test suite is expanded around legacy UI and
+platform-integration code.
+
 Repository settings required for hosted analysis:
 
 - `CODECOV_TOKEN` repository secret.
@@ -218,21 +224,23 @@ the extension remains installed.
 
 ## Documentation
 
+- [Documentation index](Documentation/README.md)
+- [Changelog](CHANGELOG.md)
 - [Architecture and security boundaries](ARCHITECTURE.md)
 - [User and operator guide](Documentation/USER_GUIDE.md)
 - [Development and CI guide](Documentation/DEVELOPMENT.md)
 - [Release checklist](Documentation/RELEASE_CHECKLIST.md)
 - [Roadmap](Documentation/ROADMAP.md)
 - [Contributing](CONTRIBUTING.md)
-- [Security policy and audit notes](SECURITY.md)
+- [Support](SUPPORT.md)
+- [Security policy](SECURITY.md)
+- [Security audit record](Documentation/SECURITY_AUDIT.md)
 
 ## Project status
 
-Nick 4.0 source, tests, signed package, and manual-download disk image are
-prepared. A release is not considered complete until the exact published build
-is installed on a clean Mac and its Endpoint Security, Email Guard, Scam
-Guardian block test, update, performance, quarantine, and uninstall flows are
-verified.
+Nick 4.0 is the current production release. Every future release remains gated
+on clean-Mac validation of Endpoint Security, Email Guard, Scam Guardian,
+updates, performance, quarantine, and uninstall behavior.
 
 ## License
 

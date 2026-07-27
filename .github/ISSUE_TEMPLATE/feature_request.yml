@@ -1,0 +1,53 @@
+name: Feature request
+description: Propose a focused product, detection, or usability improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user or security problem before proposing a solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Explain the behavior, expected result, and user controls.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Product area
+      options:
+        - Alerts and explainability
+        - Endpoint Security
+        - Scam Guardian
+        - Email Guard
+        - Scanning and quarantine
+        - Performance and maintenance
+        - Setup and updates
+        - Developer experience
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and the roadmap.
+          required: true
+        - label: This request does not require silently bypassing macOS consent or security controls.
+          required: true

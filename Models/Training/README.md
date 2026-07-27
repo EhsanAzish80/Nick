@@ -25,14 +25,17 @@ Python 3.10+ required. Tested with scikit-learn 1.4+ and coremltools 7+.
 | `feature_schema.json` | Canonical 40-feature schema — source of truth for both Swift and Python |
 | `generate_training_data.py` | Generates synthetic labeled training data |
 | `train_model.py` | Trains GBT classifier and converts to CoreML |
-| `evaluate_model.py` | Standalone evaluation with confusion matrix |
-| `convert_to_coreml.py` | Re-converts a saved sklearn pickle to CoreML |
+
+Generated CSV files are always written inside this directory. The pipeline does
+not load serialized Python models because pickle deserialization can execute
+arbitrary code. Evaluation and Core ML conversion happen directly in
+`train_model.py` while the trained model remains in memory.
 
 ## Quickstart
 
 ```bash
 # 1. Generate synthetic training data (5000 samples)
-python3 generate_training_data.py --output training_data.csv --samples 5000
+python3 generate_training_data.py --samples 5000
 
 # 2. Train the model and produce ThreatScorer.mlmodel
 python3 train_model.py --data training_data.csv --output ThreatScorer.mlmodel

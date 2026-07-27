@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: If you use Nick in research or analysis, please cite the software.
+title: Nick
+type: software
+authors:
+  - family-names: Azish
+    given-names: Ehsan
+repository-code: https://github.com/EhsanAzish80/Nick
+url: https://3nsofts.com/nick
+license: AGPL-3.0-only
+version: 4.0
+date-released: 2026-07-27
+keywords:
+  - macOS
+  - endpoint security
+  - malware detection
+  - YARA
+  - network security

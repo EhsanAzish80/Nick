@@ -71,3 +71,7 @@ OUTPUT_PATH=/Users/Shared/Nick-4.0-build-404.dmg \
 The DMG is a presentation wrapper around the installer—not a drag-to-Applications
 image. It is independently Developer ID signed, notarized, stapled, and checked
 by Gatekeeper.
+
+The published checksums are recorded in
+`Packaging/Release/v4.0.0/SHA256SUMS.txt`. Recreate that file whenever either
+immutable release artifact changes.

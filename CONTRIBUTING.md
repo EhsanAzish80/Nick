@@ -1,23 +1,33 @@
 # Contributing to Nick
 
-Thanks for your interest in making Mac security better. Nick is built by the community, for the community.
+Thanks for helping make macOS security more understandable and effective.
+Before opening a public issue, review [SUPPORT.md](SUPPORT.md). Report
+vulnerabilities privately through the process in [SECURITY.md](SECURITY.md).
 
-## Ways to Contribute
+## Ways to contribute
 
 ### Bug reports and false positives
-Found a bug or a false positive detection? Open an [issue](https://github.com/EhsanAzish80/Nick/issues/new) with:
+
+Use the matching
+[issue form](https://github.com/EhsanAzish80/Nick/issues/new/choose). Include:
+
 - macOS version and Mac model
 - Nick version
 - Steps to reproduce
 - Expected vs actual behavior
-- For false positives: the process/file that was flagged and why you believe it's safe
+- Relevant logs with secrets and personal paths removed
+- For false positives, the process or file that was flagged and why you believe
+  it is safe
 
 ### YARA rules
+
 Submit new detection rules for macOS-specific threats:
 
-1. Place your rule in the appropriate directory under `Rules/` (stealers, backdoors, adware, ransomware, or community)
-2. Follow the naming convention: `threat_family_variant.yar` (e.g., `atomic_stealer_v2.yar`)
+1. Place community rules under `Rules/community/`.
+2. Follow the naming convention `threat_family_variant.yar`, for example
+   `atomic_stealer_v2.yar`.
 3. Include metadata in every rule:
+
    ```yara
    rule atomic_stealer_v2 {
        meta:
@@ -33,11 +43,15 @@ Submit new detection rules for macOS-specific threats:
            // your condition
    }
    ```
-4. Test your rule against known-good files to minimize false positives
-5. Open a PR with the rule and a brief description of the threat it detects
+4. Test the rule against representative clean files to minimize false
+   positives.
+5. Open a pull request with references, safe test fixtures, and a brief
+   explanation of the detection.
 
 ### Behavioral scoring model
+
 The CoreML threat scoring model can be improved with:
+
 - New training data (anonymized behavioral patterns from confirmed threats)
 - Feature engineering suggestions (new signals to correlate)
 - Model architecture improvements
@@ -46,62 +60,72 @@ The CoreML threat scoring model can be improved with:
 See `Models/Training/` for the training pipeline and data format.
 
 ### Code contributions
+
 1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
+2. Create a focused branch, such as `fix/alert-copy` or
+   `feature/network-health`
 3. Make your changes
 4. Run the full build and coverage command in
    [Documentation/DEVELOPMENT.md](Documentation/DEVELOPMENT.md)
-5. Commit with a clear message: `git commit -m "Add SSH tunnel detection to NetworkAnalyzer"`
-6. Push and open a PR
+5. Commit with a concise imperative message
+6. Push the branch and open a pull request
 
 ### Documentation
+
 - Fix typos, clarify explanations, add examples
 - Document detection logic for specific threat types
 - Write guides for common use cases
 
-## Code Standards
+## Code standards
 
 ### Swift
+
 - Swift 6.0 with strict concurrency checking
 - Follow Apple's API Design Guidelines
 - Use `async/await` for asynchronous operations
 - Prefer value types (structs, enums) over reference types where appropriate
 - All public APIs must have documentation comments
 
-### Architecture Rules
+### Architecture rules
+
 - `Nick/Core/` must have no UI dependencies; it is the testable detection engine.
 - `Nick/App/` depends on `Nick/Core/`, never the reverse.
 - Privileged and extension XPC protocols must expose the smallest justified API.
 - The main app must authenticate extension health before reporting protection.
 - Network enforcement must fail open when configuration is unavailable.
-- No third-party Swift packages. Apple frameworks and POSIX APIs only.
+- New dependencies require a clear justification and security review. Sparkle
+  is the currently approved managed Swift package.
 - Vendored libyara updates must record the exact upstream version and pass the
   complete false-positive test suite.
 
 ### Testing
+
 - Every detection capability must have corresponding unit tests
-- Include both positive tests (does it catch the threat?) and negative tests (does it avoid false positives?)
-- Integration tests should use realistic but safe mock data — never include actual malware in the repo
+- Include positive tests and negative false-positive tests
+- Use realistic but safe fixtures; never commit live malware
 - A system-extension build is not deployment proof. Release claims require the
   clean-Mac checks in
   [Documentation/RELEASE_CHECKLIST.md](Documentation/RELEASE_CHECKLIST.md).
 
-## Pull Request Process
+## Pull request process
 
-1. **One PR = one concern.** Don't mix a bug fix with a new feature.
-2. **Describe the why**, not just the what. Link to the issue if one exists.
-3. **Include tests** for any new detection logic.
-4. **Update docs** if your change affects user-facing behavior.
-5. A maintainer will review within 7 days. We may request changes — this is collaborative, not adversarial.
+1. Keep each pull request focused on one concern.
+2. Explain why the change is needed and link a relevant issue.
+3. Include tests for new or changed detection behavior.
+4. Update documentation for user-visible or operational changes.
+5. Complete the pull request checklist and respond to review feedback.
 
-## Security Vulnerabilities
+## Security vulnerabilities
 
-If your contribution involves a security fix, please follow the [responsible disclosure process](SECURITY.md) first. Do not submit security fixes as public PRs without prior coordination.
+Follow the [responsible disclosure process](SECURITY.md) before submitting a
+security fix. Do not disclose an uncoordinated vulnerability in a public issue
+or pull request.
 
-## Code of Conduct
+## Code of conduct
 
-Be respectful. Be constructive. We're all here to make Macs safer. Toxic behavior, harassment, or bad-faith contributions will result in a ban.
+Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-By contributing to Nick, you agree that your contributions will be licensed under the [AGPL-3.0 License](LICENSE).
+By contributing to Nick, you agree that your contributions will be licensed
+under the [AGPL-3.0 License](LICENSE).

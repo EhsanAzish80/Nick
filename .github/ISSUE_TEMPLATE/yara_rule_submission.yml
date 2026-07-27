@@ -1,0 +1,60 @@
+name: YARA rule proposal
+description: Propose a macOS YARA rule backed by public threat research.
+title: "[YARA]: "
+labels:
+  - yara-rule
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not upload malware. A production rule must arrive through a pull request with tests; this form is for prior discussion and evidence.
+
+  - type: input
+    id: rule-name
+    attributes:
+      label: Proposed rule name
+    validations:
+      required: true
+
+  - type: input
+    id: threat
+    attributes:
+      label: Target threat or behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: Public references
+      description: Provide reputable threat-analysis or vendor references.
+    validations:
+      required: true
+
+  - type: textarea
+    id: strategy
+    attributes:
+      label: Detection strategy
+      description: Describe stable indicators and why they should avoid legitimate software.
+    validations:
+      required: true
+
+  - type: textarea
+    id: testing
+    attributes:
+      label: Test evidence
+      description: Summarize true-positive and known-clean negative testing without sharing samples.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I will not upload malware or sensitive samples.
+          required: true
+        - label: The proposed rule includes source, author, date, severity, and description metadata.
+          required: true
+        - label: The proposed rule has known-clean negative tests.
+          required: true

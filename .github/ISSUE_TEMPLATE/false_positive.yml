@@ -1,0 +1,60 @@
+name: False-positive report
+description: Report a legitimate file, process, or behavior that Nick flagged.
+title: "[False positive]: "
+labels:
+  - false-positive
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not upload the flagged file. Redact usernames, email content, tokens, and unrelated paths before sharing alert details.
+
+  - type: input
+    id: versions
+    attributes:
+      label: Nick and macOS versions
+      placeholder: "Nick 4.0 (404), macOS 26.0"
+    validations:
+      required: true
+
+  - type: input
+    id: alert-title
+    attributes:
+      label: Alert title and detection name
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: What legitimate activity was occurring?
+      description: Explain why you believe the activity is expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: provenance
+    attributes:
+      label: File or application provenance
+      description: State where it came from and whether its signature or hash was verified.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alert-json
+    attributes:
+      label: Redacted alert details
+      description: Paste reviewed alert JSON. Remove personal or sensitive data first.
+      render: json
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing false-positive reports.
+          required: true
+        - label: I did not upload a suspicious file or archive.
+          required: true
+        - label: I removed personal data and secrets.
+          required: true

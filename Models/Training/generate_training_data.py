@@ -9,7 +9,7 @@ Generates labeled training data for the Nick behavioral threat scoring model.
 Produces CSV rows with 40 features + label column matching feature_schema.json.
 
 Usage:
-    python3 generate_training_data.py --output training_data.csv --samples 5000
+    python3 generate_training_data.py --samples 5000
 """
 
 import argparse
@@ -20,7 +20,9 @@ import math
 import sys
 from pathlib import Path
 
-SCHEMA_PATH = Path(__file__).parent / "feature_schema.json"
+TRAINING_DIRECTORY = Path(__file__).resolve().parent
+SCHEMA_PATH = TRAINING_DIRECTORY / "feature_schema.json"
+OUTPUT_PATH = TRAINING_DIRECTORY / "training_data.csv"
 FEATURE_COUNT = 40
 
 # Feature column names in order (must match FeatureVector.featureNames in Swift)
@@ -296,7 +298,6 @@ def generate(n_samples: int, benign_ratio: float, malicious_ratio: float):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate Nick behavioral threat training data")
-    parser.add_argument("--output",   default="training_data.csv", help="Output CSV path")
     parser.add_argument("--samples",  type=int, default=5000,       help="Total number of samples")
     parser.add_argument("--benign",   type=float, default=0.50,     help="Fraction of benign samples")
     parser.add_argument("--malicious",type=float, default=0.30,     help="Fraction of malicious samples")
@@ -316,14 +317,13 @@ def main():
 
     rows = generate(args.samples, args.benign, args.malicious)
 
-    output_path = Path(args.output)
-    with output_path.open("w", newline="") as f:
+    with OUTPUT_PATH.open("w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(FEATURE_NAMES + ["label"])
         for vec, label in rows:
             writer.writerow([f"{v:.6f}" for v in vec] + [label])
 
-    print(f"Wrote {len(rows)} rows to {output_path}")
+    print(f"Wrote {len(rows)} rows to {OUTPUT_PATH}")
 
 
 if __name__ == "__main__":

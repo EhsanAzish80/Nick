@@ -1,0 +1,2 @@
+8750a55f764f5ed105a4387e64c26d45f66de005feca1f8fd212d7cdd6fef5fc  Nick-4.0-build-404.dmg
+0ccfedd407efa9cd601e72495ad91f5f053f2af17b6f5f39b30c4c9344265f3e  Nick-4.0-build-404.pkg

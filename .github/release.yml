@@ -1,0 +1,30 @@
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+    authors:
+      - dependabot
+  categories:
+    - title: Security and detection
+      labels:
+        - security
+        - yara-rule
+    - title: New capabilities
+      labels:
+        - enhancement
+    - title: Fixes
+      labels:
+        - bug
+        - false-positive
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Engineering
+      labels:
+        - ci
+        - dependencies
+    - title: Other changes
+      labels:
+        - "*"

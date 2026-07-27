@@ -9,11 +9,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build-and-test:
     runs-on: macos-26
     timeout-minutes: 45
     env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
     steps:
@@ -29,6 +38,9 @@ jobs:
           test -n "$XCODE_PATH"
           sudo xcode-select -s "$XCODE_PATH"
           xcodebuild -version
+
+      - name: Validate repository
+        run: ./Scripts/validate-repository.sh
 
       - name: Build Nick
         run: |
@@ -86,9 +98,10 @@ jobs:
           test -s coverage.lcov
 
       - name: Upload coverage reports to Codecov
+        if: env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6.0.2
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ env.CODECOV_TOKEN }}
           fail_ci_if_error: true
           files: coverage.lcov
           disable_search: true
