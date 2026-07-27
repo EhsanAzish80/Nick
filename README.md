@@ -1,21 +1,63 @@
-# Nick
+<p align="center">
+  <img src="nick-banner.svg" width="600" alt="Nick — open-source macOS security">
+</p>
 
-Nick is an open-source macOS security application that combines Endpoint
-Security monitoring, malware scanning, behavioral correlation, system
-hardening checks, email attachment inspection, and optional network filtering.
-Detection and analysis run locally on the Mac.
+<p align="center">
+  Native, local-first protection that explains what happened, why it matters,
+  and what to do next.
+</p>
 
-Current release: **4.0 (build 404)**
+<p align="center">
+  <a href="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml"><img src="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
+  <a href="https://github.com/EhsanAzish80/Nick/releases/latest"><img src="https://img.shields.io/github/v/release/EhsanAzish80/Nick?display_name=tag&sort=semver" alt="Latest release"></a>
+  <a href="https://codecov.io/gh/EhsanAzish80/Nick"><img src="https://codecov.io/gh/EhsanAzish80/Nick/branch/main/graph/badge.svg" alt="Code coverage"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick"><img src="https://sonarcloud.io/api/project_badges/measure?project=EhsanAzish80_Nick&metric=alert_status" alt="SonarCloud quality gate"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/EhsanAzish80/Nick" alt="AGPL-3.0 license"></a>
+  <img src="https://img.shields.io/badge/macOS-26%2B-black?logo=apple" alt="macOS 26 or later">
+</p>
 
-[CI](https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml) |
-[SonarCloud](https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick) |
-[Codecov](https://codecov.io/gh/EhsanAzish80/Nick) |
-[Changelog](CHANGELOG.md) |
-[Security policy](SECURITY.md) |
-[Support](SUPPORT.md) |
-[Contributing](CONTRIBUTING.md)
+<p align="center">
+  <a href="https://github.com/EhsanAzish80/Nick/releases/latest"><strong>Download Nick</strong></a>
+  ·
+  <a href="https://3nsofts.com/nick">Website</a>
+  ·
+  <a href="Documentation/README.md">Documentation</a>
+  ·
+  <a href="SUPPORT.md">Support</a>
+</p>
 
-## What Nick 4.0 includes
+## About Nick
+
+Nick is an open-source macOS security application built to make advanced
+protection understandable. It combines Apple's Endpoint Security and Network
+Extension frameworks with YARA malware scanning, behavioral correlation,
+system-hardening checks, email attachment inspection, quarantine, and
+human-readable alerts.
+
+Detection and analysis run locally on the Mac. Nick does not upload browsing
+history, file contents, process activity, or security telemetry to a hosted
+analysis service.
+
+Unlike a simple scanner, Nick continuously connects evidence from processes,
+files, persistence, privacy access, and network activity. A single unusual
+event can be explained without automatically being called malware; stronger,
+correlated evidence can be blocked, quarantined, and presented with a clear
+next action.
+
+## Protection layers
+
+| Layer | What it does |
+|---|---|
+| Real-Time Protection | Observes process and file activity through Apple's Endpoint Security framework. |
+| Malware Scanner | Uses YARA rules for on-demand, real-time, email, and external-volume scanning. |
+| Behavioral Detection | Correlates process, persistence, filesystem, privacy, and network signals. |
+| Scam Guardian | Optionally blocks known phishing and lookalike destinations with a Network Extension. |
+| Email Guard | Scans supported Apple Mail and Outlook attachment locations. |
+| Ransomware Shield | Watches sentinel files and suspicious high-volume file changes. |
+| System Audit | Checks SIP, FileVault, Gatekeeper, firewall, updates, XProtect, and persistence. |
+| Threat Timeline | Keeps a bounded, searchable record of relevant security activity. |
+| Quarantine | Re-verifies and isolates actionable files while preserving recovery information. |
+| Performance | Explains disk usage and offers reviewed, opt-in cleanup actions. |
 
 ### Endpoint Security
 
@@ -74,6 +116,18 @@ data.
 - A bundled native uninstaller removes Nick, its protection components,
   generated data, settings, and installed applications.
 
+## Product principles
+
+- **Local by default.** Detection and correlation happen on the Mac.
+- **Evidence before alarm.** Unusual behavior is explained without pretending
+  that every anomaly is malware.
+- **Actionable alerts.** Alerts identify the relevant file, process, rule,
+  source, recommended response, and available controls.
+- **Verified protection.** Installation alone is never shown as a healthy
+  protection state; components must report current runtime health.
+- **User-controlled remediation.** Cleanup, quarantine, permissions, and
+  optional network filtering remain visible decisions.
+
 ## Architecture
 
 Nick ships as a signed application bundle containing two system extensions:
@@ -117,8 +171,10 @@ For implementation details and trust boundaries, see
 
 ### Published release
 
+The current stable release is **Nick 4.0 (build 404)** for macOS 26 and later.
+
 1. Download the notarized Nick disk image from
-   [GitHub Releases](https://github.com/EhsanAzish80/Nick/releases).
+   [the latest GitHub release](https://github.com/EhsanAzish80/Nick/releases/latest).
 2. Open the disk image and run the signed installer package.
 3. Launch Nick from `/Applications`.
 4. Follow the setup walkthrough. macOS requires explicit user approval for
@@ -198,8 +254,8 @@ Version 4.0 release notes are in
 ## Quality gates
 
 GitHub Actions builds all shipping targets, runs the test suite with coverage,
-uploads the Xcode result bundle to Codecov, converts Xcode coverage for
-SonarCloud, and runs CI-based SonarCloud analysis.
+uploads the Xcode result bundle to Codecov, and, when `SONAR_TOKEN` is
+configured, converts Xcode coverage and runs CI-based SonarCloud analysis.
 
 Project coverage is a required gate. Patch coverage is reported as an
 informational signal while the test suite is expanded around legacy UI and

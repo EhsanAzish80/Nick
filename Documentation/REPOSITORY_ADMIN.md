@@ -39,6 +39,19 @@ consistently achievable.
 - Secret scanning and push protection: enabled where available.
 - Code scanning: SonarCloud enabled through CI.
 
+## Public presentation
+
+- Keep the About description focused on Nick as a product, not a particular
+  release.
+- Keep the product website and security-focused topics current.
+- Upload a dedicated 1280×640 social-preview image. GitHub does not use the
+  README banner as the repository's link-preview image.
+- Keep the README product-first. Version-specific detail belongs in the
+  changelog and GitHub release notes.
+- Enable Projects only while a public roadmap or triage board is actively
+  maintained.
+- Enable Sponsorships only when a valid funding destination is configured.
+
 ## Release discipline
 
 1. Complete [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
@@ -46,3 +59,7 @@ consistently achievable.
 3. Publish immutable notarized artifacts and checksums.
 4. Update `CHANGELOG.md`, release notes, website download, and Sparkle appcast.
 5. Verify the published package on a clean Mac.
+
+After the website and Sparkle appcast reference the final artifacts, enable
+GitHub release immutability so published tags and assets cannot be silently
+replaced.
