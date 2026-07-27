@@ -73,21 +73,28 @@ jobs:
 
       - name: Upload Xcode result bundle
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: TestResults
           path: TestResults.xcresult
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Convert coverage for Codecov
+        run: |
+          ./Scripts/xccov-to-lcov.sh TestResults.xcresult > coverage.lcov
+          test -s coverage.lcov
+
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6.0.2
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
+          files: coverage.lcov
+          disable_search: true
           flags: macos
-          xcode: true
-          xcode_archive_path: TestResults.xcresult
+          use_pypi: true
+          version: v11.3.1
 
       - name: Convert coverage for SonarCloud
         if: env.SONAR_TOKEN != ''
@@ -97,7 +104,7 @@ jobs:
 
       - name: Run SonarCloud analysis
         if: env.SONAR_TOKEN != ''
-        uses: SonarSource/sonarqube-scan-action@v7
+        uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2 # v7.2.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:

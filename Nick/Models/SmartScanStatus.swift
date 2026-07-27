@@ -565,9 +565,7 @@ final class SmartScanChecker {
                 ? "Nick's verified security extension watches for changes to macOS privacy permissions."
                 : "Privacy permission-change monitoring requires Nick's Endpoint Security extension.",
             icon: "hand.raised",
-            resolution: extensionActive
-                ? .none
-                : .none
+            resolution: .none
         )
     }
 
