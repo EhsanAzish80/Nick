@@ -22,10 +22,16 @@ final class ConnectionTracker: @unchecked Sendable {
 
     private struct Window {
         var connections: [(date: Date, host: String)] = []
+        static let maximumRetainedConnections = 1_000
 
         mutating func purgeExpired(windowSeconds: TimeInterval = 300) {
             let cutoff = Date().addingTimeInterval(-windowSeconds)
             connections.removeAll { $0.date < cutoff }
+            if connections.count > Self.maximumRetainedConnections {
+                connections.removeFirst(
+                    connections.count - Self.maximumRetainedConnections
+                )
+            }
         }
 
         var totalCount: Int   { connections.count }
@@ -51,6 +57,11 @@ final class ConnectionTracker: @unchecked Sendable {
             var window = windows[appID, default: Window()]
             window.purgeExpired()
             window.connections.append((date: Date(), host: remoteHost))
+            if window.connections.count > Window.maximumRetainedConnections {
+                window.connections.removeFirst(
+                    window.connections.count - Window.maximumRetainedConnections
+                )
+            }
             windows[appID] = window
 
             return window.uniqueHosts > maxUniqueHosts

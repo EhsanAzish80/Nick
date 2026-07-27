@@ -123,15 +123,24 @@ final class FileScanner {
             }
         }
 
-        // 5. Merge results — threat if EITHER technique fires
-        let isThreat    = hashMatch != nil || !yaraMatches.isEmpty
-        let threatName  = hashMatch?.name  ?? yaraMatches.first.map { "YARA:\($0.ruleName)" }
-        let threatFamily = hashMatch?.family ?? yaraMatches.first?.tags.first
+        // 5. Merge results. MEDIUM/LOW YARA rules are behavioral heuristics:
+        // useful in an explicit scan, but not enough evidence to deny execution
+        // or quarantine a file. Only HIGH/CRITICAL rules are treated as threats.
+        let actionableYARAMatches = yaraMatches.filter {
+            let severity = $0.metadata["severity"]?.uppercased() ?? "HIGH"
+            return severity == "HIGH" || severity == "CRITICAL"
+        }
+        let isThreat = hashMatch != nil || !actionableYARAMatches.isEmpty
+        let threatName = hashMatch?.name
+            ?? actionableYARAMatches.first.map { "YARA:\($0.ruleName)" }
+        let threatFamily = hashMatch?.family ?? actionableYARAMatches.first?.tags.first
 
         if let hashMatch {
             Self.logger.notice("Hash threat: \(filePath, privacy: .private) → \(hashMatch.name) [\(hashMatch.family)]")
-        } else if let first = yaraMatches.first {
+        } else if let first = actionableYARAMatches.first {
             Self.logger.notice("YARA threat: \(filePath, privacy: .private) → rule:\(first.ruleName)")
+        } else if let first = yaraMatches.first {
+            Self.logger.info("YARA heuristic only: \(filePath, privacy: .private) → rule:\(first.ruleName)")
         }
 
         // 6. Code-signing check

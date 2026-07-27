@@ -25,7 +25,7 @@ final class FileIntegrityMonitor {
     // MARK: - Monitored Paths
 
     /// Default set of security-sensitive paths to track.
-    static let defaultMonitoredPaths: [String] = [
+    static let systemMonitoredPaths: [String] = [
         "/Library/LaunchAgents",
         "/Library/LaunchDaemons",
         "/usr/local/bin",
@@ -33,7 +33,6 @@ final class FileIntegrityMonitor {
         "/etc/sudoers",
         "/private/etc/pam.d",
         "/private/etc/sudoers",
-        "~/Library/LaunchAgents",
     ]
 
     // MARK: - Private
@@ -50,11 +49,24 @@ final class FileIntegrityMonitor {
     private let monitoredPaths: [String]
     private let lock = NSLock()
 
+    var baselineCount: Int {
+        lock.withLock { baselines.count }
+    }
+
     // MARK: - Init
 
-    init(baselinePath: String, monitoredPaths: [String]? = nil) {
+    init(
+        baselinePath: String,
+        monitoredPaths: [String]? = nil,
+        userHomeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories()
+    ) {
         self.baselinePath   = baselinePath
-        self.monitoredPaths = monitoredPaths ?? Self.defaultMonitoredPaths
+        self.monitoredPaths = monitoredPaths ?? (
+            Self.systemMonitoredPaths
+                + userHomeDirectories.map {
+                    $0.appendingPathComponent("Library/LaunchAgents", isDirectory: true).path
+                }
+        )
         loadBaselines()
     }
 

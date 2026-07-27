@@ -16,6 +16,7 @@ struct ReportView: View {
 
     @Environment(SecurityEngine.self) private var engine
     @Environment(ExtensionXPCClient.self) private var xpcClient
+    @Environment(NetworkProtectionManager.self) private var networkProtection
 
     @State private var isExporting = false
     @State private var exportMessage: String?
@@ -35,11 +36,17 @@ struct ReportView: View {
 
     private var blockedLast24h: Int {
         let cutoff = Date().addingTimeInterval(-86400)
-        return xpcClient.events.filter { $0.decision == .deny && $0.timestamp > cutoff }.count
+        let endpointBlocks = xpcClient.events.filter {
+            $0.decision == .deny && $0.timestamp > cutoff
+        }.count
+        let networkBlocks = networkProtection.blockEvents.filter {
+            $0.timestamp > cutoff
+        }.count
+        return endpointBlocks + networkBlocks
     }
 
     private var networkBlockCount: Int {
-        xpcClient.events.filter { $0.decision == .deny && $0.eventType == .authOpen }.count
+        networkProtection.blockEvents.count
     }
 
     private var failedChecks: [SystemCheckResult] {
@@ -398,5 +405,6 @@ private extension String {
     ReportView()
         .environment(SecurityEngine())
         .environment(ExtensionXPCClient())
+        .environment(NetworkProtectionManager())
         .frame(width: 800, height: 600)
 }

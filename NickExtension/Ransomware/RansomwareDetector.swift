@@ -17,7 +17,7 @@ import os
 /// 5. **Behavioural score** — from `BehaviorTracker` (rapid renames, burst ops)
 ///
 /// Confidence ≥ 0.8 → `.block` (kill + quarantine immediately)
-/// Confidence 0.5–0.8 → `.suspend` (pause process, alert user)
+/// Confidence 0.5–0.8 → `.alert` (alert user; do not freeze a process on heuristics alone)
 /// Confidence < 0.5 → `.monitor` (continue watching)
 final class RansomwareDetector {
 
@@ -31,13 +31,13 @@ final class RansomwareDetector {
 
         enum Recommendation {
             case block      // high confidence — kill and quarantine now
-            case suspend    // medium confidence — suspend process, prompt user
+            case alert      // medium confidence — prompt user without freezing the app
             case monitor    // low confidence — keep watching
         }
         var recommendation: Recommendation {
             switch confidence {
             case 0.8...:     return .block
-            case 0.5..<0.8:  return .suspend
+            case 0.5..<0.8:  return .alert
             default:          return .monitor
             }
         }
@@ -62,6 +62,22 @@ final class RansomwareDetector {
 
     // MARK: - Public API
 
+    /// Content entropy can only strengthen a ransomware-specific signal; it
+    /// never creates one by itself. Use this cheap path-only check before
+    /// reading file contents from the real-time event stream.
+    func needsContentSample(filePath: String) -> Bool {
+        if canaryManager.isCanary(path: filePath) {
+            return true
+        }
+        let path = filePath as NSString
+        let ext = path.pathExtension.lowercased()
+        if !ext.isEmpty && knownRansomwareExtensions.contains(ext) {
+            return true
+        }
+        let filename = path.lastPathComponent.lowercased()
+        return ransomNotePatterns.contains { filename.contains($0) }
+    }
+
     /// Evaluates a file-write event for ransomware signals.
     ///
     /// - Parameters:
@@ -74,11 +90,13 @@ final class RansomwareDetector {
                   filePath: String, fileData: Data?) -> RansomwareAlert? {
         var indicators: [String] = []
         var confidence = 0.0
+        var hasRansomwareSpecificIndicator = false
 
         // 1. Canary file touched
         if canaryManager.isCanary(path: filePath) {
             indicators.append("Canary file touched: \(filePath)")
             confidence += 0.6
+            hasRansomwareSpecificIndicator = true
             Self.logger.warning("Canary file touched by pid=\(pid) path=\(filePath)")
         }
 
@@ -92,17 +110,20 @@ final class RansomwareDetector {
         }
 
         // 3. Known ransomware extension
-        let ext = URL(fileURLWithPath: filePath).pathExtension.lowercased()
+        let path = filePath as NSString
+        let ext = path.pathExtension.lowercased()
         if !ext.isEmpty && knownRansomwareExtensions.contains(ext) {
             indicators.append("Known ransomware extension: .\(ext)")
             confidence += 0.4
+            hasRansomwareSpecificIndicator = true
         }
 
         // 4. Ransom note filename
-        let filename = URL(fileURLWithPath: filePath).lastPathComponent.lowercased()
+        let filename = path.lastPathComponent.lowercased()
         if ransomNotePatterns.contains(where: { filename.contains($0) }) {
             indicators.append("Ransom note: \(filename)")
             confidence += 0.5
+            hasRansomwareSpecificIndicator = true
         }
 
         // 5. Behavioural analysis
@@ -112,7 +133,11 @@ final class RansomwareDetector {
             confidence += behavior.score * 0.3
         }
 
-        guard !indicators.isEmpty else { return nil }
+        // Entropy and write bursts are common for browsers, databases, build
+        // tools, and chat applications. They may raise confidence for a
+        // ransomware-specific observation, but must never create an alert by
+        // themselves.
+        guard hasRansomwareSpecificIndicator else { return nil }
 
         let alert = RansomwareAlert(
             pid:         pid,
@@ -169,46 +194,67 @@ final class CanaryFileManager {
 
     private(set) var canaryPaths: Set<String> = []
 
-    private let canaryLocations = [
-        "~/Desktop",
-        "~/Documents",
-        "~/Downloads",
-        "~/Pictures",
-    ]
+    private let homeDirectories: [URL]
+    private let protectedFolderNames = ["Desktop", "Documents", "Downloads", "Pictures"]
+
+    init(homeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories()) {
+        self.homeDirectories = homeDirectories
+    }
 
     // MARK: - Public API
 
     /// Creates hidden canary files in each location.
     /// Safe to call multiple times — skips directories where a canary already exists.
     func deployCanaries() {
-        for location in canaryLocations {
-            let expanded = NSString(string: location).expandingTildeInPath
-            let canaryPath = "\(expanded)/.~nick_canary_\(UUID().uuidString.prefix(8)).tmp"
+        for homeDirectory in homeDirectories {
+            for folderName in protectedFolderNames {
+                let directory = homeDirectory.appendingPathComponent(folderName, isDirectory: true)
+                guard FileManager.default.fileExists(atPath: directory.path) else { continue }
 
-            // Skip if we already have a canary in this directory
-            let dirAlreadyProtected = canaryPaths.contains(where: {
-                ($0 as NSString).deletingLastPathComponent == expanded
-            })
-            guard !dirAlreadyProtected else { continue }
+                // Adopt canaries from an earlier extension process. The
+                // in-memory set is rebuilt on every launch, but the files are
+                // deliberately persistent.
+                if let existingNames = try? FileManager.default.contentsOfDirectory(atPath: directory.path),
+                   let existing = existingNames.first(where: {
+                       $0.hasPrefix(".~nick_canary_") && $0.hasSuffix(".tmp")
+                   }) {
+                    canaryPaths.insert(directory.appendingPathComponent(existing).path)
+                    continue
+                }
 
-            let content = "NICK_CANARY_DO_NOT_MODIFY_\(Date())"
-            guard (try? content.write(toFile: canaryPath, atomically: true, encoding: .utf8)) != nil
-            else { continue }
+                let canaryPath = directory
+                    .appendingPathComponent(".~nick_canary_\(UUID().uuidString.prefix(8)).tmp")
+                    .path
 
-            // Mark resource as hidden via URL resource values
-            var url = URL(fileURLWithPath: canaryPath)
-            var values = URLResourceValues()
-            values.isHidden = true
-            try? url.setResourceValues(values)
+                // Skip if we already have a canary in this directory.
+                let dirAlreadyProtected = canaryPaths.contains(where: {
+                    ($0 as NSString).deletingLastPathComponent == directory.path
+                })
+                guard !dirAlreadyProtected else { continue }
 
-            canaryPaths.insert(canaryPath)
-            Self.logger.info("Canary deployed: \(canaryPath)")
+                let content = "NICK_CANARY_DO_NOT_MODIFY_\(Date())"
+                guard (try? content.write(toFile: canaryPath, atomically: true, encoding: .utf8)) != nil
+                else { continue }
+
+                // Mark resource as hidden via URL resource values.
+                var url = URL(fileURLWithPath: canaryPath)
+                var values = URLResourceValues()
+                values.isHidden = true
+                try? url.setResourceValues(values)
+
+                canaryPaths.insert(canaryPath)
+                Self.logger.info("Canary deployed: \(canaryPath)")
+            }
         }
     }
 
     /// Returns `true` if `path` is a managed canary file.
     func isCanary(path: String) -> Bool {
-        canaryPaths.contains(path)
+        if canaryPaths.contains(path) {
+            return true
+        }
+        let name = (path as NSString).lastPathComponent
+        return name.hasPrefix(".~nick_canary_") && name.hasSuffix(".tmp")
     }
 
     /// Removes all canary files from disk and clears the set.

@@ -2,7 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSEndpointSecurityMachServiceName</key>
+	<string>com.ehsanazish.nick.NickExtension.xpc</string>
 	<key>NSSystemExtensionUsageDescription</key>
-	<string>SYSTEM_EXTENSION_USAGE_DESCRIPTION</string>
+	<string>Nick monitors process and file activity to detect and block security threats.</string>
 </dict>
 </plist>

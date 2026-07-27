@@ -32,12 +32,9 @@ final class FileSystemWatcher: @unchecked Sendable {
     /// Directories monitored for new executable files.
     static let defaultMonitoredDirectories: [String] = [
         "/usr/local/bin",
-        "/usr/bin",
-        "/usr/sbin",
-        "/private/tmp",
-        NSString("~/Library/Application Support").expandingTildeInPath,
+        NSString("~/Desktop").expandingTildeInPath,
+        NSString("~/Downloads").expandingTildeInPath,
         NSString("~/.local/bin").expandingTildeInPath,
-        NSHomeDirectory(),                                     // shell profiles (.zshrc, .bashrc, …)
         NSString("~/.ssh").expandingTildeInPath,              // SSH authorized_keys
         "/etc",                                                // /etc/zshrc, /etc/zprofile, …
     ]
@@ -57,6 +54,12 @@ final class FileSystemWatcher: @unchecked Sendable {
         qos: .utility
     )
     private let lock = NSLock()
+    private var scansInFlight: Set<String> = []
+    /// Prevent an installer or build system from queuing thousands of scans at once.
+    private static let maxConcurrentScans = 8
+    /// Interactive real-time coverage is for downloaded executables. Larger files
+    /// remain covered by explicit/deep scans without causing an idle CPU spike.
+    private static let maxRealtimeFileSize: UInt64 = 100 * 1_024 * 1_024
 
     private static let log = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -222,9 +225,29 @@ final class FileSystemWatcher: @unchecked Sendable {
     }
 
     private func queueYARAScan(for path: String) {
+        // Do not scan Nick's own Xcode products during local development.
+        // Production builds do not monitor /private/tmp, but this also protects
+        // developers who explicitly add a build directory to the watcher.
+        let lowerPath = path.lowercased()
+        if lowerPath.contains("/nickperformanceaudit"),
+           lowerPath.contains("/nick.app/contents/") {
+            return
+        }
+
+        let shouldStart = lock.withLock {
+            guard scansInFlight.count < Self.maxConcurrentScans else { return false }
+            return scansInFlight.insert(path).inserted
+        }
+        guard shouldStart else { return }
+
         // Detach a low-priority task so the FSEvents callback returns immediately.
         Task.detached(priority: .utility) { [weak self, path] in
             guard let self else { return }
+            defer {
+                _ = self.lock.withLock {
+                    self.scansInFlight.remove(path)
+                }
+            }
             do {
                 let matches = try await self.yaraEngine.scanFile(at: path)
                 guard !matches.isEmpty else { return }
@@ -244,14 +267,31 @@ final class FileSystemWatcher: @unchecked Sendable {
 
     private func isExecutable(at path: String) -> Bool {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: path) else { return false }
+        guard let attributes = try? fm.attributesOfItem(atPath: path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = (attributes[.size] as? NSNumber)?.uint64Value,
+              size <= Self.maxRealtimeFileSize
+        else {
+            return false
+        }
         return fm.isExecutableFile(atPath: path)
     }
 
     private func makeThreatSignal(for path: String, matches: [YARAMatch]) -> ThreatSignal {
         let ruleNames = matches.map(\.ruleName).joined(separator: ", ")
         let tags = Set(matches.flatMap(\.tags)).sorted().joined(separator: ", ")
-        let severity: SignalSeverity = tags.contains("critical") ? .critical : .high
+        let declaredSeverity = matches
+            .compactMap { $0.metadata["severity"]?.uppercased() }
+        let severity: SignalSeverity
+        if declaredSeverity.contains("CRITICAL") {
+            severity = .critical
+        } else if declaredSeverity.contains("HIGH") {
+            severity = .high
+        } else if declaredSeverity.contains("MEDIUM") {
+            severity = .medium
+        } else {
+            severity = .high
+        }
 
         // Metadata dictionary for correlator use.
         var meta: [String: String] = [

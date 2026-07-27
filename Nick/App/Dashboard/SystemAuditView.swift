@@ -18,6 +18,7 @@ struct SystemAuditView: View {
 
     @Environment(SecurityEngine.self) private var engine
     @Environment(ExtensionXPCClient.self) private var xpcClient
+    @Environment(NetworkProtectionManager.self) private var networkProtection
 
     @State private var isExporting   = false
     @State private var exportMessage: String?
@@ -45,7 +46,13 @@ struct SystemAuditView: View {
 
     private var blockedLast24h: Int {
         let cutoff = Date().addingTimeInterval(-86400)
-        return xpcClient.events.filter { $0.decision == .deny && $0.timestamp > cutoff }.count
+        let endpointBlocks = xpcClient.events.filter {
+            $0.decision == .deny && $0.timestamp > cutoff
+        }.count
+        let networkBlocks = networkProtection.blockEvents.filter {
+            $0.timestamp > cutoff
+        }.count
+        return endpointBlocks + networkBlocks
     }
 
     private var healthScore: SystemHealthScore {
@@ -54,7 +61,7 @@ struct SystemAuditView: View {
             threatsBlocked24h:  blockedLast24h,
             quarantineCount:    xpcClient.quarantineRecords.count,
             fimViolations:      xpcClient.integrityViolations.count,
-            networkBlocksCount: xpcClient.events.filter { $0.decision == .deny && $0.eventType == .authOpen }.count,
+            networkBlocksCount: networkProtection.blockEvents.count,
             privacyAlerts:      xpcClient.privacyAlerts.count
         )
     }
@@ -874,7 +881,8 @@ private struct AuditFixLink: View {
 #Preview {
     SystemAuditView()
         .environment(SecurityEngine())
+        .environment(ExtensionXPCClient())
+        .environment(NetworkProtectionManager())
         .frame(width: NickLayout.windowWidth)
         .background(Color.backgroundPrimary)
 }
-

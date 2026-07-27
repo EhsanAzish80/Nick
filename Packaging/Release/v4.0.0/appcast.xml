@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Nick Updates</title>
+    <link>https://3nsofts.com/nick/appcast.xml</link>
+    <description>Nick macOS security app updates</description>
+    <language>en</language>
+
+    <item>
+      <title>Nick 4.0</title>
+      <pubDate>Mon, 27 Jul 2026 10:33:00 +0000</pubDate>
+      <sparkle:version>404</sparkle:version>
+      <sparkle:shortVersionString>4.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <h2>Nick 4.0 — Network Protection</h2>
+        <ul>
+          <li>Endpoint Security and Network Filter onboarding with verified status checks</li>
+          <li>Scam Guardian protection for phishing and lookalike domains</li>
+          <li>Improved Email Guard attachment scanning and YARA detection</li>
+          <li>Clearer alerts, trusted-behavior controls, and threat timeline</li>
+          <li>Redesigned performance cleanup and security recommendations</li>
+          <li>Native Nick Uninstaller for complete removal and clean reinstalls</li>
+          <li>Performance and background-monitoring improvements</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://3nsofts.com/nick/releases/Nick-4.0.pkg"
+        length="14668174"
+        type="application/octet-stream"
+        sparkle:edSignature="0keXdknNtb6xdsNDrNLnRej09JJ6JNfFZF8TrmohIimnYHJjEkgJcYE0Mmweo+7Hsrz9yOF1UgqzrnHHAqbFDw=="
+      />
+    </item>
+
+    <item>
+      <title>Nick 3.0.0</title>
+      <pubDate>Sat, 31 May 2026 12:00:00 +0000</pubDate>
+      <sparkle:version>300</sparkle:version>
+      <sparkle:shortVersionString>3.0.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <h2>Nick 3.0 — Endpoint Security Edition</h2>
+        <ul>
+          <li>Real-time threat detection via Apple Endpoint Security framework</li>
+          <li>Ransomware protection with canary files</li>
+          <li>ML-based behavioral analysis</li>
+          <li>File integrity monitoring</li>
+          <li>Quarantine and automated remediation</li>
+          <li>Privacy Guard (TCC monitoring)</li>
+          <li>USB auto-scan</li>
+          <li>Performance cleanup engine</li>
+          <li>Smart Scan with one-tap fix</li>
+          <li>User-friendly alerts</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://3nsofts.com/nick/releases/Nick-v3.0.0.dmg"
+        length="7436604"
+        type="application/octet-stream"
+        sparkle:edSignature="/k7ns4x0s516e+nGW+2VsT3pWdWo7kgjdREqvUir3l8QEkLVVEy4VOiOzhXdN42E9nqzPVj45jMuAoAV7SRnAA=="
+      />
+    </item>
+  </channel>
+</rss>

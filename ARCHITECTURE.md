@@ -2,15 +2,53 @@
 
 This document describes Nick's internal architecture, detection methodology, and security model. It's intended for contributors, security auditors, and anyone who wants to understand how Nick works before trusting it on their Mac.
 
+## Version 4 architecture
+
+Nick 4.0 separates user interface, local monitoring, privileged Endpoint
+Security observation, and optional network enforcement:
+
+```text
+Nick.app
+├── SecurityEngine and MonitorCoordinator
+├── local process, persistence, connection, capture, and system-audit monitors
+├── Smart Scan, Alerts, Timeline, Quarantine, Reports, and setup
+├── ExtensionXPCClient
+└── NetworkProtectionManager
+
+NickExtension.systemextension
+├── EndpointSecurityClient
+├── FileScanner and vendored libyara 4.5.5
+├── EmailAttachmentMonitor
+├── RansomwareDetector and FileIntegrityMonitor
+├── Behavioral and privacy event handling
+└── authenticated XPCServer
+
+NickNetFilter.systemextension
+├── FilterDataProvider
+├── deterministic NetworkProtectionPolicy
+├── ScamGuardian
+├── signed NetworkBlocklist envelope validation
+└── bounded privacy-safe health and block-event persistence
+```
+
+The main app never treats an installed bundle or saved preference as proof that
+a protection is working. System-extension and Network Extension rows become
+healthy only after current runtime state is verified.
+
 ## Design Principles
 
 1. **Defense in depth through correlation.** Any single signal (an unsigned binary, an outbound connection, a new LaunchAgent) could be benign. Nick's value is in correlating signals across monitors to surface genuinely suspicious behavior while minimizing false positives.
 
 2. **Minimal attack surface.** Nick uses zero third-party Swift dependencies. The privileged helper exposes the smallest possible XPC API. The app requests only the permissions it needs.
 
-3. **Offline by default.** Nick makes no network connections unless the user explicitly enables rule update checks. All scanning, analysis, and AI inference runs locally on the Mac.
+3. **Local analysis.** Scanning, correlation, and model inference run locally.
+   Network access is limited to explicit product functions such as Sparkle
+   update checks and future signed rule retrieval.
 
-4. **Separation of concerns.** The detection engine (`Core/`) has no UI dependency and can be tested, audited, and embedded independently. The UI (`App/`) is a thin layer over the engine. The privileged helper (`Helper/`) is isolated behind XPC.
+4. **Separation of concerns.** The detection engine (`Nick/Core/`) has no UI
+   dependency. The UI (`Nick/App/`) presents engine state. Endpoint Security
+   and network enforcement live in separate system extensions, and privileged
+   operations are isolated behind narrow authenticated XPC protocols.
 
 ---
 

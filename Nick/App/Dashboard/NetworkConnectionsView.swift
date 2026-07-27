@@ -154,52 +154,108 @@ private struct ProcessGroup: View {
     let connections: [NetworkConnectionInfo]
     let isExpanded: Bool
     let onToggle: () -> Void
+    @State private var showsExplanation = false
 
     private var isSuspicious: Bool {
         connections.contains { $0.isShellProcess && $0.isOutbound }
     }
 
+    private var isUnresolved: Bool {
+        processName == "(unknown)" || connections.allSatisfy { $0.pid <= 0 }
+    }
+
+    private var hasRegularAppIdentity: Bool {
+        connections.contains { connection in
+            guard connection.pid > 0,
+                  let app = NSRunningApplication(processIdentifier: connection.pid) else {
+                return false
+            }
+            return app.bundleURL != nil
+        }
+    }
+
+    private var shouldExplainIdentity: Bool {
+        isUnresolved || !hasRegularAppIdentity
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header row
-            Button(action: onToggle) {
-                HStack(spacing: 12) {
-                    // App icon
-                    AppIconImage(
-                        pid: connections.first?.pid ?? -1,
-                        processName: processName
-                    )
-                    .frame(width: 32, height: 32)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            HStack(spacing: 12) {
+                Button(action: onToggle) {
+                    HStack(spacing: 12) {
+                        // App icon
+                        AppIconImage(
+                            pid: connections.first?.pid ?? -1,
+                            processName: processName
+                        )
+                        .frame(width: 32, height: 32)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                    Text(processName)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isSuspicious ? Color.statusRed : Color.textPrimary)
-                        .lineLimit(1)
+                        Text(processName)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(isSuspicious ? Color.statusRed : Color.textPrimary)
+                            .lineLimit(1)
 
-                    Spacer()
+                        Spacer()
 
-                    // Status dot
-                    Circle()
-                        .fill(isSuspicious ? Color.statusRed : Color.statusGreen)
-                        .frame(width: 7, height: 7)
+                        // Status dot
+                        Circle()
+                            .fill(isSuspicious ? Color.statusRed : Color.statusGreen)
+                            .frame(width: 7, height: 7)
 
-                    Text("\(connections.count)")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.textSecondary)
-                        .frame(minWidth: 20, alignment: .trailing)
+                        Text("\(connections.count)")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.textSecondary)
+                            .frame(minWidth: 20, alignment: .trailing)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
 
+                if shouldExplainIdentity {
+                    Button {
+                        showsExplanation.toggle()
+                    } label: {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 13))
+                            .foregroundStyle(showsExplanation ? Color.accentColor : Color.textTertiary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Explain this network activity")
+                    .accessibilityLabel("Explain \(processName)")
+                }
+
+                Button(action: onToggle) {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(Color.textTertiary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                         .animation(.easeInOut(duration: 0.2), value: isExpanded)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            if showsExplanation {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                    Text(identityExplanation)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.leading, 44)
+                .padding(.bottom, 10)
+                .accessibilityElement(children: .combine)
+            }
 
             // Expanded connection list
             if isExpanded {
@@ -211,6 +267,23 @@ private struct ProcessGroup: View {
                 }
             }
         }
+    }
+
+    private var identityExplanation: String {
+        let listener = connections.first { $0.state == .listen }
+        let listenerNote: String
+        if listener?.localAddress == "0.0.0.0" || listener?.localAddress == "::" {
+            listenerNote = " 0.0.0.0 (or ::) means the service is listening on this Mac’s local network interfaces; it is not a remote address or an active connection."
+        } else if listener != nil {
+            listenerNote = " A listening socket waits for a connection; it does not mean someone is currently connected."
+        } else {
+            listenerNote = ""
+        }
+
+        if isUnresolved {
+            return "Nick found the socket but macOS did not provide enough information to match it to an app or process. “Unknown” alone is not evidence of a threat." + listenerNote
+        }
+        return "\(processName) appears to be a background process or command-line executable, so it may not have a normal app icon. The missing icon alone is not suspicious." + listenerNote
     }
 }
 

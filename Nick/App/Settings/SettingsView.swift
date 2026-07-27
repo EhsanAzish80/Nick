@@ -29,11 +29,12 @@ struct SettingsView: View {
     // MARK: Dependencies
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(NetworkProtectionManager.self) private var networkProtection
 
     // MARK: App Storage
 
     @AppStorage("notificationThresholdRaw") private var notificationThresholdRaw: Int = SignalSeverity.high.rawValue
-    @AppStorage("deepScanIntervalSeconds") private var deepScanIntervalSeconds: Int = 60
+    @AppStorage("deepScanIntervalSeconds") private var deepScanIntervalSeconds: Int = 300
     @AppStorage("logFormatter") private var logFormatter: String = "kv"
     @AppStorage("fileLoggingEnabled") private var fileLoggingEnabled: Bool = false
     @AppStorage("stdoutLoggingEnabled") private var stdoutLoggingEnabled: Bool = false
@@ -57,6 +58,8 @@ struct SettingsView: View {
             ?? ["/Users", "/Applications", "/Library", "/private/tmp"]
     }()
     @State private var newProcessName: String = ""
+    @State private var newAllowedDomain: String = ""
+    @State private var newAllowedApp: String = ""
     @State private var showRemoveProcessConfirmation = false
     @State private var nameToRemove: String?
     @State private var showClearAlertsConfirmation = false
@@ -76,6 +79,7 @@ struct SettingsView: View {
                     appearanceSection
                     notificationsSection
                     scanningSection
+                    networkProtectionSection
                     integrationsSection
                     monitoredDirectoriesSection
                     trustedProcessesSection
@@ -93,6 +97,11 @@ struct SettingsView: View {
             }
             .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
+        }
+        .onAppear(perform: refreshLaunchAtLogin)
+        .task { await networkProtection.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshLaunchAtLogin()
         }
     }
 
@@ -131,6 +140,7 @@ struct SettingsView: View {
             ) {
                 Toggle("", isOn: $launchAtLogin)
                     .labelsHidden()
+                    .accessibilityLabel("Launch Nick at login")
                     .toggleStyle(.switch)
                     .onChange(of: launchAtLogin) { _, newValue in toggleLaunchAtLogin(newValue) }
             }
@@ -199,8 +209,6 @@ struct SettingsView: View {
                 title: "Background sweep interval"
             ) {
                 Picker("", selection: $deepScanIntervalSeconds) {
-                    Text("30 seconds").tag(30)
-                    Text("1 minute").tag(60)
                     Text("5 minutes").tag(300)
                     Text("15 minutes").tag(900)
                     Text("30 minutes").tag(1800)
@@ -228,6 +236,122 @@ struct SettingsView: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var networkProtectionSection: some View {
+        Section {
+            LabeledTile(
+                icon: "network.badge.shield.half.filled",
+                tint: networkProtection.isEnabled ? .green : .orange,
+                title: "Network Protection",
+                subtitle: networkProtectionStatusText
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { networkProtection.isEnabled },
+                    set: { enabled in
+                        Task { await networkProtection.setEnabled(enabled) }
+                    }
+                ))
+                .labelsHidden()
+                .accessibilityLabel("Network Protection")
+                .toggleStyle(.switch)
+            }
+
+            if case .awaitingApproval = networkProtection.state {
+                LabeledTile(
+                    icon: "gearshape.fill", tint: .orange,
+                    title: "Approval required",
+                    subtitle: "Allow Nick under Login Items & Extensions → Network Extensions."
+                ) {
+                    Button("Open Settings") {
+                        networkProtection.openNetworkExtensionSettings()
+                    }
+                    .controlSize(.small)
+                }
+            }
+
+            if case .failed(let message) = networkProtection.state {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+
+            DisclosureGroup("Allowed Websites (\(networkProtection.allowedDomains.count))") {
+                HStack {
+                    TextField("example.com", text: $newAllowedDomain)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { addAllowedDomain() }
+                    Button("Add", action: addAllowedDomain)
+                        .disabled(newAllowedDomain.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                ForEach(networkProtection.allowedDomains, id: \.self) { domain in
+                    allowlistRow(domain) {
+                        Task { await networkProtection.removeAllowedDomain(domain) }
+                    }
+                }
+            }
+
+            DisclosureGroup("Allowed Apps (\(networkProtection.allowedAppIdentifiers.count))") {
+                HStack {
+                    TextField("com.example.app", text: $newAllowedApp)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { addAllowedApp() }
+                    Button("Add", action: addAllowedApp)
+                        .disabled(newAllowedApp.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                ForEach(networkProtection.allowedAppIdentifiers, id: \.self) { identifier in
+                    allowlistRow(identifier) {
+                        Task { await networkProtection.removeAllowedApp(identifier) }
+                    }
+                }
+            }
+
+            LabeledTile(
+                icon: "exclamationmark.octagon.fill", tint: .red,
+                title: "Emergency disable",
+                subtitle: "Immediately stop network filtering if a site or app cannot connect."
+            ) {
+                Button("Disable Now", role: .destructive) {
+                    Task { await networkProtection.emergencyDisable() }
+                }
+                .controlSize(.small)
+                .disabled(!networkProtection.isEnabled)
+            }
+        } header: {
+            Text("Network Protection")
+        } footer: {
+            Text("Allowed websites and apps always take priority over blocking. Nick stores only blocked destinations, reasons, and source app identifiers—not page contents or browsing history.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var networkProtectionStatusText: String {
+        switch networkProtection.state {
+        case .loading: return "Checking the Network Filter…"
+        case .enabled: return "Scam Guardian is checking connection destinations."
+        case .disabled: return "Filtering is off. Passive network monitoring continues."
+        case .awaitingApproval: return "Waiting for approval in System Settings."
+        case .failed: return "Nick could not verify the Network Filter."
+        }
+    }
+
+    private func allowlistRow(_ value: String, remove: @escaping () -> Void) -> some View {
+        HStack {
+            Image(systemName: "checkmark.shield.fill")
+                .foregroundStyle(.green)
+            Text(value)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+            Spacer()
+            Button(role: .destructive, action: remove) {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove \(value)")
+        }
+        .padding(.vertical, 2)
     }
 
     private var integrationsSection: some View {
@@ -704,6 +828,17 @@ struct SettingsView: View {
     private var maintenanceSection: some View {
         Section {
             LabeledTile(
+                icon: "trash.slash.fill", tint: .red,
+                title: "Uninstall Nick",
+                subtitle: "Removes Nick, its protection components, quarantine, history, settings, and all data."
+            ) {
+                Button("Open Uninstaller…", role: .destructive) {
+                    openUninstaller()
+                }
+                .controlSize(.small)
+            }
+
+            LabeledTile(
                 icon: "gearshape.2.fill", tint: .gray,
                 title: "Remove privileged helper",
                 subtitle: "Unregisters and removes the Nick privileged helper from the system."
@@ -750,6 +885,16 @@ struct SettingsView: View {
 
     // MARK: Actions
 
+    private func openUninstaller() {
+        let url = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Applications/Nick Uninstaller.app", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        NSWorkspace.shared.openApplication(
+            at: url,
+            configuration: NSWorkspace.OpenConfiguration()
+        )
+    }
+
     private func removeHelper() {
         Task {
             try? await SMAppService.daemon(plistName: "com.ehsanazish.nick.helper.plist").unregister()
@@ -762,6 +907,24 @@ struct SettingsView: View {
         @Bindable var bindableEngine = engine
         bindableEngine.trustedProcessList.addUserTrusted(trimmed)
         newProcessName = ""
+    }
+
+    private func addAllowedDomain() {
+        let value = newAllowedDomain
+        Task {
+            if await networkProtection.allowDomain(value) {
+                newAllowedDomain = ""
+            }
+        }
+    }
+
+    private func addAllowedApp() {
+        let value = newAllowedApp
+        Task {
+            if await networkProtection.allowApp(value) {
+                newAllowedApp = ""
+            }
+        }
     }
 
     private func removeProcess(_ name: String) {
@@ -852,6 +1015,10 @@ struct SettingsView: View {
         }
     }
 
+    private func refreshLaunchAtLogin() {
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
     // MARK: Icon-tile helper (gradient app-icon style square)
 
     @ViewBuilder
@@ -929,6 +1096,7 @@ struct LabeledTile<Trailing: View>: View {
 #Preview {
     SettingsView()
         .environment(SecurityEngine())
+        .environment(NetworkProtectionManager())
         .frame(width: 760, height: 900)
 }
 #endif

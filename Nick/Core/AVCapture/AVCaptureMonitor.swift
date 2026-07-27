@@ -19,9 +19,9 @@ import os
 /// recorded baseline.  A `ThreatSignal` is emitted only when a device transitions
 /// from inactive → active, preventing duplicate alerts across successive scans.
 ///
-/// Process attribution is performed on a background thread using sysctl: the most
-/// recently launched non-system process is reported as the likely accessor.
-/// Unsigned binaries are elevated to `.high` severity.
+/// The public capture APIs expose device activity but not a trustworthy owning
+/// process. Nick reports activation without naming an app; guessing from the
+/// process list previously caused unrelated recently-launched apps to be accused.
 ///
 /// - Note: `AVCaptureDevice` connection/disconnection notifications are registered
 ///         for real-time supplemental coverage (physical device plug events).
@@ -103,12 +103,11 @@ final class AVCaptureMonitor: MonitorProtocol {
             if running { anyRunning = true }
 
             if running && !wasRunning {
-                let name    = CaptureDeviceAccessor.cmioDeviceName(deviceID) ?? "Camera"
-                let process = await detectAccessingProcess()
+                let name = CaptureDeviceAccessor.cmioDeviceName(deviceID) ?? "Camera"
                 pendingSignals.append(
-                    makeCaptureSignal(mediaType: "camera", deviceName: name, process: process)
+                    makeCaptureSignal(mediaType: "camera", deviceName: name, process: nil)
                 )
-                Self.log.notice("Camera activated: \(name) — \(process?.name ?? "unknown")")
+                Self.log.notice("Camera activated: \(name) — owner unavailable")
             }
 
             knownVideoState[deviceID] = running
@@ -128,26 +127,17 @@ final class AVCaptureMonitor: MonitorProtocol {
             if running { anyRunning = true }
 
             if running && !wasRunning {
-                let name    = CaptureDeviceAccessor.audioDeviceName(deviceID) ?? "Microphone"
-                let process = await detectAccessingProcess()
+                let name = CaptureDeviceAccessor.audioDeviceName(deviceID) ?? "Microphone"
                 pendingSignals.append(
-                    makeCaptureSignal(mediaType: "microphone", deviceName: name, process: process)
+                    makeCaptureSignal(mediaType: "microphone", deviceName: name, process: nil)
                 )
-                Self.log.notice("Microphone activated: \(name) — \(process?.name ?? "unknown")")
+                Self.log.notice("Microphone activated: \(name) — owner unavailable")
             }
 
             knownAudioState[deviceID] = running
         }
 
         isMicrophoneActive = anyRunning
-    }
-
-    // MARK: - Process Detection
-
-    private func detectAccessingProcess() async -> DetectedCaptureProcess? {
-        await Task.detached(priority: .userInitiated) {
-            CaptureProcessScanner.detectAccessingProcess()
-        }.value
     }
 
     // MARK: - Signal Generation
@@ -160,10 +150,11 @@ final class AVCaptureMonitor: MonitorProtocol {
         deviceName: String,
         process:    DetectedCaptureProcess?
     ) -> ThreatSignal {
-        let processName = process?.name ?? "unknown"
+        let processName = process?.name ?? "unavailable"
 
         let severity: SignalSeverity = {
-            guard let p = process else { return .medium }
+            guard let p = process else { return .info }
+            if Self.isSimulatorRuntimeProcess(p.path) { return .info }
             switch p.signingStatus {
             case .unsigned, .invalid: return .high
             default:                  return .medium
@@ -186,20 +177,27 @@ final class AVCaptureMonitor: MonitorProtocol {
             source:      .avCapture,
             severity:    severity,
             title:       "\(deviceName) activated by \(processName)",
-            description: "The system \(mediaType) began streaming. " +
-                         "Access attributed to '\(processName)'. " +
-                         "Malware commonly activates cameras and microphones silently — " +
-                         "verify this is expected.",
+            description: process == nil
+                ? "The \(deviceName) began streaming. macOS did not provide Nick with reliable app ownership for this event."
+                : "The \(deviceName) began streaming and was attributed to \(processName).",
             context: ThreatSignalContext(
                 processInfo: processInfo,
                 metadata: [
                     "mediaType":  mediaType,
                     "deviceName": deviceName,
                     "process":    processName,
-                    "reason":     "capture_device_active"
+                    "reason":     "capture_device_active",
+                    "attributionConfidence": process == nil ? "unavailable" : "test_only"
                 ]
             )
         )
+    }
+
+    /// Simulator runtime binaries are ad-hoc signed by design. Treating that
+    /// signature as suspicious produces high-severity false positives for
+    /// services such as ShazamKit's `shazamd`.
+    private static func isSimulatorRuntimeProcess(_ path: String) -> Bool {
+        path.contains("/CoreSimulator/") || path.contains(".simruntime/")
     }
 
     // MARK: - AVCaptureDevice Notifications

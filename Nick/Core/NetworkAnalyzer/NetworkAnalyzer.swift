@@ -56,10 +56,17 @@ final class NetworkAnalyzer: MonitorProtocol {
 
         connections = scanned
 
+        // Signature validation used by the trusted-process check can block while
+        // macOS warms its trust cache. NetworkAnalyzer is MainActor-isolated for UI
+        // state, so derive those signals away from the main thread.
+        let connectionSignals = await Task.detached(priority: .utility) {
+            ConnectionScanner().signals(from: scanned)
+        }.value
+
         // Update baseline first, then detect anomalies.
         baseline.update(connections: scanned)
         let baselineSignals = baseline.anomalies(for: scanned)
-        pendingSignals = scanner.signals(from: scanned) + baselineSignals
+        pendingSignals = connectionSignals + baselineSignals
         Self.logger.info("Network snapshot: \(scanned.count) connections, \(self.pendingSignals.count) signals (\(baselineSignals.count) baseline anomalies)")
     }
 

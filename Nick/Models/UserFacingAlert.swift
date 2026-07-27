@@ -36,6 +36,15 @@ struct UserFacingAlert: Identifiable, Sendable {
     /// Answers: what happened / why it matters / what Nick did.
     let explanation: String
 
+    /// A short confidence-aware assessment, such as "Likely safe" or
+    /// "Needs your review". This is intentionally different from detector
+    /// severity: it tells a person what Nick actually knows.
+    let assessment: String
+
+    /// One concrete next step. This must never be a generic "investigate"
+    /// instruction or imply that Nick blocked something when it only observed it.
+    let recommendedAction: String
+
     /// Consumer-facing severity classification.
     let severity: AlertSeverity
 

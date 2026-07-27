@@ -3,8 +3,13 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import AppKit
+import Darwin
+import NetworkExtension
+import OSLog
+import ServiceManagement
 import Sparkle
 import SwiftData
+import SystemExtensions
 
 // MARK: - AppDelegate
 
@@ -17,11 +22,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Shared State
 
-    /// Single SecurityEngine instance shared across all scenes.
-    let engine = SecurityEngine()
+    /// Single SecurityEngine instance shared across all scenes. This must stay
+    /// lazy: uninstall maintenance mode starts the app delegate but must never
+    /// construct scanners, monitors, or persistence stores.
+    lazy var engine = SecurityEngine()
 
     /// XPC client that bridges the container app to NickExtension.
-    let xpcClient = ExtensionXPCClient()
+    lazy var xpcClient = ExtensionXPCClient()
+    lazy var networkProtection = NetworkProtectionManager()
 
     // MARK: - Private
 
@@ -29,6 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let mainWindowDelegate = MainWindowDelegate()
     private var coordinator: MonitorCoordinator?
     private var updaterController: SPUStandardUpdaterController?
+    private var uninstallPreparationInProgress = false
+    private let uninstallLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "Uninstall"
+    )
     /// Set to `true` before calling `NSApp.terminate` from an explicit user action
     /// (right-click → Quit Nick) so `applicationShouldTerminate` allows the quit
     /// even when the main window is hidden.
@@ -47,12 +60,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_: Notification) {
+        traceUninstall("Nick launched with arguments: \(CommandLine.arguments.joined(separator: " "))")
+        if CommandLine.arguments.contains("--prepare-uninstall") {
+            traceUninstall("Maintenance mode detected in applicationDidFinishLaunching")
+            prepareForUninstall(
+                markerPath: uninstallArgumentValue(after: "--result")
+            )
+            return
+        }
+
+        // XCTest launches the real application executable as its test host. Starting
+        // the production scanners here would enumerate the whole Mac, connect to the
+        // installed system extensions, and mutate persistent state while unit tests
+        // are running. Keep the test host inert; individual tests construct only the
+        // services they exercise.
+        let environment = ProcessInfo.processInfo.environment
+        let isRunningTests =
+            environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["XCInjectBundleInto"] != nil
+            || environment["DYLD_INSERT_LIBRARIES"]?.contains("XCTest") == true
+            || NSClassFromString("XCTestCase") != nil
+            || Bundle.allBundles.contains { $0.bundlePath.hasSuffix(".xctest") }
+            // Xcode's macOS XCTest host launches the app with this persistence
+            // suppression argument before the XCTest bundle itself is visible.
+            || CommandLine.arguments.contains("-ApplePersistenceIgnoreState")
+        if isRunningTests {
+            return
+        }
+
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleUninstallPreparationRequest(_:)),
+            name: .nickPrepareForUninstall,
+            object: nil
+        )
+
         // Register defaults so first-run behaviour matches configured behaviour.
         // Must run before any code that reads these keys.
         UserDefaults.standard.register(defaults: [
             "notificationThresholdRaw": SignalSeverity.high.rawValue,
-            "deepScanIntervalSeconds": 60
+            "deepScanIntervalSeconds": 300
         ])
+        // Earlier builds allowed a full process/network/persistence sweep every
+        // 30–60 seconds. Endpoint Security now supplies real-time coverage, so
+        // migrate those high-impact defaults to a five-minute background sweep.
+        if !UserDefaults.standard.bool(forKey: "performanceSweepIntervalMigratedV1") {
+            if UserDefaults.standard.integer(forKey: "deepScanIntervalSeconds") < 300 {
+                UserDefaults.standard.set(300, forKey: "deepScanIntervalSeconds")
+            }
+            UserDefaults.standard.set(true, forKey: "performanceSweepIntervalMigratedV1")
+        }
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
@@ -67,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         Task { @MainActor in
+            await networkProtection.refresh()
             engine.runFullScan()
             xpcClient.connect()
             let coord = MonitorCoordinator(engine: engine, correlator: ThreatCorrelator())
@@ -85,6 +144,208 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.willBecomeActiveNotification,
             object: nil
         )
+    }
+
+    /// Runs only when the bundled uninstaller launches Nick with
+    /// `--prepare-uninstall`. These APIs must execute from Nick's own bundle:
+    /// NetworkExtension preferences and ServiceManagement registrations are
+    /// scoped to the app that created them.
+    @objc private func handleUninstallPreparationRequest(_ notification: Notification) {
+        uninstallLogger.notice("Received uninstall preparation request")
+        prepareForUninstall(markerPath: Self.uninstallResultURL.path)
+    }
+
+    private func prepareForUninstall(markerPath requestedMarkerPath: String?) {
+        guard !uninstallPreparationInProgress else {
+            uninstallLogger.notice("Ignoring duplicate uninstall preparation request")
+            traceUninstall("Ignored duplicate preparation request")
+            return
+        }
+        uninstallPreparationInProgress = true
+        NSApp.setActivationPolicy(.prohibited)
+
+        let markerPath = requestedMarkerPath
+            ?? Self.uninstallResultURL.path
+        uninstallLogger.notice("Preparing Nick for removal")
+        traceUninstall("Preparation started; result path: \(markerPath)")
+
+        Task {
+            var failures: [String] = []
+            var restartRequired = false
+
+            do {
+                traceUninstall("Loading Network Filter preferences")
+                let manager = NEFilterManager.shared()
+                try await manager.loadFromPreferences()
+                traceUninstall("Network Filter preferences loaded; removing configuration")
+                try await manager.removeFromPreferences()
+                traceUninstall("Network Filter configuration removed")
+            } catch {
+                traceUninstall("Network Filter cleanup error: \(error.localizedDescription)")
+                // "configuration not found" is harmless during an idempotent retry.
+                let nsError = error as NSError
+                if nsError.code != NEFilterManagerError.configurationInvalid.rawValue {
+                    failures.append("Network Filter: \(error.localizedDescription)")
+                }
+            }
+
+            for identifier in [
+                "com.ehsanazish.nick.NickNetFilter",
+                NickExtensionConstants.extensionBundleID
+            ] {
+                do {
+                    traceUninstall("Requesting system extension removal: \(identifier)")
+                    let result = try await SystemExtensionRemovalRequest.deactivate(
+                        identifier: identifier
+                    )
+                    switch result {
+                    case .completed:
+                        traceUninstall("System extension removed: \(identifier)")
+                    case .willCompleteAfterReboot:
+                        traceUninstall("System extension removal will complete after restart: \(identifier)")
+                        restartRequired = true
+                    @unknown default:
+                        traceUninstall("System extension removal returned an unknown result: \(identifier)")
+                    }
+                } catch {
+                    let nsError = error as NSError
+                    if nsError.domain == OSSystemExtensionErrorDomain,
+                       nsError.code == OSSystemExtensionError.Code.extensionNotFound.rawValue {
+                        traceUninstall("System extension was already absent: \(identifier)")
+                    } else {
+                        traceUninstall(
+                            "System extension cleanup error \(identifier): \(error.localizedDescription)"
+                        )
+                        failures.append(
+                            "System Extension \(identifier): \(error.localizedDescription)"
+                        )
+                    }
+                }
+            }
+
+            let loginItem = SMAppService.mainApp
+            traceUninstall("Launch at Login status: \(String(describing: loginItem.status))")
+            if loginItem.status != .notRegistered {
+                do {
+                    traceUninstall("Unregistering Launch at Login")
+                    try await loginItem.unregister()
+                    traceUninstall("Launch at Login unregistered")
+                } catch {
+                    let nsError = error as NSError
+                    // Launch-at-login registration is owned by the containing
+                    // app. SMAppService may reject unregistering from Nick's
+                    // headless maintenance launch even when the same user
+                    // authorized removal. Deleting Nick makes the registration
+                    // non-launchable, so this cleanup is always best-effort and
+                    // must never stop the administrator-authorized purge.
+                    traceUninstall(
+                        "Launch at Login cleanup deferred to app removal: "
+                            + "\(nsError.domain) \(nsError.code) "
+                            + error.localizedDescription
+                    )
+                }
+            }
+
+            let helperPlistURL = Bundle.main.bundleURL
+                .appendingPathComponent("Contents/Library/LaunchDaemons")
+                .appendingPathComponent("com.ehsanazish.nick.helper.plist")
+            if FileManager.default.fileExists(atPath: helperPlistURL.path) {
+                let helper = SMAppService.daemon(
+                    plistName: "com.ehsanazish.nick.helper.plist"
+                )
+                traceUninstall("Privileged helper status: \(String(describing: helper.status))")
+                if helper.status != .notRegistered {
+                    do {
+                        traceUninstall("Unregistering privileged helper")
+                        try await helper.unregister()
+                        traceUninstall("Privileged helper unregistered")
+                    } catch {
+                        let nsError = error as NSError
+                        traceUninstall(
+                            "Privileged helper cleanup error \(nsError.domain) " +
+                            "\(nsError.code): \(error.localizedDescription)"
+                        )
+                        failures.append("Privileged helper: \(error.localizedDescription)")
+                    }
+                }
+            } else {
+                // Current Nick builds do not embed an SMAppService LaunchDaemon
+                // definition. A helper left by an older build is removed by the
+                // administrator-authorized purge below; asking SMAppService to
+                // unregister a nonexistent bundled definition returns EINVAL.
+                traceUninstall("No bundled helper definition; deferring legacy helper cleanup to authorized purge")
+            }
+
+            let result: [String: Any] = [
+                "completed": failures.isEmpty,
+                "failures": failures,
+                "restartRequired": restartRequired,
+                "timestamp": ISO8601DateFormatter().string(from: Date())
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted]) {
+                do {
+                    try data.write(to: URL(fileURLWithPath: markerPath), options: .atomic)
+                    uninstallLogger.notice("Wrote uninstall result")
+                    traceUninstall("Removal result written; failures: \(failures.count)")
+                } catch {
+                    uninstallLogger.error("Could not write uninstall result: \(error.localizedDescription, privacy: .public)")
+                    traceUninstall("Could not write removal result: \(error.localizedDescription)")
+                }
+            } else {
+                traceUninstall("Could not serialize removal result")
+            }
+
+            traceUninstall("Maintenance mode is terminating Nick")
+            forceQuit = true
+            NSApp.terminate(nil)
+        }
+    }
+
+    private static var uninstallResultURL: URL {
+        URL(
+            fileURLWithPath: "/private/tmp",
+            isDirectory: true
+        ).appendingPathComponent(
+            "com.ehsanazish.nick.uninstall-result-\(getuid()).json"
+        )
+    }
+
+    static func isIgnorableLaunchAtLoginRemovalError(_ error: NSError) -> Bool {
+        error.domain == NSPOSIXErrorDomain
+            && (error.code == Int(EPERM) || error.code == Int(EACCES))
+    }
+
+    private static var uninstallTraceURL: URL {
+        URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("com.ehsanazish.nick.uninstall-trace-\(getuid()).log")
+    }
+
+    private func traceUninstall(_ message: String) {
+        let line = "\(ISO8601DateFormatter().string(from: Date())) [Nick] \(message)\n"
+        print("[Nick Uninstall] \(message)")
+        let data = Data(line.utf8)
+        if !FileManager.default.fileExists(atPath: Self.uninstallTraceURL.path) {
+            FileManager.default.createFile(
+                atPath: Self.uninstallTraceURL.path,
+                contents: data
+            )
+            return
+        }
+        guard let handle = try? FileHandle(forWritingTo: Self.uninstallTraceURL) else { return }
+        defer { try? handle.close() }
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } catch {
+            print("[Nick Uninstall] Could not append trace: \(error.localizedDescription)")
+        }
+    }
+
+    private func uninstallArgumentValue(after flag: String) -> String? {
+        guard let index = CommandLine.arguments.firstIndex(of: flag) else { return nil }
+        let valueIndex = CommandLine.arguments.index(after: index)
+        guard valueIndex < CommandLine.arguments.endIndex else { return nil }
+        return CommandLine.arguments[valueIndex]
     }
 
     /// Keep Nick alive in the background when the last window closes.
@@ -313,6 +574,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await self?.engine.runFullScan()
         }
     }
+}
+
+private final class SystemExtensionRemovalRequest: NSObject,
+    OSSystemExtensionRequestDelegate
+{
+    private var continuation:
+        CheckedContinuation<OSSystemExtensionRequest.Result, Error>?
+
+    static func deactivate(
+        identifier: String
+    ) async throws -> OSSystemExtensionRequest.Result {
+        let operation = SystemExtensionRemovalRequest()
+        let result = try await withCheckedThrowingContinuation { continuation in
+            operation.continuation = continuation
+            let request = OSSystemExtensionRequest.deactivationRequest(
+                forExtensionWithIdentifier: identifier,
+                queue: .main
+            )
+            request.delegate = operation
+            OSSystemExtensionManager.shared.submitRequest(request)
+        }
+        // OSSystemExtensionRequest.delegate is not an ownership boundary. Keep
+        // this delegate alive until macOS delivers its terminal callback.
+        withExtendedLifetime(operation) {}
+        return result
+    }
+
+    func request(
+        _: OSSystemExtensionRequest,
+        actionForReplacingExtension _: OSSystemExtensionProperties,
+        withExtension _: OSSystemExtensionProperties
+    ) -> OSSystemExtensionRequest.ReplacementAction {
+        .cancel
+    }
+
+    func requestNeedsUserApproval(_: OSSystemExtensionRequest) {}
+
+    func request(
+        _: OSSystemExtensionRequest,
+        didFinishWithResult result: OSSystemExtensionRequest.Result
+    ) {
+        continuation?.resume(returning: result)
+        continuation = nil
+    }
+
+    func request(
+        _: OSSystemExtensionRequest,
+        didFailWithError error: Error
+    ) {
+        continuation?.resume(throwing: error)
+        continuation = nil
+    }
+}
+
+private extension Notification.Name {
+    static let nickPrepareForUninstall = Notification.Name(
+        "com.ehsanazish.nick.prepareForUninstall"
+    )
 }
 
 // MARK: - MainWindowDelegate

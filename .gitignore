@@ -9,8 +9,12 @@ build/
 *.moved-aside
 *.hmap
 *.ipa
+*.pkg
+*.dmg
 *.dSYM.zip
 *.dSYM
+*.xcresult/
+sonar-coverage.xml
 
 # Swift Package Manager
 .build/

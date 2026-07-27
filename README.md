@@ -1,399 +1,245 @@
-<p align="center">
-  <img src="NickIcon.png" alt="Nick" height="100">
-</p>
-<h3 align="center">Open-source macOS security suite with on-device AI threat scoring</h3>
-<p align="center">
-  One app. Six layers of protection. Zero cloud dependency. Read every line of code.
-</p>
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS%2026%2B-000000?style=flat&logo=apple" alt="macOS 26+">
-  <img src="https://img.shields.io/badge/swift-6.0-F05138?style=flat&logo=swift" alt="Swift 6.0">
-  <img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat" alt="AGPL-3.0">
-  <img src="https://img.shields.io/badge/tests-273%20passing-brightgreen?style=flat" alt="273 tests passing">
-  <img src="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml/badge.svg" alt="CI">
-  <a href="https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick"><img src="https://sonarcloud.io/api/project_badges/measure?project=EhsanAzish80_Nick&metric=alert_status" alt="Quality Gate"></a>
-  <a href="https://codecov.io/gh/EhsanAzish80/Nick"><img src="https://codecov.io/gh/EhsanAzish80/Nick/branch/main/graph/badge.svg" alt="Coverage"></a>
-  <img src="https://img.shields.io/github/stars/EhsanAzish80/Nick?style=flat" alt="Stars">
-</p>
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#building-from-source">Build</a> •
-  <a href="#contributing">Contributing</a> •
-  <a href="#roadmap">Roadmap</a>
-</p>
+# Nick
 
----
+Nick is an open-source macOS security application that combines Endpoint
+Security monitoring, malware scanning, behavioral correlation, system
+hardening checks, email attachment inspection, and optional network filtering.
+Detection and analysis run locally on the Mac.
 
-## Why Nick?
+Current release: **4.0 (build 404)**
 
-macOS ships with solid built-in security — XProtect, Gatekeeper, SIP — but these defenses are signature-based and reactive. They catch known threats after Apple adds a definition. They don't catch:
+[CI](https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml) |
+[SonarCloud](https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick) |
+[Codecov](https://codecov.io/gh/EhsanAzish80/Nick) |
+[Security policy](SECURITY.md) |
+[Contributing](CONTRIBUTING.md)
 
-- **Behavioral threats** — a signed app quietly exfiltrating your keychain
-- **Living-off-the-land attacks** — `curl` piping to `bash`, `osascript` running obfuscated scripts
-- **Persistence backdoors** — new LaunchAgents installed silently by compromised software
-- **Tunnel detection** — reverse shells, unexpected SSH forwarding, SOCKS proxies
-- **Zero-day exploits** — novel malware that no signature database has seen yet
+## What Nick 4.0 includes
 
-Existing tools either cost $60+/year (Norton, Intego), require installing 5-6 separate utilities (Objective-See's excellent but fragmented suite), or are enterprise-only (CrowdStrike, SentinelOne).
+### Endpoint Security
 
-**Nick is one app that replaces six tools**, with the only open-source on-device AI behavioral threat scoring engine for macOS. No cloud. No subscription. No trust required — the code is right here.
+The `NickExtension` system extension uses Apple's Endpoint Security framework
+to observe file and process activity. It performs YARA and behavioral checks,
+reports activity to the main app, and can deny a confirmed malicious file
+before execution.
 
----
+### Malware scanning and quarantine
 
-## Features
+- Vendored libyara 4.5.5 with curated macOS rules.
+- On-demand, real-time, email attachment, and external-volume scanning.
+- Confidence-aware results: heuristic matches are shown for review; only
+  actionable matches can be blocked or quarantined.
+- Quarantine re-scans the selected file before moving it.
+- Alerts show the file name, path, matching rule, source, recommended action,
+  and relevant controls.
 
-### �️ Endpoint Security Extension (v3.0)
-Nick's system extension uses Apple's Endpoint Security framework to intercept `AUTH_EXEC`, `AUTH_OPEN`, `AUTH_CREATE`, `AUTH_MMAP`, and `AUTH_COPYFILE` events at the kernel level — **blocking malicious files before they execute**, not after. Registered via `SMAppService`; communicates with the main app over a private XPC connection.
+### Behavioral detection
 
-### �🔍 System Integrity Audit
-Continuously verifies your Mac's security posture:
-- SIP (System Integrity Protection) status
-- FileVault encryption state
-- Gatekeeper configuration
-- Application Firewall status and rules
-- XProtect definition freshness
-- TCC database integrity
-- `sudo` configuration and PATH integrity
+Nick correlates process, persistence, network, file, and privacy signals rather
+than treating every unusual event as malware. Coverage includes suspicious
+parent-child chains, living-off-the-land tools, reverse-shell patterns,
+unsigned executables in writable locations, persistence changes, and unexpected
+camera or microphone activity.
 
-### 🛡️ Persistence Monitor
-Watches every known persistence mechanism on macOS and alerts on changes:
-- `/Library/LaunchDaemons` and `/Library/LaunchAgents`
-- `~/Library/LaunchAgents`
-- Login Items
-- Cron jobs and periodic scripts
-- System Extensions and kernel extensions
-- Browser extensions (Safari, Chrome, Firefox)
+### Scam Guardian
 
-### 🌐 Network Watchdog
-Real-time visibility into what's connecting where:
-- Active connections mapped to processes
-- Listening port detection (unexpected services)
-- Reverse shell detection (shell processes with outbound connections)
-- SSH tunnel and port forwarding identification
-- DNS query monitoring for known malicious domains
-- Unexpected VPN/proxy process detection
+The optional `NickNetFilter` system extension uses Apple's Network Extension
+content-filter APIs to evaluate connection destinations against signed rules
+and lookalike-domain checks. It does not inspect page contents or store full
+URLs, query strings, or payloads. Allowlisted apps and domains take precedence,
+and the filter fails open when its configuration cannot be read.
 
-### 🔬 Process Auditor
-Identifies suspicious runtime behavior:
-- Unsigned or ad-hoc signed binaries executing
-- Processes running from `/tmp`, `/var/tmp`, or hidden directories
-- LOLBin abuse detection (`curl | bash`, `osascript` with obfuscated payloads, `openssl` reverse connections)
-- Suspicious parent-child process chains
-- Unexpected child processes from GUI apps
+### Email Guard
 
-### 🧬 YARA Scanner
-On-demand and real-time file scanning:
-- **libyara 4.5.2** static engine embedded directly in the ES event pipeline — every cache-miss file is evaluated before an allow/deny decision is made
-- Bundled macOS-specific rulesets: adware, backdoors, ransomware, stealers
-- Community-contributed rules via pull requests
-- Deep Scanner: on-demand full-system YARA crawl, battery-aware, with live progress
-- USB/external media auto-scan on mount
-- Per-file scan timeout (10 s) prevents stalls on malformed files
-- Heuristic analysis: entropy scoring, Mach-O header inspection, embedded URL/IP extraction
+Email Guard monitors supported Apple Mail and Outlook attachment locations
+through the Endpoint Security extension. New attachments are scanned before
+Nick reports them as safe. Full Disk Access is required for protected mail
+data.
 
-### 📷 Camera & Microphone Sentinel
-Detects unauthorized access to your camera and microphone in real time:
-- Monitors all CoreMediaIO video devices for unexpected activation
-- Monitors CoreAudio input devices for unsanctioned recording
-- Attributes device activation to the most-recently-launched non-system process
-- Elevates severity to high when an unsigned binary is found accessing media hardware
-- Baseline-delta approach: only alerts on new activations, not ongoing expected usage
+### System and privacy monitoring
 
-### 📡 Logging & SIEM Integration (v1.2)
-Nick's functional logging pipeline sends alerts to your existing security infrastructure with zero configuration overhead:
-- **Formats:** Key=Value, JSON, CEF — pick one or pipe them yourself
-- **Outputs:** Local log file with daily rotation, HTTP POST webhook (Splunk HEC, AWS, PagerDuty, any HTTPS endpoint), stdout
-- **MDM-configurable** — all settings readable from the managed defaults domain (`com.ehsanazish.nick`)
+- SIP, FileVault, Gatekeeper, firewall, XProtect, and update checks.
+- LaunchAgent, LaunchDaemon, login-item, cron, and other persistence checks.
+- Process and active-connection views with human-readable context.
+- File-integrity and ransomware sentinel monitoring.
+- Privacy permission and capture-device change monitoring.
+- Bounded Threat Timeline and exportable security reports.
 
-No syslog. No OpenTelemetry. No dedicated developer required.
+### Performance and maintenance
 
-### 🧠 AI Behavioral Scoring (The Differentiator)
-On-device CoreML pipeline for behavioral threat correlation. Rule-based scoring is live; the CoreML inference model activates once trained on real-world signal data collected via opt-in telemetry.
-- Individual signals are noisy. Correlated behavioral signals are actionable.
-- `curl` downloading a binary to `/tmp` = medium risk
-- That binary executing unsigned 2 seconds later = high risk
-- That binary opening an outbound connection to a raw IP on port 443 = critical
-- **15 correlation rules** including `browser_to_shell`, `office_to_shell`, `raw_ip_outbound`, advanced LOLBin patterns, and more
-- Natural-language alert explanations powered by on-device Foundation Models (macOS 26+)
-- No data ever leaves your Mac
-
----
+- Disk-usage analysis and reviewed cleanup recommendations.
+- Background work uses reduced cadence when Nick is not active.
+- Bounded caches, event stores, and scan concurrency.
+- A bundled native uninstaller removes Nick, its protection components,
+  generated data, settings, and installed applications.
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────┐  ┌───────────────────────────┐
-│               Nick.app (SwiftUI)             │  │  NickFinderSync.appex     │
-│          Menu Bar + Dashboard + Alerts       │◄─│  Finder context menu      │
-├──────────────────────────────────────────────┤  │  App Group UserDefaults   │
-│     NickLogging  (functional pipeline)       │  └───────────────────────────┘
-│   KV / JSON / CEF  →  file / HTTP / stdout   │
-├──────────────────────────────────────────────┤
-│              Threat Correlator               │
-│    Combines signals → CoreML threat score    │
-├──────────┬──────────┬───────────┬────────────┤
-│ Process  │ Persist- │ Network   │ File       │
-│ Auditor  │ ence     │ Watchdog  │ System     │
-│          │ Monitor  │ + Baseline│ Watcher    │
-├──────────┴──────────┴───────────┴────────────┤
-│              YARA Engine (libyara)            │
-│          + Heuristic Analysis Layer           │
-├──────────────────────────────────────────────┤
-│          AI Behavioral Scorer (CoreML)        │
-├──────────────────────────────────────────────┤
-│           Privileged Helper (XPC)             │
-│      SMAppService · Elevated Operations       │
-└──────────────────────────────────────────────┘
+Nick ships as a signed application bundle containing two system extensions:
+
+```text
+Nick.app
+├── SwiftUI application
+│   ├── SecurityEngine and MonitorCoordinator
+│   ├── Smart Scan, Alerts, Timeline, Quarantine, and Reports
+│   └── Setup, settings, Sparkle updates, and maintenance
+├── NickExtension.systemextension
+│   ├── Endpoint Security client
+│   ├── YARA and behavioral scanning
+│   ├── Email Guard, ransomware, integrity, and privacy monitors
+│   └── authenticated XPC service
+└── NickNetFilter.systemextension
+    ├── Network Extension content filter
+    ├── Scam Guardian and signed blocklist policy
+    └── privacy-safe health and block events
+
+Nick Uninstaller.app
+└── guided removal and cleanup
 ```
 
-### Project Structure
+The main architectural rule is that installation is not treated as proof of
+protection. Smart Scan and setup show a green state only after the relevant
+component reports current health.
 
-```
-Nick/
-├── Core/                        # Detection engine (pure Swift, no UI dependency)
-│   ├── AVCapture/               # Camera and microphone activity monitoring
-│   ├── BehavioralScorer/        # CoreML inference engine
-│   ├── DeepScan/                # Full-system YARA deep scan driver
-│   ├── Helper/                  # Privileged helper client interface
-│   ├── Logging/                 # Functional alert logging pipeline (KV/JSON/CEF)
-│   ├── Models/                  # Core-layer model types
-│   ├── NetworkAnalyzer/         # Connection monitoring, tunnel detection, and baseline
-│   ├── Notifications/           # NotificationManager
-│   ├── PersistenceWatcher/      # LaunchAgent/Daemon/Login Item surveillance
-│   ├── ProcessMonitor/          # Process auditing and anomaly detection
-│   ├── Protocols/               # Shared monitor protocol definitions
-│   ├── Services/                # macOS Services menu provider
-│   ├── Settings/                # AppSettings
-│   ├── SystemAudit/             # SIP, FileVault, Gatekeeper, firewall checks
-│   ├── ThreatCorrelator/        # Multi-signal correlation, scoring, and suppression
-│   ├── ThreatLog/               # Persistent threat log
-│   ├── YARAEngine/              # C interop wrapper for libyara + FSEvents watcher
-│   ├── SecurityEngine.swift     # Top-level observable state model
-│   └── MonitorCoordinator.swift # Lifecycle orchestration for all monitors
-│
-├── App/                         # SwiftUI macOS application
-│   ├── Dashboard/               # Overview, scanner, deep scan, network, and alert views
-│   ├── Alerts/                  # Threat log export and history
-│   ├── Settings/                # Settings view
-│   ├── SystemAudit/             # System audit view
-│   ├── Theme/                   # Design tokens (colors, typography, spacing, layout)
-│   ├── MainWindowView.swift     # NavigationSplitView shell and sidebar
-│   ├── NickApp.swift            # @main entry point
-│   └── AppDelegate.swift        # NSStatusItem and engine bootstrap
-│
-├── NickHelper/                  # Privileged helper tool (XPC + SMAppService)
-│
-├── NickFinderSync/              # Finder Sync Extension — right-click "Scan with Nick"
-│
-├── Models/                      # Shared Swift model types
-│   └── Training/                # CoreML training pipeline (Python)
-│
-├── Rules/                       # YARA rule sets
-│   └── community/               # Community-contributed rules
-│
-└── Tests/
-    ├── NickTests/               # Unit tests
-    └── NickIntegrationTests/    # End-to-end detection tests
-```
+For implementation details and trust boundaries, see
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
----
+## Requirements
+
+- macOS 26 or later.
+- Xcode 26 or later for source builds.
+- A Mac capable of running macOS 26.
+- Apple-approved Endpoint Security and Network Extension entitlements for
+  signed system-extension builds.
 
 ## Installation
 
-### Requirements
-- macOS 26 or later (required by the YARA static library)
-- Apple Silicon or Intel Mac
+### Published release
 
-### Download
-Download the latest notarized `.dmg` from [Releases](https://github.com/EhsanAzish80/Nick/releases).
+1. Download the notarized Nick disk image from
+   [GitHub Releases](https://github.com/EhsanAzish80/Nick/releases).
+2. Open the disk image and run the signed installer package.
+3. Launch Nick from `/Applications`.
+4. Follow the setup walkthrough. macOS requires explicit user approval for
+   system extensions, Network Extensions, and Full Disk Access.
+5. Complete Smart Scan and confirm that each enabled protection reports current
+   health.
 
-### Homebrew (coming soon)
-```bash
-brew install --cask nick-security
-```
+The disk image is a presentation wrapper around the installer package. Sparkle
+updates use the signed package directly.
 
 ### Permissions
-Nick requires the following permissions to function (each is requested individually with an explanation):
 
-| Permission | Why |
-|---|---|
-| **Full Disk Access** | Monitor LaunchAgents, browser extensions, and system directories |
-| **Network Monitoring** | Detect suspicious connections and tunnels |
-| **Camera & Microphone** | Detect unauthorized access to media hardware |
-| **Accessibility** | Detect UI-level process manipulation (optional) |
-| **Notifications** | Alert you when threats are detected |
+| Approval | Used by | Purpose |
+|---|---|---|
+| Endpoint Security system extension | NickExtension | Real-time process and file monitoring |
+| Network Extension | NickNetFilter | Optional Scam Guardian destination filtering |
+| Full Disk Access | Nick and NickExtension | Protected system and mail attachment locations |
+| Notifications | Nick | User-facing threat notifications |
 
-Nick never accesses your documents, photos, or personal files. Monitoring is limited to system directories, process tables, and network state.
+Nick cannot silently grant these approvals. The setup walkthrough opens the
+correct macOS pane and waits for verified component health.
 
----
+## Building from source
 
-## Building from Source
+Clone and open the checked-in Xcode project:
 
-```bash
-## Clone
+```sh
 git clone https://github.com/EhsanAzish80/Nick.git
 cd Nick
-
-## Open in Xcode (requires Xcode 26+)
 open Nick.xcodeproj
-
-## Build (includes Nick.app + NickFinderSync.appex + NickHelper)
-xcodebuild -scheme Nick -configuration Release
-
-## Run tests
-xcodebuild test -scheme NickTests -destination "platform=macOS"
-
-## Build unsigned (no signing team required)
-xcodebuild -scheme Nick CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 ```
 
-> The checked-in project uses the maintainer's signing team. Override with your own team in Xcode → Signing & Capabilities, or build unsigned using the command above.
+Build without signing:
 
-> **Finder Sync Extension:** `NickFinderSync` requires both `Nick.app` and `NickFinderSync.appex` to share the App Group `group.com.ehsanazish.nick`. Add this entitlement in **Signing & Capabilities → App Groups** for both targets before building a signed release.
+```sh
+xcodebuild build \
+  -project Nick.xcodeproj \
+  -scheme Nick \
+  -destination "platform=macOS" \
+  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=NO
+```
 
-### Dependencies
-Nick uses zero third-party Swift dependencies. External dependencies:
+Run the complete test suite with coverage:
 
-- **UI**: SwiftUI (Apple framework)
-- **Persistence detection**: FSEvents, Foundation (Apple frameworks)
-- **Network monitoring**: Network.framework, `sysctl` (Apple frameworks / POSIX)
-- **Process auditing**: `proc_info`, `sysctl` (POSIX)
-- **Scanning**: libyara 4.5.2 (vendored, BSD license)
-- **AI scoring**: CoreML, Foundation Models (Apple frameworks)
-- **Privileged helper**: SMAppService, XPC (Apple frameworks)
-- **Automatic updates**: Sparkle 2 (Swift Package, MIT license)
+```sh
+xcodebuild test \
+  -project Nick.xcodeproj \
+  -scheme Nick \
+  -destination "platform=macOS" \
+  -enableCodeCoverage YES \
+  -resultBundlePath TestResults.xcresult \
+  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=NO
+```
 
----
+Unsigned builds are compile and unit-test evidence only. They cannot prove that
+Endpoint Security or Network Extension installation works.
 
-## How Nick Compares
+## Release and update distribution
 
-| Capability | Nick | Objective-See (6 tools) | Little Snitch | Intego | Norton |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Process monitoring | ✅ | ✅ (BlockBlock + KnockKnock) | ❌ | ❌ | ✅ |
-| Persistence detection | ✅ | ✅ (BlockBlock) | ❌ | ❌ | ✅ |
-| Network monitoring | ✅ | ✅ (LuLu) | ✅ | ✅ (NetBarrier) | ✅ |
-| Webcam/mic monitoring | ✅ | ✅ (OverSight) | ❌ | ❌ | ✅ |
-| YARA scanning | ✅ | ❌ | ❌ | ✅ | ✅ |
-| Behavioral AI scoring | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Correlated threat detection | ✅ | ❌ | ❌ | ❌ | ❌ |
-| System hardening audit | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Log export (KV/JSON/CEF) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| SIEM webhook | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Open source | ✅ | ✅ | ❌ | ❌ | ❌ |
-| No cloud dependency | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Single app | ✅ | ❌ (6 separate apps) | ✅ | ✅ | ✅ |
-| Free | ✅ | ✅ | ❌ ($59) | ❌ ($40-70/yr) | ❌ ($40-80/yr) |
+The production release pipeline is documented in
+[Packaging/README.md](Packaging/README.md). In summary:
 
----
+- `Packaging/release.sh` builds, signs, notarizes, staples, and validates the
+  installer package.
+- `Packaging/build-dmg.sh` creates the notarized manual-download disk image.
+- Sparkle reads `https://3nsofts.com/nick/appcast.xml`.
+- The appcast enclosure must reference the exact, unmodified signed package.
+- Manual website and GitHub downloads may use the disk image.
 
-## Roadmap
+Version 4.0 release notes are in
+[Packaging/Release/v4.0.0/RELEASE_NOTES.md](Packaging/Release/v4.0.0/RELEASE_NOTES.md).
 
-### ✅ v1.0 — Public Release
-### ✅ v1.1 — Detection Hardening
+## Quality gates
 
-### ✅ v1.2 — AI & Reporting
-- Functional logging pipeline (KV/JSON/CEF → file/webhook/stdout)
-- Foundation Models explanations on all alert paths
-- Network baseline anomaly detection
-- Finder Sync Extension (right-click without user opt-in)
-- Scheduled Deep Scan
-- MDM configuration profile support
-- Configurable alert suppression rules
+GitHub Actions builds all shipping targets, runs the test suite with coverage,
+uploads the Xcode result bundle to Codecov, converts Xcode coverage for
+SonarCloud, and runs CI-based SonarCloud analysis.
 
-### ✅ v3.0 — Endpoint Security & Real-Time Prevention *(current)*
-- **Endpoint Security System Extension** — AUTH event interception; files blocked before execution
-- **YARA engine in ES pipeline** — every cache-miss file evaluated against libyara 4.5.2 before allow/deny
-- **15-rule behavioral correlator** — process genealogy + network correlation (added `parentChainRule`, `rawIpOutboundRule`)
-- **LOLBin detector** — `curl`, `osascript`, `python3`, `launchctl`, `base64`, and more
-- **Reverse shell detector** — shell process + outbound socket pattern matching
-- **AV/Capture monitor** — unauthorized camera/mic session detection
-- **Persistence watcher** — LaunchAgents/Daemons, Login Items, cron
-- **Deep Scanner** — full-system YARA crawl, battery-aware
-- **USB/external media auto-scan**
-- **Network Inspector** — LAN host discovery and port scanning
-- **Performance Engine** — 30+ disk cleanup rules (Xcode artifacts, caches, Docker, Steam, and more)
-- **Security Score** redesigned (4 components, 0–100)
-- **Export Security Report** — HTML report from System Audit toolbar
-- **Automatic updates** via Sparkle 2 (`https://3nsofts.com/nick/appcast.xml`)
-- Privileged helper migrated to `SMAppService` (modern API)
+Repository settings required for hosted analysis:
 
-### 🔄 v3.1 — Behavioral Model & Community
-- Homebrew cask distribution
-- CoreML behavioral model activated (trained on opt-in telemetry from v3.0)
-- Community YARA rule submission pipeline
-- Alert aggregation view (group related alerts)
+- `CODECOV_TOKEN` repository secret.
+- `SONAR_TOKEN` repository secret.
+- SonarCloud Automatic Analysis disabled so CI-based coverage is used.
 
-### 🔮 v4.0 — Network Prevention
-- Network Extension (outbound connection blocking, DNS filtering)
-- Scam Guardian — URL/phishing detection via network filter
-
----
-
-## Contributing
-
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-**Ways to contribute:**
-- 🐛 Report bugs and false positives
-- 🧬 Submit YARA rules for macOS-specific threats
-- 🧠 Improve the behavioral scoring model
-- 📖 Improve documentation
-- 🔍 Security audit and responsible disclosure (see [SECURITY.md](SECURITY.md))
-- 🧪 Test on different Mac configurations
-
----
-
-## Security
-
-Nick is a security tool — we hold ourselves to a higher standard. If you discover a vulnerability in Nick itself, please follow our [responsible disclosure process](SECURITY.md). Do **not** open a public issue for security vulnerabilities.
-
----
+Vendored libyara sources and generated build, package, and result artifacts are
+excluded from SonarCloud ownership and coverage calculations.
 
 ## Uninstalling
 
-1. Quit Nick from the menu bar icon → **Quit Nick**.
-2. Open **Nick → Settings → Maintenance** and click **Remove Helper…** to unregister the privileged helper.
-3. Drag `Nick.app` from `/Applications` to the Trash.
-4. Remove preferences and data:
-   ```bash
-   defaults delete com.ehsanazish.nick
-   rm -rf ~/Library/Application\ Support/Nick
-   rm -f ~/Library/LaunchAgents/com.ehsanazish.nick.plist
-   sudo rm -f /Library/LaunchDaemons/com.ehsanazish.nick.helper.plist
-   sudo rm -f /Library/PrivilegedHelperTools/com.ehsanazish.nick.helper
-   ```
+Run `/Applications/Nick Uninstaller.app`. The uninstaller guides removal of
+active protection, application data, preferences, installed components, and
+both application bundles. macOS can retain a disabled privacy-list row after
+the executable is removed; that row is system-owned UI state and does not mean
+the extension remains installed.
 
----
+## Documentation
 
-## Philosophy
+- [Architecture and security boundaries](ARCHITECTURE.md)
+- [User and operator guide](Documentation/USER_GUIDE.md)
+- [Development and CI guide](Documentation/DEVELOPMENT.md)
+- [Release checklist](Documentation/RELEASE_CHECKLIST.md)
+- [Roadmap](Documentation/ROADMAP.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy and audit notes](SECURITY.md)
 
-1. **No cloud, ever.** All scanning, analysis, and AI inference happens on your Mac. Your security data never leaves your machine.
-2. **Zero third-party Swift dependencies.** Every dependency is an attack surface. Nick uses Apple frameworks and a single vendored C library (libyara).
-3. **Transparency over trust.** You shouldn't trust any security tool blindly. Read the code. Audit the helper. Verify the signatures.
-4. **Signals over alerts.** Individual events are noisy. Correlated behavioral scoring reduces false positives and surfaces real threats.
-5. **Restraint over decoration.** Clean, native macOS interface. No scare tactics. No upsells. No dark patterns.
+## Project status
 
----
+Nick 4.0 source, tests, signed package, and manual-download disk image are
+prepared. A release is not considered complete until the exact published build
+is installed on a clean Mac and its Endpoint Security, Email Guard, Scam
+Guardian block test, update, performance, quarantine, and uninstall flows are
+verified.
 
 ## License
 
-Nick is licensed under the [GNU Affero General Public License v3.0](LICENSE).
-
-This means you can freely use, modify, and distribute Nick. If you run a modified version as a network service, you must make your source code available. This ensures the security community always has access to the detection logic.
-
----
+Nick is licensed under the
+[GNU Affero General Public License v3.0](LICENSE).
 
 ## Acknowledgments
 
-Nick stands on the shoulders of:
-- [Patrick Wardle](https://objective-see.org) and the Objective-See Foundation — for pioneering open-source macOS security
-- [YARA](https://virustotal.github.io/yara/) — the pattern matching engine that powers malware research worldwide
-- The macOS security research community — for continuously uncovering and documenting threats
-
----
-
-<p align="center">
-  Built by Ehsan Azish at <a href="https://3nsofts.com">3nsofts</a> · Crafted with Swift · Protected by the community
-</p>
+Nick uses YARA and builds on public macOS security research, including the work
+of the Objective-See Foundation and the wider macOS security community.

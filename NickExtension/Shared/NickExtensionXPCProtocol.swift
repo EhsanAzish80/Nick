@@ -24,6 +24,18 @@ import Foundation
     ///   - reply: `(success, errorDescription)` — `errorDescription` is `nil` on success.
     func requestScan(path: String, reply: @escaping (Bool, String?) -> Void)
 
+    /// Re-scans and moves a confirmed threat into Nick's protected vault.
+    /// The encoded record lets the app update Quarantine immediately.
+    func requestQuarantineFile(
+        path: String,
+        expectedThreatName: String,
+        reply: @escaping (Bool, String?, Data?) -> Void
+    )
+
+    /// Returns a bounded JSON array of important events recorded while the
+    /// container app was closed.
+    func getPersistedEvents(reply: @escaping (Data) -> Void)
+
     /// Instructs the extension to rebuild the FIM baseline from the current
     /// state of monitored paths. Used by the "Rebuild Baseline" button in
     /// `IntegrityView`.
@@ -33,6 +45,10 @@ import Foundation
     /// user's common directories (Desktop, Documents, Downloads, Pictures).
     /// Useful when the user manually enables the Ransomware Shield from Smart Scan.
     func requestDeployCanaries(reply: @escaping (Bool) -> Void)
+
+    func requestRestoreQuarantinedFile(id: String, reply: @escaping (Bool) -> Void)
+
+    func requestDeleteQuarantinedFile(id: String, reply: @escaping (Bool) -> Void)
 }
 
 // MARK: - NickAppXPCProtocol (Extension → Container App)

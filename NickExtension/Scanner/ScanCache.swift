@@ -32,7 +32,7 @@ final class ScanCache {
     /// Default TTL for cache entries (5 minutes).
     static let defaultTTL: TimeInterval = 300
 
-    /// Maximum number of entries before an expired-entry eviction pass is run.
+    /// Hard maximum number of retained entries.
     static let maxEntries = 10_000
 
     // MARK: - Private
@@ -77,6 +77,10 @@ final class ScanCache {
 
         if store.count > Self.maxEntries {
             evictExpired()
+            if store.count > Self.maxEntries,
+               let oldest = store.min(by: { $0.value.expiry < $1.value.expiry })?.key {
+                store.removeValue(forKey: oldest)
+            }
         }
         lock.unlock()
     }

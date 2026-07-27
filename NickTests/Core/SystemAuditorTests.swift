@@ -15,18 +15,6 @@ import XCTest
 @MainActor
 final class SystemAuditorTests: XCTestCase {
 
-    private var auditor: SystemAuditor!
-
-    override func setUp() {
-        super.setUp()
-        auditor = SystemAuditor()
-    }
-
-    override func tearDown() {
-        auditor = nil
-        super.tearDown()
-    }
-
     // MARK: - SystemCheckResult
 
     func test_systemCheckResult_impliedSeverity_failOnCriticalCheckIsCritical() {
@@ -102,6 +90,7 @@ final class SystemAuditorTests: XCTestCase {
     // MARK: - runCommand error handling
 
     func test_runCommand_throwsToolUnavailable_forNonexistentPath() async {
+        let auditor = SystemAuditor()
         do {
             _ = try await auditor.runCommand("/nonexistent/tool", args: [])
             XCTFail("Expected toolUnavailable to be thrown")

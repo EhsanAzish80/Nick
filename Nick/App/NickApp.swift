@@ -25,22 +25,42 @@ struct NickApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    private var isUninstallMaintenanceMode: Bool {
+        CommandLine.arguments.contains("--prepare-uninstall")
+    }
+
     var body: some Scene {
-        // Main application window — opened by clicking the menu bar icon.
+        // The scenes always exist because SceneBuilder cannot branch, but their
+        // view closures avoid touching SecurityEngine in maintenance mode.
         Window("Nick", id: "main") {
-            MainWindowView()
-                .environment(appDelegate.engine)
-                .environment(appDelegate.xpcClient)
+            if isUninstallMaintenanceMode {
+                EmptyView()
+            } else {
+                MainWindowView()
+                    .environment(appDelegate.engine)
+                    .environment(appDelegate.xpcClient)
+                    .environment(appDelegate.networkProtection)
+                    .frame(minWidth: 760, minHeight: 520)
+            }
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
-        .defaultSize(width: 900, height: 620)
+        .defaultSize(
+            width: isUninstallMaintenanceMode ? 1 : 900,
+            height: isUninstallMaintenanceMode ? 1 : 620
+        )
         .defaultPosition(.center)
+        .windowResizability(.contentMinSize)
 
         Settings {
-            SettingsView()
-                .environment(appDelegate.engine)
-                .environment(appDelegate.xpcClient)
+            if isUninstallMaintenanceMode {
+                EmptyView()
+            } else {
+                SettingsView()
+                    .environment(appDelegate.engine)
+                    .environment(appDelegate.xpcClient)
+                    .environment(appDelegate.networkProtection)
+            }
         }
     }
 }

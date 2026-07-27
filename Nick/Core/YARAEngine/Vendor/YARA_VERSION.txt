@@ -1,1 +1,6 @@
-v4.5.2, built 2026-05-22
+v4.5.5, built 2026-07-26
+Source: https://github.com/VirusTotal/yara/releases/tag/v4.5.5
+Source archive SHA-256: d38e30fd9c1e1c7921d1c4568262d94f5c2d6b5da139fe49572a43ffbc5c53f6
+Universal library SHA-256: eba368204e21eeffc94f43309da7e585669081c020ed1e5b3ff1df3aed35e5d9
+Architectures: arm64, x86_64
+Minimum macOS: 14.0

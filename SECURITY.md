@@ -1,9 +1,36 @@
-# Nick — Security Audit
+# Nick Security Policy and Audit
+
+## Current release security status
+
+Nick 4.0 build 404 adds two restricted, security-sensitive surfaces beyond the
+historical audit below:
+
+- `NickExtension`, an Endpoint Security system extension with authenticated
+  XPC, bounded event handling, confidence-aware YARA enforcement, Email Guard,
+  file integrity, privacy monitoring, and quarantine re-validation.
+- `NickNetFilter`, a Network Extension content filter with deterministic
+  allowlist-first policy, fail-open configuration, privacy-safe events, and
+  Ed25519 validation for downloaded rule envelopes.
+
+Vendored YARA is version 4.5.5. The complete automated suite currently contains
+308 passing tests. That result validates source behavior; it does not replace
+the signed clean-Mac release matrix in
+`Documentation/RELEASE_CHECKLIST.md`.
+
+The embedded network-rule public key is still a development placeholder.
+Downloaded rule updates must not be published until a production key pair is
+created, the public key is embedded, and signed-feed expiry, rollback, and
+last-known-good recovery are validated. Built-in deterministic Scam Guardian
+logic remains separate from that future feed.
+
+The detailed findings below are the June 2026 v3 audit record. Status markers
+describe the code at the time of that audit unless a later section explicitly
+says otherwise.
 
 **Auditor:** Ehsan Azish ([@ehsanazish80](https://github.com/EhsanAzish80))
 **Date:** June 2, 2026
 **Scope:** All files in `NickHelper/` (privileged helper), `NickExtension/` (ES system extension), and `Nick/Core/` (detection engine)
-**Nick version audited:** `v3.0 (build 1)`
+**Historical version audited:** `v3.0 (build 1)`
 
 ---
 
@@ -46,15 +73,15 @@ Each section below documents the audit checklist, finding status, and any remedi
 
 | # | Check | File | Status | Notes |
 |---|-------|------|--------|-------|
-| 1 | Caller validation | `HelperDaemon.swift` | ✅ Pass | `SecCodeCopyGuestWithAttributes` validates PID → code signature → team ID. Team ID is hardcoded in `HelperDaemon.authorisedTeamID`, not configurable at runtime. |
-| 2 | Path allowlist | `HelperProtocol.swift`, `HelperDaemon.swift` | ✅ Pass | `HelperPathAllowlist.validate(_:)` enforces an 8-step chain: null byte check, max 4 096 bytes, absolute path requirement, percent-encoded slash rejection, `..` component check (rejects traversal before symlink resolution), NFC normalisation, symlink resolution, and prefix matching against 5 directories. Note: `/etc/` intentionally excluded — allowing it would let a symlink attack redirect reads to `/etc/sudoers`. |
-| 3 | No shell execution | `HelperDaemon.swift`, `HelperProtocol.swift`, `main.swift` | ✅ Pass | Grep for `Process()`, `NSTask`, `system()`, `popen()`: zero results. `getSIPStatus` uses `csr_get_active_config` directly. `getFirewallStatus` reads the plist file via the allowlist-validated path. No subprocess is spawned anywhere in the helper. |
-| 4 | No write operations | All `NickHelper/` files | ✅ Pass | No `FileManager.createFile`, `write(to:)`, `moveItem`, or `removeItem` calls exist. All operations are read-only. |
-| 5 | No dynamic code loading | All `NickHelper/` files | ✅ Pass | No `dlopen`, `NSBundle.load`, or `dlsym`. The helper is statically linked. |
-| 6 | Input validation | `HelperDaemon.swift` | ✅ Pass | All string parameters are validated by `HelperPathAllowlist.validate(_:)` before use. The 7-step validation chain is documented in `HelperProtocol.swift`. |
-| 7 | Error handling | `HelperDaemon.swift` | ✅ Pass | `HelperProtocolImplementation` returns only `HelperError.operationFailed` ("Operation failed.") — no paths, errno values, or system information are included in error messages. |
-| 8 | Connection rate limit | `HelperDaemon.swift` | ✅ Pass | Sliding 1-second window per PID. Maximum 10 connections/second. Dictionary capped at 500 unique PIDs to prevent unbounded memory growth. |
-| 9 | Entitlements | `NickHelper.entitlements` | ✅ Pass | Entitlements file present and reviewed. `com.apple.security.app-sandbox` = false, Hardened Runtime = ON. Minimal set for SMAppService registration and XPC only. |
+| 1 | Caller validation | `HelperDaemon.swift` | Yes Pass | `SecCodeCopyGuestWithAttributes` validates PID → code signature → team ID. Team ID is hardcoded in `HelperDaemon.authorisedTeamID`, not configurable at runtime. |
+| 2 | Path allowlist | `HelperProtocol.swift`, `HelperDaemon.swift` | Yes Pass | `HelperPathAllowlist.validate(_:)` enforces an 8-step chain: null byte check, max 4 096 bytes, absolute path requirement, percent-encoded slash rejection, `..` component check (rejects traversal before symlink resolution), NFC normalisation, symlink resolution, and prefix matching against 5 directories. Note: `/etc/` intentionally excluded — allowing it would let a symlink attack redirect reads to `/etc/sudoers`. |
+| 3 | No shell execution | `HelperDaemon.swift`, `HelperProtocol.swift`, `main.swift` | Yes Pass | Grep for `Process()`, `NSTask`, `system()`, `popen()`: zero results. `getSIPStatus` uses `csr_get_active_config` directly. `getFirewallStatus` reads the plist file via the allowlist-validated path. No subprocess is spawned anywhere in the helper. |
+| 4 | No write operations | All `NickHelper/` files | Yes Pass | No `FileManager.createFile`, `write(to:)`, `moveItem`, or `removeItem` calls exist. All operations are read-only. |
+| 5 | No dynamic code loading | All `NickHelper/` files | Yes Pass | No `dlopen`, `NSBundle.load`, or `dlsym`. The helper is statically linked. |
+| 6 | Input validation | `HelperDaemon.swift` | Yes Pass | All string parameters are validated by `HelperPathAllowlist.validate(_:)` before use. The 7-step validation chain is documented in `HelperProtocol.swift`. |
+| 7 | Error handling | `HelperDaemon.swift` | Yes Pass | `HelperProtocolImplementation` returns only `HelperError.operationFailed` ("Operation failed.") — no paths, errno values, or system information are included in error messages. |
+| 8 | Connection rate limit | `HelperDaemon.swift` | Yes Pass | Sliding 1-second window per PID. Maximum 10 connections/second. Dictionary capped at 500 unique PIDs to prevent unbounded memory growth. |
+| 9 | Entitlements | `NickHelper.entitlements` | Yes Pass | Entitlements file present and reviewed. `com.apple.security.app-sandbox` = false, Hardened Runtime = ON. Minimal set for SMAppService registration and XPC only. |
 
 ### Finding Details
 
@@ -123,15 +150,15 @@ any validation work is performed.
 
 | # | Check | Files | Status | Notes |
 |---|-------|-------|--------|-------|
-| 1 | No sensitive data in logs | All `Core/` files | ✅ Pass | Reviewed `os.Logger` calls. PIDs and paths use `.private` privacy label. No user data at `.default` or `.public`. |
-| 2 | No sensitive data in signals | `ThreatSignal.swift` | ✅ Pass | Signals carry: path, PID, process name, connection tuples. No file contents, passwords, or key material. |
-| 3 | No disk writes outside app support | All `Core/` files | ✅ Pass | `ThreatLogger` writes only to `~/Library/Application Support/com.ehsanazish.nick/`. No writes to `/tmp`, Desktop, or Documents. |
-| 4 | Signal buffer limits | `CorrelationWindow.swift` | ✅ Pass | `CorrelationWindow` prunes expired signals on every `add()` / `addAll()` / `currentSignals()` call. Signals older than `windowDuration` (default 30s) are removed. Buffer cannot grow unbounded under sustained signal input. |
-| 5 | YARA rule safety | `YARAEngine/YARAEngine.swift` | ✅ Pass | `YARAEngine` wraps libyara v4.5.2 (vendored static library). Per-file scan timeout is fixed at 10 seconds (`perFileScanTimeoutSeconds`). Compiler error callback via `yr_compiler_set_callback` logs and surfaces malformed rules without crashing. Backtracking is bounded by the libyara default. Rule compilation is lazy and protected by `NSLock`. |
-| 6 | Process enumeration safety | `ProcessScanner.swift` | ✅ Pass | `sysctl` is called twice: first to size the buffer, then to fill it. The `actualCount` trimming on line 97 prevents a race condition where the process table shrinks between calls. `MemoryLayout<kinfo_proc>.stride` is used throughout — no manual size arithmetic. |
-| 7 | Network scanner safety | `ConnectionScanner.swift` | ✅ Pass | `lsof` output is parsed with defensive guards. Malformed lines produce a `continue` (skipped), not a crash. PID parsing uses `Int32(_:)` optional initialiser. |
-| 8 | SwiftData safety | `ThreatLogEntry.swift`, `AppDelegate.swift` | ✅ Pass | `AppDelegate.applicationDidFinishLaunching` launches a background `Task` that opens the production `ModelContainer` and calls `ThreatLogger.pruneOlderThan(days: 90)`. Stale entries are removed on every launch. Fixed in Part 4.6. |
-| 9 | Foundation Models security | `BehavioralScorer/AlertExplainer.swift`, `BehavioralScorer/ExplanationPromptBuilder.swift` | ✅ Pass | **Data privacy:** `LanguageModelSession` (Apple `FoundationModels` framework) runs entirely on-device. No alert metadata, process names, or user data is transmitted externally — confirmed by framework design and `SECURITY` comment in `AlertExplainer.explain`. **Prompt injection:** Alert title, description, and signal metadata (including process names and file paths) are embedded in the prompt by `ExplanationPromptBuilder`. A crafted process name could inject LLM instructions. Impact is bounded: the model output is used only for the human-readable explanation card — it has no effect on threat score, severity, alert firing, or notification dispatch. Accepted risk. **Availability:** Any `LanguageModelSession` error is caught and falls back to a deterministic template string; the fallback is always non-empty and actionable. Threat detection is unaffected if the model is unavailable. |
+| 1 | No sensitive data in logs | All `Core/` files | Yes Pass | Reviewed `os.Logger` calls. PIDs and paths use `.private` privacy label. No user data at `.default` or `.public`. |
+| 2 | No sensitive data in signals | `ThreatSignal.swift` | Yes Pass | Signals carry: path, PID, process name, connection tuples. No file contents, passwords, or key material. |
+| 3 | No disk writes outside app support | All `Core/` files | Yes Pass | `ThreatLogger` writes only to `~/Library/Application Support/com.ehsanazish.nick/`. No writes to `/tmp`, Desktop, or Documents. |
+| 4 | Signal buffer limits | `CorrelationWindow.swift` | Yes Pass | `CorrelationWindow` prunes expired signals on every `add()` / `addAll()` / `currentSignals()` call. Signals older than `windowDuration` (default 30s) are removed. Buffer cannot grow unbounded under sustained signal input. |
+| 5 | YARA rule safety | `YARAEngine/YARAEngine.swift` | Pass | `YARAEngine` wraps libyara v4.5.5 (vendored static library). Per-file scan timeout is fixed at 10 seconds (`perFileScanTimeoutSeconds`). Compiler error callback via `yr_compiler_set_callback` logs and surfaces malformed rules without crashing. Backtracking is bounded by the libyara default. Rule compilation is lazy and protected by `NSLock`. |
+| 6 | Process enumeration safety | `ProcessScanner.swift` | Yes Pass | `sysctl` is called twice: first to size the buffer, then to fill it. The `actualCount` trimming on line 97 prevents a race condition where the process table shrinks between calls. `MemoryLayout<kinfo_proc>.stride` is used throughout — no manual size arithmetic. |
+| 7 | Network scanner safety | `ConnectionScanner.swift` | Yes Pass | `lsof` output is parsed with defensive guards. Malformed lines produce a `continue` (skipped), not a crash. PID parsing uses `Int32(_:)` optional initialiser. |
+| 8 | SwiftData safety | `ThreatLogEntry.swift`, `AppDelegate.swift` | Yes Pass | `AppDelegate.applicationDidFinishLaunching` launches a background `Task` that opens the production `ModelContainer` and calls `ThreatLogger.pruneOlderThan(days: 90)`. Stale entries are removed on every launch. Fixed in Part 4.6. |
+| 9 | Foundation Models security | `BehavioralScorer/AlertExplainer.swift`, `BehavioralScorer/ExplanationPromptBuilder.swift` | Yes Pass | **Data privacy:** `LanguageModelSession` (Apple `FoundationModels` framework) runs entirely on-device. No alert metadata, process names, or user data is transmitted externally — confirmed by framework design and `SECURITY` comment in `AlertExplainer.explain`. **Prompt injection:** Alert title, description, and signal metadata (including process names and file paths) are embedded in the prompt by `ExplanationPromptBuilder`. A crafted process name could inject LLM instructions. Impact is bounded: the model output is used only for the human-readable explanation card — it has no effect on threat score, severity, alert firing, or notification dispatch. Accepted risk. **Availability:** Any `LanguageModelSession` error is caught and falls back to a deterministic template string; the fallback is always non-empty and actionable. Threat detection is unaffected if the model is unavailable. |
 
 ### Finding Details
 
@@ -166,12 +193,12 @@ severity are discarded with a `.notice`-level log entry. See `ThreatCorrelator.s
 
 | Item | Priority | Owner | Status |
 |------|----------|-------|--------|
-| Create `NickHelper.entitlements` with minimal entitlement set | High | @ehsanazish80 | ✅ Fixed (Part 4.2) |
-| Verify SwiftData pruning at launch | Medium | @ehsanazish80 | ✅ Fixed (Part 4.6) |
-| Add YARA rule compilation timeout | High | @ehsanazish80 | ✅ Fixed (libyara v4.5.2, 10s timeout) |
+| Create `NickHelper.entitlements` with minimal entitlement set | High | @ehsanazish80 | Yes Fixed (Part 4.2) |
+| Verify SwiftData pruning at launch | Medium | @ehsanazish80 | Yes Fixed (Part 4.6) |
+| Add YARA rule compilation timeout | High | @ehsanazish80 | Fixed (libyara v4.5.5, 10s timeout) |
 | Replace `lsof` with `proc_pidfdinfo` | Low | @ehsanazish80 | Open — tracked as #1 |
 | Implement `getListeningPorts` with direct sysctl | Medium | @ehsanazish80 | Open — tracked as #43 |
-| Audit `NickExtension/` ES event pipeline for path traversal and signal flooding | High | @ehsanazish80 | Open — v3.0 new surface |
+| Audit `NickExtension/` ES event pipeline for path traversal and signal flooding | High | @ehsanazish80 | Re-audit required for each v4 release |
 | Verify Sparkle EdDSA key rotation procedure | Medium | @ehsanazish80 | Open — pre-v3.1 |
 
 ---
@@ -209,41 +236,41 @@ dispatch path. Each detector was traced from raw OS observation → `ThreatSigna
 
 | Source | File | Wired In Pipeline | Notes |
 |--------|------|:-----------------:|-------|
-| `ProcessScanner` (process spawn) | `ProcessMonitor/ProcessScanner.swift` | ✅ | Called in `SecurityEngine.performFullScan` + `MonitorCoordinator.quickTick` |
-| `LOLBinDetector` | `ProcessMonitor/LOLBinDetector.swift` | ✅ | Called in `MonitorCoordinator.quickTick` only (quickTick checks each new PID) |
-| `ParentChainAnalyzer` | `ProcessMonitor/ParentChainAnalyzer.swift` | ✅ | Called in `MonitorCoordinator.quickTick` for each new PID |
-| `NetworkAnalyzer` / `ConnectionScanner` | `NetworkAnalyzer/` | ✅ | Called in `SecurityEngine.performFullScan` |
-| `ReverseShellDetector` | `NetworkAnalyzer/ReverseShellDetector.swift` | ✅ | Called internally by `ConnectionScanner.signals()` |
-| `PersistenceWatcher` | `PersistenceWatcher/` | ✅ | Called in `SecurityEngine.performFullScan` |
-| `AVCaptureMonitor` | `AVCapture/` | ✅ | Called in `SecurityEngine.performFullScan` |
-| `SystemAuditor` | `SystemAudit/SystemAuditor.swift` | ✅ | Called in `SecurityEngine.performFullScan` |
-| `YARAEngine` / `FileSystemWatcher` | `YARAEngine/` | ✅ | Both paths active. `FileSystemWatcher` started in `MonitorCoordinator.startRealTimePipeline()` (fixed in Part 4.1). `DeepScanner` ingests signals into `ThreatCorrelator` (fixed in Part 4.3). |
-| `BehavioralScorer` | `BehavioralScorer/` | ❌ Not wired | 40-feature `FeatureVector` and `FeatureExtractor` fully implemented. `BehavioralScorer` wraps CoreML (`ThreatScorer.mlmodelc`). Excluded from live detection path until the model is trained on real post-launch telemetry. `isModelAvailable` guards accidental activation. |
+| `ProcessScanner` (process spawn) | `ProcessMonitor/ProcessScanner.swift` | Yes | Called in `SecurityEngine.performFullScan` + `MonitorCoordinator.quickTick` |
+| `LOLBinDetector` | `ProcessMonitor/LOLBinDetector.swift` | Yes | Called in `MonitorCoordinator.quickTick` only (quickTick checks each new PID) |
+| `ParentChainAnalyzer` | `ProcessMonitor/ParentChainAnalyzer.swift` | Yes | Called in `MonitorCoordinator.quickTick` for each new PID |
+| `NetworkAnalyzer` / `ConnectionScanner` | `NetworkAnalyzer/` | Yes | Called in `SecurityEngine.performFullScan` |
+| `ReverseShellDetector` | `NetworkAnalyzer/ReverseShellDetector.swift` | Yes | Called internally by `ConnectionScanner.signals()` |
+| `PersistenceWatcher` | `PersistenceWatcher/` | Yes | Called in `SecurityEngine.performFullScan` |
+| `AVCaptureMonitor` | `AVCapture/` | Yes | Called in `SecurityEngine.performFullScan` |
+| `SystemAuditor` | `SystemAudit/SystemAuditor.swift` | Yes | Called in `SecurityEngine.performFullScan` |
+| `YARAEngine` / `FileSystemWatcher` | `YARAEngine/` | Yes | Both paths active. `FileSystemWatcher` started in `MonitorCoordinator.startRealTimePipeline()` (fixed in Part 4.1). `DeepScanner` ingests signals into `ThreatCorrelator` (fixed in Part 4.3). |
+| `BehavioralScorer` | `BehavioralScorer/` | No Not wired | 40-feature `FeatureVector` and `FeatureExtractor` fully implemented. `BehavioralScorer` wraps CoreML (`ThreatScorer.mlmodelc`). Excluded from live detection path until the model is trained on real post-launch telemetry. `isModelAvailable` guards accidental activation. |
 
 ---
 
 ### 3.2 Detection Category Coverage
 
-#### 3.2.1 Unsigned Binary in Temp Directory ✅ WORKING
+#### 3.2.1 Unsigned Binary in Temp Directory Yes WORKING
 
 - **Detector:** `ProcessScanner.latestSignals()` (full scan), `MonitorCoordinator.quickTick()` (fast path)
 - **Signal reason:** `unsigned_temp_path` (full scan), `temp_path_spawn` (quickTick)
 - **Correlation rule:** `unsignedBinaryInTmpRule` (score: 0.85, severity: high)
-- **Notification:** ✅ Both paths — quickTick dispatches immediately; full scan dispatches via new deduplication-aware notification block (fixed this session)
+- **Notification:** Yes Both paths — quickTick dispatches immediately; full scan dispatches via new deduplication-aware notification block (fixed this session)
 - **Test:** `NickTests/BehavioralScorerTests.swift`, `NickTests/FeatureExtractorTests.swift`
 - **Status:** Full coverage — detection, alert, and notification all working.
 
-#### 3.2.2 Download-to-Shell Pipe (curl|bash / wget|bash) ✅ WORKING (partially fixed)
+#### 3.2.2 Download-to-Shell Pipe (curl|bash / wget|bash) Yes WORKING (partially fixed)
 
 - **Detector:** `LOLBinDetector.evaluate()` in `quickTick`
 - **Signal reasons:** `curl_pipe_shell`, `wget_pipe_shell`
 - **Correlation rule:** `curlPipeShellRule` (score: 0.95, severity: critical)
 - **Gap found:** Rule previously matched only `reason == "curl_pipe_shell"`. `wget_pipe_shell` signals were ingested but never produced an alert.
 - **Fix applied:** `curlPipeShellRule` now matches both `curl_pipe_shell` and `wget_pipe_shell`.
-- **Notification:** ✅ quickTick path dispatches immediately
+- **Notification:** Yes quickTick path dispatches immediately
 - **Status:** Fixed. Both curl and wget pipe attacks trigger critical alert + notification.
 
-#### 3.2.3 Advanced LOLBin Patterns ✅ WORKING (fixed)
+#### 3.2.3 Advanced LOLBin Patterns Yes WORKING (fixed)
 
 Patterns detected by `LOLBinDetector` but previously **unmatched** by any correlation rule:
 
@@ -258,18 +285,18 @@ Patterns detected by `LOLBinDetector` but previously **unmatched** by any correl
 
 - **Gap found:** All six signal reasons above were ingested by `ThreatCorrelator` but **no correlation rule matched them**. Signals silently disappeared after ingestion.
 - **Fix applied:** New `lolbinAdvancedRule` (score: 0.80, severity: high) added to `CorrelationRule.standard`. Matches all six reasons.
-- **Notification:** ✅ quickTick dispatches immediately after fix
+- **Notification:** Yes quickTick dispatches immediately after fix
 - **Status:** Fixed. All advanced LOLBin signals now produce alerts.
 
-#### 3.2.4 Basic LOLBin (Shell from Non-Terminal Parent) ✅ WORKING
+#### 3.2.4 Basic LOLBin (Shell from Non-Terminal Parent) Yes WORKING
 
 - **Detector:** `LOLBinDetector.evaluate()` + `ParentChainAnalyzer.evaluateChain()`
 - **Signal reason:** `lolbin`
 - **Correlation rule:** `lolbinRule` (score: 0.65, severity: medium)
-- **Notification:** ✅ quickTick path
+- **Notification:** Yes quickTick path
 - **Status:** Working correctly.
 
-#### 3.2.5 Reverse Shell ✅ WORKING (fixed)
+#### 3.2.5 Reverse Shell Yes WORKING (fixed)
 
 - **Detectors:**
   - `ConnectionScanner` → reason: `reverse_shell` (shell interpreter + ESTABLISHED outbound TCP)
@@ -277,52 +304,52 @@ Patterns detected by `LOLBinDetector` but previously **unmatched** by any correl
 - **Gap found:** `reverseShellRule` matched only `reason == "reverse_shell"`. The three `ReverseShellDetector`-specific reasons were ingested but never triggered an alert.
 - **Additional gap:** Rule extracted `metadata["process"]` but `ReverseShellDetector` signals store the process in `processInfo`, not in metadata. `processes` string was empty for those signals.
 - **Fix applied:** `reverseShellRule` now matches all four reasons. Process extraction falls back to `processInfo?.name` when `metadata["process"]` is absent.
-- **Notification:** ✅ Both full scan (fixed) and quickTick (pre-existing)
+- **Notification:** Yes Both full scan (fixed) and quickTick (pre-existing)
 - **Status:** Fixed. All reverse shell signal variants trigger critical alert + notification.
 
-#### 3.2.6 Camera / Microphone Activation ✅ WORKING
+#### 3.2.6 Camera / Microphone Activation Yes WORKING
 
 - **Detector:** `AVCaptureMonitor` → `source: .avCapture`
 - **Correlation rule:** `unexpectedCaptureDeviceRule` (score: 0.85, severity: high)
-- **Notification:** ✅ Full scan path (now with notification dispatch after fix in 3.3.1)
+- **Notification:** Yes Full scan path (now with notification dispatch after fix in 3.3.1)
 - **Status:** Working correctly.
 
-#### 3.2.7 Unsigned LaunchAgent / LaunchDaemon ✅ WORKING
+#### 3.2.7 Unsigned LaunchAgent / LaunchDaemon Yes WORKING
 
 - **Detector:** `PersistenceWatcher` → `source: .persistence`, severity `.high` or `.critical`
 - **Correlation rule:** `unsignedLaunchAgentRule` (score: 0.70, severity: high)
 - **Coverage:**
-  - `/Library/LaunchDaemons` ✅
-  - `/Library/LaunchAgents` ✅
-  - `~/Library/LaunchAgents` ✅
-  - `/Library/StartupItems` ✅
-  - `/Library/Periodic` ✅
-  - `/Library/SystemExtensions` ✅
+  - `/Library/LaunchDaemons` Yes
+  - `/Library/LaunchAgents` Yes
+  - `~/Library/LaunchAgents` Yes
+  - `/Library/StartupItems` Yes
+  - `/Library/Periodic` Yes
+  - `/Library/SystemExtensions` Yes
 - **Missing persistence locations:** Login Items (`SMAppService`), `at` jobs, `/etc/cron.d`, shell profile files (`~/.zshrc`, `~/.bash_profile`, `/etc/zshrc`), `~/.ssh/authorized_keys`
-- **Notification:** ✅ Full scan path (now with notification dispatch)
+- **Notification:** Yes Full scan path (now with notification dispatch)
 - **Status:** Working for LaunchAgent/Daemon. Shell profiles and Login Items not monitored (see 3.4).
 
-#### 3.2.8 Critical System Security Configuration ✅ WORKING
+#### 3.2.8 Critical System Security Configuration Yes WORKING
 
 - **Detector:** `SystemAuditor` checks: SIP, FileVault, Gatekeeper → `source: .systemAudit`, `severity: .critical`
 - **Correlation rule:** `criticalSystemAuditRule` (score: 0.90, severity: critical)
-- **Notification:** ✅ Full scan path (now with notification dispatch)
+- **Notification:** Yes Full scan path (now with notification dispatch)
 - **Checks covered:**
 
 | Check | Passes Critical Rule? | Notes |
 |-------|-----------------------|-------|
-| SIP disabled | ✅ yes | `status == .fail` → `.critical` severity signal |
-| FileVault disabled | ✅ yes | `status == .fail` → `.critical` severity signal |
-| Gatekeeper disabled | ✅ yes | `status == .fail` → `.critical` severity signal |
-| Firewall disabled | ⚠️ no | `makeSignal` emits `.warning` — below the `.critical` filter in `criticalSystemAuditRule` |
-| Stealth mode off | ⚠️ no | Same — `.warning` severity |
-| XProtect stale | ⚠️ no | `status == .warning` → `.warning` signal |
-| Remote login on | ⚠️ no | Returned as `.warning` or `.unknown` |
+| SIP disabled | Yes yes | `status == .fail` → `.critical` severity signal |
+| FileVault disabled | Yes yes | `status == .fail` → `.critical` severity signal |
+| Gatekeeper disabled | Yes yes | `status == .fail` → `.critical` severity signal |
+| Firewall disabled | Warning no | `makeSignal` emits `.warning` — below the `.critical` filter in `criticalSystemAuditRule` |
+| Stealth mode off | Warning no | Same — `.warning` severity |
+| XProtect stale | Warning no | `status == .warning` → `.warning` signal |
+| Remote login on | Warning no | Returned as `.warning` or `.unknown` |
 
 - **Gap:** Firewall/stealth/XProtect/remote-login findings appear in the System Audit UI tab but **produce no alert and no notification**. They accumulate only if 3+ warnings exist to trigger `multipleHighSignalsRule`.
 - **Status:** Critical system checks (SIP/FileVault/Gatekeeper) work. Non-critical checks are UI-only.
 
-#### 3.2.9 YARA File Signature Match ⚠️ PARTIAL
+#### 3.2.9 YARA File Signature Match Warning PARTIAL
 
 - **Detector:** `YARAEngine` + `FileSystemWatcher` (FSEvents real-time), `DeepScanner` (manual)
 - **Pipeline status:**
@@ -332,7 +359,7 @@ Patterns detected by `LOLBinDetector` but previously **unmatched** by any correl
 - **Remaining gap:** `FileSystemWatcher` is not started. `DeepScanner` results are not ingested. YARA signals only produce alerts if `FileSystemWatcher` is wired into the pipeline.
 - **Status:** Rule added. Wiring `FileSystemWatcher` is a separate task (see 3.5.2).
 
-#### 3.2.10 Multiple Concurrent Threat Indicators ✅ WORKING
+#### 3.2.10 Multiple Concurrent Threat Indicators Yes WORKING
 
 - **Rule:** `multipleHighSignalsRule` (score: 0.75, severity: high)
 - **Trigger:** 3+ `severity >= .medium` signals from any source within the 30-second window
@@ -377,7 +404,7 @@ show no "Why this is suspicious" explanation card. All functional — no false n
 
 **Resolution (Fixed — Part 4.6):** `SecurityEngine.performFullScan()` now creates an `AlertExplainer` instance and enriches each `genuinelyNew` alert's `explanation` field before dispatch. Full-scan alerts (AVCapture, Persistence, System Audit) now include the Foundation Models explanation card.
 
-#### 3.3.3 QuickTick Notification Pipeline ✅ Verified Correct
+#### 3.3.3 QuickTick Notification Pipeline Yes Verified Correct
 
 The fast-tick path in `MonitorCoordinator.quickTick()` correctly implements the full pipeline:
 
@@ -395,18 +422,18 @@ All steps confirmed present and in the correct order.
 
 | Persistence Mechanism | Monitored | Notes |
 |-----------------------|:---------:|-------|
-| `/Library/LaunchDaemons` | ✅ | |
-| `/Library/LaunchAgents` | ✅ | |
-| `~/Library/LaunchAgents` | ✅ | |
-| `/Library/StartupItems` | ✅ | |
-| `/Library/Periodic` (daily/weekly/monthly) | ✅ | |
-| `/Library/SystemExtensions` | ✅ | |
-| Login Items (`SMAppService` / `SMLoginItem`) | ❌ | Not monitored |
-| `at` jobs | ❌ | Not monitored |
-| `/etc/cron.d`, user crontabs | ⚠️ Partial | `LOLBinDetector` detects `crontab -` modification in real time; no baseline diff |
-| `~/.zshrc`, `~/.bash_profile`, `/etc/zshrc` | ❌ | Not monitored |
-| `~/.ssh/authorized_keys` | ❌ | Not monitored |
-| Kernel extensions (`kext`) | ❌ | SIP prevents loading unsigned kexts; lower risk |
+| `/Library/LaunchDaemons` | Yes | |
+| `/Library/LaunchAgents` | Yes | |
+| `~/Library/LaunchAgents` | Yes | |
+| `/Library/StartupItems` | Yes | |
+| `/Library/Periodic` (daily/weekly/monthly) | Yes | |
+| `/Library/SystemExtensions` | Yes | |
+| Login Items (`SMAppService` / `SMLoginItem`) | No | Not monitored |
+| `at` jobs | No | Not monitored |
+| `/etc/cron.d`, user crontabs | Warning Partial | `LOLBinDetector` detects `crontab -` modification in real time; no baseline diff |
+| `~/.zshrc`, `~/.bash_profile`, `/etc/zshrc` | No | Not monitored |
+| `~/.ssh/authorized_keys` | No | Not monitored |
+| Kernel extensions (`kext`) | No | SIP prevents loading unsigned kexts; lower risk |
 
 **Recommendation:** Add Login Items enumeration via `SMAppService.statusForLegacyPlist` and
 `SMAppService.statusForAuthorizableItem` in a future `PersistenceWatcher` revision.
@@ -450,29 +477,29 @@ The `BehavioralScorer` CoreML scorer is intentionally excluded from the live det
 
 | Detection | Detector | Rule | Alert | Notification | Pre-fix Status | Post-fix Status |
 |-----------|----------|------|:-----:|:------------:|---------------|----------------|
-| Unsigned binary in /tmp | ProcessScanner | `unsignedBinaryInTmpRule` | ✅ | ✅ | ✅ Working | ✅ Working |
-| curl\|bash pipe | LOLBinDetector | `curlPipeShellRule` | ✅ | ✅ | ✅ Working | ✅ Working |
-| wget\|bash pipe | LOLBinDetector | `curlPipeShellRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| osascript shell | LOLBinDetector | `lolbinAdvancedRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| quarantine removal | LOLBinDetector | `lolbinAdvancedRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| base64 payload | LOLBinDetector | `lolbinAdvancedRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| launchctl from /tmp | LOLBinDetector | `lolbinAdvancedRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| crontab modification | LOLBinDetector | `lolbinAdvancedRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| mktemp + execute | LOLBinDetector | `lolbinAdvancedRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| LOLBin (non-terminal shell) | LOLBinDetector | `lolbinRule` | ✅ | ✅ | ✅ Working | ✅ Working |
-| Reverse shell (ConnectionScanner) | ConnectionScanner | `reverseShellRule` | ✅ | ✅ | ✅ Working | ✅ Working |
-| Reverse shell (unusual port) | ReverseShellDetector | `reverseShellRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| netcat with active connection | ReverseShellDetector | `reverseShellRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| /tmp process + outbound TCP | ReverseShellDetector | `reverseShellRule` | ❌ | ❌ | 🔴 **Gap** | ✅ **Fixed** |
-| Camera / mic activation | AVCaptureMonitor | `unexpectedCaptureDeviceRule` | ✅ | ❌ | 🟡 No notify | ✅ **Fixed** |
-| Unsigned LaunchAgent/Daemon | PersistenceWatcher | `unsignedLaunchAgentRule` | ✅ | ❌ | 🟡 No notify | ✅ **Fixed** |
-| SIP / FileVault / Gatekeeper off | SystemAuditor | `criticalSystemAuditRule` | ✅ | ❌ | 🟡 No notify | ✅ **Fixed** |
-| Firewall disabled | SystemAuditor | (none — UI only) | ⚠️ | ❌ | 🟡 Gap | 🟡 UI only |
-| YARA match (DeepScanner) | DeepScanner | `yaraMatchRule` | ⚠️ | ❌ | 🔴 No rule | 🟡 Rule added; ingest not wired |
-| YARA match (real-time FSEvents) | FileSystemWatcher | `yaraMatchRule` | ⚠️ | ❌ | 🔴 Not started | 🟡 Rule added; watcher not started |
-| Multiple concurrent indicators | Any | `multipleHighSignalsRule` | ✅ | ✅ | ✅ Working | ✅ Working |
+| Unsigned binary in /tmp | ProcessScanner | `unsignedBinaryInTmpRule` | Yes | Yes | Yes Working | Yes Working |
+| curl\|bash pipe | LOLBinDetector | `curlPipeShellRule` | Yes | Yes | Yes Working | Yes Working |
+| wget\|bash pipe | LOLBinDetector | `curlPipeShellRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| osascript shell | LOLBinDetector | `lolbinAdvancedRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| quarantine removal | LOLBinDetector | `lolbinAdvancedRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| base64 payload | LOLBinDetector | `lolbinAdvancedRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| launchctl from /tmp | LOLBinDetector | `lolbinAdvancedRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| crontab modification | LOLBinDetector | `lolbinAdvancedRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| mktemp + execute | LOLBinDetector | `lolbinAdvancedRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| LOLBin (non-terminal shell) | LOLBinDetector | `lolbinRule` | Yes | Yes | Yes Working | Yes Working |
+| Reverse shell (ConnectionScanner) | ConnectionScanner | `reverseShellRule` | Yes | Yes | Yes Working | Yes Working |
+| Reverse shell (unusual port) | ReverseShellDetector | `reverseShellRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| netcat with active connection | ReverseShellDetector | `reverseShellRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| /tmp process + outbound TCP | ReverseShellDetector | `reverseShellRule` | No | No | Gap **Gap** | Yes **Fixed** |
+| Camera / mic activation | AVCaptureMonitor | `unexpectedCaptureDeviceRule` | Yes | No | Partial No notify | Yes **Fixed** |
+| Unsigned LaunchAgent/Daemon | PersistenceWatcher | `unsignedLaunchAgentRule` | Yes | No | Partial No notify | Yes **Fixed** |
+| SIP / FileVault / Gatekeeper off | SystemAuditor | `criticalSystemAuditRule` | Yes | No | Partial No notify | Yes **Fixed** |
+| Firewall disabled | SystemAuditor | (none — UI only) | Warning | No | Partial Gap | Partial UI only |
+| YARA match (DeepScanner) | DeepScanner | `yaraMatchRule` | Warning | No | Gap No rule | Partial Rule added; ingest not wired |
+| YARA match (real-time FSEvents) | FileSystemWatcher | `yaraMatchRule` | Warning | No | Gap Not started | Partial Rule added; watcher not started |
+| Multiple concurrent indicators | Any | `multipleHighSignalsRule` | Yes | Yes | Yes Working | Yes Working |
 
-**Legend:** ✅ Working &nbsp; 🔴 Gap (not detected) &nbsp; 🟡 Partial / known limitation &nbsp; ❌ Missing
+**Legend:** Yes Working &nbsp; Gap Gap (not detected) &nbsp; Partial Partial / known limitation &nbsp; No Missing
 
 ---
 
@@ -511,7 +538,7 @@ was reproduced via `xcodebuild test` (EXC\_BAD\_ACCESS in `ScanPerformanceTests`
 `MemoryLeakTests`, `YARAEngineIntegrationTests`) and resolved by the flag fix.
 Full test suite after fix: **269 tests, 0 failures, TEST SUCCEEDED**.
 
-**Detection status:** YARA real-time file scanning: ⚠️ Partial → ✅ Working.
+**Detection status:** YARA real-time file scanning: Warning Partial → Yes Working.
 
 ### 4.2 NickHelper.entitlements Created (Fixed)
 
@@ -540,9 +567,9 @@ Pattern mirrors the verified real-time pipeline. Full test suite: **269 tests, 0
 
 | Detection | Part 3 Status | Part 4 Status |
 |-----------|:---:|:---:|
-| YARA match (real-time FSEvents) | 🟡 Rule added; watcher not started | ✅ Working |
-| YARA match (DeepScanner) | 🟡 Rule added; ingest not wired | ✅ Working |
-| NickHelper entitlements | ⚠️ Pending | ✅ Created |
+| YARA match (real-time FSEvents) | Partial Rule added; watcher not started | Yes Working |
+| YARA match (DeepScanner) | Partial Rule added; ingest not wired | Yes Working |
+| NickHelper entitlements | Warning Pending | Yes Created |
 
 ### 4.5 Remaining Open Items
 
@@ -562,29 +589,29 @@ All changes compile cleanly and the test suite remains at **269 tests, 0 failure
 
 | Gap | Audit Reference | Fix | Status |
 |-----|----------------|-----|--------|
-| Full scan alerts lack Foundation Models explanations | 3.3.2 | `SecurityEngine.performFullScan` now creates an `AlertExplainer` instance and enriches each new alert's `explanation` field before dispatch. | ✅ Fixed |
-| SwiftData pruning not verified at launch | Part 2, item 8 | `AppDelegate.applicationDidFinishLaunching` launches a background `Task` that creates a `ThreatLogger` from the production `ModelContainer` and calls `pruneOlderThan(days: 90)`. | ✅ Fixed |
-| Login Items not monitored | 3.4 | `PersistenceWatcher.scanLoginItems()` queries System Events via a hardcoded `osascript` string (tab-delimited to avoid name-parsing ambiguity). Results merged into `snapshot()`. Verified live: 5 login items found during test run. | ✅ Fixed |
-| Shell profiles not monitored | 3.4 | `FileSystemWatcher.defaultMonitoredDirectories` now includes `NSHomeDirectory()` and `/etc`. `handleEvents` emits a `.persistence / medium / reason: "shell_profile_modified"` signal for `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.profile`, `/etc/zshrc`, `/etc/zprofile`, and `/etc/zshenv`. New `shellProfileRule` (score: 0.70, severity: `.high`) added to `CorrelationRule.standard`. | ✅ Fixed |
-| `~/.ssh/authorized_keys` not monitored | 3.4 | `~/.ssh` added to `defaultMonitoredDirectories`. `handleEvents` emits `.persistence / critical / reason: "ssh_keys_modified"` for any path ending in `/authorized_keys`. New `sshKeysRule` (score: 0.90, severity: `.critical`) added to `CorrelationRule.standard`. | ✅ Fixed |
-| Firewall / stealth mode / XProtect / remote login — no alert | 3.2.8 | New `systemHardeningRule` (score: 0.50, severity: `.medium`) added to `CorrelationRule.standard`. Matches `.systemAudit` signals with `severity >= .medium` and `check` in `{firewall, firewallStealth, remoteLogin, automaticUpdates, xprotect}` — the non-critical checks previously visible only in the System Audit UI tab. | ✅ Fixed |
+| Full scan alerts lack Foundation Models explanations | 3.3.2 | `SecurityEngine.performFullScan` now creates an `AlertExplainer` instance and enriches each new alert's `explanation` field before dispatch. | Yes Fixed |
+| SwiftData pruning not verified at launch | Part 2, item 8 | `AppDelegate.applicationDidFinishLaunching` launches a background `Task` that creates a `ThreatLogger` from the production `ModelContainer` and calls `pruneOlderThan(days: 90)`. | Yes Fixed |
+| Login Items not monitored | 3.4 | `PersistenceWatcher.scanLoginItems()` queries System Events via a hardcoded `osascript` string (tab-delimited to avoid name-parsing ambiguity). Results merged into `snapshot()`. Verified live: 5 login items found during test run. | Yes Fixed |
+| Shell profiles not monitored | 3.4 | `FileSystemWatcher.defaultMonitoredDirectories` now includes `NSHomeDirectory()` and `/etc`. `handleEvents` emits a `.persistence / medium / reason: "shell_profile_modified"` signal for `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.profile`, `/etc/zshrc`, `/etc/zprofile`, and `/etc/zshenv`. New `shellProfileRule` (score: 0.70, severity: `.high`) added to `CorrelationRule.standard`. | Yes Fixed |
+| `~/.ssh/authorized_keys` not monitored | 3.4 | `~/.ssh` added to `defaultMonitoredDirectories`. `handleEvents` emits `.persistence / critical / reason: "ssh_keys_modified"` for any path ending in `/authorized_keys`. New `sshKeysRule` (score: 0.90, severity: `.critical`) added to `CorrelationRule.standard`. | Yes Fixed |
+| Firewall / stealth mode / XProtect / remote login — no alert | 3.2.8 | New `systemHardeningRule` (score: 0.50, severity: `.medium`) added to `CorrelationRule.standard`. Matches `.systemAudit` signals with `severity >= .medium` and `check` in `{firewall, firewallStealth, remoteLogin, automaticUpdates, xprotect}` — the non-critical checks previously visible only in the System Audit UI tab. | Yes Fixed |
 
 #### Updated Coverage Table (Persistence)
 
 | Persistence Mechanism | Monitored |
 |-----------------------|:---------:|
-| `/Library/LaunchDaemons` | ✅ |
-| `/Library/LaunchAgents` | ✅ |
-| `~/Library/LaunchAgents` | ✅ |
-| `/Library/StartupItems` | ✅ |
-| `/Library/Periodic` (daily/weekly/monthly) | ✅ |
-| `/Library/SystemExtensions` | ✅ |
-| Login Items (`SMAppService` / System Events) | ✅ |
-| `~/.zshrc`, `~/.bash_profile`, `/etc/zshrc`, etc. | ✅ |
-| `~/.ssh/authorized_keys` | ✅ |
-| `at` jobs | ❌ |
-| `/etc/cron.d`, user crontabs | ⚠️ Partial |
-| Kernel extensions (`kext`) | ❌ |
+| `/Library/LaunchDaemons` | Yes |
+| `/Library/LaunchAgents` | Yes |
+| `~/Library/LaunchAgents` | Yes |
+| `/Library/StartupItems` | Yes |
+| `/Library/Periodic` (daily/weekly/monthly) | Yes |
+| `/Library/SystemExtensions` | Yes |
+| Login Items (`SMAppService` / System Events) | Yes |
+| `~/.zshrc`, `~/.bash_profile`, `/etc/zshrc`, etc. | Yes |
+| `~/.ssh/authorized_keys` | Yes |
+| `at` jobs | No |
+| `/etc/cron.d`, user crontabs | Warning Partial |
+| Kernel extensions (`kext`) | No |
 
 **Test count:** 269 tests, 0 failures, TEST SUCCEEDED. Codebase is in a clean state for v1.0.
 
@@ -671,10 +698,10 @@ not expand the attack surface meaningfully. Suppressed alerts are still logged a
 | Endpoint Security entitlement | High | Submitted to Apple, awaiting approval |
 | Network Extension entitlement | Medium | Not yet applied |
 | CoreML model training | Medium | Deferred until v1.2 telemetry data is sufficient |
-| `getListeningPorts` implementation | Low | ✅ Closed in v1.2 (proc_pidfdinfo) |
-| Replace `lsof` with `proc_pidfdinfo` | Low | ✅ Closed in v1.2 |
+| `getListeningPorts` implementation | Low | Yes Closed in v1.2 (proc_pidfdinfo) |
+| Replace `lsof` with `proc_pidfdinfo` | Low | Yes Closed in v1.2 |
 
-**Test count:** 273 tests, 0 failures, TEST SUCCEEDED. Codebase clean for v1.2.
+**Historical test count:** 273 tests, 0 failures, TEST SUCCEEDED for v1.2.
 
 ---
 

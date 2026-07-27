@@ -4,73 +4,100 @@
 
 import SwiftUI
 
-// MARK: - DiskUsageView
-
-/// Phase 7 — Visual representation of disk usage as proportional colour blocks.
+/// A calm, data-first summary of the boot volume.
 struct DiskUsageView: View {
 
     @Environment(SecurityEngine.self) private var engine
     @State private var storageMonitor = StorageMonitor()
 
+    private var reclaimableBytes: Int64 {
+        engine.performanceMonitor?.coordinator.totalReclaimableSize ?? 0
+    }
+
+    private var usedFraction: Double {
+        guard storageMonitor.totalDiskBytes > 0 else { return 0 }
+        return min(1, max(0, Double(storageMonitor.usedDiskBytes) / Double(storageMonitor.totalDiskBytes)))
+    }
+
+    private var pressureTint: Color {
+        switch usedFraction {
+        case 0..<0.75: return .mint
+        case 0..<0.9: return .orange
+        default: return .red
+        }
+    }
+
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.quaternary)
+        VStack(alignment: .leading, spacing: NickSpacing.xl) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: NickSpacing.xs) {
+                    Text("Macintosh HD")
+                        .font(.headline)
+                    Text(storageSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
-                if storageMonitor.totalDiskBytes > 0 {
-                    let usedFraction = min(1, Double(storageMonitor.usedDiskBytes) / Double(storageMonitor.totalDiskBytes))
-                    let reclaimFraction: Double = {
-                        guard let monitor = engine.performanceMonitor,
-                              storageMonitor.totalDiskBytes > 0 else { return 0 }
-                        return min(usedFraction, Double(monitor.coordinator.totalReclaimableSize) / Double(storageMonitor.totalDiskBytes))
-                    }()
+                Spacer()
 
-                    HStack(spacing: 0) {
-                        // Used (excluding reclaimable)
-                        Rectangle()
-                            .fill(.red.opacity(0.7))
-                            .frame(width: proxy.size.width * (usedFraction - reclaimFraction))
+                Text("\(Int(usedFraction * 100))% used")
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(pressureTint)
+            }
 
-                        // Reclaimable
-                        Rectangle()
-                            .fill(.orange.opacity(0.8))
-                            .frame(width: proxy.size.width * reclaimFraction)
-                    }
-                    .cornerRadius(8)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.quaternary)
+                    Capsule()
+                        .fill(pressureTint)
+                        .frame(width: proxy.size.width * usedFraction)
                 }
             }
-            .overlay(alignment: .bottom) {
-                labels
-                    .padding(.bottom, 6)
+            .frame(height: 10)
+            .accessibilityElement()
+            .accessibilityLabel("Disk usage")
+            .accessibilityValue("\(Int(usedFraction * 100)) percent used")
+
+            HStack(spacing: 0) {
+                metric(formatted(storageMonitor.usedDiskBytes), "Used", pressureTint)
+                Spacer()
+                metric(formatted(storageMonitor.freeDiskBytes), "Available", .secondary)
+                if reclaimableBytes > 0 {
+                    Spacer()
+                    metric(formatted(reclaimableBytes), "Found by Nick", .orange)
+                }
             }
         }
-        .task {
-            storageMonitor.refresh()
+        .padding(NickSpacing.xl)
+        .nickCard()
+        .task { storageMonitor.refresh() }
+    }
+
+    private var storageSummary: String {
+        guard storageMonitor.totalDiskBytes > 0 else { return "Reading storage…" }
+        if usedFraction >= 0.9 {
+            return "Storage is nearly full. Review larger findings first."
         }
-    }
-
-    @ViewBuilder
-    private var labels: some View {
-        HStack {
-            legendDot(.red.opacity(0.7), "Used: \(ByteCountFormatter.string(fromByteCount: storageMonitor.usedDiskBytes, countStyle: .file))")
-            legendDot(.orange.opacity(0.8), "Reclaimable: \(reclaimableLabel)")
-            legendDot(.gray.opacity(0.35), "Free: \(ByteCountFormatter.string(fromByteCount: storageMonitor.freeDiskBytes, countStyle: .file))")
+        if usedFraction >= 0.75 {
+            return "Storage is filling up, but you still have room available."
         }
-        .font(.caption2)
-        .padding(.horizontal, 8)
+        return "\(formatted(storageMonitor.totalDiskBytes)) total capacity"
     }
 
-    private var reclaimableLabel: String {
-        let bytes = engine.performanceMonitor?.coordinator.totalReclaimableSize ?? 0
-        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
-
-    @ViewBuilder
-    private func legendDot(_ color: Color, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 8, height: 8)
+    private func metric(_ value: String, _ label: String, _ tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: NickSpacing.xs) {
+            Text(value)
+                .font(.title3.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(tint)
             Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+    }
+
+    private func formatted(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }

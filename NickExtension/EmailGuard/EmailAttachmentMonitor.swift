@@ -66,8 +66,20 @@ final class EmailAttachmentMonitor: @unchecked Sendable {
     /// Returns the mail-client name if `filePath` is inside a mail-app
     /// directory, or `nil` if it is not an email-sourced file.
     func source(forPath filePath: String) -> String? {
+        // Endpoint Security supplies an absolute kernel path. Avoid
+        // `standardizedFileURL` here: resolving URL resource information for
+        // every modified file causes expensive Carbon FileID lookups on
+        // pseudo-volumes and File Provider mounts.
+        guard filePath.hasPrefix("/"), !filePath.contains("/../") else {
+            return nil
+        }
+        let normalized = filePath.replacingOccurrences(of: "//", with: "/")
+        // The Endpoint Security extension runs as root, so do not use its home
+        // directory. Require a real user's Library boundary to avoid treating
+        // attacker-created paths such as /tmp/Library/Mail as email.
+        guard normalized.hasPrefix("/Users/") else { return nil }
         for (path, source) in emailPaths {
-            if filePath.contains(path) { return source }
+            if normalized.contains("/\(path)") { return source }
         }
         return nil
     }

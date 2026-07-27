@@ -44,7 +44,7 @@ final class MonitorCoordinator {
     /// preference is respected without restarting the pipeline.
     var deepScanInterval: TimeInterval {
         let stored = UserDefaults.standard.integer(forKey: "deepScanIntervalSeconds")
-        return stored > 0 ? TimeInterval(stored) : 60.0
+        return stored >= 300 ? TimeInterval(stored) : 300.0
     }
 
     // MARK: - Private

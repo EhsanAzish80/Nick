@@ -60,10 +60,11 @@ final class TamperProtection: @unchecked Sendable {
 
     init(additionalPaths: [String] = []) {
         var paths: [String] = [
-            // System extension location (macOS 10.15+)
-            "/Library/SystemExtensions/",
-            // Typical user-installed application location
+            // Protect Nick itself. Never protect the broad
+            // /Library/SystemExtensions prefix because it also contains
+            // extensions owned by unrelated applications.
             "/Applications/Nick.app",
+            "/Library/Application Support/com.ehsanazish.nick",
         ]
 
         // Also protect the running extension bundle itself (resolves symlinks)
@@ -134,7 +135,11 @@ final class TamperProtection: @unchecked Sendable {
     // MARK: - Private
 
     private func isProtected(path: String) -> Bool {
-        protectedPaths.contains { path.hasPrefix($0) }
+        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        return protectedPaths.contains { protected in
+            let root = URL(fileURLWithPath: protected).standardizedFileURL.path
+            return standardized == root || standardized.hasPrefix(root + "/")
+        }
     }
 
     /// Returns `true` when `actorPath` belongs to a trusted process.

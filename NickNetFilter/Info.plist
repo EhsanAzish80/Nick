@@ -16,17 +16,22 @@
     <key>CFBundleName</key>
     <string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key>
-    <string>XPC!</string>
+    <string>SYSX</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>NSExtension</key>
-    <dict>
-        <key>NSExtensionPointIdentifier</key>
-        <string>com.apple.networkextension.content-filter</string>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NetworkExtension</key>
+	<dict>
+		<key>NEProviderClasses</key>
+		<dict>
+			<key>com.apple.networkextension.filter-data</key>
+            <string>$(PRODUCT_MODULE_NAME).FilterDataProvider</string>
+        </dict>
     </dict>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 Ehsan Azish. All rights reserved.</string>
+    <key>NSSystemExtensionUsageDescription</key>
+    <string>Nick uses this Network Filter to check website connections for known phishing and lookalike domains. Nick does not inspect page contents or store your browsing history.</string>
 </dict>
 </plist>

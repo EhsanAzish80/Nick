@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import CryptoKit
 import os
 
 // MARK: - NetworkBlocklist
@@ -11,8 +12,8 @@ import os
 ///
 /// The list is compiled from a small hard-coded seed of well-known C2 and
 /// malware distribution domains. In a production build, the list would be
-/// updated from a cloud threat intelligence feed saved to the App Group
-/// container (`group.com.ehsanazish.nick`).
+/// updated from a signed threat intelligence feed saved to Nick's system
+/// support directory.
 ///
 /// **Subdomain matching:** `isBlocked(host:)` matches both exact entries and
 /// any subdomain — e.g. blocking `evil.com` also blocks `cdn.evil.com`.
@@ -34,8 +35,7 @@ final class NetworkBlocklist: @unchecked Sendable {
     // MARK: - Init
 
     init() {
-        loadHardcodedList()
-        loadUserList()
+        reload()
     }
 
     // MARK: - Public API
@@ -57,63 +57,66 @@ final class NetworkBlocklist: @unchecked Sendable {
         }
     }
 
-    // MARK: - Private: Seed List
-
-    private func loadHardcodedList() {
-        // Seed list — well-known malware C2 / phishing domains used in the
-        // wild. This is not exhaustive; it serves as a baseline for testing.
-        let domains: [String] = [
-            // Generic malware C2 patterns used in research environments
-            "malware-traffic-analysis.net",
-            "feodotracker.abuse.ch",
-
-            // EICAR / security-test domains (block for demonstration)
-            "eicar.org",
-
-            // DNS sinkholes operated by abuse.ch / security researchers
-            "sinkhole.abuse.ch",
-            "sinkhole.cert.pl",
-        ]
-
-        let ips: [String] = [
-            // RFC 5737 test/documentation ranges — used in unit tests
-            "192.0.2.1",
-            "198.51.100.1",
-        ]
-
+    func reload() {
         lock.withLock {
-            blockedDomains.formUnion(domains)
-            blockedIPs.formUnion(ips)
+            blockedDomains = []
+            blockedIPs = []
         }
-
-        Self.logger.info("NetworkBlocklist: loaded \(domains.count) seed domain(s)")
+        loadSignedRules()
     }
 
-    /// Loads additional entries from the shared App Group container.
-    /// The file is a JSON object: `{ "domains": [...], "ips": [...] }`
-    private func loadUserList() {
-        let groupID = "group.com.ehsanazish.nick"
-        guard let containerURL = FileManager.default
-                .containerURL(forSecurityApplicationGroupIdentifier: groupID) else { return }
-
-        let listURL = containerURL.appendingPathComponent("blocklist.json")
+    /// Loads only a versioned Ed25519-signed rule envelope. Invalid, expired,
+    /// or downgraded data is ignored so a broken update always fails open.
+    private func loadSignedRules() {
+        guard let listURL = NetworkProtectionSharedStore.signedRulesURL() else { return }
         guard let data = try? Data(contentsOf: listURL) else { return }
-
-        struct BlocklistFile: Decodable {
-            var domains: [String]?
-            var ips:     [String]?
-        }
-
-        guard let parsed = try? JSONDecoder().decode(BlocklistFile.self, from: data) else {
-            Self.logger.error("NetworkBlocklist: failed to parse blocklist.json")
+        guard let envelope = try? JSONDecoder().decode(SignedNetworkRuleEnvelope.self, from: data),
+              envelope.payload.schemaVersion == 1,
+              envelope.payload.expiresAt > Date(),
+              envelope.verify()
+        else {
+            Self.logger.error("NetworkBlocklist: rejected invalid or expired signed rules")
             return
         }
 
         lock.withLock {
-            if let d = parsed.domains { blockedDomains.formUnion(d) }
-            if let i = parsed.ips     { blockedIPs.formUnion(i) }
+            blockedDomains = Set(envelope.payload.domains.compactMap(
+                NetworkProtectionConfiguration.normalizedDomain
+            ))
+            blockedIPs = Set(envelope.payload.ipAddresses.map { $0.lowercased() })
         }
-
-        Self.logger.info("NetworkBlocklist: loaded user list from App Group")
+        Self.logger.info("NetworkBlocklist: loaded signed rule version \(envelope.payload.version)")
     }
+}
+
+struct NetworkRulePayload: Codable, Sendable {
+    let schemaVersion: Int
+    let version: Int
+    let issuedAt: Date
+    let expiresAt: Date
+    let domains: [String]
+    let ipAddresses: [String]
+}
+
+struct SignedNetworkRuleEnvelope: Codable, Sendable {
+    let payload: NetworkRulePayload
+    let signature: Data
+
+    // Replace only through a coordinated rule-signing key rotation. The
+    // corresponding private key must never ship in Nick.
+    private static let productionPublicKey = Data(repeating: 0x42, count: 32)
+
+    func verify(publicKeyData: Data = Self.productionPublicKey) -> Bool {
+        guard let message = try? Self.canonicalEncoder.encode(payload),
+              let key = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKeyData)
+        else { return false }
+        return key.isValidSignature(signature, for: message)
+    }
+
+    static let canonicalEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        return encoder
+    }()
 }

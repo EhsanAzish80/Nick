@@ -19,7 +19,7 @@ final class ESXPCServer: NSObject {
 
     // MARK: - Private
 
-    private static let logger = Logger(
+    fileprivate static let logger = Logger(
         subsystem: "com.ehsanazish.nick.NickExtension",
         category: "XPCServer"
     )
@@ -29,6 +29,9 @@ final class ESXPCServer: NSObject {
 
     /// Serialises writes to `appConnection`.
     private let connectionLock = NSLock()
+    private let eventStore = EndpointEventStore(
+        path: "/Library/Application Support/com.ehsanazish.nick/endpoint-events.json"
+    )
 
     // MARK: - Init
 
@@ -50,6 +53,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `ESEvent` to the container app.
     func sendEventToApp(_ eventData: Data) {
+        eventStore.appendIfImportant(eventData)
         withAppProxy { proxy in
             proxy.reportEvent(eventData)
         }
@@ -191,9 +195,122 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         reply(true)
     }
 
-    func requestScan(path _: String, reply: @escaping (Bool, String?) -> Void) {
-        // TODO: Phase 2 — on-demand file scanning via ES or YARA.
-        reply(false, "On-demand scan not yet implemented (Phase 2)")
+    func getPersistedEvents(reply: @escaping (Data) -> Void) {
+        reply(eventStore.snapshot())
+    }
+
+    func requestScan(path: String, reply: @escaping (Bool, String?) -> Void) {
+        guard let scanner = ESXPCServer.fileScannerRef else {
+            reply(false, "The security scanner is not ready.")
+            return
+        }
+
+        let standardPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard standardPath.hasPrefix("/"), FileManager.default.fileExists(atPath: standardPath) else {
+            reply(false, "The selected item no longer exists.")
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            var isDirectory: ObjCBool = false
+            FileManager.default.fileExists(atPath: standardPath, isDirectory: &isDirectory)
+            let paths: [String]
+            if isDirectory.boolValue {
+                guard let enumerator = FileManager.default.enumerator(
+                    at: URL(fileURLWithPath: standardPath),
+                    includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                ) else {
+                    reply(false, "Nick could not read the selected folder.")
+                    return
+                }
+                var collected: [String] = []
+                for case let fileURL as URL in enumerator {
+                    guard collected.count < 10_000 else {
+                        reply(false, "The folder contains more than 10,000 files. Choose a smaller folder.")
+                        return
+                    }
+                    let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                    guard values?.isRegularFile == true,
+                          (values?.fileSize ?? 0) <= 250 * 1_024 * 1_024 else { continue }
+                    collected.append(fileURL.path)
+                }
+                paths = collected
+            } else {
+                let values = try? URL(fileURLWithPath: standardPath)
+                    .resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard values?.isRegularFile == true else {
+                    reply(false, "The selected item is not a regular file.")
+                    return
+                }
+                guard (values?.fileSize ?? 0) <= 250 * 1_024 * 1_024 else {
+                    reply(false, "Files larger than 250 MB require a full scan.")
+                    return
+                }
+                paths = [standardPath]
+            }
+
+            for filePath in paths {
+                let result = scanner.scan(filePath: filePath)
+                if result.isThreat {
+                    reply(false, "Threat detected: \(result.threatName ?? "unknown threat")")
+                    return
+                }
+            }
+            reply(true, nil)
+        }
+    }
+
+    func requestQuarantineFile(
+        path: String,
+        expectedThreatName: String,
+        reply: @escaping (Bool, String?, Data?) -> Void
+    ) {
+        guard let scanner = ESXPCServer.fileScannerRef,
+              let manager = ESXPCServer.quarantineManagerRef else {
+            reply(false, "Nick's protection service is not ready.", nil)
+            return
+        }
+
+        let standardPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        var isDirectory: ObjCBool = false
+        guard standardPath.hasPrefix("/"),
+              FileManager.default.fileExists(atPath: standardPath, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            reply(false, "The detected file no longer exists.", nil)
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = scanner.scan(filePath: standardPath)
+            guard result.isThreat else {
+                reply(
+                    false,
+                    "Nick re-scanned the file and could not confirm the detection. The file was not moved.",
+                    nil
+                )
+                return
+            }
+            guard !result.hash.isEmpty else {
+                reply(false, "Nick could not read the detected file.", nil)
+                return
+            }
+
+            let threatName = result.threatName
+                ?? (expectedThreatName.isEmpty ? "Detected threat" : expectedThreatName)
+            guard let record = manager.quarantine(
+                filePath: standardPath,
+                hash: result.hash,
+                threatName: threatName,
+                severity: "critical",
+                processPath: "",
+                pid: 0
+            ) else {
+                reply(false, "Nick could not move this file into quarantine.", nil)
+                return
+            }
+            reply(true, nil, try? JSONEncoder().encode(record))
+        }
     }
 
     func requestRebuildFIMBaseline(reply: @escaping (Bool) -> Void) {
@@ -221,6 +338,34 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         }
     }
 
+    func requestRestoreQuarantinedFile(
+        id: String,
+        reply: @escaping (Bool) -> Void
+    ) {
+        guard let id = UUID(uuidString: id),
+              let manager = ESXPCServer.quarantineManagerRef else {
+            reply(false)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            reply(manager.restore(id: id))
+        }
+    }
+
+    func requestDeleteQuarantinedFile(
+        id: String,
+        reply: @escaping (Bool) -> Void
+    ) {
+        guard let id = UUID(uuidString: id),
+              let manager = ESXPCServer.quarantineManagerRef else {
+            reply(false)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            reply(manager.deletePermanently(id: id))
+        }
+    }
+
     // MARK: - Module back-references (set by main.swift)
 
     /// Weak reference to the `FileIntegrityMonitor` used to service
@@ -230,4 +375,64 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     /// Weak reference to the `RansomwareDetector` used to service
     /// `requestDeployCanaries` calls from the container app.
     nonisolated(unsafe) static weak var ransomwareDetectorRef: RansomwareDetector?
+
+    nonisolated(unsafe) static weak var quarantineManagerRef: QuarantineManager?
+
+    nonisolated(unsafe) static weak var fileScannerRef: FileScanner?
+}
+
+/// Small durable ring buffer for denied and threat-enriched ES events. Routine
+/// writes stay live-only so database journals cannot create continuous disk I/O.
+private final class EndpointEventStore {
+    private let url: URL
+    private let queue = DispatchQueue(
+        label: "com.ehsanazish.nick.NickExtension.persisted-events",
+        qos: .utility
+    )
+    private let maximumCount = 250
+
+    init(path: String) {
+        url = URL(fileURLWithPath: path)
+    }
+
+    func appendIfImportant(_ data: Data) {
+        guard let event = try? JSONDecoder().decode(ESEvent.self, from: data),
+              event.decision == .deny || event.threatName != nil else { return }
+        queue.async {
+            var events = self.load()
+            guard !events.contains(where: { $0.id == event.id }) else { return }
+            events.append(event)
+            if events.count > self.maximumCount {
+                events.removeFirst(events.count - self.maximumCount)
+            }
+            do {
+                try FileManager.default.createDirectory(
+                    at: self.url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o755]
+                )
+                let encoded = try JSONEncoder().encode(events)
+                try encoded.write(to: self.url, options: .atomic)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o644],
+                    ofItemAtPath: self.url.path
+                )
+            } catch {
+                ESXPCServer.logger.error(
+                    "Could not persist important event: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+    }
+
+    func snapshot() -> Data {
+        queue.sync {
+            (try? JSONEncoder().encode(load())) ?? Data("[]".utf8)
+        }
+    }
+
+    private func load() -> [ESEvent] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([ESEvent].self, from: data)) ?? []
+    }
 }

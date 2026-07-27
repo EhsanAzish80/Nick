@@ -30,7 +30,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "BB55CC11DDEEFF00AA220020"
-               BuildableName = "NickNetFilter.systemextension"
+               BuildableName = "com.ehsanazish.nick.NickNetFilter.systemextension"
                BlueprintName = "NickNetFilter"
                ReferencedContainer = "container:Nick.xcodeproj">
             </BuildableReference>
@@ -67,7 +67,7 @@
       </Testables>
    </TestAction>
    <LaunchAction
-      buildConfiguration = "Release"
+      buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       launchStyle = "0"

@@ -112,7 +112,16 @@ final class NetworkAnalyzerTests: XCTestCase {
 
     func test_signals_trustedProcess_returnsNoRawIPSignal() {
         for process in ["Spotify", "Xcode", "Claude Helper", "rapportd", "identityservicesd", "Safari"] {
-            let conn = makeConnection(processName: process, remoteAddress: "203.0.113.1", remotePort: 443, state: .established)
+            // Use a PID that cannot accidentally identify a real, unsigned process
+            // on the machine running the suite. An unresolvable synthetic PID uses
+            // the documented name-only fallback.
+            let conn = makeConnection(
+                pid: Int32.max,
+                processName: process,
+                remoteAddress: "203.0.113.1",
+                remotePort: 443,
+                state: .established
+            )
             let signals = scanner.signals(from: [conn]).filter { $0.metadata["reason"] == "raw_ip_outbound" }
             XCTAssertTrue(signals.isEmpty, "Expected no raw_ip_outbound signal for trusted process '\(process)'")
         }

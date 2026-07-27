@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.0</string>
+	<string>4.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
@@ -55,7 +55,7 @@
 	<key>NSSystemAdministrationUsageDescription</key>
 	<string>Nick requires administrator access to monitor system security state.</string>
 	<key>NSSystemExtensionUsageDescription</key>
-	<string>Nick requires administrator access to monitor system security state.</string>
+	<string>Nick uses system extensions for real-time protection and to check website connections for known phishing and lookalike domains. Nick does not inspect page contents or store your browsing history.</string>
 	<key>SMPrivilegedExecutables</key>
 	<dict>
 		<key>com.ehsanazish.nick.helper</key>

@@ -95,8 +95,29 @@ public final class ExtensionXPCClient: NSObject {
 
         conn.resume()
         connection = conn
-        isConnected = true
-        Self.logger.info("XPC connection to NickExtension opened")
+        isConnected = false
+        Self.logger.info("XPC connection to NickExtension opened; verifying ES client status")
+
+        // Opening an NSXPCConnection does not prove the service exists or that
+        // its Endpoint Security client started successfully. Only promote the
+        // connection after the extension answers its status request.
+        let errorHandler: @Sendable (Error) -> Void = { error in
+            Self.logger.warning("Extension status verification failed: \(error.localizedDescription)")
+        }
+        guard let proxy = conn.remoteObjectProxyWithErrorHandler(errorHandler)
+            as? NickExtensionXPCProtocol else {
+            return
+        }
+        let statusReply: @Sendable (Bool) -> Void = { [weak self] active in
+            Task { @MainActor [weak self] in
+                self?.isConnected = active
+                Self.logger.info("Verified extension status: isActive=\(active)")
+                if active {
+                    self?.loadPersistedEvents()
+                }
+            }
+        }
+        proxy.getStatus(reply: statusReply)
     }
 
     /// Closes the XPC connection.
@@ -104,6 +125,24 @@ public final class ExtensionXPCClient: NSObject {
         connection?.invalidate()
         connection  = nil
         isConnected = false
+    }
+
+    private func loadPersistedEvents() {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        proxy.getPersistedEvents { [weak self] data in
+            guard let replay = try? JSONDecoder().decode([ESEvent].self, from: data) else {
+                return
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let existingIDs = Set(events.map(\.id))
+                events.append(contentsOf: replay.filter { !existingIDs.contains($0.id) })
+                events.sort { $0.timestamp > $1.timestamp }
+                if events.count > maxEventCount {
+                    events.removeLast(events.count - maxEventCount)
+                }
+            }
+        }
     }
 
     // MARK: - Outbound Calls (Container App → Extension)
@@ -127,6 +166,29 @@ public final class ExtensionXPCClient: NSObject {
         proxy.requestScan(path: path, reply: completion)
     }
 
+    public func requestQuarantineFile(
+        path: String,
+        expectedThreatName: String,
+        completion: @escaping (Bool, String?) -> Void
+    ) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false, "Real-Time Protection is not connected.")
+            return
+        }
+        proxy.requestQuarantineFile(path: path, expectedThreatName: expectedThreatName) {
+            [weak self] success, message, recordData in
+            Task { @MainActor [weak self] in
+                if success,
+                   let recordData,
+                   let record = try? JSONDecoder().decode(QuarantineRecord.self, from: recordData) {
+                    self?.quarantineRecords.removeAll { $0.id == record.id }
+                    self?.quarantineRecords.insert(record, at: 0)
+                }
+                completion(success, message)
+            }
+        }
+    }
+
     /// Instructs the extension to rebuild the FIM baseline (Phase 5+).
     public func requestRebuildFIMBaseline(completion: @escaping (Bool) -> Void) {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
@@ -143,6 +205,42 @@ public final class ExtensionXPCClient: NSObject {
             return
         }
         proxy.requestDeployCanaries(reply: completion)
+    }
+
+    public func requestRestoreQuarantinedFile(
+        id: UUID,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.requestRestoreQuarantinedFile(id: id.uuidString) { [weak self] success in
+            Task { @MainActor [weak self] in
+                if success {
+                    self?.quarantineRecords.removeAll { $0.id == id }
+                }
+                completion(success)
+            }
+        }
+    }
+
+    public func requestDeleteQuarantinedFile(
+        id: UUID,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.requestDeleteQuarantinedFile(id: id.uuidString) { [weak self] success in
+            Task { @MainActor [weak self] in
+                if success {
+                    self?.quarantineRecords.removeAll { $0.id == id }
+                }
+                completion(success)
+            }
+        }
     }
 }
 

@@ -6,46 +6,64 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          fetch-depth: 0
           lfs: true
 
       - name: Select Xcode
         run: |
-          ls /Applications/ | grep Xcode
-          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          XCODE_PATH="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' | sort -V | tail -1)"
+          test -n "$XCODE_PATH"
+          sudo xcode-select -s "$XCODE_PATH"
           xcodebuild -version
 
       - name: Build Nick
         run: |
-          xcodebuild build -scheme Nick \
+          xcodebuild build \
+            -project Nick.xcodeproj \
+            -scheme Nick \
             -destination "platform=macOS" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Build NickHelper
+      - name: Build shipping components
         run: |
-          xcodebuild build -scheme NickHelper \
-            -destination "platform=macOS" \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+          for scheme in NickExtension NickNetFilter NickHelper NickUninstaller; do
+            xcodebuild build \
+              -project Nick.xcodeproj \
+              -scheme "$scheme" \
+              -destination "platform=macOS" \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO
+          done
 
       - name: Run Tests
         run: |
-          xcodebuild test -scheme Nick \
+          rm -rf TestResults.xcresult
+          xcodebuild test \
+            -project Nick.xcodeproj \
+            -scheme Nick \
             -destination "platform=macOS" \
+            -enableCodeCoverage YES \
+            -resultBundlePath TestResults.xcresult \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            -resultBundlePath TestResults.xcresult
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Test Summary
         if: always()
@@ -53,11 +71,35 @@ jobs:
           xcrun xcresulttool get test-results summary \
             --path TestResults.xcresult 2>/dev/null || echo "Test results unavailable"
 
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Upload Xcode result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults
+          path: TestResults.xcresult
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          flags: macos
           xcode: true
           xcode_archive_path: TestResults.xcresult
+
+      - name: Convert coverage for SonarCloud
+        if: env.SONAR_TOKEN != ''
+        run: |
+          ./Scripts/xccov-to-sonarqube.sh TestResults.xcresult > sonar-coverage.xml
+          test -s sonar-coverage.xml
+
+      - name: Run SonarCloud analysis
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.qualitygate.wait=true

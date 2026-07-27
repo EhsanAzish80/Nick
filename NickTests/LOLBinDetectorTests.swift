@@ -39,7 +39,6 @@ final class LOLBinDetectorTests: XCTestCase {
     }
 
     func test_evaluate_shWithCurlInArgs_returnsCriticalSignal() {
-        let proc = makeProc(name: "sh")
         // curl in path string simulates argv[0] from parent
         let procWithCurlPath = NickProcessInfo(
             pid: 101, path: "/usr/bin/curl | sh", name: "sh",
@@ -123,7 +122,7 @@ final class LOLBinDetectorTests: XCTestCase {
 
     func test_evaluate_trustedParentTerminal_returnsNil() {
         let proc = makeProc(name: "bash", parentName: "Terminal")
-        var trusted = TrustedProcessList()
+        let trusted = TrustedProcessList()
         // Terminal is in builtIn list
         let signal = LOLBinDetector.evaluate(proc, parentName: "Terminal", trustedProcessList: trusted)
         XCTAssertNil(signal)

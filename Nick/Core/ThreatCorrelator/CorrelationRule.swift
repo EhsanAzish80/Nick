@@ -159,7 +159,9 @@ struct CorrelationRule: Sendable {
         )
     }
 
-    /// Camera or microphone activated by an unsigned or unrecognised process.
+    /// Camera or microphone activity. Severity is evidence-based: known
+    /// simulator runtime services are informational, signed/unknown processes
+    /// require review, and invalid or unsigned processes are high severity.
     private static let unexpectedCaptureDeviceRule = CorrelationRule(
         name:     "unexpected_capture_device",
         score:    0.85,
@@ -169,16 +171,60 @@ struct CorrelationRule: Sendable {
         guard !matches.isEmpty else { return nil }
         let devices   = matches.compactMap { $0.metadata["deviceName"] }.joined(separator: ", ")
         let processes = matches.compactMap { $0.metadata["process"]    }.joined(separator: ", ")
+        let hasAuthoritativeAttribution = matches.allSatisfy {
+            $0.metadata["attributionConfidence"] == "authoritative"
+        }
+        let isSimulatorActivity = matches.allSatisfy {
+            guard let path = $0.processInfo?.path else { return false }
+            return path.contains("/CoreSimulator/") || path.contains(".simruntime/")
+        }
+        let hasInvalidSignature = hasAuthoritativeAttribution && matches.contains {
+            guard let signingStatus = $0.processInfo?.signingStatus else { return false }
+            return signingStatus == .unsigned || signingStatus == .invalid
+        }
+
+        if isSimulatorActivity {
+            return ThreatAlert(
+                score: 0.2,
+                content: AlertContent(
+                    title: "Capture device used by iOS Simulator",
+                    description: "\(devices) was used by \(processes) inside Xcode's iOS Simulator. "
+                        + "Simulator services are ad-hoc signed by design; this is not evidence of malware.",
+                    severity: .info,
+                    recommendedAction: "No action is needed if you were using Xcode or Simulator. "
+                        + "Otherwise, quit Simulator and confirm that the camera or microphone indicator turns off."
+                ),
+                contributingSignals: matches
+            )
+        }
+
+        guard hasAuthoritativeAttribution else {
+            return ThreatAlert(
+                score: 0.15,
+                content: AlertContent(
+                    title: "Camera or microphone activity observed",
+                    description: "\(devices) became active. Nick cannot reliably identify the app using it with the available macOS APIs.",
+                    severity: .info,
+                    recommendedAction: "No action is needed if this matches what you were doing. If it is unexpected, check the macOS privacy indicator and review permissions in System Settings → Privacy & Security."
+                ),
+                contributingSignals: matches
+            )
+        }
+
+        let severity: SignalSeverity = hasInvalidSignature ? .high : .medium
+        let score = hasInvalidSignature ? 0.85 : 0.55
         return ThreatAlert(
-            score: 0.85,
+            score: score,
             content: AlertContent(
-                title: "Unexpected capture device activation",
-                description: "Device(s) '\(devices)' were activated, attributed to '\(processes)'. " +
-                             "Covert camera or microphone access is a hallmark of spyware and RATs.",
-                severity: .high,
+                title: "Camera or microphone activity needs review",
+                description: "\(devices) became active and Nick attributed the activity to \(processes). "
+                    + (hasInvalidSignature
+                        ? "The attributed process does not have a valid code signature."
+                        : "This can be normal and does not by itself prove malicious activity."),
+                severity: severity,
                 recommendedAction:
-                    "Open System Settings → Privacy & Security → Camera / Microphone and audit " +
-                    "which apps have permission. Revoke access for anything unexpected."
+                    "If you expected this activity, keep the app. Otherwise, quit it and remove its " +
+                    "Camera or Microphone permission in System Settings → Privacy & Security."
             ),
             contributingSignals: matches
         )

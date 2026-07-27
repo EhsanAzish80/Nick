@@ -135,13 +135,17 @@ final class AlertExplainerTests: XCTestCase {
         XCTAssertGreaterThan(explanation.count, 30)
     }
 
-    func test_explain_completesWithinReasonableTime() async {
+    func test_templatedExplanation_completesWithinReasonableTime() {
         let alert = makeAlert(score: 0.6, severity: .medium, title: "Test")
-        let start = Date()
-        _ = await explainer.explain(alert: alert, topFeatures: [])
-        let elapsed = Date().timeIntervalSince(start)
-        // Templated path must be fast; LLM path may vary. 5 seconds is generous.
-        XCTAssertLessThan(elapsed, 5.0, "Explanation must complete within 5 seconds")
+        let clock = ContinuousClock()
+        let start = clock.now
+        _ = promptBuilder.buildTemplatedExplanation(for: alert, topFeatures: [])
+        let elapsed = start.duration(to: clock.now)
+
+        // The deterministic fallback is owned by Nick and must remain fast.
+        // Foundation Models inference is an OS service and is intentionally not
+        // constrained by a wall-clock unit test.
+        XCTAssertLessThan(elapsed, .seconds(1))
     }
 
     // MARK: - Helpers

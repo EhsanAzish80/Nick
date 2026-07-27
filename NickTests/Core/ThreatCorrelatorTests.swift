@@ -33,16 +33,37 @@ final class ThreatCorrelatorTests: XCTestCase {
     }
 
     func test_ingest_prunesExpiredSignals() async {
-        // Create a correlator with a tiny window so signals expire instantly
-        let tiny = ThreatCorrelator(windowDuration: 0.0001)
-        let old = makeStaleSigal()
-        await tiny.ingest([old])
-        // After ingest, the stale signal should be pruned
-        // (pruning is on ingest + correlate)
-        try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
-        await tiny.ingest([]) // triggers prune
-        let count = await tiny.bufferedSignalCount
+        let old = makeSignal(timestamp: Date(timeIntervalSinceNow: -60))
+        await correlator.ingest([old])
+        let count = await correlator.bufferedSignalCount
         XCTAssertEqual(count, 0)
+    }
+
+    func test_ingest_retainsSignalInsideWindow() async {
+        let recent = makeSignal(timestamp: Date(timeIntervalSinceNow: -5))
+        await correlator.ingest([recent])
+        let count = await correlator.bufferedSignalCount
+        XCTAssertEqual(count, 1)
+    }
+
+    func test_ingest_enforcesBufferCap_andRetainsCriticalSignal() async {
+        let lowSignals = (0...ThreatCorrelator.maxBufferSize).map { _ in
+            makeSignal(severity: .low)
+        }
+        let critical = makeSignal(
+            source: .systemAudit,
+            severity: .critical,
+            title: "SIP Disabled"
+        )
+
+        await correlator.ingest(lowSignals + [critical])
+
+        let count = await correlator.bufferedSignalCount
+        let alerts = await correlator.correlate()
+        XCTAssertEqual(count, ThreatCorrelator.maxBufferSize)
+        XCTAssertTrue(alerts.contains { alert in
+            alert.contributingSignals.contains { $0.id == critical.id }
+        })
     }
 
     func test_flush_clearsBuffer() async {
@@ -119,6 +140,21 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertTrue(multipleAlerts.isEmpty)
     }
 
+    func test_correlateNew_emitsRuleOnlyOnce_untilReset() async {
+        await correlator.ingest([
+            makeSignal(source: .network, severity: .high, metadata: ["reason": "reverse_shell"])
+        ])
+
+        let first = await correlator.correlateNew()
+        let second = await correlator.correlateNew()
+        await correlator.resetEmittedRules()
+        let afterReset = await correlator.correlateNew()
+
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertTrue(second.isEmpty)
+        XCTAssertEqual(afterReset.map(\.title), first.map(\.title))
+    }
+
     // MARK: - ThreatAlert
 
     func test_threatAlert_scoreIsClamped_belowZero() {
@@ -162,28 +198,19 @@ final class ThreatCorrelatorTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeSignal(
-        source: MonitorType,
-        severity: SignalSeverity,
+        source: MonitorType = .process,
+        severity: SignalSeverity = .medium,
+        timestamp: Date = Date(),
         title: String = "Test Signal",
         metadata: [String: String] = [:]
     ) -> ThreatSignal {
         ThreatSignal(
             source: source,
             severity: severity,
+            timestamp: timestamp,
             title: title,
             description: "Test signal for \(source.rawValue)",
             context: ThreatSignalContext(metadata: metadata)
-        )
-    }
-
-    private func makeStaleSigal() -> ThreatSignal {
-        ThreatSignal(
-            id: UUID(),
-            source: .process,
-            severity: .low,
-            timestamp: Date(timeIntervalSinceNow: -3600), // 1 hour ago
-            title: "Old Signal",
-            description: "Should be pruned"
         )
     }
 }

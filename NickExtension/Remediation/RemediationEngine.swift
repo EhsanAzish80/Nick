@@ -42,12 +42,15 @@ final class RemediationEngine {
         hash:        String,
         threatName:  String,
         processPath: String,
-        pid:         Int32
+        pid:         Int32,
+        terminateProcess: Bool = true
     ) -> RemediationReport {
         var actions: [RemediationAction] = []
 
         // 1. Kill the offending process immediately
-        actions.append(killProcess(pid: pid))
+        if terminateProcess {
+            actions.append(killProcess(pid: pid))
+        }
 
         // 2. Quarantine (or delete as fallback) the threat file
         let record = quarantineManager.quarantine(

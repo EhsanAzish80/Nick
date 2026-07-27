@@ -4,7 +4,7 @@ Thanks for your interest in making Mac security better. Nick is built by the com
 
 ## Ways to Contribute
 
-### 🐛 Bug Reports & False Positives
+### Bug reports and false positives
 Found a bug or a false positive detection? Open an [issue](https://github.com/EhsanAzish80/Nick/issues/new) with:
 - macOS version and Mac model
 - Nick version
@@ -12,7 +12,7 @@ Found a bug or a false positive detection? Open an [issue](https://github.com/Eh
 - Expected vs actual behavior
 - For false positives: the process/file that was flagged and why you believe it's safe
 
-### 🧬 YARA Rules
+### YARA rules
 Submit new detection rules for macOS-specific threats:
 
 1. Place your rule in the appropriate directory under `Rules/` (stealers, backdoors, adware, ransomware, or community)
@@ -36,7 +36,7 @@ Submit new detection rules for macOS-specific threats:
 4. Test your rule against known-good files to minimize false positives
 5. Open a PR with the rule and a brief description of the threat it detects
 
-### 🧠 Behavioral Scoring Model
+### Behavioral scoring model
 The CoreML threat scoring model can be improved with:
 - New training data (anonymized behavioral patterns from confirmed threats)
 - Feature engineering suggestions (new signals to correlate)
@@ -45,15 +45,16 @@ The CoreML threat scoring model can be improved with:
 
 See `Models/Training/` for the training pipeline and data format.
 
-### 💻 Code Contributions
+### Code contributions
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/your-feature`
 3. Make your changes
-4. Run tests: `xcodebuild test -scheme NickTests`
+4. Run the full build and coverage command in
+   [Documentation/DEVELOPMENT.md](Documentation/DEVELOPMENT.md)
 5. Commit with a clear message: `git commit -m "Add SSH tunnel detection to NetworkAnalyzer"`
 6. Push and open a PR
 
-### 📖 Documentation
+### Documentation
 - Fix typos, clarify explanations, add examples
 - Document detection logic for specific threat types
 - Write guides for common use cases
@@ -68,16 +69,22 @@ See `Models/Training/` for the training pipeline and data format.
 - All public APIs must have documentation comments
 
 ### Architecture Rules
-- `Core/` must have **zero** UI dependencies — it's a pure detection engine
-- `App/` depends on `Core/` but never the reverse
-- `Helper/` has the smallest possible API surface — every XPC method must be justified
+- `Nick/Core/` must have no UI dependencies; it is the testable detection engine.
+- `Nick/App/` depends on `Nick/Core/`, never the reverse.
+- Privileged and extension XPC protocols must expose the smallest justified API.
+- The main app must authenticate extension health before reporting protection.
+- Network enforcement must fail open when configuration is unavailable.
 - No third-party Swift packages. Apple frameworks and POSIX APIs only.
-- `libyara` is the sole C dependency and must remain vendored
+- Vendored libyara updates must record the exact upstream version and pass the
+  complete false-positive test suite.
 
 ### Testing
 - Every detection capability must have corresponding unit tests
 - Include both positive tests (does it catch the threat?) and negative tests (does it avoid false positives?)
 - Integration tests should use realistic but safe mock data — never include actual malware in the repo
+- A system-extension build is not deployment proof. Release claims require the
+  clean-Mac checks in
+  [Documentation/RELEASE_CHECKLIST.md](Documentation/RELEASE_CHECKLIST.md).
 
 ## Pull Request Process
 

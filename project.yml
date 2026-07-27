@@ -20,17 +20,17 @@ name: Nick
 options:
   bundleIdPrefix: com.ehsanazish
   deploymentTarget:
-    macOS: "14.0"
-  xcodeVersion: "16.0"
+    macOS: "26.0"
+  xcodeVersion: "26.0"
   createIntermediateGroups: true
   generateEmptyDirectories: true
 
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    MARKETING_VERSION: "4.0"
+    CURRENT_PROJECT_VERSION: "404"
     DEVELOPMENT_TEAM: ""          # Set your Team ID here
 
 targets:
@@ -39,7 +39,7 @@ targets:
   Nick:
     type: application
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Nick
     settings:
@@ -59,7 +59,7 @@ targets:
   NickHelper:
     type: tool
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "26.0"
     sources:
       - path: NickHelper
     settings:
@@ -74,7 +74,7 @@ targets:
   NickTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "26.0"
     sources:
       - path: NickTests
     dependencies:
@@ -87,7 +87,7 @@ targets:
   NickIntegrationTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "26.0"
     sources:
       - path: NickIntegrationTests
     dependencies:
@@ -103,7 +103,7 @@ targets:
   NickNetFilter:
     type: app-extension
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "26.0"
     sources:
       - path: NickNetFilter
         excludes:

@@ -33,6 +33,7 @@ final class USBScanner {
 
     /// Files larger than this limit are skipped during background volume scans.
     static let scanSizeLimit: Int = 100 * 1_024 * 1_024  // 100 MB
+    static let maximumFilesPerMount = 50_000
 
     // MARK: - Public
 
@@ -76,6 +77,11 @@ final class USBScanner {
         }
     }
 
+    func handleUnmount(volumePath: String) {
+        lock.withLock { _ = mountedVolumes.remove(volumePath) }
+        Self.logger.info("Volume unmounted — cancelling scan: \(volumePath)")
+    }
+
     /// Returns `true` if `filePath` is on a mounted external volume.
     ///
     /// Used by `EventHandler` to apply extra scrutiny to files being opened or
@@ -103,6 +109,11 @@ final class USBScanner {
         var threatsFound = 0
 
         for case let fileURL as URL in enumerator {
+            guard isMounted(volumePath: path),
+                  scannedCount < Self.maximumFilesPerMount else {
+                Self.logger.info("USB scan stopped or reached its file limit: \(path)")
+                break
+            }
             guard let rv = try? fileURL.resourceValues(forKeys: [.isRegularFileKey,
                                                                   .fileSizeKey,
                                                                   .isSymbolicLinkKey]),
@@ -141,12 +152,22 @@ final class USBScanner {
         )
     }
 
-    /// Returns `true` for paths under `/Volumes/` that are not the boot disk.
-    ///
-    /// This heuristic avoids scanning Time Machine, network shares that mount at
-    /// `/Volumes/`, or the boot volume itself.
+    private func isMounted(volumePath: String) -> Bool {
+        lock.withLock { mountedVolumes.contains(volumePath) }
+    }
+
+    /// Returns `true` only for a local removable/ejectable volume. Network
+    /// shares often mount under `/Volumes` too and must not trigger a full scan.
     private func isExternalVolumePath(_ path: String) -> Bool {
         guard path.hasPrefix("/Volumes/") else { return false }
+        let keys: Set<URLResourceKey> = [
+            .volumeIsLocalKey, .volumeIsRemovableKey, .volumeIsEjectableKey
+        ]
+        guard let values = try? URL(fileURLWithPath: path).resourceValues(forKeys: keys),
+              values.volumeIsLocal == true,
+              values.volumeIsRemovable == true || values.volumeIsEjectable == true else {
+            return false
+        }
         // Exclude boot disk aliases (typically "/Volumes/Macintosh HD" → "/"
         // but may also appear under /Volumes/)
         let name = String(path.dropFirst("/Volumes/".count))

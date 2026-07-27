@@ -36,6 +36,10 @@ struct QuarantineView: View {
 private struct QuarantineRowView: View {
 
     let record: QuarantineRecord
+    @Environment(ExtensionXPCClient.self) private var xpcClient
+    @State private var isWorking = false
+    @State private var actionFailed = false
+    @State private var showDeleteConfirmation = false
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -76,19 +80,49 @@ private struct QuarantineRowView: View {
                 Spacer()
                 // Restore button — sends request to extension via XPC
                 Button("Restore") {
-                    // Phase 4: route through XPCClient → extension requestRestore(id:)
+                    isWorking = true
+                    actionFailed = false
+                    xpcClient.requestRestoreQuarantinedFile(id: record.id) { success in
+                        isWorking = false
+                        actionFailed = !success
+                    }
                 }
                 .buttonStyle(.bordered)
                 .tint(.orange)
+                .disabled(isWorking || !xpcClient.isConnected)
 
                 Button("Delete Permanently", role: .destructive) {
-                    // Phase 4: route through XPCClient → extension requestDelete(id:)
+                    showDeleteConfirmation = true
                 }
                 .buttonStyle(.bordered)
+                .disabled(isWorking || !xpcClient.isConnected)
             }
             .padding(.top, 4)
+
+            if actionFailed {
+                Text("The action failed. Check Real-Time Protection in Smart Scan and try again.")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
         .padding(.vertical, 4)
+        .confirmationDialog(
+            "Permanently delete this quarantined file?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Permanently", role: .destructive) {
+                isWorking = true
+                actionFailed = false
+                xpcClient.requestDeleteQuarantinedFile(id: record.id) { success in
+                    isWorking = false
+                    actionFailed = !success
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone. The original file will not be recoverable.")
+        }
     }
 }
 

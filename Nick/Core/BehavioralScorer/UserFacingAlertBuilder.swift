@@ -28,7 +28,9 @@ final class UserFacingAlertBuilder: Sendable {
             id:              alert.id,
             headline:        pattern.headline,
             explanation:     pattern.explanation,
-            severity:        mapSeverity(alert.severity),
+            assessment:      pattern.assessment,
+            recommendedAction: pattern.recommendedAction,
+            severity:        pattern.severity ?? mapSeverity(alert.severity),
             actions:         pattern.actions,
             technicalDetail: alert,
             timestamp:       alert.timestamp
@@ -40,7 +42,26 @@ final class UserFacingAlertBuilder: Sendable {
     private struct AlertPattern {
         let headline: String
         let explanation: String
+        let assessment: String
+        let recommendedAction: String
+        let severity: UserFacingAlert.AlertSeverity?
         let actions: [UserFacingAlert.AlertAction]
+
+        init(
+            headline: String,
+            explanation: String,
+            assessment: String,
+            recommendedAction: String,
+            severity: UserFacingAlert.AlertSeverity? = nil,
+            actions: [UserFacingAlert.AlertAction]
+        ) {
+            self.headline = headline
+            self.explanation = explanation
+            self.assessment = assessment
+            self.recommendedAction = recommendedAction
+            self.severity = severity
+            self.actions = actions
+        }
     }
 
     private func detectPattern(from alert: ThreatAlert) -> AlertPattern {
@@ -58,38 +79,110 @@ final class UserFacingAlertBuilder: Sendable {
         let hasPersistence = monitors.contains(.persistence)
         let hasYARA        = monitors.contains(.yara)
         let hasFilesystem  = monitors.contains(.filesystem)
+        let hasCapture     = monitors.contains(.avCapture)
         let title          = alert.title.lowercased()
+        let firstProcess   = signals.compactMap(\.processInfo).first
+        let processName    = firstProcess?.name ?? signals.compactMap { $0.metadata["process"] }.first
+        let displayProcess = userReadableProcessName(processName)
+
+        // Alerts persisted by an older development build can include Nick's own
+        // unsigned Xcode products. They are build artifacts, not user threats.
+        // This is deliberately narrow: an arbitrary executable named "Nick"
+        // outside our known build roots is not trusted.
+        if signals.contains(where: isNickDevelopmentArtifact) {
+            return AlertPattern(
+                headline: "Nick development build activity",
+                explanation: "Nick scanned one of its own temporary Xcode build files. This is developer activity, not evidence of malware on your Mac.",
+                assessment: "Safe developer activity",
+                recommendedAction: "No action is needed. You can hide this alert.",
+                severity: .safe,
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
+        // --- Camera / microphone ---
+        if hasCapture {
+            let mediaType = signals.compactMap { $0.metadata["mediaType"] }.first ?? "camera or microphone"
+            let device = signals.compactMap { $0.metadata["deviceName"] }.first ?? mediaType
+            let isSimulatorActivity = signals.contains(where: isSimulatorCapture)
+            let hasAuthoritativeAttribution = signals.allSatisfy {
+                $0.metadata["attributionConfidence"] == "authoritative"
+            }
+
+            if !hasAuthoritativeAttribution {
+                return AlertPattern(
+                    headline: "\(device) became active",
+                    explanation: "Nick observed \(mediaType) activity, but macOS did not provide reliable information about which app owned the session. Older Nick versions guessed from recently launched processes; names such as Mail, Node, or Photos in those alerts were not evidence that those apps used your \(mediaType).",
+                    assessment: "Informational activity",
+                    recommendedAction: "If this matches an app you were using, such as Driftor checking whether you are present, no action is needed. If it is unexpected, check the macOS privacy indicator and review \(mediaType) permissions in System Settings → Privacy & Security.",
+                    severity: .safe,
+                    actions: [.showDetails, .dismiss]
+                )
+            }
+
+            if isSimulatorActivity {
+                return AlertPattern(
+                    headline: "\(device) was used by iOS Simulator",
+                    explanation: "\(displayProcess ?? "An Apple simulator service") accessed the \(mediaType) while running inside Xcode's iOS Simulator. "
+                        + "Simulator components use ad-hoc signatures, so that signature alone is not evidence of malware.",
+                    assessment: "Likely safe developer activity",
+                    recommendedAction: "Keep it if you were using Xcode or Simulator. Otherwise, quit Simulator and check whether the camera indicator turns off.",
+                    severity: .safe,
+                    actions: [.showDetails, .dismiss]
+                )
+            }
+
+            let isUntrusted = firstProcess.map {
+                $0.signingStatus == .unsigned || $0.signingStatus == .invalid
+            } ?? false
+            return AlertPattern(
+                headline: "\(displayProcess ?? "An unidentified app") used your \(mediaType)",
+                explanation: "\(device) became active and Nick attributed the activity to \(displayProcess ?? "an unidentified app"). "
+                    + (isUntrusted
+                        ? "The app does not have a valid code signature, which makes this activity more concerning."
+                        : "Camera or microphone use can be normal; this event alone does not prove the app is dangerous."),
+                assessment: isUntrusted ? "Potentially dangerous" : "Needs your review",
+                recommendedAction: "If you expected this, keep the app. If not, quit it and remove its \(mediaType) permission in System Settings → Privacy & Security.",
+                severity: isUntrusted ? .critical : .warning,
+                actions: [.showDetails, .dismiss]
+            )
+        }
 
         // --- Ransomware ---
         if title.contains("ransomware") || title.contains("mass rename") || title.contains("canary") {
             return AlertPattern(
                 headline: "Possible ransomware detected",
-                explanation: "An app tried to rapidly encrypt or rename your files. "
-                    + "This is a common sign of ransomware. "
-                    + "Nick blocked the app and quarantined the threat to keep your files safe.",
-                actions: [.keepBlocked, .showDetails]
+                explanation: "An app rapidly changed several files, which can happen during encryption or mass renaming. "
+                    + "That pattern is associated with ransomware, but Nick needs the app and file context before calling it a confirmed infection.",
+                assessment: "Potentially dangerous",
+                recommendedAction: "Pause work in the named app and review the affected files. If you do not recognize the app, quit it before continuing.",
+                actions: [.showDetails, .dismiss]
             )
         }
 
         // --- Reverse shell ---
         if features.contains("shell") && hasNetwork {
             return AlertPattern(
-                headline: "Suspicious remote access blocked",
+                headline: "Possible remote access detected",
                 explanation: "A command-line tool on your Mac was connecting to an outside server. "
-                    + "This can allow someone to control your Mac remotely. "
-                    + "Nick blocked the connection. If you weren't using a remote tool, no action is needed.",
-                actions: [.keepBlocked, .showDetails]
+                    + "This pattern can be a remote shell, but it is also normal when you intentionally use SSH or developer tools. "
+                    + "Nick detected the connection; this alert does not mean the connection was blocked.",
+                assessment: "Potentially dangerous",
+                recommendedAction: "If you started an SSH or remote-development session, keep it. Otherwise, quit the named process and review how it started.",
+                actions: [.showDetails, .dismiss]
             )
         }
 
         // --- Unsigned binary in temp ---
         if features.contains("unsigned") && features.contains("tmp") {
             return AlertPattern(
-                headline: "Nick blocked an untrusted app",
-                explanation: "An unverified app tried to run from a temporary folder. "
-                    + "Legitimate apps don't usually work this way — this is how malware often hides. "
-                    + "Nick stopped it before it could do anything.",
-                actions: [.keepBlocked, .allowOnce, .showDetails]
+                headline: "An untrusted app ran from a temporary folder",
+                explanation: "An unverified app ran from a temporary folder. "
+                    + "Installers sometimes do this, but malware also uses temporary folders to hide downloaded programs. "
+                    + "Nick flagged the app; check its name and origin before assuming it is harmful.",
+                assessment: "Potentially dangerous",
+                recommendedAction: "Keep it only if it belongs to an installer or app you just opened. Otherwise, quit it and show the file in Finder before deleting anything.",
+                actions: [.showDetails, .dismiss]
             )
         }
 
@@ -100,17 +193,34 @@ final class UserFacingAlertBuilder: Sendable {
                 explanation: "Something was added to run automatically when your Mac starts up. "
                     + "While some apps do this normally, malware also uses this trick to stay on your Mac. "
                     + "Review this item and remove it if you don't recognize it.",
+                assessment: "Needs your review",
+                recommendedAction: "Keep it if you recognize the app. Otherwise, show its location before removing it.",
                 actions: [.keepBlocked, .allowOnce, .showDetails]
             )
         }
 
         // --- YARA match ---
         if hasYARA {
+            let isHeuristicOnly = signals
+                .filter { $0.source == .yara }
+                .allSatisfy { $0.severity == .info || $0.severity == .low || $0.severity == .medium }
+            if isHeuristicOnly {
+                return AlertPattern(
+                    headline: "A file matched a suspicious behavior pattern",
+                    explanation: "A file contains instructions sometimes used to change startup settings or perform other sensitive actions. Legitimate installers and security tools can contain the same instructions, so this is not a confirmed malware detection.",
+                    assessment: "Needs your review",
+                    recommendedAction: "Check the file name, location, and detection rule. Quarantine it only if you do not recognize where it came from.",
+                    severity: .warning,
+                    actions: [.showDetails, .dismiss]
+                )
+            }
             return AlertPattern(
                 headline: "Known threat detected",
-                explanation: "Nick matched a file to its threat database — this file is known to be harmful. "
-                    + "It has been blocked and can be quarantined to prevent any damage. "
-                    + "No action is needed unless you want to review the details.",
+                explanation: "A file matched a malware-detection rule. "
+                    + "This is strong evidence, although security test files and specialized tools can sometimes match intentionally. "
+                    + "Nick has not deleted the file.",
+                assessment: "High-confidence detection",
+                recommendedAction: "Quarantine it unless you recognize it as a security test file or trusted research tool.",
                 actions: [.quarantine, .showDetails]
             )
         }
@@ -118,11 +228,13 @@ final class UserFacingAlertBuilder: Sendable {
         // --- C2 / suspicious network ---
         if hasNetwork && !features.contains("shell") {
             return AlertPattern(
-                headline: "Suspicious network activity blocked",
+                headline: "An app made an unusual network connection",
                 explanation: "An app tried to connect to a server that Nick flagged as potentially dangerous. "
-                    + "This can indicate malware trying to communicate with an attacker. "
-                    + "The connection was blocked — your data is safe.",
-                actions: [.keepBlocked, .allowOnce, .showDetails]
+                    + "This can be malware communication, but raw IP addresses and uncommon ports are also used by legitimate software. "
+                    + "Nick observed this connection; passive monitoring does not block it.",
+                assessment: "Needs your review",
+                recommendedAction: "Keep the app if you recognize it and expected network activity. Otherwise, quit it and review the destination in Details.",
+                actions: [.showDetails, .dismiss]
             )
         }
 
@@ -133,6 +245,8 @@ final class UserFacingAlertBuilder: Sendable {
                 explanation: "A file that controls how your Mac operates was modified. "
                     + "This can happen after a legitimate update, but it's also how malware hides. "
                     + "Review the change to make sure it's expected.",
+                assessment: "Needs your review",
+                recommendedAction: "Keep the change if it followed an app or macOS update. Otherwise, show the file and review its source.",
                 actions: [.showDetails, .dismiss]
             )
         }
@@ -140,22 +254,76 @@ final class UserFacingAlertBuilder: Sendable {
         // --- Fork bomb / resource abuse ---
         if title.contains("fork") || title.contains("excessive") || title.contains("resource") {
             return AlertPattern(
-                headline: "Harmful app behavior stopped",
+                headline: "An app may be overwhelming your Mac",
                 explanation: "An app was using your Mac's resources in a way that could slow it down or crash it. "
-                    + "Nick stopped the app to protect your Mac's performance. "
-                    + "If you don't recognize the app, it's safe to keep it blocked.",
-                actions: [.keepBlocked, .showDetails]
+                    + "Nick detected the pattern, but this alert alone does not confirm that the app was stopped or that it is malware.",
+                assessment: "Potentially disruptive",
+                recommendedAction: "Quit the app if your Mac is slow or unresponsive. Keep it running only if you recognize it and expected the workload.",
+                actions: [.showDetails, .dismiss]
             )
         }
 
         // --- Generic fallback ---
         return AlertPattern(
-            headline: "Nick detected suspicious activity",
-            explanation: "Something on your Mac triggered Nick's security checks. "
-                + "Nick is monitoring the situation and has taken protective action. "
-                + "Tap \"Show Details\" for more information about what was detected.",
+            headline: genericHeadline(alert: alert, processName: displayProcess),
+            explanation: genericExplanation(alert: alert, processName: displayProcess),
+            assessment: "Needs your review",
+            recommendedAction: cleanRecommendation(alert.recommendedAction),
             actions: [.showDetails, .dismiss]
         )
+    }
+
+    private func isSimulatorCapture(_ signal: ThreatSignal) -> Bool {
+        guard signal.source == .avCapture, let path = signal.processInfo?.path else { return false }
+        return path.contains("/CoreSimulator/") || path.contains(".simruntime/")
+    }
+
+    private func isNickDevelopmentArtifact(_ signal: ThreatSignal) -> Bool {
+        let paths = [
+            signal.fileInfo?.path,
+            signal.metadata["path"],
+            signal.metadata["script_path"],
+            signal.processInfo?.path,
+        ].compactMap { $0?.lowercased() }
+
+        return paths.contains { path in
+            let isNickProduct = path.contains("/nick.app/contents/")
+                || path.hasSuffix("/nick.debug.dylib")
+                || path.hasSuffix("/macos/nick")
+            let isKnownBuildRoot = path.contains("/nickperformanceaudit")
+                || path.contains("/deriveddata/")
+                || path.contains("/build/products/")
+            return isNickProduct && isKnownBuildRoot
+        }
+    }
+
+    private func userReadableProcessName(_ name: String?) -> String? {
+        guard let name, !name.isEmpty, name != "unknown" else { return nil }
+        if name == "shazamd" { return "Shazam service" }
+        return name
+    }
+
+    private func genericHeadline(alert: ThreatAlert, processName: String?) -> String {
+        if let processName {
+            return "\(processName) needs your review"
+        }
+        return alert.title.isEmpty ? "Security activity needs your review" : alert.title
+    }
+
+    private func genericExplanation(alert: ThreatAlert, processName: String?) -> String {
+        let subject = processName.map { "\($0) triggered a security check." }
+            ?? "Nick observed an event that matched a security check."
+        let detail = alert.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(subject) This does not by itself prove that your Mac is infected. "
+            + (detail.isEmpty ? "Use the technical details if you need more context." : detail)
+    }
+
+    private func cleanRecommendation(_ recommendation: String) -> String {
+        let trimmed = recommendation.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed.lowercased() == "investigate." {
+            return "Open the details and check whether you recognize the app or file before deleting anything."
+        }
+        return trimmed
     }
 
     // MARK: - Severity Mapping

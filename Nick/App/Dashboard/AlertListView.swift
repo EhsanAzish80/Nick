@@ -27,7 +27,9 @@ struct AlertListView: View {
     private var visibleAlerts: [ThreatAlert] {
         showTrustedAlerts
             ? engine.alerts
-            : engine.alerts.filter { $0.severity != .info }
+            : engine.alerts.filter {
+                UserFacingAlertBuilder.shared.build(from: $0).severity != .safe
+            }
     }
 
     var body: some View {
@@ -59,7 +61,7 @@ struct AlertListView: View {
                     Text("Timeline").tag(1)
                 }
                 .pickerStyle(.segmented)
-                .controlSize(.small)
+
                 if viewMode == 1 {
                     Picker("Filter", selection: $timelineFilter) {
                         ForEach(ThreatTimelineView.EventFilter.allCases, id: \.self) {
@@ -67,7 +69,6 @@ struct AlertListView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .controlSize(.small)
                 }
             }
         }
@@ -84,7 +85,7 @@ struct AlertListView: View {
                 .font(.title3)
                 .foregroundStyle(.secondary)
             Toggle(isOn: $showTrustedAlerts) {
-                Text("Show dismissed")
+                Text("Show informational activity")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -105,23 +106,71 @@ private struct AlertRow: View {
 
     let alert: ThreatAlert
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
     @AppStorage("simpleAlertMode") private var simpleAlertMode: Bool = true
     @State private var killingProcess = false
     @State private var killFailed     = false
     @State private var processKilled  = false   // confirmed dead this session
     @State private var deleteFailed   = false
+    @State private var showQuarantineConfirmation = false
+    @State private var quarantining = false
+    @State private var quarantineError: String?
 
-    /// Whether this alert represents trusted-app activity (severity == .info).
-    private var isTrustedActivity: Bool { alert.severity == .info }
+    private var userAlert: UserFacingAlert {
+        UserFacingAlertBuilder.shared.build(from: alert)
+    }
+
+    private var displaySeverity: SignalSeverity {
+        guard simpleAlertMode else { return alert.severity }
+        switch userAlert.severity {
+        case .safe:     return .info
+        case .warning:  return .medium
+        case .critical: return alert.severity == .critical ? .critical : .high
+        }
+    }
+
+    /// Whether the consumer assessment says no immediate action is required.
+    private var isTrustedActivity: Bool { displaySeverity == .info }
+
+    private var isCaptureAlert: Bool {
+        alert.contributingSignals.contains { $0.source == .avCapture }
+    }
+
+    private var shouldOfferProcessTermination: Bool {
+        userAlert.severity == .critical && !isCaptureAlert
+    }
+
+    private var detectedFilePath: String? {
+        for signal in alert.contributingSignals {
+            if let path = signal.fileInfo?.path, !path.isEmpty { return path }
+            if let path = signal.metadata["script_path"], !path.isEmpty { return path }
+            if let path = signal.metadata["path"], !path.isEmpty { return path }
+        }
+        return nil
+    }
+
+    private var detectionRule: String? {
+        for signal in alert.contributingSignals {
+            if let rule = signal.metadata["rule"] ?? signal.metadata["yaraRules"],
+               !rule.isEmpty {
+                return rule
+            }
+        }
+        return nil
+    }
+
+    private var isMalwareDetection: Bool {
+        userAlert.actions.contains(.quarantine)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: NickSpacing.md) {
 
             // Line 1 — icon + title
             HStack(alignment: .top, spacing: NickSpacing.md) {
-                Image(systemName: alert.severity.systemImage)
+                Image(systemName: displaySeverity.systemImage)
                     .font(.system(size: NickLayout.iconSizeLarge))
-                    .foregroundStyle(isTrustedActivity ? Color.textTertiary : alert.severity.statusColor)
+                    .foregroundStyle(isTrustedActivity ? Color.textTertiary : displaySeverity.statusColor)
                 Text(simpleMode_title)
                     .font(.nickBodyMedium)
                     .foregroundStyle(isTrustedActivity ? Color.textTertiary : Color.textPrimary)
@@ -130,7 +179,11 @@ private struct AlertRow: View {
 
             // Line 2 — badge · confidence · timestamp
             HStack(spacing: NickSpacing.xs) {
-                SeverityBadge(severity: alert.severity)
+                if simpleAlertMode {
+                    AssessmentBadge(text: userAlert.assessment, severity: displaySeverity)
+                } else {
+                    SeverityBadge(severity: alert.severity)
+                }
                 Text("·")
                     .font(.nickCaption)
                     .foregroundStyle(Color.textTertiary)
@@ -153,6 +206,26 @@ private struct AlertRow: View {
                 .font(.nickBody)
                 .foregroundStyle(isTrustedActivity ? Color.textTertiary : Color.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if isMalwareDetection {
+                detectionSummary
+            }
+
+            if simpleAlertMode {
+                HStack(alignment: .top, spacing: NickSpacing.sm) {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .foregroundStyle(displaySeverity.statusColor)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("What to do")
+                            .font(.nickBodyMedium)
+                            .foregroundStyle(Color.textPrimary)
+                        Text(userAlert.recommendedAction)
+                            .font(.nickBody)
+                            .foregroundStyle(Color.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
 
             // Contributing signals — only in technical mode
             if !simpleAlertMode, !alert.contributingSignals.isEmpty {
@@ -197,9 +270,24 @@ private struct AlertRow: View {
 
             // Buttons
             HStack(spacing: NickSpacing.md) {
+                if isMalwareDetection, detectedFilePath != nil {
+                    Button {
+                        showQuarantineConfirmation = true
+                    } label: {
+                        Label(
+                            quarantining ? "Quarantining…" : "Quarantine File",
+                            systemImage: "archivebox.fill"
+                        )
+                        .font(.nickButton)
+                    }
+                    .buttonStyle(.nickDestructive)
+                    .disabled(quarantining)
+                }
+
                 // Kill Process — visible while the process is alive (or mid-kill).
                 // Hidden once processKilled is set, making room for Delete File.
-                if !processKilled,
+                if shouldOfferProcessTermination,
+                   !processKilled,
                    let pid = alert.contributingSignals.first?.processInfo?.pid,
                    killingProcess || ProcessScanner.isRunning(pid: pid) {
                     Button {
@@ -273,9 +361,9 @@ private struct AlertRow: View {
                 }
 
                 // Show in Finder
-                let finderPath = alert.contributingSignals.first?.metadata["script_path"]
+                let finderPath = detectedFilePath
                     ?? alert.contributingSignals.first?.processInfo?.path
-                if let path = finderPath, !path.isEmpty {
+                if let path = finderPath, !path.isEmpty, !simpleAlertMode || !isCaptureAlert {
                     Button {
                         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
                     } label: {
@@ -286,32 +374,119 @@ private struct AlertRow: View {
                 }
 
                 Spacer()
-                Button("Copy JSON") { copyJSON() }
-                    .buttonStyle(.plain)
-                    .font(.nickButton)
-                    .foregroundStyle(Color.textSecondary)
-                Button("Dismiss") { engine.dismissAlert(alert.id) }
+                if !simpleAlertMode {
+                    Button("Copy JSON") { copyJSON() }
+                        .buttonStyle(.plain)
+                        .font(.nickButton)
+                        .foregroundStyle(Color.textSecondary)
+                }
+                Button(simpleAlertMode ? "Hide alert" : "Dismiss") {
+                    if simpleAlertMode {
+                        engine.hideAlert(alert.id)
+                    } else {
+                        engine.dismissAlert(alert.id)
+                    }
+                }
                     .buttonStyle(.nickPrimary)
             }
         }
         .padding(.horizontal, NickSpacing.lg)
         .padding(.vertical, NickSpacing.lg)
+        .confirmationDialog(
+            "Move this file to Quarantine?",
+            isPresented: $showQuarantineConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Quarantine File", role: .destructive) {
+                quarantineDetectedFile()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if let path = detectedFilePath {
+                Text("Nick will re-scan \(URL(fileURLWithPath: path).lastPathComponent), then isolate it so it cannot run. You can restore it later from Quarantine.")
+            }
+        }
+        .alert(
+            "Couldn’t Quarantine File",
+            isPresented: Binding(
+                get: { quarantineError != nil },
+                set: { if !$0 { quarantineError = nil } }
+            )
+        ) {
+            Button("OK") { quarantineError = nil }
+        } message: {
+            Text(quarantineError ?? "")
+        }
     }
 
     // MARK: - Private
 
     private var simpleMode_title: String {
         if simpleAlertMode {
-            return UserFacingAlertBuilder.shared.build(from: alert).headline
+            return userAlert.headline
         }
         return alert.title
     }
 
     private var simpleMode_explanation: String {
         if simpleAlertMode {
-            return UserFacingAlertBuilder.shared.build(from: alert).explanation
+            return userAlert.explanation
         }
         return alert.explanation ?? alert.description
+    }
+
+    @ViewBuilder
+    private var detectionSummary: some View {
+        if let path = detectedFilePath {
+            VStack(alignment: .leading, spacing: NickSpacing.xs) {
+                Label("Detected file", systemImage: "doc.fill")
+                    .font(.nickBodyMedium)
+                    .foregroundStyle(Color.textPrimary)
+                Text(URL(fileURLWithPath: path).lastPathComponent)
+                    .font(.nickBody)
+                    .foregroundStyle(Color.textPrimary)
+                Text(path)
+                    .font(.nickMono)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .help(path)
+                if let detectionRule {
+                    Text("Detection: \(detectionRule)")
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textSecondary)
+                }
+                Text("Nick found this while monitoring \(URL(fileURLWithPath: path).deletingLastPathComponent().path). It has not been removed.")
+                    .font(.nickCaption)
+                    .foregroundStyle(Color.textSecondary)
+            }
+            .padding(.leading, NickSpacing.lg)
+        } else {
+            Label(
+                "The detector did not provide a usable file location, so Nick cannot safely quarantine this item. Open Details before taking action.",
+                systemImage: "exclamationmark.circle"
+            )
+            .font(.nickBodySmall)
+            .foregroundStyle(Color.textSecondary)
+        }
+    }
+
+    private func quarantineDetectedFile() {
+        guard let path = detectedFilePath else { return }
+        quarantining = true
+        quarantineError = nil
+        xpcClient.requestQuarantineFile(
+            path: path,
+            expectedThreatName: detectionRule ?? "Detected threat"
+        ) { success, message in
+            quarantining = false
+            if success {
+                engine.resolveAlert(alert.id)
+                engine.runFullScan()
+            } else {
+                quarantineError = message ?? "Nick could not quarantine the file."
+            }
+        }
     }
 
     private func copyJSON() {
@@ -326,6 +501,20 @@ private struct AlertRow: View {
 }
 
 // MARK: - SeverityBadge (shared)
+
+private struct AssessmentBadge: View {
+    let text: String
+    let severity: SignalSeverity
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(.nickCaption)
+            .foregroundStyle(severity.statusColor)
+            .padding(.horizontal, NickSpacing.md)
+            .padding(.vertical, NickSpacing.xs)
+            .background(severity.statusBackground, in: Capsule())
+    }
+}
 
 /// Pill-shaped severity badge using Nick design tokens.
 struct SeverityBadge: View {

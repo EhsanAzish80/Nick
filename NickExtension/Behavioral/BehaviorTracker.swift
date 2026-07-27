@@ -28,6 +28,10 @@ final class BehaviorTracker {
         let suspiciousShellChainDepth: Int = 3
         /// Sliding window duration
         let timelineWindowSeconds: TimeInterval = 60
+        /// Hard memory bound for a single busy process. This remains well
+        /// above every behavioural threshold used below.
+        let maxEventsPerProcess: Int = 512
+        let maxChildrenPerProcess: Int = 256
     }
 
     // MARK: - Types
@@ -93,6 +97,12 @@ final class BehaviorTracker {
             BehaviorEvent(timestamp: Date(), type: eventType, detail: detail)
         )
         processTimelines[pid]?.prune(window: thresholds.timelineWindowSeconds)
+        if let count = processTimelines[pid]?.events.count,
+           count > thresholds.maxEventsPerProcess {
+            processTimelines[pid]?.events.removeFirst(
+                count - thresholds.maxEventsPerProcess
+            )
+        }
     }
 
     /// Records a fork event — links the child PID to the parent's timeline.
@@ -107,6 +117,12 @@ final class BehaviorTracker {
             )
         }
         processTimelines[parentPid]?.childPids.append(childPid)
+        if let count = processTimelines[parentPid]?.childPids.count,
+           count > thresholds.maxChildrenPerProcess {
+            processTimelines[parentPid]?.childPids.removeFirst(
+                count - thresholds.maxChildrenPerProcess
+            )
+        }
         processTimelines[parentPid]?.events.append(
             BehaviorEvent(timestamp: Date(), type: .processFork, detail: "child:\(childPid)")
         )

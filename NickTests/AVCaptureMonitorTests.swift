@@ -42,11 +42,11 @@ final class AVCaptureMonitorTests: XCTestCase {
 
     // MARK: - Signal Generation: severity
 
-    func test_makeCaptureSignal_nilProcess_severityMedium() async {
+    func test_makeCaptureSignal_nilProcess_isInformational() async {
         let signal = monitor.makeCaptureSignal(
             mediaType: "camera", deviceName: "Camera", process: nil
         )
-        XCTAssertEqual(signal.severity, .medium)
+        XCTAssertEqual(signal.severity, .info)
     }
 
     func test_makeCaptureSignal_signedProcess_severityMedium() async {
@@ -88,6 +88,19 @@ final class AVCaptureMonitorTests: XCTestCase {
         XCTAssertEqual(signal.severity, .high)
     }
 
+    func test_makeCaptureSignal_simulatorService_isInformational() async {
+        let process = DetectedCaptureProcess(
+            pid: 68348,
+            name: "shazamd",
+            path: "/Library/Developer/CoreSimulator/Volumes/iOS_Test/RuntimeRoot/System/Library/Frameworks/ShazamKit.framework/shazamd",
+            signingStatus: .adHoc
+        )
+        let signal = monitor.makeCaptureSignal(
+            mediaType: "camera", deviceName: "HD Web Camera", process: process
+        )
+        XCTAssertEqual(signal.severity, .info)
+    }
+
     // MARK: - Signal Generation: metadata
 
     func test_makeCaptureSignal_metadata_containsExpectedKeys() async {
@@ -99,6 +112,7 @@ final class AVCaptureMonitorTests: XCTestCase {
         XCTAssertEqual(signal.metadata["mediaType"],  "microphone")
         XCTAssertEqual(signal.metadata["deviceName"], "MacBook Pro Microphone")
         XCTAssertEqual(signal.metadata["reason"],     "capture_device_active")
+        XCTAssertEqual(signal.metadata["attributionConfidence"], "unavailable")
         XCTAssertNotNil(signal.metadata["process"])
     }
 
@@ -135,14 +149,12 @@ final class AVCaptureMonitorTests: XCTestCase {
         XCTAssertTrue(signal.title.contains("Logitech BRIO"), "title = \(signal.title)")
     }
 
-    func test_makeCaptureSignal_description_mentionsMalware() async {
+    func test_makeCaptureSignal_description_doesNotClaimMalware() async {
         let signal = monitor.makeCaptureSignal(
             mediaType: "camera", deviceName: "Camera", process: nil
         )
-        XCTAssertTrue(
-            signal.description.lowercased().contains("malware"),
-            "Expected description to contain 'malware'; got: \(signal.description)"
-        )
+        XCTAssertFalse(signal.description.lowercased().contains("malware"))
+        XCTAssertTrue(signal.description.contains("reliable app ownership"))
     }
 
     // MARK: - latestSignals drains buffer
@@ -179,7 +191,7 @@ final class AVCaptureMonitorTests: XCTestCase {
         let rule   = correlationRule(named: "unexpected_capture_device")
         let alert  = rule?.evaluate([signal])
         XCTAssertNotNil(alert, "Rule should produce an alert for .avCapture signals")
-        XCTAssertEqual(alert?.severity, .high)
+        XCTAssertEqual(alert?.severity, .info)
     }
 
     func test_unexpectedCaptureDeviceRule_doesNotFireForOtherSources() {
@@ -189,7 +201,7 @@ final class AVCaptureMonitorTests: XCTestCase {
         XCTAssertNil(alert, "Rule must not fire for non-avCapture signals")
     }
 
-    func test_unexpectedCaptureDeviceRule_alertContainsDeviceAndProcessNames() {
+    func test_unexpectedCaptureDeviceRule_doesNotAccuseUnverifiedProcess() {
         let signal = makeCaptureSignal(
             severity:   .medium,
             deviceName: "FaceTime HD Camera",
@@ -198,7 +210,33 @@ final class AVCaptureMonitorTests: XCTestCase {
         let rule  = correlationRule(named: "unexpected_capture_device")
         let alert = rule?.evaluate([signal])
         XCTAssertTrue(alert?.description.contains("FaceTime HD Camera") == true)
-        XCTAssertTrue(alert?.description.contains("evilspy") == true)
+        XCTAssertFalse(alert?.description.contains("evilspy") == true)
+    }
+
+    func test_unexpectedCaptureDeviceRule_simulatorShazamd_isInformational() {
+        let signal = makeCaptureSignal(
+            severity: .info,
+            deviceName: "HD Web Camera",
+            process: "shazamd",
+            path: "/Library/Developer/CoreSimulator/Volumes/iOS_Test/RuntimeRoot/System/Library/Frameworks/ShazamKit.framework/shazamd",
+            signingStatus: .adHoc
+        )
+        let alert = correlationRule(named: "unexpected_capture_device")?.evaluate([signal])
+
+        XCTAssertEqual(alert?.severity, .info)
+        XCTAssertEqual(alert?.score, 0.2)
+        XCTAssertTrue(alert?.description.contains("not evidence of malware") == true)
+    }
+
+    func test_unexpectedCaptureDeviceRule_unverifiedUnsignedCandidate_isInformational() {
+        let signal = makeCaptureSignal(
+            severity: .high,
+            process: "evilspy",
+            path: "/tmp/evilspy",
+            signingStatus: .unsigned
+        )
+        let alert = correlationRule(named: "unexpected_capture_device")?.evaluate([signal])
+        XCTAssertEqual(alert?.severity, .info)
     }
 
     // MARK: - MonitorType display helpers
@@ -220,14 +258,28 @@ private extension AVCaptureMonitorTests {
     func makeCaptureSignal(
         severity:   SignalSeverity = .medium,
         deviceName: String         = "Camera",
-        process:    String         = "unknown"
+        process:    String         = "unknown",
+        path:       String?        = nil,
+        signingStatus: SigningStatus = .unknown
     ) -> ThreatSignal {
-        ThreatSignal(
+        let processInfo = path.map {
+            NickProcessInfo(
+                pid: 1234,
+                path: $0,
+                name: process,
+                parentPID: 1,
+                parentName: nil,
+                signingStatus: signingStatus,
+                metadata: ProcessMetadata()
+            )
+        }
+        return ThreatSignal(
             source:      .avCapture,
             severity:    severity,
             title:       "\(deviceName) activated by \(process)",
             description: "Test signal",
             context: ThreatSignalContext(
+                processInfo: processInfo,
                 metadata: [
                     "mediaType":  "camera",
                     "deviceName": deviceName,

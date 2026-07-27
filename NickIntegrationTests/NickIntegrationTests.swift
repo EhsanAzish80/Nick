@@ -9,7 +9,7 @@ import XCTest
 /// These are skipped in CI unless the host is a macOS machine with Full Disk Access.
 ///
 /// Run manually:
-///   xcodebuild test -scheme NickIntegrationTests -destination 'platform=macOS'
+///   xcodebuild test -scheme Nick -only-testing:NickIntegrationTests -destination 'platform=macOS'
 @MainActor
 final class NickIntegrationTests: XCTestCase {
 
@@ -22,12 +22,28 @@ final class NickIntegrationTests: XCTestCase {
         XCTAssertNotEqual(result.currentValue, "")
     }
 
-    /// Verify `lsof` is available and produces parseable output.
+    /// Verify the system connection scanner returns internally consistent records.
     func test_connectionScanner_scan_returnsSomeConnections() async throws {
         let scanner = ConnectionScanner()
-        // May throw on sandboxed hosts — that's acceptable here
-        guard let connections = try? await scanner.scan() else { return }
-        // Any macOS host with a network should have at least one connection
-        XCTAssertGreaterThanOrEqual(connections.count, 0)
+        let connections: [NetworkConnectionInfo]
+        do {
+            connections = try await scanner.scan()
+        } catch ConnectionScannerError.unavailable {
+            throw XCTSkip("Connection APIs and lsof are unavailable in this environment")
+        }
+
+        guard !connections.isEmpty else {
+            throw XCTSkip("The host has no network connections visible to the test process")
+        }
+
+        for connection in connections {
+            XCTAssertGreaterThan(connection.pid, 0)
+            XCTAssertFalse(connection.processName.isEmpty)
+            XCTAssertGreaterThanOrEqual(connection.localPort, 0)
+            XCTAssertLessThanOrEqual(connection.localPort, 65_535)
+            if let remotePort = connection.remotePort {
+                XCTAssertTrue((0...65_535).contains(remotePort))
+            }
+        }
     }
 }

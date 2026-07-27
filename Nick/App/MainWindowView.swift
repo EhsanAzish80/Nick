@@ -45,38 +45,40 @@ struct MainWindowView: View {
         }
     }
 
-    // Alert count for sidebar badge (info-severity are trusted-app activity, not actionable).
+    // Count only alerts that the consumer-facing assessment considers actionable.
     private var activeAlertCount: Int {
-        engine.alerts.filter { $0.severity != .info }.count
+        engine.userFacingAlerts.filter { $0.severity != .safe }.count
     }
 
     var body: some View {
         if !hasCompletedOnboarding {
             WelcomeView(hasCompletedOnboarding: $hasCompletedOnboarding)
         } else {
-            VStack(spacing: 0) {
-                if notificationsDenied {
-                    HStack(spacing: NickSpacing.sm) {
-                        Image(systemName: "bell.slash")
-                            .foregroundStyle(Color.statusYellow)
-                        Text("Notifications are disabled. Nick can't alert you about threats.")
-                            .font(.nickBodySmall)
-                            .foregroundStyle(Color.textSecondary)
-                        Spacer()
-                        Button("Enable") {
-                            NSWorkspace.shared.open(SystemPrefsURL.notifications)
+            ProtectionSetupGate {
+                VStack(spacing: 0) {
+                    if notificationsDenied {
+                        HStack(spacing: NickSpacing.sm) {
+                            Image(systemName: "bell.slash")
+                                .foregroundStyle(Color.statusYellow)
+                            Text("Notifications are disabled. Nick can't alert you about threats.")
+                                .font(.nickBodySmall)
+                                .foregroundStyle(Color.textSecondary)
+                            Spacer()
+                            Button("Enable") {
+                                NSWorkspace.shared.open(SystemPrefsURL.notifications)
+                            }
+                            .font(.nickCaption)
+                            Button("Dismiss") {
+                                notificationsDenied = false
+                            }
+                            .font(.nickCaption)
+                            .foregroundStyle(Color.textTertiary)
                         }
-                        .font(.nickCaption)
-                        Button("Dismiss") {
-                            notificationsDenied = false
-                        }
-                        .font(.nickCaption)
-                        .foregroundStyle(Color.textTertiary)
+                        .padding(NickSpacing.md)
+                        .background(Color.statusYellow.opacity(0.12))
                     }
-                    .padding(NickSpacing.md)
-                    .background(Color.statusYellow.opacity(0.12))
+                    mainContent
                 }
-                mainContent
             }
             .task {
                 // Switch to .regular before calling requestAuthorization — macOS
@@ -106,8 +108,7 @@ struct MainWindowView: View {
                 Section("SECURITY") {
                     SidebarNavItem(
                         section:    .alerts,
-                        badge:      activeAlertCount,
-                        isDisabled: activeAlertCount == 0
+                        badge:      activeAlertCount
                     )
                     .tag(SidebarSection.alerts)
                     SidebarNavItem(section: .scan).tag(SidebarSection.scan)
@@ -130,11 +131,6 @@ struct MainWindowView: View {
             }
             .navigationSplitViewColumnWidth(min: 210, ideal: 250)
             .navigationTitle("Nick")
-            .onChange(of: activeAlertCount) { _, count in
-                if count == 0 && selectedSection == .alerts {
-                    selectedSection = .overview
-                }
-            }
         } detail: {
             switch selectedSection ?? .overview {
             case .overview:    OverviewDetailView(selectedSection: $selectedSection)
@@ -156,6 +152,7 @@ struct MainWindowView: View {
                     Label("Run Scan", systemImage: "arrow.clockwise")
                 }
                 .disabled(engine.isScanning)
+                .keyboardShortcut("r", modifiers: .command)
             }
         }
         .preferredColorScheme(resolvedColorScheme)
@@ -299,8 +296,7 @@ struct OverviewDetailView: View {
     @Environment(SecurityEngine.self) private var engine
     @Environment(ExtensionXPCClient.self) private var xpcClient
 
-    @AppStorage("deepScanIntervalSeconds") private var scanIntervalSeconds: Int = 60
-    @State private var now: Date = .now
+    @AppStorage("deepScanIntervalSeconds") private var scanIntervalSeconds: Int = 300
     @State private var focusModeActive = false
 
     // MARK: - Derived
@@ -309,7 +305,10 @@ struct OverviewDetailView: View {
     private var persistenceIssues: Int { engine.persistenceItems.filter { $0.signingStatus?.isSuspicious == true }.count }
     private var processIssues:     Int { engine.processes.filter { $0.signingStatus == .unsigned || $0.signingStatus == .invalid }.count }
     private var networkIssues:     Int { engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count }
-    private var totalIssues:       Int { auditIssues + persistenceIssues + processIssues + networkIssues }
+    private var totalIssues: Int {
+        auditIssues + persistenceIssues + processIssues + networkIssues
+            + (xpcClient.isConnected ? 0 : 1)
+    }
 
     private var statusLine: String {
         guard !engine.isScanning else { return "Scan in progress…" }
@@ -319,7 +318,11 @@ struct OverviewDetailView: View {
         }
         let n = engine.totalThreatsDetected
         parts.append(n == 0 ? "No threats blocked" : "\(n) threat\(n == 1 ? "" : "s") blocked")
-        parts.append("6 layers active")
+        parts.append(
+            xpcClient.isConnected
+                ? "Real-time protection active"
+                : "Real-time protection needs attention"
+        )
         return parts.joined(separator: " · ")
     }
 
@@ -353,12 +356,11 @@ struct OverviewDetailView: View {
         }
         .background(Color(.windowBackgroundColor))
         .navigationTitle("Overview")
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                now = .now
-                focusModeActive = isFocusModeActive()
-            }
+        .onAppear {
+            focusModeActive = isFocusModeActive()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            focusModeActive = isFocusModeActive()
         }
     }
 
@@ -430,10 +432,18 @@ struct OverviewDetailView: View {
             : "\(connCount) connection\(connCount == 1 ? "" : "s") active"
 
         let privCount = xpcClient.privacyAlerts.count
-        let privSub = privCount == 0 ? "No unauthorized access" : "\(privCount) alert\(privCount == 1 ? "" : "s")"
+        let privSub = !xpcClient.isConnected
+            ? "Waiting for security extension"
+            : privCount == 0
+                ? "Monitoring · no alerts"
+                : "\(privCount) alert\(privCount == 1 ? "" : "s")"
 
         let emailCount = xpcClient.events.filter { $0.threatFamily == "EmailThreat" }.count
-        let emailSub = emailCount == 0 ? "Monitoring" : "\(emailCount) threat\(emailCount == 1 ? "" : "s") detected"
+        let emailSub = !xpcClient.isConnected
+            ? "Waiting for security extension"
+            : emailCount == 0
+                ? "Monitoring · no threats"
+                : "\(emailCount) threat\(emailCount == 1 ? "" : "s") detected"
 
         let perfBytes = engine.performanceMonitor?.totalReclaimableBytes ?? 0
         let perfSub: String
@@ -449,8 +459,11 @@ struct OverviewDetailView: View {
         let smartActive: Bool
         if let last = engine.lastScanDate {
             let mins = Int(Date().timeIntervalSince(last) / 60)
-            smartSub = mins < 60 ? "Last: \(mins)m ago · All clear" : "Last: \(mins / 60)h ago · All clear"
-            smartActive = true
+            let result = totalIssues == 0 ? "All clear" : "\(totalIssues) need attention"
+            smartSub = mins < 60
+                ? "Last: \(mins)m ago · \(result)"
+                : "Last: \(mins / 60)h ago · \(result)"
+            smartActive = totalIssues == 0
         } else {
             smartSub = "Not run yet"
             smartActive = false
@@ -464,9 +477,9 @@ struct OverviewDetailView: View {
             FeatureTileItem(name: "Network Monitor",      icon: "network",
                             tint: .blue,    section: .network,     subtitle: netSub,        active: connCount > 0),
             FeatureTileItem(name: "Privacy Guard",        icon: "hand.raised.fill",
-                            tint: .indigo,  section: .systemAudit, subtitle: privSub,       active: privCount == 0),
+                            tint: .indigo,  section: .systemAudit, subtitle: privSub,       active: xpcClient.isConnected),
             FeatureTileItem(name: "Email Guard",          icon: "envelope.badge.shield.half.filled",
-                            tint: .teal,    section: .alerts,      subtitle: emailSub,      active: true),
+                            tint: .teal,    section: .alerts,      subtitle: emailSub,      active: xpcClient.isConnected),
             FeatureTileItem(name: "Performance",          icon: "gauge.medium",
                             tint: .mint,    section: .performance, subtitle: perfSub,       active: perfBytes > 0),
             FeatureTileItem(name: "Smart Scan",           icon: "sparkle.magnifyingglass",
@@ -486,7 +499,7 @@ struct OverviewDetailView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Image(systemName: tile.icon)
                                 .font(.title2)
-                                .foregroundStyle(.cyan)
+                                .foregroundStyle(tile.tint)
                             Text(tile.name)
                                 .font(.headline)
                                 .foregroundStyle(Color.textPrimary)
@@ -733,6 +746,16 @@ struct ProcessListView: View {
         Group {
             if viewMode == 1 {
                 ProcessTreeView()
+            } else if filtered.isEmpty {
+                ContentUnavailableView(
+                    searchText.isEmpty ? "No Processes Available" : "No Matching Processes",
+                    systemImage: searchText.isEmpty ? "cpu" : "magnifyingglass",
+                    description: Text(
+                        searchText.isEmpty
+                            ? "Run a scan to load the current process list."
+                            : "No process matches “\(searchText)”."
+                    )
+                )
             } else {
             Table(filtered, sortOrder: $sortOrder) {
                 TableColumn("PID", value: \.pid) { p in
@@ -1903,4 +1926,3 @@ private struct ResultRow: View {
         }
     }
 }
-

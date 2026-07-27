@@ -274,7 +274,7 @@ final class DeepScanner {
 
         // Category A: Build / dev artifacts — path check is safe (build system output).
         let buildArtifacts = ["deriveddata", "workspacestorage", ".git/", "node_modules",
-                              "__pycache__", ".build/"]
+                              "__pycache__", ".build/", "/build/products/", "nickperformanceaudit"]
         if buildArtifacts.contains(where: { path.contains($0) }) { return .developmentArtifact }
 
         // Category B: Application runtime data — only trust if the parent .app is signed.

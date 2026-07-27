@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		8805B7A42FCC246600AA4FBA /* libEndpointSecurity.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 8805B7A32FCC246600AA4FBA /* libEndpointSecurity.tbd */; };
-		8805B7AC2FCC246600AA4FBA /* NickExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 8805B7A12FCC246600AA4FBA /* NickExtension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		8805B7AC2FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA11223344556677AABB0011 /* ESEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0001 /* ESEvent.swift */; };
 		AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */; };
 		AA11223344556677AABB0013 /* NickExtensionConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0003 /* NickExtensionConstants.swift */; };
@@ -16,7 +16,13 @@
 		AA11223344556677AABB0015 /* YARAEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0005 /* YARAEngine.swift */; };
 		AA11223344556677AABB0016 /* YARAMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0006 /* YARAMatch.swift */; };
 		BB55CC11DDEEFF00AA220061 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */; };
+		BB55CC11DDEEFF00AA220062 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */; };
+		BB55CC11DDEEFF00AA220063 /* com.ehsanazish.nick.NickNetFilter.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220001 /* com.ehsanazish.nick.NickNetFilter.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		CC7788AA11223344BBEE0001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 88C895112FCC7FC100617073 /* Sparkle */; };
+		D10000000000000000000001 /* Nick Uninstaller.app in Embed Uninstaller */ = {isa = PBXBuildFile; fileRef = D10000000000000000000002 /* Nick Uninstaller.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		E40000000000000000000001 /* NetworkProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000000 /* NetworkProtectionPolicy.swift */; };
+		E40000000000000000000002 /* NetworkProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000000 /* NetworkProtectionPolicy.swift */; };
+		E40000000000000000000004 /* ScamGuardian.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000003 /* ScamGuardian.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -55,6 +61,13 @@
 			remoteGlobalIDString = BB55CC11DDEEFF00AA220020;
 			remoteInfo = NickNetFilter;
 		};
+		D10000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A7B63905B7F834888F9EACCE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D10000000000000000000010;
+			remoteInfo = NickUninstaller;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -64,9 +77,21 @@
 			dstPath = "$(SYSTEM_EXTENSIONS_FOLDER_PATH)";
 			dstSubfolderSpec = 16;
 			files = (
-				8805B7AC2FCC246600AA4FBA /* NickExtension.systemextension in Embed System Extensions */,
+				8805B7AC2FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension in Embed System Extensions */,
+				BB55CC11DDEEFF00AA220063 /* com.ehsanazish.nick.NickNetFilter.systemextension in Embed System Extensions */,
 			);
 			name = "Embed System Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10000000000000000000004 /* Embed Uninstaller */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Applications;
+			dstSubfolderSpec = 1;
+			files = (
+				D10000000000000000000001 /* Nick Uninstaller.app in Embed Uninstaller */,
+			);
+			name = "Embed Uninstaller";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -75,7 +100,7 @@
 		1E8F435E967C1E411C4372EE /* NickTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NickTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		38DFE5592D83150BDECCFBB9 /* NickIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NickIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5CA9A7DC5A8387423EC9412E /* NickHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = NickHelper; sourceTree = BUILT_PRODUCTS_DIR; };
-		8805B7A12FCC246600AA4FBA /* NickExtension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = NickExtension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.ehsanazish.nick.NickExtension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		8805B7A32FCC246600AA4FBA /* libEndpointSecurity.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libEndpointSecurity.tbd; path = usr/lib/libEndpointSecurity.tbd; sourceTree = SDKROOT; };
 		8B8901B2276260484B8A6A0C /* Nick.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nick.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA11223344556677AABB0001 /* ESEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ESEvent.swift; path = NickExtension/Shared/ESEvent.swift; sourceTree = SOURCE_ROOT; };
@@ -84,8 +109,11 @@
 		AA11223344556677AABB0004 /* QuarantineTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineTypes.swift; path = NickExtension/Shared/QuarantineTypes.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0005 /* YARAEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAEngine.swift; path = Nick/Core/YARAEngine/YARAEngine.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0006 /* YARAMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAMatch.swift; path = Nick/Core/YARAEngine/YARAMatch.swift; sourceTree = SOURCE_ROOT; };
-		BB55CC11DDEEFF00AA220001 /* NickNetFilter.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = NickNetFilter.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+		BB55CC11DDEEFF00AA220001 /* com.ehsanazish.nick.NickNetFilter.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.ehsanazish.nick.NickNetFilter.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
+		D10000000000000000000002 /* Nick Uninstaller.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Nick Uninstaller.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E40000000000000000000000 /* NetworkProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NetworkProtectionPolicy.swift; path = Shared/NetworkProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000003 /* ScamGuardian.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScamGuardian.swift; path = NickNetFilter/ScamGuardian.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -109,6 +137,13 @@
 				Info.plist,
 			);
 			target = BB55CC11DDEEFF00AA220020 /* NickNetFilter */;
+		};
+		D10000000000000000000005 /* Exceptions for "NickUninstaller" folder in "NickUninstaller" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = D10000000000000000000010 /* NickUninstaller */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -152,6 +187,14 @@
 			path = NickNetFilter;
 			sourceTree = "<group>";
 		};
+		D10000000000000000000006 /* NickUninstaller */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				D10000000000000000000005 /* Exceptions for "NickUninstaller" folder in "NickUninstaller" target */,
+			);
+			path = NickUninstaller;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -176,6 +219,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				CC7788AA11223344BBEE0001 /* Sparkle in Frameworks */,
+				BB55CC11DDEEFF00AA220062 /* NetworkExtension.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -189,7 +240,8 @@
 				5CA9A7DC5A8387423EC9412E /* NickHelper */,
 				38DFE5592D83150BDECCFBB9 /* NickIntegrationTests.xctest */,
 				1E8F435E967C1E411C4372EE /* NickTests.xctest */,
-				8805B7A12FCC246600AA4FBA /* NickExtension.systemextension */,
+				8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */,
+				D10000000000000000000002 /* Nick Uninstaller.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -210,7 +262,11 @@
 				AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */,
 				AA11223344556677AABB0003 /* NickExtensionConstants.swift */,
 				AA11223344556677AABB0004 /* QuarantineTypes.swift */,
-				BB55CC11DDEEFF00AA220001 /* NickNetFilter.systemextension */,
+				BB55CC11DDEEFF00AA220001 /* com.ehsanazish.nick.NickNetFilter.systemextension */,
+				AA11223344556677AABB0005 /* YARAEngine.swift */,
+				AA11223344556677AABB0006 /* YARAMatch.swift */,
+				E40000000000000000000000 /* NetworkProtectionPolicy.swift */,
+				E40000000000000000000003 /* ScamGuardian.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -224,6 +280,7 @@
 				885ADC842FBFAFA900664E7B /* NickTests */,
 				8805B7A52FCC246600AA4FBA /* NickExtension */,
 				BB55CC11DDEEFF00AA220002 /* NickNetFilter */,
+				D10000000000000000000006 /* NickUninstaller */,
 				8805B7A22FCC246600AA4FBA /* Frameworks */,
 				428C90590A8B2419274FDF24 /* Products */,
 				8805BB8F2FCC3A3200AA4FBA /* Recovered References */,
@@ -260,6 +317,7 @@
 				8805B79D2FCC246600AA4FBA /* Sources */,
 				8805B79E2FCC246600AA4FBA /* Frameworks */,
 				8805B79F2FCC246600AA4FBA /* Resources */,
+				CC1AABB4D5E6F78900002301 /* Copy YARA Rules Into Extension */,
 				AA9900BB11CC2233DDEE0001 /* Strip XAttrs */,
 			);
 			buildRules = (
@@ -273,7 +331,7 @@
 			packageProductDependencies = (
 			);
 			productName = NickExtension;
-			productReference = 8805B7A12FCC246600AA4FBA /* NickExtension.systemextension */;
+			productReference = 8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */;
 			productType = "com.apple.product-type.system-extension";
 		};
 		A7068781809A7A01D520A3F7 /* Nick */ = {
@@ -285,6 +343,7 @@
 				1E5C0074F6A2B9D1CE8EFCDE /* Resources */,
 				CC1AABB4D5E6F78900002300 /* Copy YARA Rules */,
 				8805B7B12FCC246600AA4FBA /* Embed System Extensions */,
+				D10000000000000000000004 /* Embed Uninstaller */,
 			);
 			buildRules = (
 			);
@@ -292,6 +351,7 @@
 				535A0CC3BF4FE0A60C515DAF /* PBXTargetDependency */,
 				8805B7AB2FCC246600AA4FBA /* PBXTargetDependency */,
 				BB55CC11DDEEFF00AA220031 /* PBXTargetDependency */,
+				D10000000000000000000011 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				885ADC512FBFAF9E00664E7B /* Nick */,
@@ -324,8 +384,30 @@
 			packageProductDependencies = (
 			);
 			productName = NickNetFilter;
-			productReference = BB55CC11DDEEFF00AA220001 /* NickNetFilter.systemextension */;
+			productReference = BB55CC11DDEEFF00AA220001 /* com.ehsanazish.nick.NickNetFilter.systemextension */;
 			productType = "com.apple.product-type.system-extension";
+		};
+		D10000000000000000000010 /* NickUninstaller */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D10000000000000000000015 /* Build configuration list for PBXNativeTarget "NickUninstaller" */;
+			buildPhases = (
+				D10000000000000000000012 /* Sources */,
+				D10000000000000000000007 /* Frameworks */,
+				D10000000000000000000013 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				D10000000000000000000006 /* NickUninstaller */,
+			);
+			name = NickUninstaller;
+			packageProductDependencies = (
+			);
+			productName = "Nick Uninstaller";
+			productReference = D10000000000000000000002 /* Nick Uninstaller.app */;
+			productType = "com.apple.product-type.application";
 		};
 		EFAE930A65D7BB016CE44088 /* NickIntegrationTests */ = {
 			isa = PBXNativeTarget;
@@ -407,6 +489,7 @@
 				F41503E0B5121344E9E560D5 /* NickTests */,
 				8805B7A02FCC246600AA4FBA /* NickExtension */,
 				BB55CC11DDEEFF00AA220020 /* NickNetFilter */,
+				D10000000000000000000010 /* NickUninstaller */,
 			);
 		};
 /* End PBXProject section */
@@ -427,6 +510,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BB55CC11DDEEFF00AA220012 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10000000000000000000013 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -494,6 +584,34 @@
 			shellPath = /bin/sh;
 			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules\"\nrm -rf \"${RULES_DST}\"\ncp -R \"${RULES_SRC}\" \"${RULES_DST}\"\necho \"note: Copied YARA rules to ${RULES_DST}\"\n";
 		};
+		CC1AABB4D5E6F78900002301 /* Copy YARA Rules Into Extension */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Rules/community/macos_stealers.yar",
+				"$(SRCROOT)/Rules/community/macos_ransomware.yar",
+				"$(SRCROOT)/Rules/community/macos_adware.yar",
+				"$(SRCROOT)/Rules/community/macos_backdoors.yar",
+				"$(SRCROOT)/Rules/community/email_guard_day_one.yar",
+			);
+			name = "Copy YARA Rules Into Extension";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/macos_stealers.yar",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/macos_ransomware.yar",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/macos_adware.yar",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/macos_backdoors.yar",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/email_guard_day_one.yar",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules/community\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules/community\"\nmkdir -p \"${RULES_DST}\"\ncp -f \"${RULES_SRC}/macos_stealers.yar\" \"${RULES_DST}/macos_stealers.yar\"\ncp -f \"${RULES_SRC}/macos_ransomware.yar\" \"${RULES_DST}/macos_ransomware.yar\"\ncp -f \"${RULES_SRC}/macos_adware.yar\" \"${RULES_DST}/macos_adware.yar\"\ncp -f \"${RULES_SRC}/macos_backdoors.yar\" \"${RULES_DST}/macos_backdoors.yar\"\ncp -f \"${RULES_SRC}/email_guard_day_one.yar\" \"${RULES_DST}/email_guard_day_one.yar\"\necho \"note: Copied YARA rules into extension at ${RULES_DST}\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -524,6 +642,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E40000000000000000000002 /* NetworkProtectionPolicy.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D10000000000000000000012 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -538,6 +664,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E40000000000000000000001 /* NetworkProtectionPolicy.swift in Sources */,
+				E40000000000000000000004 /* ScamGuardian.swift in Sources */,
 				AA11223344556677AABB0011 /* ESEvent.swift in Sources */,
 				AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */,
 				AA11223344556677AABB0013 /* NickExtensionConstants.swift in Sources */,
@@ -572,6 +700,11 @@
 			isa = PBXTargetDependency;
 			target = BB55CC11DDEEFF00AA220020 /* NickNetFilter */;
 			targetProxy = BB55CC11DDEEFF00AA220030 /* PBXContainerItemProxy */;
+		};
+		D10000000000000000000011 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D10000000000000000000010 /* NickUninstaller */;
+			targetProxy = D10000000000000000000003 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -610,7 +743,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 404;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -629,7 +762,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 4.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -668,11 +801,9 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = NickIcon;
 				CODE_SIGN_ENTITLEMENTS = Nick/Nick.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
-				CODE_SIGN_STYLE = Manual;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
-				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				HEADER_SEARCH_PATHS = (
@@ -691,14 +822,13 @@
 					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 4.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick;
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = Nick;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = Nick/Core/YARAEngine/YARABridge.h;
 			};
@@ -738,7 +868,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 404;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -755,7 +885,7 @@
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 4.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -826,13 +956,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = NickIcon;
-				CODE_SIGN_ENTITLEMENTS = Nick/Nick.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application: ehsan azish (UXGW5V3BY6)";
+				CODE_SIGN_ENTITLEMENTS = Nick/Nick.Release.entitlements;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
-				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				HEADER_SEARCH_PATHS = (
@@ -851,14 +979,13 @@
 					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 4.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick;
-				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = nickdistribute;
+				PROVISIONING_PROFILE_SPECIFIER = "df99a166-d93e-4068-8edf-ec3668b0c4ed";
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = Nick/Core/YARAEngine/YARABridge.h;
 			};
@@ -871,7 +998,7 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_ENTITLEMENTS = NickExtension/NickExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 404;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -881,6 +1008,10 @@
 					"$(inherited)",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
+				);
 				INFOPLIST_FILE = NickExtension/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = NickExtension;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -889,23 +1020,19 @@
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
 				);
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				MARKETING_VERSION = 3.0;
-				HEADER_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
-				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
 				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MARKETING_VERSION = 4.0;
 				OTHER_LDFLAGS = (
 					"-lbsm",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickExtension;
-				PRODUCT_NAME = "$(inherited)";
+				PRODUCT_NAME = com.ehsanazish.nick.NickExtension;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
@@ -928,13 +1055,17 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 404;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
+				);
 				INFOPLIST_FILE = NickExtension/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = NickExtension;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -943,25 +1074,21 @@
 					"@executable_path/../Frameworks",
 					"@executable_path/../../../../Frameworks",
 				);
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				MARKETING_VERSION = 3.0;
-				HEADER_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
-				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
 				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MARKETING_VERSION = 4.0;
 				OTHER_LDFLAGS = (
 					"-lbsm",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickExtension;
-				PRODUCT_NAME = "$(inherited)";
-				PROVISIONING_PROFILE_SPECIFIER = "";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = nickExtentiondistribute;
+				PRODUCT_NAME = com.ehsanazish.nick.NickExtension;
+				PROVISIONING_PROFILE_SPECIFIER = "f10e8306-fb19-405e-86d0-32eb38d61003";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "f10e8306-fb19-405e-86d0-32eb38d61003";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1002,14 +1129,15 @@
 				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 404;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickNetFilter/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickNetFilter;
-				PRODUCT_NAME = NickNetFilter;
+				PRODUCT_NAME = com.ehsanazish.nick.NickNetFilter;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SCREEN_EXTENSION_POINT_NAME = "com.apple.networkextension.content-filter";
 				SDKROOT = macosx;
@@ -1021,19 +1149,77 @@
 		BB55CC11DDEEFF00AA220042 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.Release.entitlements;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 404;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickNetFilter/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickNetFilter;
-				PRODUCT_NAME = NickNetFilter;
-				PROVISIONING_PROFILE_SPECIFIER = "";
+				PRODUCT_NAME = com.ehsanazish.nick.NickNetFilter;
+				PROVISIONING_PROFILE_SPECIFIER = "547cfdac-6a5f-4f1b-91df-87632ac99f54";
 				SCREEN_EXTENSION_POINT_NAME = "com.apple.networkextension.content-filter";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		D10000000000000000000016 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = NickUninstallIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 404;
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = NickUninstaller/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Nick Uninstaller";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 4.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.uninstaller;
+				PRODUCT_NAME = "Nick Uninstaller";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		D10000000000000000000017 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = NickUninstallIcon;
+				CODE_SIGN_IDENTITY = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 404;
+				DEVELOPMENT_TEAM = UXGW5V3BY6;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = NickUninstaller/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Nick Uninstaller";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 4.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.uninstaller;
+				PRODUCT_NAME = "Nick Uninstaller";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 6.0;
@@ -1149,6 +1335,15 @@
 			buildConfigurations = (
 				BB55CC11DDEEFF00AA220041 /* Debug */,
 				BB55CC11DDEEFF00AA220042 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D10000000000000000000015 /* Build configuration list for PBXNativeTarget "NickUninstaller" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D10000000000000000000016 /* Debug */,
+				D10000000000000000000017 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

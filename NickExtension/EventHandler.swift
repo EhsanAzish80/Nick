@@ -101,57 +101,65 @@ final class ESEventHandler {
             let csFlags     = msg.event.exec.target.pointee.codesigning_flags
             let isSigned    = (csFlags & 0x00000001) != 0   // CS_VALID
 
-            // --- Phase 2: Signature / cache check ---
+            // AUTH callbacks have a strict deadline. Only consult the in-memory
+            // cache before responding; hashing, ML, behavioural analysis and XPC
+            // delivery must never hold up process launch.
             let cached   = fileScanner?.cache.lookup(path: targetPath)
-            var isThreat = cached?.isThreat ?? false
-
-            // Background-scan if unseen (first-execution gap; Phase 4 ML partially closes this)
-            if cached == nil {
-                let path = targetPath
-                dispatchQueue.async { [weak self] in _ = self?.fileScanner?.scan(filePath: path) }
-            }
-
-            // --- Phase 4: ML pre-execution prediction ---
-            // Exempt /System/ and /usr/lib/ to avoid false-positives on Apple-signed binaries
-            let isTrustedSystem = targetPath.hasPrefix("/System/") || targetPath.hasPrefix("/usr/lib/")
-            if !isTrustedSystem, let ml = threatPredictor?.predict(filePath: targetPath) {
-                if ml.classification == .malware                              { isThreat = true }
-                if ml.classification == .suspicious && !isSigned              { isThreat = true }
-            }
-
-            // --- Phase 4: Behavioural analysis ---
-            let behaviorResult = behaviorTracker?.analyze(pid: pid)
-            if behaviorResult?.isMalicious == true { isThreat = true }
-
-            // Record exec event in the tracker
-            behaviorTracker?.record(
-                pid: pid, processPath: processPath,
-                eventType: .processExec, detail: targetPath
-            )
-            // Phase 6: record in process tree
-            processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: [])
-            // Phase 6: watch for systemextensionsctl (tamper vector)
-            tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid)
-
+            let isThreat = cached?.isThreat ?? false
             esClient?.respond(to: message, allow: !isThreat)
 
-            // Also flag unsigned binaries from untrusted locations (warning, not block)
-            let locationSuspect = !isSigned && (fileScanner?.isUntrustedLocation(targetPath) ?? false)
+            // The message pointer is no longer valid after this method returns,
+            // so capture value types only and perform all remaining work off the
+            // Endpoint Security callback queue.
+            dispatchQueue.async { [weak self] in
+                guard let self else { return }
 
-            pushEvent(ESEvent(
-                eventType:   .authExec,
-                processPath: processPath,
-                pid:         pid,
-                parentPid:   parentPid,
-                filePath:    targetPath,
-                decision:    isThreat ? .deny : .allow,
-                threat:      ESEvent.ThreatContext(
-                    sha256:       cached?.hash,
-                    threatName:   cached?.threatName,
-                    threatFamily: cached?.threatFamily,
-                    isCodeSigned: isSigned || !locationSuspect ? isSigned : false
+                // Avoid hashing and YARA-scanning every signed application and
+                // helper launched on the Mac. Unknown or writable-location
+                // executables still receive the full scan.
+                if cached == nil,
+                   !isSigned || self.fileScanner?.isUntrustedLocation(targetPath) == true {
+                    _ = self.fileScanner?.scan(filePath: targetPath)
+                }
+
+                // Prediction remains an observational signal for a first launch.
+                // A positive result populates the normal scan/reporting pipeline
+                // without risking an ES deadline miss.
+                let isTrustedSystem =
+                    targetPath.hasPrefix("/System/") ||
+                    targetPath.hasPrefix("/usr/lib/")
+                if !isTrustedSystem {
+                    _ = self.threatPredictor?.predict(filePath: targetPath)
+                }
+
+                _ = self.behaviorTracker?.analyze(pid: pid)
+                self.behaviorTracker?.record(
+                    pid: pid, processPath: processPath,
+                    eventType: .processExec, detail: targetPath
                 )
-            ))
+                self.processTree?.recordExec(
+                    pid: pid, ppid: parentPid, path: targetPath, args: []
+                )
+                self.tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid)
+
+                let locationSuspect =
+                    !isSigned &&
+                    (self.fileScanner?.isUntrustedLocation(targetPath) ?? false)
+                self.pushEvent(ESEvent(
+                    eventType:   .authExec,
+                    processPath: processPath,
+                    pid:         pid,
+                    parentPid:   parentPid,
+                    filePath:    targetPath,
+                    decision:    isThreat ? .deny : .allow,
+                    threat:      ESEvent.ThreatContext(
+                        sha256:       cached?.hash,
+                        threatName:   cached?.threatName,
+                        threatFamily: cached?.threatFamily,
+                        isCodeSigned: isSigned || !locationSuspect ? isSigned : false
+                    )
+                ))
+            }
 
         // MARK: AUTH_OPEN — block opening of cached-threat files
 
@@ -162,19 +170,23 @@ final class ESEventHandler {
 
             esClient?.respond(to: message, allow: !isThreat)
 
-            pushEvent(ESEvent(
-                eventType:   .authOpen,
-                processPath: processPath,
-                pid:         pid,
-                parentPid:   parentPid,
-                filePath:    filePath,
-                decision:    isThreat ? .deny : .allow,
-                threat:      ESEvent.ThreatContext(
-                    sha256:       cached?.hash,
-                    threatName:   cached?.threatName,
-                    threatFamily: cached?.threatFamily
-                )
-            ))
+            // Normal file opens are extremely high-volume and add no useful
+            // user-facing information. Forward only an actual blocked threat.
+            if isThreat {
+                pushEvent(ESEvent(
+                    eventType:   .authOpen,
+                    processPath: processPath,
+                    pid:         pid,
+                    parentPid:   parentPid,
+                    filePath:    filePath,
+                    decision:    .deny,
+                    threat:      ESEvent.ThreatContext(
+                        sha256:       cached?.hash,
+                        threatName:   cached?.threatName,
+                        threatFamily: cached?.threatFamily
+                    )
+                ))
+            }
 
         // MARK: AUTH_CREATE — heuristic-only (can't hash a file that doesn't exist yet)
 
@@ -195,14 +207,16 @@ final class ESEventHandler {
             let isSuspicious   = processSuspect && destSuspect
             esClient?.respond(to: message, allow: !isSuspicious)
 
-            pushEvent(ESEvent(
-                eventType:    .authOpen,   // reuse open type; CREATE is filtered in UI
-                processPath:  processPath,
-                pid:          pid,
-                parentPid:    parentPid,
-                filePath:     filePath,
-                decision:     isSuspicious ? .deny : .allow
-            ))
+            if isSuspicious {
+                pushEvent(ESEvent(
+                    eventType:    .authOpen,   // reuse open type; CREATE is filtered in UI
+                    processPath:  processPath,
+                    pid:          pid,
+                    parentPid:    parentPid,
+                    filePath:     filePath,
+                    decision:     .deny
+                ))
+            }
 
         // MARK: AUTH_MMAP — block mapping of cached-threat files
 
@@ -231,8 +245,17 @@ final class ESEventHandler {
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
 
+                // One event per completed modification replaces the former
+                // per-write XPC stream, which could deliver thousands of main
+                // actor updates for database journals and logs.
+                self.behaviorTracker?.record(
+                    pid: pid, processPath: processPath,
+                    eventType: .fileWrite, detail: filePath
+                )
+
                 // --- Phase 6: Email attachment detection ---
-                if let emailEvent = self.emailAttachmentMonitor?.evaluate(filePath: filePath) {
+                let emailEvent = self.emailAttachmentMonitor?.evaluate(filePath: filePath)
+                if let emailEvent {
                     Self.logger.info("Email attachment: \(emailEvent.source) — \(filePath)")
                     if emailEvent.isDangerousExtension {
                         // Treat dangerous email attachments like discovered threats
@@ -261,7 +284,69 @@ final class ESEventHandler {
                     self.xpcServer?.sendIntegrityViolationToApp(data)
                 }
 
+                // Ransomware heuristics run once at close and read at most a
+                // small prefix. Canary names and known extensions do not need
+                // the file contents; entropy is only a supporting signal.
+                let ransomwareSample: Data?
+                if self.ransomwareDetector?.needsContentSample(filePath: filePath) == true {
+                    ransomwareSample = self.boundedFileSample(
+                        at: filePath,
+                        maximumBytes: 1_048_576
+                    )
+                } else {
+                    ransomwareSample = nil
+                }
+                if let alert = self.ransomwareDetector?.evaluate(
+                    pid: pid,
+                    processPath: processPath,
+                    filePath: filePath,
+                    fileData: ransomwareSample
+                ) {
+                    Self.logger.warning(
+                        "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) action=\(String(describing: alert.recommendation))"
+                    )
+                    let ransomwareEvent = ESEvent(
+                        eventType: .notifyWrite,
+                        processPath: processPath,
+                        pid: pid,
+                        parentPid: parentPid,
+                        filePath: filePath,
+                        decision: .notApplicable,
+                        threat: ESEvent.ThreatContext(
+                            threatName: "Possible ransomware activity",
+                            threatFamily: alert.indicators.joined(separator: "; ")
+                        )
+                    )
+                    self.pushEvent(ransomwareEvent)
+                    if let data = try? self.encoder.encode(ransomwareEvent) {
+                        self.xpcServer?.sendThreatToApp(data)
+                    }
+                    if alert.recommendation == .block,
+                       let engine = self.remediationEngine {
+                        let report = engine.remediate(
+                            threatPath: filePath,
+                            hash: "",
+                            threatName: "Ransomware (\(alert.indicators.first ?? "unknown"))",
+                            processPath: processPath,
+                            pid: pid
+                        )
+                        if let data = try? JSONEncoder().encode(report) {
+                            self.xpcServer?.sendRemediationToApp(data)
+                        }
+                    }
+                }
+
                 // --- Threat Detection + Remediation ---
+                guard self.shouldDeepScanModifiedFile(at: filePath) else { return }
+                self.pushEvent(ESEvent(
+                    eventType: .notifyWrite,
+                    processPath: processPath,
+                    pid: pid,
+                    parentPid: parentPid,
+                    filePath: filePath,
+                    decision: .notApplicable
+                ))
+
                 guard let scanner = self.fileScanner else { return }
                 let result = scanner.scan(filePath: filePath)
                 guard result.isThreat else { return }
@@ -293,61 +378,14 @@ final class ESEventHandler {
                         hash:        hash,
                         threatName:  result.threatName ?? "Unknown",
                         processPath: processPath,
-                        pid:         pid
+                        pid:         pid,
+                        // Mail and Outlook are delivery processes, not the
+                        // malware itself. Quarantine the confirmed attachment
+                        // without terminating the user's mail client.
+                        terminateProcess: emailEvent == nil
                     )
                     if let data = try? JSONEncoder().encode(report) {
                         self.xpcServer?.sendRemediationToApp(data)
-                    }
-                }
-            }
-
-        // MARK: NOTIFY_WRITE — log writes, run FIM + ransomware check
-
-        case ES_EVENT_TYPE_NOTIFY_WRITE:
-            let filePath = esString(msg.event.write.target.pointee.path)
-            pushEvent(ESEvent(
-                eventType:   .notifyWrite,
-                processPath: processPath,
-                pid:         pid,
-                parentPid:   parentPid,
-                filePath:    filePath,
-                decision:    .notApplicable
-            ))
-            // Record in behavioral tracker (synchronous — NSLock, very fast)
-            behaviorTracker?.record(
-                pid: pid, processPath: processPath,
-                eventType: .fileWrite, detail: filePath
-            )
-            // Async: FIM check + ransomware eval
-            dispatchQueue.async { [weak self] in
-                guard let self else { return }
-                // FIM
-                if let violation = self.fileIntegrityMonitor?.check(path: filePath),
-                   let data = try? JSONEncoder().encode(violation) {
-                    self.xpcServer?.sendIntegrityViolationToApp(data)
-                }
-                // Ransomware (read file data for entropy check)
-                let fileData = FileManager.default.contents(atPath: filePath)
-                if let alert = self.ransomwareDetector?.evaluate(
-                    pid: pid, processPath: processPath,
-                    filePath: filePath, fileData: fileData
-                ) {
-                    Self.logger.warning(
-                        "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) action=\(String(describing: alert.recommendation))"
-                    )
-                    // If high-confidence, trigger remediation
-                    if alert.recommendation == .block,
-                       let engine = self.remediationEngine {
-                        let report = engine.remediate(
-                            threatPath:  filePath,
-                            hash:        "",
-                            threatName:  "Ransomware (\(alert.indicators.first ?? "unknown"))",
-                            processPath: processPath,
-                            pid:         pid
-                        )
-                        if let data = try? JSONEncoder().encode(report) {
-                            self.xpcServer?.sendRemediationToApp(data)
-                        }
                     }
                 }
             }
@@ -427,13 +465,8 @@ final class ESEventHandler {
             )
             // Phase 6: record child exec in process tree
             processTree?.recordExec(pid: childPid, ppid: pid, path: processPath, args: [])
-            pushEvent(ESEvent(
-                eventType:   .notifyFork,
-                processPath: processPath,
-                pid:         pid,
-                parentPid:   parentPid,
-                decision:    .notApplicable
-            ))
+            // Keep lifecycle data inside the extension. Forwarding every fork
+            // invalidates the app's observable timeline at system-wide rates.
 
         case ES_EVENT_TYPE_NOTIFY_EXIT:
             // Clean up timeline to prevent unbounded memory growth
@@ -441,13 +474,7 @@ final class ESEventHandler {
             // Phase 6: mark process exit in tree
             let exitCode: Int32 = 0  // exit code not provided by notify_exit in this binding
             processTree?.recordExit(pid: pid, exitCode: exitCode)
-            pushEvent(ESEvent(
-                eventType:   .notifyExit,
-                processPath: processPath,
-                pid:         pid,
-                parentPid:   parentPid,
-                decision:    .notApplicable
-            ))
+            // Exits reclaim the behavioural timeline; they are not alerts.
 
         // MARK: NOTIFY_MOUNT — Phase 5: scan external volumes
 
@@ -458,6 +485,12 @@ final class ESEventHandler {
                 String(cString: ptr.baseAddress!.assumingMemoryBound(to: CChar.self))
             }
             usbScanner?.handleMount(volumePath: mountPoint)
+
+        case ES_EVENT_TYPE_NOTIFY_UNMOUNT:
+            let mountPoint: String = withUnsafeBytes(of: msg.event.unmount.statfs.pointee.f_mntonname) { ptr in
+                String(cString: ptr.baseAddress!.assumingMemoryBound(to: CChar.self))
+            }
+            usbScanner?.handleUnmount(volumePath: mountPoint)
 
         // MARK: NOTIFY_TCC_MODIFY — Phase 5: privacy permission changes (macOS 15.4+)
 
@@ -496,6 +529,38 @@ final class ESEventHandler {
             guard let self, let data = try? self.encoder.encode(event) else { return }
             self.xpcServer?.sendEventToApp(data)
         }
+    }
+
+    /// Limits real-time deep scanning to files that can reasonably carry
+    /// executable or document-borne payloads. Databases, journals, logs,
+    /// caches, media and other high-churn data are left to manual/deep scans.
+    private func shouldDeepScanModifiedFile(at path: String) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        let ext = url.pathExtension.lowercased()
+        let candidateExtensions: Set<String> = [
+            "app", "bin", "bundle", "command", "dylib", "exe", "framework",
+            "jar", "js", "macho", "pkg", "plugin", "py", "scpt", "sh",
+            "dmg", "iso", "rar", "tar", "zip", "7z",
+            "doc", "docm", "docx", "pdf", "ppt", "pptm", "pptx",
+            "rtf", "xls", "xlsm", "xlsx"
+        ]
+
+        guard candidateExtensions.contains(ext)
+                || FileManager.default.isExecutableFile(atPath: path) else {
+            return false
+        }
+
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size])
+                as? NSNumber else {
+            return false
+        }
+        return size.int64Value > 0 && size.int64Value <= 100 * 1_024 * 1_024
+    }
+
+    private func boundedFileSample(at path: String, maximumBytes: Int) -> Data? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        return try? handle.read(upToCount: maximumBytes)
     }
 
     /// Extracts the exec target path from `AUTH_EXEC`.

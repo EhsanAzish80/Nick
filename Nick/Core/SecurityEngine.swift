@@ -180,8 +180,13 @@ final class SecurityEngine {
         if let data = ud.data(forKey: "nickPersistedAlerts"),
            let decoded = try? JSONDecoder().decode([ThreatAlert].self, from: data) {
             // Drop any that were later dismissed.
-            alerts = decoded.filter { !dismissedAlertKeys.contains($0.deduplicationKey) }
+            alerts = Self.boundedPersistedAlerts(
+                decoded.filter { !dismissedAlertKeys.contains($0.deduplicationKey) }
+            )
             logger.info("Restored \(self.alerts.count) persisted alert(s)")
+            if let encoded = try? JSONEncoder().encode(alerts) {
+                ud.set(encoded, forKey: "nickPersistedAlerts")
+            }
         }
 
         // One-time purge: remove false-positive raw-IP alerts produced before the
@@ -440,6 +445,14 @@ final class SecurityEngine {
         rebuildUserFacingAlerts()
     }
 
+    /// Hides the current alert without classifying it as a false positive or
+    /// suppressing future detections of the same pattern.
+    func hideAlert(_ id: UUID) {
+        alerts.removeAll { $0.id == id }
+        saveAlerts()
+        rebuildUserFacingAlerts()
+    }
+
     /// Removes a resolved alert (threat was killed / deleted) without adding its
     /// `deduplicationKey` to `dismissedAlertKeys`.  The same threat pattern will
     /// reappear in the alert list if the binary is re-run.
@@ -470,8 +483,23 @@ final class SecurityEngine {
     /// Encodes the current alerts array to JSON and writes it to UserDefaults
     /// so they survive app restarts.
     private func saveAlerts() {
-        guard let data = try? JSONEncoder().encode(alerts) else { return }
+        let bounded = Self.boundedPersistedAlerts(alerts)
+        guard let data = try? JSONEncoder().encode(bounded) else { return }
         UserDefaults.standard.set(data, forKey: "nickPersistedAlerts")
+    }
+
+    /// UserDefaults rejects values around 4 MB. Keep only the newest alert
+    /// summaries that fit comfortably below that boundary.
+    private static func boundedPersistedAlerts(_ source: [ThreatAlert]) -> [ThreatAlert] {
+        var bounded = Array(source.sorted { $0.timestamp > $1.timestamp }.prefix(100))
+        let encoder = JSONEncoder()
+        let byteLimit = 3_000_000
+        while bounded.count > 1,
+              let data = try? encoder.encode(bounded),
+              data.count > byteLimit {
+            bounded.removeLast()
+        }
+        return bounded
     }
 
     /// Records the completion of a YARA deep scan and persists the stats.

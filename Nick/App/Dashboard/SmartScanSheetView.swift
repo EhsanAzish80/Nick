@@ -89,7 +89,7 @@ struct SmartScanContentView: View {
                         .font(.caption)
                         .foregroundStyle(Color.textSecondary)
                     Spacer()
-                    if s.issueCount > 0 {
+                    if s.checks.contains(where: { $0.resolution.canAutoResolve }) {
                         Button(isFixingAll ? "Fixing…" : "Fix All") {
                             handleFixAll(currentStatus: s)
                         }
@@ -109,9 +109,20 @@ struct SmartScanContentView: View {
             checker.securityEngine = engine
             checker.xpcClient = xpcClient
             checker.extensionManager = extensionManager
+            xpcClient.connect()
             if status == nil {
+                await checker.refreshLiveProtectionState()
                 status = checker.runScan()
             }
+        }
+        .onChange(of: xpcClient.isConnected) {
+            // Extension activation and invalidation can happen while this view
+            // is open. Re-evaluate every row so stale green states disappear.
+            refreshStatus()
+        }
+        .onChange(of: extensionManager.extensionState) {
+            // Surface installation, approval, and failure states immediately.
+            refreshStatus()
         }
     }
 
@@ -119,8 +130,16 @@ struct SmartScanContentView: View {
 
     private func handleResolve(_ check: ProtectionCheck) async {
         await checker.resolve(check: check)
+        await checker.refreshLiveProtectionState()
         if let updated = checker.rescanCheck(id: check.id) {
             status = status?.replacing(check: updated)
+        }
+    }
+
+    private func refreshStatus() {
+        Task { @MainActor in
+            await checker.refreshLiveProtectionState()
+            status = checker.runScan()
         }
     }
 
@@ -254,6 +273,13 @@ private struct ProtectionCheckRow: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(isResolving)
+
+        case .revealAppForInstallation:
+            Button("Show App") {
+                Task { await onResolve() }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
 
         case .autoEnable:
             Button(isResolving ? "Enabling…" : "Enable") {

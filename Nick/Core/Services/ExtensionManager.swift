@@ -43,12 +43,50 @@ public final class ExtensionManager: NSObject {
     /// Non-nil when the last operation ended in failure.
     public private(set) var lastError: Error?
 
+    /// Converts opaque System Extensions errors into an action the user can
+    /// understand. A code-signature failure cannot be repaired by repeatedly
+    /// pressing Install; the app must be rebuilt with a valid certificate (or
+    /// notarized when distributed with Developer ID).
+    public static func userFacingInstallationError(_ error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == OSSystemExtensionErrorDomain,
+           nsError.code == OSSystemExtensionError.Code.codeSignatureInvalid.rawValue {
+            return """
+            Nick's signing certificate is not trusted. For local testing, renew the Apple Development certificate in Xcode → Settings → Accounts, then rebuild Nick and move that new build to Applications. Release builds must be notarized before installation.
+            """
+        }
+
+        return error.localizedDescription
+    }
+
     // MARK: - Private
 
     private nonisolated static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
         category: "ExtensionManager"
     )
+    private static let activationCompletedKey = "endpointSecurityExtensionActivationCompleted"
+    private static let activatedVersionKey = "endpointSecurityExtensionActivatedVersion"
+
+    public override init() {
+        super.init()
+        let activatedVersion = UserDefaults.standard.string(forKey: Self.activatedVersionKey)
+        if UserDefaults.standard.bool(forKey: Self.activationCompletedKey),
+           activatedVersion == Self.bundledExtensionVersion {
+            extensionState = .installed
+        }
+    }
+
+    private static var bundledExtensionVersion: String? {
+        guard let extensionURL = Bundle.main.builtInPlugInsURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("SystemExtensions")
+            .appendingPathComponent("com.ehsanazish.nick.NickExtension.systemextension"),
+              let bundle = Bundle(url: extensionURL) else {
+            return nil
+        }
+        return bundle.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
+    }
 
     // MARK: - Public API
 
@@ -74,6 +112,8 @@ public final class ExtensionManager: NSObject {
     public func uninstallExtension() {
         extensionState = .uninstalling
         lastError = nil
+        UserDefaults.standard.set(false, forKey: Self.activationCompletedKey)
+        UserDefaults.standard.removeObject(forKey: Self.activatedVersionKey)
 
         let request = OSSystemExtensionRequest.deactivationRequest(
             forExtensionWithIdentifier: NickExtensionConstants.extensionBundleID,
@@ -114,6 +154,11 @@ extension ExtensionManager: OSSystemExtensionRequestDelegate {
             switch result {
             case .completed:
                 Self.logger.info("Extension request completed successfully")
+                UserDefaults.standard.set(true, forKey: Self.activationCompletedKey)
+                UserDefaults.standard.set(
+                    Self.bundledExtensionVersion,
+                    forKey: Self.activatedVersionKey
+                )
                 extensionState = .installed
             case .willCompleteAfterReboot:
                 Self.logger.notice("Extension will activate after reboot")

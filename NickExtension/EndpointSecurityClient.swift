@@ -107,10 +107,24 @@ final class EndpointSecurityClient {
         guard let client else { return }
         guard message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return }
 
-        let authResult: es_auth_result_t = allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY
-        let ret = es_respond_auth_result(client, message, authResult, false)
+        let ret: es_respond_result_t
+        if message.pointee.event_type == ES_EVENT_TYPE_AUTH_OPEN {
+            // AUTH_OPEN is the one authorization event that requires a flags
+            // response. Responding with `es_respond_auth_result` returns
+            // ES_RESPOND_RESULT_ERR_EVENT_TYPE, leaves the open suspended, and
+            // eventually causes macOS to kill and respawn the extension.
+            let authorizedFlags = allow
+                ? UInt32(bitPattern: message.pointee.event.open.fflag)
+                : 0
+            ret = es_respond_flags_result(client, message, authorizedFlags, false)
+        } else {
+            let authResult: es_auth_result_t = allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY
+            ret = es_respond_auth_result(client, message, authResult, false)
+        }
         if ret != ES_RESPOND_RESULT_SUCCESS {
-            Self.logger.warning("es_respond_auth_result returned \(ret.rawValue) — may have missed deadline")
+            Self.logger.warning(
+                "Endpoint Security response returned \(ret.rawValue) for event \(message.pointee.event_type.rawValue) — operation was not answered"
+            )
         }
     }
 

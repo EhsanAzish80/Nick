@@ -121,11 +121,41 @@ final class QuarantineManager {
     func restore(id: UUID) -> Bool {
         guard let record = database.get(id: id) else { return false }
         let fm = FileManager.default
+        let vaultRoot = URL(fileURLWithPath: vaultPath).standardizedFileURL.path + "/"
+        let source = URL(fileURLWithPath: record.quarantinedPath).standardizedFileURL.path
+        let destination = URL(fileURLWithPath: record.originalPath).standardizedFileURL.path
+
+        guard source.hasPrefix(vaultRoot),
+              destination.hasPrefix("/"),
+              !destination.hasPrefix("/System/"),
+              !destination.hasPrefix("/usr/"),
+              !fm.fileExists(atPath: destination) else {
+            Self.logger.error("Restore refused because the source or destination is unsafe")
+            return false
+        }
 
         do {
             // Re-enable read/write so the file can be moved
-            try fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: record.quarantinedPath)
-            try fm.moveItem(atPath: record.quarantinedPath, toPath: record.originalPath)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: source)
+            try fm.createDirectory(
+                at: URL(fileURLWithPath: destination).deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try fm.moveItem(atPath: source, toPath: destination)
+
+            // Restored threats remain marked as downloaded/untrusted so
+            // Gatekeeper and supporting apps can warn before opening them.
+            let quarantineValue = "0081;\(Int(Date().timeIntervalSince1970));Nick;"
+            quarantineValue.withCString { value in
+                _ = setxattr(
+                    destination,
+                    "com.apple.quarantine",
+                    value,
+                    strlen(value),
+                    0,
+                    XATTR_NOFOLLOW
+                )
+            }
 
             let metaPath = (vaultPath as NSString).appendingPathComponent("\(record.hash).meta.json")
             try? fm.removeItem(atPath: metaPath)

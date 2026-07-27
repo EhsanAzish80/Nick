@@ -16,6 +16,7 @@ struct ThreatTimelineView: View {
     @Binding var selectedFilter: EventFilter
     @Binding var searchText: String
     @Environment(ExtensionXPCClient.self) private var xpcClient
+    @Environment(NetworkProtectionManager.self) private var networkProtection
 
     // MARK: - Filters
 
@@ -50,6 +51,17 @@ struct ThreatTimelineView: View {
             .sorted { $0.timestamp > $1.timestamp }
     }
 
+    private var filteredNetworkEvents: [NetworkBlockEvent] {
+        guard selectedFilter != .writes else { return [] }
+        return networkProtection.blockEvents.filter { event in
+            guard !searchText.isEmpty else { return true }
+            let query = searchText.lowercased()
+            return event.host.lowercased().contains(query)
+                || (event.appIdentifier?.lowercased().contains(query) ?? false)
+                || event.reason.userTitle.lowercased().contains(query)
+        }
+    }
+
     // Group events by calendar day (newest day first).
     private var grouped: [(day: String, events: [ESEvent])] {
         let formatter = DateFormatter()
@@ -65,11 +77,16 @@ struct ThreatTimelineView: View {
     // MARK: - Body
 
     var body: some View {
-        if filtered.isEmpty {
-            VStack(spacing: 8) {
-                Text(xpcClient.events.isEmpty
-                    ? "No events yet. Events appear here once the extension is active."
-                    : "No events match the current filter.")
+        if filtered.isEmpty && filteredNetworkEvents.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: xpcClient.isConnected ? "clock" : "puzzlepiece.extension")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+
+                Text(emptyTitle)
+                    .font(.headline)
+
+                Text(emptyMessage)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -78,6 +95,13 @@ struct ThreatTimelineView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List {
+                if filteredNetworkEvents.isEmpty == false {
+                    Section("Network Protection") {
+                        ForEach(filteredNetworkEvents) { event in
+                            NetworkBlockEventRow(event: event)
+                        }
+                    }
+                }
                 ForEach(grouped, id: \.day) { group in
                     Section(header: Text(group.day).font(.headline)) {
                         ForEach(group.events) { event in
@@ -87,7 +111,97 @@ struct ThreatTimelineView: View {
                 }
             }
             .listStyle(.inset)
+            .task { networkProtection.loadEvents() }
         }
+    }
+
+    private var emptyTitle: String {
+        if !xpcClient.events.isEmpty || !networkProtection.blockEvents.isEmpty {
+            if !searchText.isEmpty { return "No matching events" }
+            switch selectedFilter {
+            case .all:     return "No matching events"
+            case .blocked: return "No blocked activity"
+            case .threats: return "No threats detected"
+            case .writes:  return "No file writes"
+            }
+        }
+        if !xpcClient.isConnected { return "System extension not active" }
+        return "No timeline events yet"
+    }
+
+    private var emptyMessage: String {
+        if !xpcClient.events.isEmpty || !networkProtection.blockEvents.isEmpty {
+            if !searchText.isEmpty {
+                return "Try a different search or clear the current filter."
+            }
+            switch selectedFilter {
+            case .all:
+                return "Try a different filter or clear the search."
+            case .blocked:
+                return "Nick has not blocked any activity in the recorded timeline."
+            case .threats:
+                return "No recorded timeline event has been identified as a threat."
+            case .writes:
+                return "No file-write events match the current timeline."
+            }
+        }
+        if !xpcClient.isConnected {
+            return "Timeline requires Nick’s Endpoint Security extension. Open Smart Scan to check its status."
+        }
+        return "New process and file activity will appear here while Nick is running."
+    }
+}
+
+private struct NetworkBlockEventRow: View {
+    let event: NetworkBlockEvent
+    @Environment(NetworkProtectionManager.self) private var networkProtection
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "network.slash")
+                .foregroundStyle(.red)
+                .frame(width: 20)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(event.host)
+                        .fontWeight(.medium)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(event.timestamp.formatted(date: .omitted, time: .standard))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(event.reason.userTitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    if let app = event.appIdentifier, !app.isEmpty {
+                        Text(app)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Button("Allow Website") {
+                        Task { _ = await networkProtection.allowDomain(event.host) }
+                    }
+                    .controlSize(.small)
+                    if let app = event.appIdentifier, !app.isEmpty {
+                        Button("Allow App") {
+                            Task { _ = await networkProtection.allowApp(app) }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(event.host), blocked, \(event.reason.userTitle)")
     }
 }
 
@@ -190,9 +304,10 @@ private extension String {
 // MARK: - Preview
 
 #Preview {
-    @State var filter = ThreatTimelineView.EventFilter.all
-    @State var search = ""
+    @Previewable @State var filter = ThreatTimelineView.EventFilter.all
+    @Previewable @State var search = ""
     return ThreatTimelineView(selectedFilter: $filter, searchText: $search)
         .environment(ExtensionXPCClient())
+        .environment(NetworkProtectionManager())
         .frame(width: 700, height: 500)
 }
