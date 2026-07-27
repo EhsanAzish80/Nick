@@ -54,6 +54,11 @@ Generate SonarCloud generic coverage:
 ./Scripts/xccov-to-sonarqube.sh TestResults.xcresult > sonar-coverage.xml
 ```
 
+The Codecov conversion excludes `NickTests` and `NickIntegrationTests`.
+Coverage must describe production code exercised by tests, not the test source
+files executing themselves. The checked-in Codecov project target is an honest
+baseline and should be raised as production coverage improves.
+
 ## CI quality gates
 
 The GitHub workflow:

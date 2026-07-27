@@ -24,12 +24,19 @@ awk '
   /^[^[:space:]].*:$/ {
     close_file()
     path = substr($0, 1, length($0) - 1)
+    skip_file = path ~ /\/NickTests\// || path ~ /\/NickIntegrationTests\//
+    if (skip_file) {
+      next
+    }
     print "SF:" path
     file_open = 1
     next
   }
 
   /^[[:space:]]*[0-9]+:[[:space:]]+[0-9]+([[:space:]]|$)/ {
+    if (skip_file) {
+      next
+    }
     line = $1
     sub(/:$/, "", line)
     count = $2

@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="nick-banner.svg" width="600" alt="Nick — open-source macOS security">
+  <img src="NickIcon.png" width="144" alt="Nick app icon">
 </p>
+
+<h1 align="center">Nick</h1>
 
 <p align="center">
   Native, local-first protection that explains what happened, why it matters,
@@ -257,8 +259,10 @@ GitHub Actions builds all shipping targets, runs the test suite with coverage,
 uploads the Xcode result bundle to Codecov, and, when `SONAR_TOKEN` is
 configured, converts Xcode coverage and runs CI-based SonarCloud analysis.
 
-Project coverage is a required gate. Patch coverage is reported as an
-informational signal while the test suite is expanded around legacy UI and
+Project coverage measures production targets only; test-source targets are
+excluded so executing the tests cannot inflate the headline percentage. The
+current project target is a 15% honest baseline. Patch coverage is reported as
+an informational signal while coverage expands around legacy UI and
 platform-integration code.
 
 Repository settings required for hosted analysis:
