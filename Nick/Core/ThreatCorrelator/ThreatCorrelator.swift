@@ -280,7 +280,31 @@ actor ThreatCorrelator {
     /// Returns `true` if any active suppression rule matches the given alert.
     private func isSuppressed(_ alert: ThreatAlert) -> Bool {
         guard !suppressionRules.isEmpty else { return false }
+        // Trust never overrides strong or materially different evidence. This
+        // protects against a trusted editor, browser, or extension becoming the
+        // delivery vehicle for persistence or a reverse shell.
+        let nonSuppressibleReasons: Set<String> = [
+            "reverse_shell", "reverse_shell_port", "netcat_connection",
+            "temp_binary_network", "raw_ip_outbound", "ssh_key_added",
+            "shell_profile_modified"
+        ]
+        if alert.severity == .critical ||
+            alert.contributingSignals.contains(where: {
+                $0.source == .persistence ||
+                    $0.source == .yara ||
+                    $0.source == .systemAudit ||
+                    nonSuppressibleReasons.contains($0.metadata["reason"] ?? "")
+            }) {
+            return false
+        }
+
+        let context = SuppressionRule.contextFingerprint(for: alert)
         for rule in suppressionRules {
+            guard rule.isActive else { continue }
+            if let learnedContext = rule.behaviorContext,
+               learnedContext != context {
+                continue
+            }
             let needle = rule.value.lowercased()
             guard !needle.isEmpty else { continue }
             switch rule.type {
@@ -289,6 +313,17 @@ actor ThreatCorrelator {
             case .processName:
                 let names = alert.contributingSignals.compactMap { $0.processInfo?.name.lowercased() }
                 if names.contains(where: { $0.contains(needle) }) { return true }
+            case .signedProcess:
+                let identities = alert.contributingSignals.compactMap { signal -> String? in
+                    guard let process = signal.processInfo,
+                          case .signed(let teamID) = process.signingStatus,
+                          !teamID.isEmpty,
+                          !process.path.isEmpty else { return nil }
+                    let path = URL(fileURLWithPath: process.path)
+                        .standardizedFileURL.path.lowercased()
+                    return "\(teamID.lowercased())|\(path)"
+                }
+                if identities.contains(needle) { return true }
             case .path:
                 let paths = alert.contributingSignals.compactMap { $0.fileInfo?.path.lowercased() }
                 if paths.contains(where: { $0.hasPrefix(needle) || $0.contains(needle) }) { return true }

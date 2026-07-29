@@ -105,8 +105,9 @@ final class ESEventHandler {
             // cache before responding; hashing, ML, behavioural analysis and XPC
             // delivery must never hold up process launch.
             let cached   = fileScanner?.cache.lookup(path: targetPath)
-            let isThreat = cached?.isThreat ?? false
-            esClient?.respond(to: message, allow: !isThreat)
+            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(path: targetPath) ?? false
+            let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
+            esClient?.respond(to: message, allow: !shouldBlock)
 
             // The message pointer is no longer valid after this method returns,
             // so capture value types only and perform all remaining work off the
@@ -151,7 +152,7 @@ final class ESEventHandler {
                     pid:         pid,
                     parentPid:   parentPid,
                     filePath:    targetPath,
-                    decision:    isThreat ? .deny : .allow,
+                    decision:    shouldBlock ? .deny : .allow,
                     threat:      ESEvent.ThreatContext(
                         sha256:       cached?.hash,
                         threatName:   cached?.threatName,
@@ -166,13 +167,14 @@ final class ESEventHandler {
         case ES_EVENT_TYPE_AUTH_OPEN:
             let filePath = esString(msg.event.open.file.pointee.path)
             let cached   = fileScanner?.cache.lookup(path: filePath)
-            let isThreat = cached?.isThreat ?? false
+            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(path: filePath) ?? false
+            let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
-            esClient?.respond(to: message, allow: !isThreat)
+            esClient?.respond(to: message, allow: !shouldBlock)
 
             // Normal file opens are extremely high-volume and add no useful
             // user-facing information. Forward only an actual blocked threat.
-            if isThreat {
+            if shouldBlock {
                 pushEvent(ESEvent(
                     eventType:   .authOpen,
                     processPath: processPath,
@@ -200,21 +202,23 @@ final class ESEventHandler {
                 filePath = dir + "/" + name
             }
 
-            // Block only when BOTH the process AND the destination are suspicious.
-            // Process-only check false-positives on legitimate installers from /tmp.
+            // This is heuristic-only: there is no file to hash yet. Observe and
+            // report suspicious creates, but fail open so AirDrop, Handoff,
+            // installers and developer builds cannot be disrupted.
             let processSuspect = fileScanner?.isUntrustedLocation(processPath) ?? false
             let destSuspect    = fileScanner?.isUntrustedLocation(filePath) ?? false
             let isSuspicious   = processSuspect && destSuspect
-            esClient?.respond(to: message, allow: !isSuspicious)
+            esClient?.respond(to: message, allow: true)
 
             if isSuspicious {
+                guard !isTrustedPlatformActor(processPath) else { break }
                 pushEvent(ESEvent(
                     eventType:    .authOpen,   // reuse open type; CREATE is filtered in UI
                     processPath:  processPath,
                     pid:          pid,
                     parentPid:    parentPid,
                     filePath:     filePath,
-                    decision:     .deny
+                    decision:     .allow
                 ))
             }
 
@@ -223,18 +227,18 @@ final class ESEventHandler {
         case ES_EVENT_TYPE_AUTH_MMAP:
             let filePath = esString(msg.event.mmap.source.pointee.path)
             let cached   = fileScanner?.cache.lookup(path: filePath)
-            let isThreat = cached?.isThreat ?? false
+            let shouldBlock = cached?.mayBlock ?? false
 
-            esClient?.respond(to: message, allow: !isThreat)
+            esClient?.respond(to: message, allow: !shouldBlock)
 
         // MARK: AUTH_COPYFILE — block copying of cached-threat files
 
         case ES_EVENT_TYPE_AUTH_COPYFILE:
             let srcPath  = esString(msg.event.copyfile.source.pointee.path)
             let cached   = fileScanner?.cache.lookup(path: srcPath)
-            let isThreat = cached?.isThreat ?? false
+            let shouldBlock = cached?.mayBlock ?? false
 
-            esClient?.respond(to: message, allow: !isThreat)
+            esClient?.respond(to: message, allow: !shouldBlock)
 
         // MARK: NOTIFY_CLOSE (modified) — scan modified files, run FIM, trigger remediation
 
@@ -338,6 +342,14 @@ final class ESEventHandler {
 
                 // --- Threat Detection + Remediation ---
                 guard self.shouldDeepScanModifiedFile(at: filePath) else { return }
+                // Xcode/SwiftPM build products are rewritten constantly and
+                // legitimately contain linker/install/persistence strings that
+                // generic YARA rules match. Apple developer tools remain covered
+                // by exact hash intelligence, but heuristic scanning here only
+                // creates noise and previously broke builds.
+                if self.isTrustedDeveloperBuild(actorPath: processPath, filePath: filePath) {
+                    return
+                }
                 self.pushEvent(ESEvent(
                     eventType: .notifyWrite,
                     processPath: processPath,
@@ -372,7 +384,9 @@ final class ESEventHandler {
                 }
                 // Phase 6: mark the writing process as a threat in the process tree
                 self.processTree?.markAsThreat(pid: pid)
-                if let engine = self.remediationEngine {
+                // Heuristic/YARA matches are user-review findings. Automated
+                // kill/quarantine is reserved for exact curated hash evidence.
+                if result.mayBlock, let engine = self.remediationEngine {
                     let report = engine.remediate(
                         threatPath:  filePath,
                         hash:        hash,
@@ -566,6 +580,30 @@ final class ESEventHandler {
     /// Extracts the exec target path from `AUTH_EXEC`.
     private func execTargetPath(from msg: es_message_t) -> String {
         return esString(msg.event.exec.target.pointee.executable.pointee.path)
+    }
+
+    private func isTrustedPlatformActor(_ path: String) -> Bool {
+        path.hasPrefix("/System/Library/") ||
+            path.hasPrefix("/usr/libexec/") ||
+            path.hasPrefix("/System/Applications/")
+    }
+
+    private func isTrustedDeveloperBuild(actorPath: String, filePath: String) -> Bool {
+        let actor = URL(fileURLWithPath: actorPath).lastPathComponent.lowercased()
+        let trustedActors: Set<String> = [
+            "xcode", "xcbuild", "xcodebuild", "swbbuildservice",
+            "swift", "swiftc", "swift-frontend", "clang", "clang++", "ld"
+        ]
+        let isDeveloperActor =
+            actorPath.contains("/Xcode.app/Contents/") ||
+            actorPath.hasPrefix("/usr/bin/") && trustedActors.contains(actor) ||
+            trustedActors.contains(actor)
+        guard isDeveloperActor else { return false }
+
+        return filePath.contains("/Library/Developer/Xcode/DerivedData/") ||
+            filePath.contains("/.build/") ||
+            filePath.contains("/Build/Products/") ||
+            filePath.contains("/Developer/Xcode/UserData/Previews/")
     }
 
     /// Safely converts an `es_string_token_t` to a Swift `String`.

@@ -19,7 +19,8 @@ import Foundation
 /// - App → curl/wget  (arbitrary app downloading and executing — less specific, medium)
 /// - Deep shell nesting  (shell → shell → shell — obfuscation indicator)
 ///
-/// Signals are suppressed when the root of the chain is a trusted process.
+/// Trust is applied during correlation; it never prevents collection of a suspicious
+/// chain because a signed, familiar root process can still be compromised.
 enum ParentChainAnalyzer {
 
     // MARK: - Process Categories
@@ -104,16 +105,13 @@ enum ParentChainAnalyzer {
     ///
     /// - Parameters:
     ///   - chain: A resolved `ProcessChain` for the process under evaluation.
-    ///   - trustedProcessList: Allowlist — if the root of the chain is trusted, returns `nil`.
+    ///   - trustedProcessList: Allowlist forwarded for API compatibility.
     /// - Returns: A `ThreatSignal` if a suspicious chain pattern is found.
     static func evaluateChain(
         _ chain: ProcessChain,
         trustedProcessList: TrustedProcessList = TrustedProcessList()
     ) -> ThreatSignal? {
         guard let leaf = chain.leaf, chain.depth >= 2 else { return nil }
-
-        // If the chain's root is a trusted, signed process — suppress as intentional user activity.
-        if let root = chain.root, trustedProcessList.isTrusted(root.name, pid: root.pid) { return nil }
 
         let chainNames = chain.processes.map { $0.name }
         let leafIsShellOrInterpreter = shellNames.contains(leaf.name.lowercased())
@@ -246,7 +244,6 @@ enum ParentChainAnalyzer {
         }
 
         for proc in candidates {
-            guard !trustedProcessList.isTrusted(proc.name) else { continue }
             let chain = buildChain(for: proc, allProcesses: processes)
             if let signal = evaluateChain(chain, trustedProcessList: trustedProcessList) {
                 results.append(signal)

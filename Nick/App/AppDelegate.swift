@@ -527,6 +527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the NickFinderSync extension and launches a deep scan on that path.
     @objc func applicationWillBecomeActive() {
         checkPendingFinderScan()
+        Task { await networkProtection.refresh() }
     }
 
     private func checkPendingFinderScan() {

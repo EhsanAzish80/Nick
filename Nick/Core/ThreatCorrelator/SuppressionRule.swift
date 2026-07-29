@@ -10,6 +10,9 @@ import Foundation
 enum SuppressionType: String, Codable, CaseIterable {
     /// Suppress all alerts whose contributing signals originate from this process name.
     case processName
+    /// Suppress behavioral alerts from one signed executable identity.
+    /// The stored value is `teamID|standardizedExecutablePath`.
+    case signedProcess
     /// Suppress all alerts whose contributing signals reference this file path prefix.
     case path
     /// Suppress all alerts whose correlation rule name (alert title) matches this value.
@@ -18,6 +21,7 @@ enum SuppressionType: String, Codable, CaseIterable {
     var displayName: String {
         switch self {
         case .processName: return "Process Name"
+        case .signedProcess: return "Signed App"
         case .path:        return "Path"
         case .ruleName:    return "Rule Name"
         }
@@ -39,12 +43,40 @@ struct SuppressionRule: Codable, Identifiable, Equatable {
     /// Optional human-readable note explaining why this rule was added.
     var note: String
     let createdAt: Date
+    /// Optional exact behavior context learned when the user approved an alert.
+    /// A signed app performing a different action must still be reviewed.
+    var behaviorContext: String?
+    /// Learned approvals expire so long-running or newly compromised software
+    /// cannot retain a permanent blind spot.
+    var expiresAt: Date?
 
-    init(id: UUID = UUID(), type: SuppressionType, value: String, note: String = "", createdAt: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        type: SuppressionType,
+        value: String,
+        note: String = "",
+        createdAt: Date = Date(),
+        behaviorContext: String? = nil,
+        expiresAt: Date? = nil
+    ) {
         self.id = id
         self.type = type
         self.value = value
         self.note = note
         self.createdAt = createdAt
+        self.behaviorContext = behaviorContext
+        self.expiresAt = expiresAt
+    }
+
+    var isActive: Bool {
+        expiresAt.map { $0 > Date() } ?? true
+    }
+
+    static func contextFingerprint(for alert: ThreatAlert) -> String {
+        let signalContexts = alert.contributingSignals.map { signal in
+            let reason = signal.metadata["reason"] ?? signal.title
+            return "\(signal.source.rawValue):\(reason.lowercased())"
+        }.sorted()
+        return ([alert.title.lowercased()] + signalContexts).joined(separator: "|")
     }
 }

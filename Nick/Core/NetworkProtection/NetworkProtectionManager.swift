@@ -30,7 +30,15 @@ final class NetworkProtectionManager {
             )
             allowedDomains = configuration.allowedDomains.sorted()
             allowedAppIdentifiers = configuration.allowedAppIdentifiers.sorted()
-            state = manager.isEnabled ? .enabled : .disabled
+            if !manager.isEnabled {
+                state = .disabled
+            } else if NetworkProtectionSharedStore.hasCurrentHealth() {
+                state = .enabled
+            } else {
+                state = .failed(
+                    "The Network Filter is enabled in macOS, but its provider is not running."
+                )
+            }
             loadEvents()
         } catch {
             state = .failed(error.localizedDescription)

@@ -674,6 +674,7 @@ struct SettingsView: View {
         case .processName: return "e.g. xcodebuild"
         case .path:        return "e.g. /usr/local/bin/tool"
         case .ruleName:    return "e.g. raw_ip_outbound"
+        case .signedProcess: return "Team ID | executable path"
         }
     }
 

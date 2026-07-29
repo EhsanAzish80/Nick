@@ -115,6 +115,7 @@ private struct AlertRow: View {
     @State private var showQuarantineConfirmation = false
     @State private var quarantining = false
     @State private var quarantineError: String?
+    @State private var approvalError: String?
 
     private var userAlert: UserFacingAlert {
         UserFacingAlertBuilder.shared.build(from: alert)
@@ -161,6 +162,25 @@ private struct AlertRow: View {
 
     private var isMalwareDetection: Bool {
         userAlert.actions.contains(.quarantine)
+    }
+
+    private var isHeuristicDetection: Bool {
+        alert.contributingSignals.contains { $0.source == .yara }
+    }
+
+    private var reviewProcessName: String? {
+        alert.contributingSignals.compactMap(\.processInfo?.name)
+            .first(where: { !$0.isEmpty })
+    }
+
+    private var hasStableSignedIdentity: Bool {
+        alert.contributingSignals.contains { signal in
+            guard let process = signal.processInfo,
+                  case .signed(let teamID) = process.signingStatus else {
+                return false
+            }
+            return !teamID.isEmpty && !process.path.isEmpty
+        }
     }
 
     var body: some View {
@@ -270,6 +290,49 @@ private struct AlertRow: View {
 
             // Buttons
             HStack(spacing: NickSpacing.md) {
+                if (!isMalwareDetection || isHeuristicDetection), reviewProcessName != nil {
+                    Button("Accept Once") {
+                        engine.allowAlertOnce(alert.id)
+                    }
+                    .buttonStyle(.nickSecondary)
+
+                    if hasStableSignedIdentity {
+                        Button("Always Allow This App") {
+                            engine.alwaysAllowBehavior(from: alert.id)
+                        }
+                        .buttonStyle(.nickSecondary)
+                        .help("Allows this signed app only for the same behavior for 7 days. New, critical, persistence, and malware activity still alerts.")
+                    }
+                }
+
+                if isMalwareDetection, let path = detectedFilePath {
+                    Button("Allow Once") {
+                        xpcClient.requestAllowFileOnce(path: path) { success in
+                            if success {
+                                engine.allowAlertOnce(alert.id)
+                            } else {
+                                approvalError = "Real-Time Protection did not accept the approval. The file remains blocked."
+                            }
+                        }
+                    }
+                    .buttonStyle(.nickSecondary)
+                    .help("Allows only the next access and clears the current cached denial.")
+
+                    if isHeuristicDetection {
+                        Button("Block File") {
+                            xpcClient.requestBlockReviewedFile(path: path) { success in
+                                if success {
+                                    engine.hideAlert(alert.id)
+                                } else {
+                                    approvalError = "Real-Time Protection could not block this reviewed file."
+                                }
+                            }
+                        }
+                        .buttonStyle(.nickDestructive)
+                        .help("Blocks future access to this reviewed file until its cache entry expires.")
+                    }
+                }
+
                 if isMalwareDetection, detectedFilePath != nil {
                     Button {
                         showQuarantineConfirmation = true
@@ -416,6 +479,17 @@ private struct AlertRow: View {
             Button("OK") { quarantineError = nil }
         } message: {
             Text(quarantineError ?? "")
+        }
+        .alert(
+            "Couldn’t Allow File",
+            isPresented: Binding(
+                get: { approvalError != nil },
+                set: { if !$0 { approvalError = nil } }
+            )
+        ) {
+            Button("OK") { approvalError = nil }
+        } message: {
+            Text(approvalError ?? "")
         }
     }
 

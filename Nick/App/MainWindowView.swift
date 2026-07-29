@@ -295,6 +295,7 @@ struct OverviewDetailView: View {
     @Binding var selectedSection: SidebarSection?
     @Environment(SecurityEngine.self) private var engine
     @Environment(ExtensionXPCClient.self) private var xpcClient
+    @Environment(NetworkProtectionManager.self) private var networkProtection
 
     @AppStorage("deepScanIntervalSeconds") private var scanIntervalSeconds: Int = 300
     @State private var focusModeActive = false
@@ -430,6 +431,20 @@ struct OverviewDetailView: View {
         let netSub = connCount == 0
             ? "No active connections"
             : "\(connCount) connection\(connCount == 1 ? "" : "s") active"
+        let scamActive = networkProtection.isEnabled
+        let scamSub: String
+        switch networkProtection.state {
+        case .loading:
+            scamSub = "Checking filter status"
+        case .enabled:
+            scamSub = "Blocking phishing destinations"
+        case .awaitingApproval:
+            scamSub = "Approval required"
+        case .disabled:
+            scamSub = "Not enabled"
+        case .failed:
+            scamSub = "Filter is not running"
+        }
 
         let privCount = xpcClient.privacyAlerts.count
         let privSub = !xpcClient.isConnected
@@ -476,6 +491,8 @@ struct OverviewDetailView: View {
                             tint: .orange,  section: .alerts,      subtitle: ransomSub,     active: canariesDeployed),
             FeatureTileItem(name: "Network Monitor",      icon: "network",
                             tint: .blue,    section: .network,     subtitle: netSub,        active: connCount > 0),
+            FeatureTileItem(name: "Scam Guardian",        icon: "globe.badge.chevron.backward",
+                            tint: .orange,  section: .smartScan,   subtitle: scamSub,       active: scamActive),
             FeatureTileItem(name: "Privacy Guard",        icon: "hand.raised.fill",
                             tint: .indigo,  section: .systemAudit, subtitle: privSub,       active: xpcClient.isConnected),
             FeatureTileItem(name: "Email Guard",          icon: "envelope.badge.shield.half.filled",

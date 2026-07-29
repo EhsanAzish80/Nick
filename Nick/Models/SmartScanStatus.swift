@@ -695,20 +695,8 @@ final class SmartScanChecker {
     }
 
     private var isNetworkFilterActive: Bool {
-        guard networkFilterPreferenceEnabled else { return false }
-
-        guard
-            let path = NetworkProtectionSharedStore.healthURL()?.path,
-            let data = FileManager.default.contents(atPath: path),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return false
-        }
-
-        return Self.isCurrentNetworkFilterHealth(
-            object,
-            now: Date().timeIntervalSince1970
-        )
+        networkFilterPreferenceEnabled &&
+            NetworkProtectionSharedStore.hasCurrentHealth()
     }
 
     private static var bundledEndpointExtensionVersion: String? {
@@ -726,17 +714,7 @@ final class SmartScanChecker {
         _ object: [String: Any],
         now: TimeInterval
     ) -> Bool {
-        guard
-            object["active"] as? Bool == true,
-            object["configurationVersion"] as? Int
-                == NetworkProtectionConfiguration.configurationVersion,
-            object["failOpen"] as? Bool == true,
-            let updatedAt = object["updatedAt"] as? TimeInterval
-        else {
-            return false
-        }
-        let age = now - updatedAt
-        return age >= 0 && age <= 30
+        NetworkProtectionSharedStore.isCurrentHealth(object, now: now)
     }
 
     // MARK: - Resolution Execution

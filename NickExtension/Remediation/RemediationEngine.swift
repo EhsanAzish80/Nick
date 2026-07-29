@@ -52,7 +52,8 @@ final class RemediationEngine {
             actions.append(killProcess(pid: pid))
         }
 
-        // 2. Quarantine (or delete as fallback) the threat file
+        // 2. Quarantine the threat file. Never delete as a fallback: a failed
+        // quarantine must remain recoverable and visible to the user.
         let record = quarantineManager.quarantine(
             filePath:    threatPath,
             hash:        hash,
@@ -67,7 +68,7 @@ final class RemediationEngine {
             success: record != nil,
             detail:  record != nil
                 ? "Moved to quarantine vault"
-                : "Failed to quarantine — deleted as fallback"
+                : "Failed to quarantine — file was not deleted"
         ))
 
         // 3. Remove persistence mechanisms that reference the threat

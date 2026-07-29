@@ -155,6 +155,54 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(afterReset.map(\.title), first.map(\.title))
     }
 
+    func test_learnedApproval_suppressesOnlySameSignedBehavior() async {
+        let rule = passthroughRule()
+        let localCorrelator = ThreatCorrelator(rules: [rule])
+        let approved = makeSignedSignal(reason: "expected_action")
+        let approvedAlert = rule.evaluate([approved])!
+        await localCorrelator.updateSuppressionRules([
+            SuppressionRule(
+                type: .signedProcess,
+                value: "TEAM123|/Applications/Editor.app/Contents/MacOS/Editor",
+                behaviorContext: SuppressionRule.contextFingerprint(for: approvedAlert),
+                expiresAt: Date().addingTimeInterval(3_600)
+            )
+        ])
+
+        await localCorrelator.ingest([approved])
+        let approvedResult = await localCorrelator.correlateNew()
+        XCTAssertTrue(approvedResult.isEmpty)
+
+        await localCorrelator.flush()
+        await localCorrelator.resetEmittedRules()
+        await localCorrelator.ingest([makeSignedSignal(reason: "new_unusual_action")])
+        let changedResult = await localCorrelator.correlateNew()
+        XCTAssertFalse(changedResult.isEmpty)
+    }
+
+    func test_learnedApproval_neverSuppressesPersistence() async {
+        let rule = passthroughRule()
+        let localCorrelator = ThreatCorrelator(rules: [rule])
+        let persistence = makeSignedSignal(
+            source: .persistence,
+            severity: .high,
+            reason: "launch_agent_added"
+        )
+        let alert = rule.evaluate([persistence])!
+        await localCorrelator.updateSuppressionRules([
+            SuppressionRule(
+                type: .signedProcess,
+                value: "TEAM123|/Applications/Editor.app/Contents/MacOS/Editor",
+                behaviorContext: SuppressionRule.contextFingerprint(for: alert),
+                expiresAt: Date().addingTimeInterval(3_600)
+            )
+        ])
+
+        await localCorrelator.ingest([persistence])
+        let result = await localCorrelator.correlateNew()
+        XCTAssertFalse(result.isEmpty)
+    }
+
     // MARK: - ThreatAlert
 
     func test_threatAlert_scoreIsClamped_belowZero() {
@@ -212,5 +260,50 @@ final class ThreatCorrelatorTests: XCTestCase {
             description: "Test signal for \(source.rawValue)",
             context: ThreatSignalContext(metadata: metadata)
         )
+    }
+
+    private func makeSignedSignal(
+        source: MonitorType = .process,
+        severity: SignalSeverity = .medium,
+        reason: String
+    ) -> ThreatSignal {
+        let process = NickProcessInfo(
+            pid: 42,
+            path: "/Applications/Editor.app/Contents/MacOS/Editor",
+            name: "Editor",
+            parentPID: 1,
+            parentName: "launchd",
+            signingStatus: .signed(teamID: "TEAM123")
+        )
+        return ThreatSignal(
+            source: source,
+            severity: severity,
+            title: "Editor behavior",
+            description: "Test signed editor behavior",
+            context: ThreatSignalContext(
+                processInfo: process,
+                metadata: ["reason": reason]
+            )
+        )
+    }
+
+    private func passthroughRule() -> CorrelationRule {
+        CorrelationRule(
+            name: "approval_test",
+            score: 0.6,
+            severity: .medium
+        ) { signals in
+            guard !signals.isEmpty else { return nil }
+            return ThreatAlert(
+                score: 0.6,
+                content: AlertContent(
+                    title: "Editor behavior",
+                    description: "Test",
+                    severity: signals.map(\.severity).max() ?? .medium,
+                    recommendedAction: "Review"
+                ),
+                contributingSignals: signals
+            )
+        }
     }
 }

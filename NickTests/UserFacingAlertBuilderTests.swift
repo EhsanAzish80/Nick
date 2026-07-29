@@ -129,7 +129,57 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         XCTAssertEqual(result.severity, .warning)
         XCTAssertTrue(result.headline.contains("suspicious behavior"))
         XCTAssertTrue(result.explanation.contains("not a confirmed malware detection"))
-        XCTAssertFalse(result.actions.contains(.quarantine))
+        XCTAssertTrue(result.actions.contains(.quarantine))
+        XCTAssertTrue(result.actions.contains(.allowOnce))
+        XCTAssertTrue(result.actions.contains(.keepBlocked))
+    }
+
+    func test_highYARAHeuristic_isStillReviewableAndNeverAutoQuarantine() {
+        let process = NickProcessInfo(
+            pid: 42,
+            path: "/Applications/Xcode.app/Contents/SharedFrameworks/XCBuild.framework/XCBuild",
+            name: "SWBBuildService",
+            parentPID: 1,
+            parentName: "Xcode",
+            signingStatus: .signed(teamID: "APPLE"),
+            metadata: ProcessMetadata()
+        )
+        let signal = ThreatSignal(
+            source: .yara,
+            severity: .critical,
+            title: "YARA match: macos_mass_file_rename",
+            description: "Matched a behavioral rule.",
+            context: ThreatSignalContext(
+                processInfo: process,
+                fileInfo: FileInfo(
+                    path: "/Users/test/Library/Developer/Xcode/DerivedData/App/Build/Products/Debug/App",
+                    sha256Hash: "changing-build-hash",
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: nil
+                ),
+                metadata: ["yaraRules": "macos_mass_file_rename"]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.95,
+            content: AlertContent(
+                title: "Known threat detected",
+                description: "YARA match",
+                severity: .critical,
+                recommendedAction: "Quarantine."
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(result.severity, .warning)
+        XCTAssertEqual(result.assessment, "Needs your review")
+        XCTAssertTrue(result.explanation.contains("not a confirmed malware"))
+        XCTAssertTrue(result.actions.contains(.quarantine))
+        XCTAssertTrue(result.actions.contains(.allowOnce))
+        XCTAssertTrue(result.actions.contains(.keepBlocked))
     }
 
     private func makeCaptureAlert(

@@ -189,6 +189,28 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
+    public func requestAllowFileOnce(
+        path: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.requestAllowFileOnce(path: path, reply: completion)
+    }
+
+    public func requestBlockReviewedFile(
+        path: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.requestBlockReviewedFile(path: path, reply: completion)
+    }
+
     /// Instructs the extension to rebuild the FIM baseline (Phase 5+).
     public func requestRebuildFIMBaseline(completion: @escaping (Bool) -> Void) {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {

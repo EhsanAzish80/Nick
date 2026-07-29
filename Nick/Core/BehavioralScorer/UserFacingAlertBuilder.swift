@@ -201,27 +201,16 @@ final class UserFacingAlertBuilder: Sendable {
 
         // --- YARA match ---
         if hasYARA {
-            let isHeuristicOnly = signals
-                .filter { $0.source == .yara }
-                .allSatisfy { $0.severity == .info || $0.severity == .low || $0.severity == .medium }
-            if isHeuristicOnly {
-                return AlertPattern(
-                    headline: "A file matched a suspicious behavior pattern",
-                    explanation: "A file contains instructions sometimes used to change startup settings or perform other sensitive actions. Legitimate installers and security tools can contain the same instructions, so this is not a confirmed malware detection.",
-                    assessment: "Needs your review",
-                    recommendedAction: "Check the file name, location, and detection rule. Quarantine it only if you do not recognize where it came from.",
-                    severity: .warning,
-                    actions: [.showDetails, .dismiss]
-                )
-            }
+            // A YARA rule is pattern evidence, not identity evidence. Severity
+            // expresses the rule author's concern; it does not turn a heuristic
+            // into a confirmed malicious hash.
             return AlertPattern(
-                headline: "Known threat detected",
-                explanation: "A file matched a malware-detection rule. "
-                    + "This is strong evidence, although security test files and specialized tools can sometimes match intentionally. "
-                    + "Nick has not deleted the file.",
-                assessment: "High-confidence detection",
-                recommendedAction: "Quarantine it unless you recognize it as a security test file or trusted research tool.",
-                actions: [.quarantine, .showDetails]
+                headline: "A file matched a suspicious behavior pattern",
+                explanation: "A file contains instructions sometimes used to change startup settings or perform other sensitive actions. Legitimate installers, developer builds, and security tools can contain the same instructions, so this is not a confirmed malware detection.",
+                assessment: "Needs your review",
+                recommendedAction: "Check the file name, location, and detection rule. Accept it if you recognize the app or build; quarantine it only after reviewing the file.",
+                severity: .warning,
+                actions: [.keepBlocked, .allowOnce, .quarantine, .showDetails, .dismiss]
             )
         }
 

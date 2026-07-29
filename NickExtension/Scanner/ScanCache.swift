@@ -22,6 +22,10 @@ final class ScanCache {
     struct Entry {
         let hash: String
         let isThreat: Bool
+        /// Only exact, high-confidence evidence may be used by an AUTH event
+        /// to deny access. A YARA/behavioural match remains reportable but must
+        /// never silently break the app that produced or opened the file.
+        let mayBlock: Bool
         let threatName: String?
         let threatFamily: String?
         let expiry: Date
@@ -38,6 +42,7 @@ final class ScanCache {
     // MARK: - Private
 
     private var store: [String: Entry] = [:]
+    private var oneTimeAllowances: Set<String> = []
     private let lock = NSLock()
 
     // MARK: - Public API
@@ -55,11 +60,47 @@ final class ScanCache {
         return entry
     }
 
+    /// Consumes an explicit user approval for the next authorization involving
+    /// this path. Consuming it prevents an accidental permanent bypass.
+    func consumeOneTimeAllowance(path: String) -> Bool {
+        lock.withLock {
+            oneTimeAllowances.remove(path) != nil
+        }
+    }
+
+    /// Allows the next authorization and clears any stale deny verdict now,
+    /// rather than waiting for the normal cache TTL.
+    func allowOnce(path: String) {
+        lock.withLock {
+            oneTimeAllowances.insert(path)
+            store.removeValue(forKey: path)
+        }
+    }
+
+    /// Promotes the current cached finding to an explicit user-selected block.
+    /// Returns false when no reviewed finding exists for the path.
+    func blockReviewedFinding(path: String) -> Bool {
+        lock.withLock {
+            guard let entry = store[path], entry.isThreat else { return false }
+            store[path] = Entry(
+                hash: entry.hash,
+                isThreat: true,
+                mayBlock: true,
+                threatName: entry.threatName,
+                threatFamily: entry.threatFamily,
+                expiry: entry.expiry
+            )
+            oneTimeAllowances.remove(path)
+            return true
+        }
+    }
+
     /// Stores a scan result for `path` with the given TTL (defaults to `defaultTTL`).
     func store(
         path: String,
         hash: String,
         isThreat: Bool,
+        mayBlock: Bool = false,
         threatName: String? = nil,
         threatFamily: String? = nil,
         ttl: TimeInterval = defaultTTL
@@ -67,6 +108,7 @@ final class ScanCache {
         let entry = Entry(
             hash: hash,
             isThreat: isThreat,
+            mayBlock: mayBlock,
             threatName: threatName,
             threatFamily: threatFamily,
             expiry: Date().addingTimeInterval(ttl)

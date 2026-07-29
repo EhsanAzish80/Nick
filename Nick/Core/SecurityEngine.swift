@@ -453,6 +453,57 @@ final class SecurityEngine {
         rebuildUserFacingAlerts()
     }
 
+    /// Accepts the current occurrence without teaching Nick a permanent rule.
+    func allowAlertOnce(_ id: UUID) {
+        guard let alert = alerts.first(where: { $0.id == id }) else { return }
+        SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
+        hideAlert(id)
+    }
+
+    /// Trusts a user-confirmed application/process for future behavioural
+    /// correlation. Exact malware hash detections are intentionally excluded
+    /// from this preference.
+    func alwaysAllowBehavior(from alertID: UUID) {
+        guard let alert = alerts.first(where: { $0.id == alertID }),
+              let name = alert.contributingSignals.compactMap(\.processInfo?.name)
+                .first(where: { !$0.isEmpty }) else { return }
+        let signedIdentity = alert.contributingSignals.compactMap { signal -> String? in
+            guard let process = signal.processInfo,
+                  case .signed(let teamID) = process.signingStatus,
+                  !teamID.isEmpty,
+                  !process.path.isEmpty else { return nil }
+            let path = URL(fileURLWithPath: process.path).standardizedFileURL.path
+            return "\(teamID)|\(path)"
+        }.first
+        guard let signedIdentity else {
+            // Unsigned/name-only identities are trivial to impersonate. They
+            // may be accepted once, but never receive persistent trust.
+            return
+        }
+        suppressionRules.append(SuppressionRule(
+            type: .signedProcess,
+            value: signedIdentity,
+            note: "Accepted \(name) for this behavior",
+            behaviorContext: SuppressionRule.contextFingerprint(for: alert),
+            expiresAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
+        ))
+        SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
+        let acceptedContext = SuppressionRule.contextFingerprint(for: alert)
+        // Remove only repeats of this same behavior. Different activity from
+        // the same app remains visible and reviewable.
+        alerts.removeAll { candidate in
+            SuppressionRule.contextFingerprint(for: candidate) == acceptedContext &&
+            candidate.contributingSignals.contains {
+                $0.processInfo?.name.caseInsensitiveCompare(name) == .orderedSame
+            }
+        }
+        saveAlerts()
+        rebuildUserFacingAlerts()
+        Task {
+            await correlator.updateSuppressionRules(suppressionRules)
+        }
+    }
+
     /// Removes a resolved alert (threat was killed / deleted) without adding its
     /// `deduplicationKey` to `dismissedAlertKeys`.  The same threat pattern will
     /// reappear in the alert list if the binary is re-run.

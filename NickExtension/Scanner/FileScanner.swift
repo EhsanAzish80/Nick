@@ -30,6 +30,9 @@ final class FileScanner {
         let filePath: String
         let hash: String          // lowercase hex SHA-256, empty string on I/O error
         let isThreat: Bool
+        /// True only for evidence strong enough to deny an Endpoint Security
+        /// authorization request without asking the user.
+        let mayBlock: Bool
         let threatName: String?
         let threatFamily: String?
         let isCodeSigned: Bool?   // nil = not evaluated
@@ -92,6 +95,7 @@ final class FileScanner {
                 filePath: filePath,
                 hash: entry.hash,
                 isThreat: entry.isThreat,
+                mayBlock: entry.mayBlock,
                 threatName: entry.threatName,
                 threatFamily: entry.threatFamily,
                 isCodeSigned: nil
@@ -102,7 +106,7 @@ final class FileScanner {
         guard let hash = computeSHA256(path: filePath) else {
             Self.logger.debug("Cannot hash \(filePath) — skipping scan")
             return ScanResult(filePath: filePath, hash: "", isThreat: false,
-                              threatName: nil, threatFamily: nil, isCodeSigned: nil)
+                              mayBlock: false, threatName: nil, threatFamily: nil, isCodeSigned: nil)
         }
 
         // 3. Signature DB lookup (hash-based — catches known exact samples)
@@ -131,6 +135,10 @@ final class FileScanner {
             return severity == "HIGH" || severity == "CRITICAL"
         }
         let isThreat = hashMatch != nil || !actionableYARAMatches.isEmpty
+        // YARA rules are pattern/heuristic evidence. Even a high-severity rule
+        // can match a legitimate newly-linked executable (for example Xcode
+        // DerivedData). Only an exact curated hash is safe to auto-block.
+        let mayBlock = hashMatch != nil
         let threatName = hashMatch?.name
             ?? actionableYARAMatches.first.map { "YARA:\($0.ruleName)" }
         let threatFamily = hashMatch?.family ?? actionableYARAMatches.first?.tags.first
@@ -151,6 +159,7 @@ final class FileScanner {
             path: filePath,
             hash: hash,
             isThreat: isThreat,
+            mayBlock: mayBlock,
             threatName: threatName,
             threatFamily: threatFamily
         )
@@ -159,6 +168,7 @@ final class FileScanner {
             filePath: filePath,
             hash: hash,
             isThreat: isThreat,
+            mayBlock: mayBlock,
             threatName: threatName,
             threatFamily: threatFamily,
             isCodeSigned: isSigned

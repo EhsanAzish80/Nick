@@ -154,7 +154,8 @@ enum LOLBinDetector {
     ///
     /// Checks the process name and command-line arguments against known
     /// LOLBin signatures. Parent process context is used to reduce false
-    /// positives — shells spawned from trusted terminal emulators are skipped.
+    /// positives. Trust is applied later by correlation and never prevents collection
+    /// of strong evidence from a potentially compromised signed application.
     ///
     /// - Parameters:
     ///   - proc: The process to evaluate.
@@ -166,9 +167,6 @@ enum LOLBinDetector {
         parentName: String?,
         trustedProcessList: TrustedProcessList = TrustedProcessList()
     ) -> ThreatSignal? {
-        // Skip if parent is a trusted, signed process — user intentionally running a shell command.
-        if let parent = parentName, trustedProcessList.isTrusted(parent, pid: proc.parentPID) { return nil }
-
         // Include parentName in the search string so pipe-based patterns
         // (e.g., `curl … | bash`) are detected via the parent process name.
         let argv = proc.path + " " + proc.name + " " + (parentName ?? "")
@@ -199,7 +197,7 @@ enum LOLBinDetector {
     /// Evaluates a list of processes for LOLBin patterns.
     ///
     /// Builds a PID→name map for parent resolution, then calls `evaluate(_:parentName:trustedProcessList:)`
-    /// for each process. Processes in `trustedProcessList` are skipped outright.
+    /// for each process. Trust is handled after signal collection.
     ///
     /// - Parameters:
     ///   - processes: All currently running processes.
@@ -213,7 +211,6 @@ enum LOLBinDetector {
         var results: [ThreatSignal] = []
 
         for proc in processes {
-            guard !trustedProcessList.isTrusted(proc.name) else { continue }
             // Fall back to the stored parentName field when the parent PID
             // is not present in the current snapshot (e.g. parent already exited).
             let storedParent = proc.parentName.flatMap { $0.isEmpty ? nil : $0 }

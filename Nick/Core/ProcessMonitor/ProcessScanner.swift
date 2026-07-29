@@ -190,9 +190,8 @@ struct ProcessScanner {
     /// - Unsigned binary in `/tmp/`, `/var/folders/`, `/private/tmp/` → `.high`
     /// - Shell process with no terminal parent (LOLBin) → `.medium`
     ///
-    /// Processes in `trustedProcessList` are silently skipped — no signals are emitted
-    /// for them. This eliminates false positives from known-good software such as
-    /// terminal emulators, Homebrew tools, and IDE helpers.
+    /// Trust affects presentation and correlation, not signal collection. A signed,
+    /// familiar application can still be compromised or execute a dangerous child.
     ///
     /// - Parameters:
     ///   - processes: Output of `scan()`.
@@ -204,9 +203,6 @@ struct ProcessScanner {
         let pidToName = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0.name) })
 
         for proc in processes {
-            // Skip known-good processes — suppresses false positives on developer/creative Macs.
-            if trustedProcessList.isTrusted(proc.name) { continue }
-
             // Unsigned binary in temp/scratch directories → high
             if proc.signingStatus == .unsigned || proc.signingStatus == .invalid,
                isTemporaryPath(proc.path) {
@@ -243,27 +239,25 @@ struct ProcessScanner {
                     || parentName.contains("ssh")
                     || parentName.contains("bash")
                     || parentName.contains("zsh")
-                // Suppress signal when the parent is a trusted IDE helper or known-good process.
-                let parentTrusted = !rawParentName.isEmpty && trustedProcessList.isTrusted(rawParentName)
-                if !hasTerminalParent && !parentTrusted {
-                    signals.append(ThreatSignal(
-                        source: .process,
-                        severity: .medium,
-                        title: "Shell spawned from non-terminal parent",
-                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)' (PID \(proc.parentPID)), which is not a recognized terminal.",
-                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "lolbin", "parent": rawParentName])
-                    ))
-                } else if Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
-                       || Self.hasPipeDownloadPattern(
-                              Self.parentCommandLine(for: proc.parentPID) ?? "") {
-                    // curl | bash / wget | bash — either a download tool shares the same
-                    // parent at the same moment, or the parent's argv contains a pipe pattern.
+                let hasPipeAttack = Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
+                    || Self.hasPipeDownloadPattern(Self.parentCommandLine(for: proc.parentPID) ?? "")
+                if hasPipeAttack {
+                    // Strong evidence is never hidden merely because a familiar app
+                    // launched the shell.
                     signals.append(ThreatSignal(
                         source: .process,
                         severity: .critical,
                         title: "Shell piped from download tool",
                         description: "'\(proc.name)' (PID \(proc.pid)) is running concurrently with a download tool under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a download-to-shell pipe attack.",
                         context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "curl_pipe_shell", "parent": rawParentName])
+                    ))
+                } else if !hasTerminalParent {
+                    signals.append(ThreatSignal(
+                        source: .process,
+                        severity: .medium,
+                        title: "Shell spawned from non-terminal parent",
+                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)' (PID \(proc.parentPID)), which is not a recognized terminal.",
+                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "lolbin", "parent": rawParentName])
                     ))
                 }
             }
@@ -375,8 +369,6 @@ struct ProcessScanner {
         let pidToName = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0.name) })
 
         for proc in processes where newPIDs.contains(proc.pid) {
-            if trustedProcessList.isTrusted(proc.name) { continue }
-
             // Path-based temp check — fires even when signing status is .pending.
             if !proc.path.isEmpty, isTemporaryPath(proc.path) {
                 results.append(ThreatSignal(
@@ -399,24 +391,23 @@ struct ProcessScanner {
                     || parentName.contains("ssh")
                     || parentName.contains("bash")
                     || parentName.contains("zsh")
-                let parentTrusted = !rawParentName.isEmpty && trustedProcessList.isTrusted(rawParentName)
-                if !hasTerminalParent && !parentTrusted {
-                    results.append(ThreatSignal(
-                        source: .process,
-                        severity: .medium,
-                        title: "Shell spawned from non-terminal parent",
-                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)', which is not a recognized terminal.",
-                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "lolbin", "parent": rawParentName])
-                    ))
-                } else if Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
-                       || Self.hasPipeDownloadPattern(
-                              Self.parentCommandLine(for: proc.parentPID) ?? "") {
+                let hasPipeAttack = Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
+                    || Self.hasPipeDownloadPattern(Self.parentCommandLine(for: proc.parentPID) ?? "")
+                if hasPipeAttack {
                     results.append(ThreatSignal(
                         source: .process,
                         severity: .critical,
                         title: "Shell piped from download tool",
                         description: "'\(proc.name)' (PID \(proc.pid)) appeared concurrently with a download tool under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a pipe attack.",
                         context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "curl_pipe_shell", "parent": rawParentName])
+                    ))
+                } else if !hasTerminalParent {
+                    results.append(ThreatSignal(
+                        source: .process,
+                        severity: .medium,
+                        title: "Shell spawned from non-terminal parent",
+                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)', which is not a recognized terminal.",
+                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "lolbin", "parent": rawParentName])
                     ))
                 }
             }

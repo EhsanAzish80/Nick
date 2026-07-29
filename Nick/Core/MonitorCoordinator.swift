@@ -207,8 +207,6 @@ final class MonitorCoordinator {
 
             Self.log.info("quickTick: new PID \(pid) — \(info.name, privacy: .public) at \(info.path, privacy: .public) args: \(info.arguments.joined(separator: " "), privacy: .public)")
 
-            if engine.trustedProcessList.isTrusted(info.name) { continue }
-
             // Check 1: Executable in a writable temp directory, OR interpreter running
             // a script whose first argument points to a temp-directory path.
             // Catches: /tmp/evil (direct) AND /bin/bash /tmp/evil.sh (interpreter pattern).

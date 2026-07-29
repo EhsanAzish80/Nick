@@ -161,4 +161,35 @@ enum NetworkProtectionSharedStore {
     static func healthURL(fileManager: FileManager = .default) -> URL? {
         systemSupportDirectory.appendingPathComponent(healthFileName)
     }
+
+    static func hasCurrentHealth(
+        fileManager: FileManager = .default,
+        now: TimeInterval = Date().timeIntervalSince1970
+    ) -> Bool {
+        guard
+            let url = healthURL(fileManager: fileManager),
+            let data = fileManager.contents(atPath: url.path),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return false
+        }
+        return isCurrentHealth(object, now: now)
+    }
+
+    static func isCurrentHealth(
+        _ object: [String: Any],
+        now: TimeInterval
+    ) -> Bool {
+        guard
+            object["active"] as? Bool == true,
+            object["configurationVersion"] as? Int
+                == NetworkProtectionConfiguration.configurationVersion,
+            object["failOpen"] as? Bool == true,
+            let updatedAt = object["updatedAt"] as? TimeInterval
+        else {
+            return false
+        }
+        let age = now - updatedAt
+        return age >= 0 && age <= 30
+    }
 }

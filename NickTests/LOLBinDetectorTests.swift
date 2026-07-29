@@ -164,15 +164,25 @@ final class LOLBinDetectorTests: XCTestCase {
         XCTAssertTrue(signals.isEmpty)
     }
 
-    func test_signals_trustedProcessSkipped() {
+    func test_signals_trustedParentDoesNotHideStrongPattern() {
         let processes = [
             NickProcessInfo(pid: 400, path: "/bin/bash curl x", name: "bash",
                             parentPID: 1, parentName: "Terminal",
                             signingStatus: .adHoc, metadata: ProcessMetadata(user: "user", startTime: Date()))
         ]
         let signals = LOLBinDetector.signals(from: processes)
-        // bash is not in builtIn; Terminal parent suppresses it
-        XCTAssertTrue(signals.isEmpty)
+        XCTAssertEqual(signals.first?.severity, .critical)
+        XCTAssertEqual(signals.first?.metadata["reason"], "curl_pipe_shell")
+    }
+
+    func test_signals_codeHelperParentDoesNotHideStrongPattern() {
+        let processes = [
+            NickProcessInfo(pid: 401, path: "/bin/bash curl payload | bash", name: "bash",
+                            parentPID: 2, parentName: "Code Helper",
+                            signingStatus: .adHoc, metadata: ProcessMetadata(user: "user", startTime: Date()))
+        ]
+        let signals = LOLBinDetector.signals(from: processes)
+        XCTAssertEqual(signals.first?.severity, .critical)
     }
 
     // MARK: - Metadata

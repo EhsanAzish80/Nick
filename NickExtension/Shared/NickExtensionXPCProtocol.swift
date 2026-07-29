@@ -32,6 +32,13 @@ import Foundation
         reply: @escaping (Bool, String?, Data?) -> Void
     )
 
+    /// Clears a stale cached denial and permits the next authorization for the
+    /// selected file. This is deliberately one-shot.
+    func requestAllowFileOnce(path: String, reply: @escaping (Bool) -> Void)
+
+    /// Promotes a reviewed heuristic finding to an explicit user block.
+    func requestBlockReviewedFile(path: String, reply: @escaping (Bool) -> Void)
+
     /// Returns a bounded JSON array of important events recorded while the
     /// container app was closed.
     func getPersistedEvents(reply: @escaping (Data) -> Void)

@@ -313,6 +313,34 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         }
     }
 
+    func requestAllowFileOnce(path: String, reply: @escaping (Bool) -> Void) {
+        guard let scanner = ESXPCServer.fileScannerRef else {
+            reply(false)
+            return
+        }
+        let standardPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard standardPath.hasPrefix("/") else {
+            reply(false)
+            return
+        }
+        scanner.cache.allowOnce(path: standardPath)
+        Self.logger.notice("User allowed one authorization for \(standardPath, privacy: .private)")
+        reply(true)
+    }
+
+    func requestBlockReviewedFile(path: String, reply: @escaping (Bool) -> Void) {
+        guard let scanner = ESXPCServer.fileScannerRef else {
+            reply(false)
+            return
+        }
+        let standardPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        let blocked = scanner.cache.blockReviewedFinding(path: standardPath)
+        if blocked {
+            Self.logger.notice("User blocked reviewed finding \(standardPath, privacy: .private)")
+        }
+        reply(blocked)
+    }
+
     func requestRebuildFIMBaseline(reply: @escaping (Bool) -> Void) {
         // Delegate to the FileIntegrityMonitor that was wired in at startup.
         // The extension does not keep a strong reference to the monitor here,

@@ -5,7 +5,9 @@ SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h}
 BUILD_DIR=${BUILD_DIR:-"${PROJECT_DIR}/build/release"}
 ARCHIVE_PATH=${ARCHIVE_PATH:-"${BUILD_DIR}/Nick.xcarchive"}
-OUTPUT_PATH=${OUTPUT_PATH:-"${BUILD_DIR}/Nick-4.0.pkg"}
+EXPECTED_VERSION=${EXPECTED_VERSION:-4.0.1}
+EXPECTED_BUILD=${EXPECTED_BUILD:-405}
+OUTPUT_PATH=${OUTPUT_PATH:-"${BUILD_DIR}/Nick-${EXPECTED_VERSION}-build-${EXPECTED_BUILD}.pkg"}
 STAGING_DIR=${STAGING_DIR:-"${TMPDIR%/}/NickReleaseStaging"}
 APP_SIGNING_IDENTITY=${APP_SIGNING_IDENTITY:-"Developer ID Application: ehsan azish (UXGW5V3BY6)"}
 INSTALLER_SIGNING_IDENTITY=${INSTALLER_SIGNING_IDENTITY:-"Developer ID Installer: ehsan azish (UXGW5V3BY6)"}
@@ -40,8 +42,8 @@ SPARKLE_FRAMEWORK="${NICK_APP}/Contents/Frameworks/Sparkle.framework"
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${NICK_APP}/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${NICK_APP}/Contents/Info.plist")
-[[ "${VERSION}" == "4.0" && "${BUILD}" == "404" ]] || {
-  print -u2 "Expected Nick 4.0 (404), found ${VERSION} (${BUILD})."
+[[ "${VERSION}" == "${EXPECTED_VERSION}" && "${BUILD}" == "${EXPECTED_BUILD}" ]] || {
+  print -u2 "Expected Nick ${EXPECTED_VERSION} (${EXPECTED_BUILD}), found ${VERSION} (${BUILD})."
   exit 1
 }
 
