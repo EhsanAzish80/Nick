@@ -85,6 +85,10 @@ struct ProtectionCheck: Identifiable, Sendable {
         /// Reveal the current build so the user can move it there first.
         case revealAppForInstallation
 
+        /// Relaunches Nick so macOS applies a privacy grant made while the
+        /// current process was already running.
+        case restartApplication
+
         /// Feature is pending platform approval (e.g. Apple entitlement review).
         /// Shows a disabled informational button — no user action possible.
         case pendingApproval(reason: String)
@@ -98,6 +102,7 @@ struct ProtectionCheck: Identifiable, Sendable {
             case .requiresPermission:   return "Open Settings"
             case .installExtension:     return "Install"
             case .revealAppForInstallation: return "Show App"
+            case .restartApplication:   return "Reopen Nick"
             case .pendingApproval:      return "Pending Approval"
             case .none:                 return "Protected"
             }
@@ -256,6 +261,8 @@ final class SmartScanChecker {
             await installExtension(name: name)
         case .revealAppForInstallation:
             NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+        case .restartApplication:
+            restartApplication()
         case .pendingApproval, .none:
             break
         }
@@ -265,6 +272,7 @@ final class SmartScanChecker {
 
     private func checkEndpointSecurity() -> ProtectionCheck {
         let isActive = isEndpointSecurityActive
+        let extensionNeedsUpdate = endpointExtensionNeedsUpdate
         let extensionFullDiskAccessReady =
             endpointExtensionHealth?["fullDiskAccessReady"] as? Bool == true
         let appFullDiskAccessReady = Self.hasFullDiskAccess
@@ -282,6 +290,18 @@ final class SmartScanChecker {
                 explanation: "macOS only allows Nick to install its security extension when Nick.app is running from the Applications folder.",
                 icon: "shield.checkered",
                 resolution: .revealAppForInstallation
+            )
+        }
+
+        if extensionNeedsUpdate {
+            return ProtectionCheck(
+                id: "endpoint_security",
+                title: "Real-Time Protection",
+                status: .warning,
+                headline: "Update Nick's security extension",
+                explanation: "Nick was updated, but macOS is still running the previous security extension. Install the bundled update to finish upgrading protection.",
+                icon: "shield.checkered",
+                resolution: .installExtension(extensionName: "NickExtension")
             )
         }
 
@@ -340,6 +360,17 @@ final class SmartScanChecker {
         }
 
         if isActive, !fullDiskAccessReady {
+            if extensionFullDiskAccessReady, !appFullDiskAccessReady {
+                return ProtectionCheck(
+                    id: "endpoint_security",
+                    title: "Real-Time Protection",
+                    status: .warning,
+                    headline: "Reopen Nick to finish Full Disk Access",
+                    explanation: "Full Disk Access is enabled for NickExtension. Reopen Nick so macOS applies the newly enabled permission to the app itself.",
+                    icon: "shield.checkered",
+                    resolution: .restartApplication
+                )
+            }
             return ProtectionCheck(
                 id: "endpoint_security",
                 title: "Real-Time Protection",
@@ -450,10 +481,10 @@ final class SmartScanChecker {
             id: "scam_guardian",
             title: "Scam Guardian",
             status: isActive ? .protected : .warning,
-            headline: isActive ? "Phishing and lookalike blocking is active" : "Active website blocking is not enabled",
+            headline: isActive ? "Phishing destination monitoring is active" : "Network protection monitoring is not enabled",
             explanation: isActive
-                ? "Nick's Network Filter is running and checking outbound connections for phishing and lookalike domains."
-                : "Install and enable Nick's Network Filter to let Scam Guardian block known phishing and lookalike domains.",
+                ? "Nick's Network Filter checks outbound destinations and reports suspected phishing without interrupting ordinary connections."
+                : "Install and enable Nick's Network Filter to monitor known phishing and lookalike domains.",
             icon: "globe.badge.chevron.backward",
             resolution: isActive ? .none : .installExtension(extensionName: "NickNetFilter")
         )
@@ -652,6 +683,21 @@ final class SmartScanChecker {
         return age >= 0 && age <= 30
     }
 
+    var endpointExtensionNeedsUpdate: Bool {
+        Self.extensionNeedsUpdate(
+            runningVersion: endpointExtensionHealth?["version"] as? String,
+            bundledVersion: Self.bundledEndpointExtensionVersion
+        )
+    }
+
+    static func extensionNeedsUpdate(
+        runningVersion: String?,
+        bundledVersion: String?
+    ) -> Bool {
+        guard let runningVersion, let bundledVersion else { return false }
+        return runningVersion != bundledVersion
+    }
+
     private var endpointExtensionHealth: [String: Any]? {
         let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
         guard
@@ -761,6 +807,21 @@ final class SmartScanChecker {
     private func openSystemSettings(url: String) {
         if let settingsURL = URL(string: url) {
             NSWorkspace.shared.open(settingsURL)
+        }
+    }
+
+    private func restartApplication() {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(
+            at: Bundle.main.bundleURL,
+            configuration: configuration
+        ) { _, error in
+            guard error == nil else { return }
+            Task { @MainActor in
+                NSApp.terminate(nil)
+            }
         }
     }
 

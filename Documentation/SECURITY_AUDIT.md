@@ -2,15 +2,16 @@
 
 ## Current release security status
 
-Nick 4.0 build 404 adds two restricted, security-sensitive surfaces beyond the
+Nick 4.0.1 build 408 includes two restricted, security-sensitive surfaces
+beyond the
 historical audit below:
 
 - `NickExtension`, an Endpoint Security system extension with authenticated
   XPC, bounded event handling, confidence-aware YARA enforcement, Email Guard,
   file integrity, privacy monitoring, and quarantine re-validation.
-- `NickNetFilter`, a Network Extension content filter with deterministic
-  allowlist-first policy, fail-open configuration, privacy-safe events, and
-  Ed25519 validation for downloaded rule envelopes.
+- `NickNetFilter`, a Network Extension content filter with fail-open,
+  observation-only policy, privacy-safe events, and Ed25519 validation for
+  downloaded rule envelopes. Build 408 contains no traffic-drop verdict path.
 
 Vendored YARA is version 4.5.5. The automated suite validates source behavior;
 it does not replace

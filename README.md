@@ -53,7 +53,7 @@ next action.
 | Real-Time Protection | Observes process and file activity through Apple's Endpoint Security framework. |
 | Malware Scanner | Uses YARA rules for on-demand, real-time, email, and external-volume scanning. |
 | Behavioral Detection | Correlates process, persistence, filesystem, privacy, and network signals. |
-| Scam Guardian | Optionally blocks known phishing and lookalike destinations with a Network Extension. |
+| Scam Guardian | Observes phishing and lookalike destinations through a fail-open Network Extension. |
 | Email Guard | Scans supported Apple Mail and Outlook attachment locations. |
 | Ransomware Shield | Watches sentinel files and suspicious high-volume file changes. |
 | System Audit | Checks SIP, FileVault, Gatekeeper, firewall, updates, XProtect, and persistence. |
@@ -91,8 +91,10 @@ camera or microphone activity.
 The optional `NickNetFilter` system extension uses Apple's Network Extension
 content-filter APIs to evaluate connection destinations against signed rules
 and lookalike-domain checks. It does not inspect page contents or store full
-URLs, query strings, or payloads. Allowlisted apps and domains take precedence,
-and the filter fails open when its configuration cannot be read.
+URLs, query strings, or payloads. Version 4.0.1 operates in observation-only
+mode: suspected destinations are reported for review, but the extension does
+not drop ordinary application traffic. Missing, stale, or invalid
+configuration also fails open.
 
 ### Email Guard
 
@@ -147,8 +149,8 @@ Nick.app
 │   └── authenticated XPC service
 └── NickNetFilter.systemextension
     ├── Network Extension content filter
-    ├── Scam Guardian and signed blocklist policy
-    └── privacy-safe health and block events
+    ├── Scam Guardian and signed destination policy
+    └── privacy-safe health and observation events
 
 Nick Uninstaller.app
 └── guided removal and cleanup
@@ -173,7 +175,7 @@ For implementation details and trust boundaries, see
 
 ### Published release
 
-The current stable release is **Nick 4.0 (build 404)** for macOS 26 and later.
+The current stable release is **Nick 4.0.1 (build 408)** for macOS 26 and later.
 
 1. Download the notarized Nick disk image from
    [the latest GitHub release](https://github.com/EhsanAzish80/Nick/releases/latest).
@@ -192,7 +194,7 @@ updates use the signed package directly.
 | Approval | Used by | Purpose |
 |---|---|---|
 | Endpoint Security system extension | NickExtension | Real-time process and file monitoring |
-| Network Extension | NickNetFilter | Optional Scam Guardian destination filtering |
+| Network Extension | NickNetFilter | Optional Scam Guardian destination monitoring |
 | Full Disk Access | Nick and NickExtension | Protected system and mail attachment locations |
 | Notifications | Nick | User-facing threat notifications |
 
@@ -250,8 +252,8 @@ The production release pipeline is documented in
 - The appcast enclosure must reference the exact, unmodified signed package.
 - Manual website and GitHub downloads may use the disk image.
 
-Version 4.0 release notes are in
-[Packaging/Release/v4.0.0/RELEASE_NOTES.md](Packaging/Release/v4.0.0/RELEASE_NOTES.md).
+Version 4.0.1 release notes are in
+[Packaging/Release/v4.0.1/RELEASE_NOTES.md](Packaging/Release/v4.0.1/RELEASE_NOTES.md).
 
 ## Quality gates
 
@@ -298,7 +300,7 @@ the extension remains installed.
 
 ## Project status
 
-Nick 4.0 is the current production release. Every future release remains gated
+Nick 4.0.1 is the current production release. Every future release remains gated
 on clean-Mac validation of Endpoint Security, Email Guard, Scam Guardian,
 updates, performance, quarantine, and uninstall behavior.
 

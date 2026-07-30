@@ -88,6 +88,27 @@ final class SmartScanStatusTests: XCTestCase {
         XCTAssertFalse(SmartScanChecker.isEmailScannerReady(nil, now: now))
     }
 
+    func test_endpointExtensionUpdate_requiresMatchingBundledBuild() {
+        XCTAssertTrue(
+            SmartScanChecker.extensionNeedsUpdate(
+                runningVersion: "406",
+                bundledVersion: "407"
+            )
+        )
+        XCTAssertFalse(
+            SmartScanChecker.extensionNeedsUpdate(
+                runningVersion: "407",
+                bundledVersion: "407"
+            )
+        )
+        XCTAssertFalse(
+            SmartScanChecker.extensionNeedsUpdate(
+                runningVersion: nil,
+                bundledVersion: "407"
+            )
+        )
+    }
+
     func test_uninstallDoesNotFailWhenLaunchAtLoginRemovalIsDenied() {
         let denied = NSError(
             domain: NSPOSIXErrorDomain,

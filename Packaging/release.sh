@@ -5,8 +5,9 @@ SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h}
 BUILD_DIR=${BUILD_DIR:-"${PROJECT_DIR}/build/release"}
 ARCHIVE_PATH=${ARCHIVE_PATH:-"${BUILD_DIR}/Nick.xcarchive"}
+DERIVED_DATA_PATH=${DERIVED_DATA_PATH:-"${BUILD_DIR}/DerivedData"}
 EXPECTED_VERSION=${EXPECTED_VERSION:-4.0.1}
-EXPECTED_BUILD=${EXPECTED_BUILD:-405}
+EXPECTED_BUILD=${EXPECTED_BUILD:-408}
 OUTPUT_PATH=${OUTPUT_PATH:-"${BUILD_DIR}/Nick-${EXPECTED_VERSION}-build-${EXPECTED_BUILD}.pkg"}
 STAGING_DIR=${STAGING_DIR:-"${TMPDIR%/}/NickReleaseStaging"}
 APP_SIGNING_IDENTITY=${APP_SIGNING_IDENTITY:-"Developer ID Application: ehsan azish (UXGW5V3BY6)"}
@@ -21,6 +22,7 @@ xcodebuild \
   -project "${PROJECT_DIR}/Nick.xcodeproj" \
   -scheme Nick \
   -configuration Release \
+  -derivedDataPath "${DERIVED_DATA_PATH}" \
   -archivePath "${ARCHIVE_PATH}" \
   archive
 

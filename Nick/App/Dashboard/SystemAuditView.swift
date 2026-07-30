@@ -50,7 +50,7 @@ struct SystemAuditView: View {
             $0.decision == .deny && $0.timestamp > cutoff
         }.count
         let networkBlocks = networkProtection.blockEvents.filter {
-            $0.timestamp > cutoff
+            $0.decision == .blocked && $0.timestamp > cutoff
         }.count
         return endpointBlocks + networkBlocks
     }
@@ -61,7 +61,9 @@ struct SystemAuditView: View {
             threatsBlocked24h:  blockedLast24h,
             quarantineCount:    xpcClient.quarantineRecords.count,
             fimViolations:      xpcClient.integrityViolations.count,
-            networkBlocksCount: networkProtection.blockEvents.count,
+            networkBlocksCount: networkProtection.blockEvents.filter {
+                $0.decision == .blocked
+            }.count,
             privacyAlerts:      xpcClient.privacyAlerts.count
         )
     }

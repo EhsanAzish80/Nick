@@ -54,11 +54,14 @@ struct ThreatTimelineView: View {
     private var filteredNetworkEvents: [NetworkBlockEvent] {
         guard selectedFilter != .writes else { return [] }
         return networkProtection.blockEvents.filter { event in
+            if selectedFilter == .blocked && event.decision != .blocked {
+                return false
+            }
             guard !searchText.isEmpty else { return true }
             let query = searchText.lowercased()
             return event.host.lowercased().contains(query)
                 || (event.appIdentifier?.lowercased().contains(query) ?? false)
-                || event.reason.userTitle.lowercased().contains(query)
+                || event.reasonTitle.lowercased().contains(query)
         }
     }
 
@@ -158,8 +161,8 @@ private struct NetworkBlockEventRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "network.slash")
-                .foregroundStyle(.red)
+            Image(systemName: event.decision == .blocked ? "network.slash" : "eye")
+                .foregroundStyle(event.decision == .blocked ? .red : .orange)
                 .frame(width: 20)
                 .accessibilityHidden(true)
 
@@ -174,7 +177,7 @@ private struct NetworkBlockEventRow: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text(event.reason.userTitle)
+                Text("\(event.decision.userTitle) · \(event.reasonTitle)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -186,22 +189,49 @@ private struct NetworkBlockEventRow: View {
                             .lineLimit(1)
                     }
                     Spacer()
-                    Button("Allow Website") {
-                        Task { _ = await networkProtection.allowDomain(event.host) }
-                    }
-                    .controlSize(.small)
-                    if let app = event.appIdentifier, !app.isEmpty {
-                        Button("Allow App") {
-                            Task { _ = await networkProtection.allowApp(app) }
+                    AllowMenu(label: "Allow Website") { duration in
+                        Task {
+                            if let duration {
+                                _ = await networkProtection.allowDomain(event.host, for: duration)
+                            } else {
+                                _ = await networkProtection.allowDomain(event.host)
+                            }
                         }
-                        .controlSize(.small)
+                    }
+                    if let app = event.appIdentifier, !app.isEmpty {
+                        AllowMenu(label: "Allow App") { duration in
+                            Task {
+                                if let duration {
+                                    _ = await networkProtection.allowApp(app, for: duration)
+                                } else {
+                                    _ = await networkProtection.allowApp(app)
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(event.host), blocked, \(event.reason.userTitle)")
+        .accessibilityLabel(
+            "\(event.host), \(event.decision.userTitle), \(event.reasonTitle)"
+        )
+    }
+}
+
+private struct AllowMenu: View {
+    let label: String
+    let action: (TimeInterval?) -> Void
+
+    var body: some View {
+        Menu(label) {
+            Button("For 1 Hour") { action(60 * 60) }
+            Button("For 24 Hours") { action(24 * 60 * 60) }
+            Divider()
+            Button("Always") { action(nil) }
+        }
+        .controlSize(.small)
     }
 }
 

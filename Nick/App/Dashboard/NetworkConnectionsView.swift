@@ -17,6 +17,7 @@ import SwiftUI
 struct NetworkConnectionsView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(NetworkProtectionManager.self) private var networkProtection
     @State private var searchText = ""
     @State private var expandedProcesses: Set<String> = []
     @State private var viewMode = 0
@@ -49,8 +50,10 @@ struct NetworkConnectionsView: View {
 
     var body: some View {
         Group {
-            if viewMode == 1 {
+            if viewMode == 2 {
                 NetworkInspectorView()
+            } else if viewMode == 1 {
+                NetworkActivityView(searchText: searchText)
             } else {
         Group {
             if grouped.isEmpty {
@@ -92,21 +95,28 @@ struct NetworkConnectionsView: View {
                 .background(Color.backgroundPrimary)
             }
         }
-        .searchable(text: $searchText, placement: .toolbar, prompt: "Search process or address…")
         } // end else (Connections mode)
         } // end outer Group
+        .searchable(
+            text: $searchText,
+            placement: .toolbar,
+            prompt: viewMode == 1 ? "Search network activity…" : "Search process or address…"
+        )
         .navigationTitle("Network")
         .navigationSubtitle(viewMode == 0
             ? "\(grouped.count) app\(grouped.count == 1 ? "" : "s") · \(totalConnections) connections"
-            : "")
+            : viewMode == 1
+                ? "\(networkProtection.blockEvents.count) recorded decisions"
+                : "")
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Picker("View", selection: $viewMode) {
                     Text("Connections").tag(0)
-                    Text("Inspector").tag(1)
+                    Text("Activity").tag(1)
+                    Text("Inspector").tag(2)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 200)
+                .frame(width: 260)
             }
         }
     }
@@ -143,6 +153,176 @@ struct NetworkConnectionsView: View {
             .padding(40)
         }
         .background(Color.backgroundPrimary)
+    }
+}
+
+// MARK: - NetworkActivityView
+
+private struct NetworkActivityView: View {
+    let searchText: String
+    @Environment(NetworkProtectionManager.self) private var networkProtection
+    @State private var filter = NetworkActivityFilter.all
+
+    private enum NetworkActivityFilter: String, CaseIterable {
+        case all = "All"
+        case blocked = "Blocked"
+        case observed = "Observed"
+    }
+
+    private var events: [NetworkBlockEvent] {
+        networkProtection.blockEvents.filter { event in
+            let matchesFilter = switch filter {
+            case .all: true
+            case .blocked: event.decision == .blocked
+            case .observed: event.decision == .observed
+            }
+            guard matchesFilter else { return false }
+            guard !searchText.isEmpty else { return true }
+            let query = searchText.lowercased()
+            return event.host.lowercased().contains(query)
+                || event.reasonTitle.lowercased().contains(query)
+                || (event.appIdentifier?.lowercased().contains(query) ?? false)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Picker("Activity", selection: $filter) {
+                    ForEach(NetworkActivityFilter.allCases, id: \.self) {
+                        Text($0.rawValue).tag($0)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 240)
+
+                Spacer()
+
+                Button {
+                    networkProtection.loadEvents()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+
+                if !networkProtection.blockEvents.isEmpty {
+                    Button("Clear") {
+                        networkProtection.clearEvents()
+                    }
+                }
+            }
+            .padding()
+
+            Divider()
+
+            if events.isEmpty {
+                ContentUnavailableView(
+                    filter == .blocked ? "Nothing Blocked" : "No Network Activity",
+                    systemImage: filter == .blocked ? "checkmark.shield" : "network",
+                    description: Text(emptyMessage)
+                )
+            } else {
+                List(events) { event in
+                    NetworkActivityRow(event: event)
+                }
+                .listStyle(.inset)
+            }
+        }
+        .task {
+            await networkProtection.refresh()
+        }
+    }
+
+    private var emptyMessage: String {
+        if !searchText.isEmpty {
+            return "No recorded network decision matches your search."
+        }
+        if filter == .blocked {
+            return "Nick has not interrupted any network connection. Review-only observations appear under Observed."
+        }
+        return "Nick will show verified blocks and debounced review-only observations here."
+    }
+}
+
+private struct NetworkActivityRow: View {
+    let event: NetworkBlockEvent
+    @Environment(NetworkProtectionManager.self) private var networkProtection
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: event.decision == .blocked ? "hand.raised.fill" : "eye.fill")
+                .foregroundStyle(event.decision == .blocked ? .red : .orange)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text(event.host)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                    if let port = event.port {
+                        Text(":\(port)")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text(event.timestamp.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("\(event.decision.userTitle) · \(event.reasonTitle)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    if let app = event.appIdentifier {
+                        Text(app)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    NetworkAllowanceMenu(label: "Allow Website") { duration in
+                        Task {
+                            if let duration {
+                                _ = await networkProtection.allowDomain(event.host, for: duration)
+                            } else {
+                                _ = await networkProtection.allowDomain(event.host)
+                            }
+                        }
+                    }
+                    if let app = event.appIdentifier {
+                        NetworkAllowanceMenu(label: "Allow App") { duration in
+                            Task {
+                                if let duration {
+                                    _ = await networkProtection.allowApp(app, for: duration)
+                                } else {
+                                    _ = await networkProtection.allowApp(app)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(event.host), \(event.decision.userTitle), \(event.reasonTitle)"
+        )
+    }
+}
+
+private struct NetworkAllowanceMenu: View {
+    let label: String
+    let action: (TimeInterval?) -> Void
+
+    var body: some View {
+        Menu(label) {
+            Button("For 1 Hour") { action(60 * 60) }
+            Button("For 24 Hours") { action(24 * 60 * 60) }
+            Divider()
+            Button("Always") { action(nil) }
+        }
+        .controlSize(.small)
     }
 }
 

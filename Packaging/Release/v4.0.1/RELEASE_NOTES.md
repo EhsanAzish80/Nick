@@ -1,22 +1,36 @@
 # Nick 4.0.1
 
-Nick 4.0.1 is a safety and reliability update for Nick 4.
+Build 408 is a safety and reliability update for Nick 4.
 
-- Trusted applications no longer create permanent security blind spots.
-- “Always Allow” is limited to the same signed executable and behavior context,
-  expires after seven days, and does not cover new behavior.
-- Malware matches, persistence changes, reverse shells, system-security changes,
-  and other critical evidence always alert, even for a previously approved app.
-- Familiar developer tools such as Xcode and Visual Studio Code can no longer
-  bypass strong detections merely because their names are trusted.
-- Endpoint Security process authorization fails open so Nick does not interrupt
-  Xcode builds, AirDrop, Handoff, Universal Clipboard, or normal app launches.
-- Heuristic YARA matches are reported for review instead of automatically
-  blocking or quarantining files. Exact known-malware hashes retain enforcement.
-- Scam Guardian is shown as active only when the Network Filter is enabled and
-  its provider is reporting a current live heartbeat.
-- The dashboard and Smart Scan now use the same verified Scam Guardian state.
-- Alert actions include one-time acceptance, context-limited approval, blocking,
-  and quarantine where those actions are safe and applicable.
+## Network safety
 
-Nick 4.0.1 requires macOS 26 or later.
+- Scam Guardian now operates in observation-only mode.
+- Suspected phishing and lookalike destinations remain visible for review.
+- The Network Filter contains no traffic-drop verdict path and cannot
+  interrupt ordinary application connections.
+- Missing, stale, or invalid Network Filter configuration fails open.
+- Browsers, Git, developer tools, AirDrop, Handoff, and other legitimate
+  services continue to connect while Scam Guardian observes destinations.
+
+## Protection status
+
+- Smart Scan and setup distinguish destination monitoring from active
+  blocking.
+- Endpoint Security and Network Extension health still require current runtime
+  confirmation before Nick reports them as active.
+- Full Disk Access remains required for NickExtension, Endpoint Security, and
+  Email Guard.
+
+## Verification
+
+- 321 automated tests passed and 4 platform-dependent tests were skipped.
+- The package and disk image are signed with Developer ID, notarized, stapled,
+  and accepted by Gatekeeper.
+- A controlled runtime check confirmed GitHub web and Git remote access with
+  both system extensions enabled.
+
+## Requirements
+
+- macOS 26 or later.
+- User approval for the Endpoint Security and Network Extensions.
+- Full Disk Access for Nick and NickExtension.

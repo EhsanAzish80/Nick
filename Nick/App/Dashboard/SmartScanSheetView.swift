@@ -281,6 +281,13 @@ private struct ProtectionCheckRow: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
 
+        case .restartApplication:
+            Button("Reopen Nick") {
+                Task { await onResolve() }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+
         case .autoEnable:
             Button(isResolving ? "Enabling…" : "Enable") {
                 isResolving = true

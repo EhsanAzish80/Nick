@@ -66,13 +66,31 @@ final class SignatureValidator: @unchecked Sendable {
         }
         lock.unlock()
 
-        let result = performStaticCheck(path: binaryPath)
+        // Executables on the sealed system volume cannot be replaced by an
+        // unprivileged process. Avoid Security.framework certificate-chain
+        // validation for every Apple daemon during each process snapshot.
+        // Writable and third-party locations still receive the full check.
+        let result: SigningStatus = Self.isSealedSystemBinaryPath(binaryPath)
+            ? .signed(teamID: "APPLE_PLATFORM")
+            : performStaticCheck(path: binaryPath)
 
         lock.lock()
         cache[binaryPath] = CacheEntry(status: result, cachedAt: Date())
         lock.unlock()
 
         return result
+    }
+
+    static func isSealedSystemBinaryPath(_ path: String) -> Bool {
+        let prefixes = [
+            "/System/",
+            "/usr/bin/",
+            "/usr/lib/",
+            "/usr/libexec/",
+            "/bin/",
+            "/sbin/"
+        ]
+        return prefixes.contains { path.hasPrefix($0) }
     }
 
     /// Removes all cached signing results.
@@ -110,6 +128,15 @@ final class SignatureValidator: @unchecked Sendable {
             guard !Task.isCancelled else { return }
             guard proc.signingStatus == .pending, !proc.path.isEmpty else { continue }
 
+            // Certificate-chain evaluation is intentionally paced. A cold launch
+            // may contain hundreds of third-party helper processes; validating
+            // them back-to-back can monopolize a CPU core and make the entire Mac
+            // feel stalled. Sealed-system paths use the cheap policy above and do
+            // not need the delay.
+            if !Self.isSealedSystemBinaryPath(proc.path) {
+                try? await Task.sleep(nanoseconds: 75_000_000)
+                guard !Task.isCancelled else { return }
+            }
             let resolved = evaluate(binaryPath: proc.path)
             let updated = NickProcessInfo(
                 pid: proc.pid,
@@ -137,8 +164,13 @@ final class SignatureValidator: @unchecked Sendable {
             return .unknown
         }
 
-        // Validate the signature (does not check revocation in Phase 1)
-        let validationStatus = SecStaticCodeCheckValidity(code, [], nil)
+        // Process inventory needs to establish whether the running executable has
+        // a valid code signature; it must not recursively hash every resource in
+        // the containing app bundle. A full resource-envelope validation can take
+        // seconds for large apps and previously monopolized a CPU core at launch.
+        // File/deep scans retain their own full-integrity validation paths.
+        let validationFlags = SecCSFlags(rawValue: UInt32(kSecCSDoNotValidateResources))
+        let validationStatus = SecStaticCodeCheckValidity(code, validationFlags, nil)
 
         switch validationStatus {
         case errSecSuccess:

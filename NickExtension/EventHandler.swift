@@ -256,6 +256,10 @@ final class ESEventHandler {
                     pid: pid, processPath: processPath,
                     eventType: .fileWrite, detail: filePath
                 )
+                let isTrustedBuildOutput = self.isTrustedDeveloperBuild(
+                    actorPath: processPath,
+                    filePath: filePath
+                )
 
                 // --- Phase 6: Email attachment detection ---
                 let emailEvent = self.emailAttachmentMonitor?.evaluate(filePath: filePath)
@@ -292,7 +296,8 @@ final class ESEventHandler {
                 // small prefix. Canary names and known extensions do not need
                 // the file contents; entropy is only a supporting signal.
                 let ransomwareSample: Data?
-                if self.ransomwareDetector?.needsContentSample(filePath: filePath) == true {
+                if !isTrustedBuildOutput,
+                   self.ransomwareDetector?.needsContentSample(filePath: filePath) == true {
                     ransomwareSample = self.boundedFileSample(
                         at: filePath,
                         maximumBytes: 1_048_576
@@ -300,7 +305,8 @@ final class ESEventHandler {
                 } else {
                     ransomwareSample = nil
                 }
-                if let alert = self.ransomwareDetector?.evaluate(
+                if !isTrustedBuildOutput,
+                   let alert = self.ransomwareDetector?.evaluate(
                     pid: pid,
                     processPath: processPath,
                     filePath: filePath,
@@ -347,7 +353,7 @@ final class ESEventHandler {
                 // generic YARA rules match. Apple developer tools remain covered
                 // by exact hash intelligence, but heuristic scanning here only
                 // creates noise and previously broke builds.
-                if self.isTrustedDeveloperBuild(actorPath: processPath, filePath: filePath) {
+                if isTrustedBuildOutput {
                     return
                 }
                 self.pushEvent(ESEvent(
@@ -559,8 +565,13 @@ final class ESEventHandler {
             "rtf", "xls", "xlsm", "xlsx"
         ]
 
-        guard candidateExtensions.contains(ext)
-                || FileManager.default.isExecutableFile(atPath: path) else {
+        // Do not ask FileManager whether every modified path is executable.
+        // NOTIFY_CLOSE is system-wide and includes databases, File Provider
+        // items, pseudo-volumes, and other high-churn files. The executable
+        // lookup performs Carbon FileID resolution on those paths, producing
+        // a large error stream and sustained CPU usage. Executables without a
+        // recognized extension are already scanned before launch by AUTH_EXEC.
+        guard candidateExtensions.contains(ext) else {
             return false
         }
 

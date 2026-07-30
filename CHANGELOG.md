@@ -8,7 +8,33 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
-No user-facing changes have been released since 4.0.
+No user-facing changes have been released since 4.0.1.
+
+## [4.0.1] - 2026-07-30
+
+### Changed
+
+- Scam Guardian is now observation-only and cannot interrupt ordinary network
+  traffic.
+- Network policy configuration is versioned; missing, stale, or invalid
+  configuration fails open.
+- Scam Guardian status and documentation now distinguish destination
+  monitoring from active blocking.
+- Endpoint Security and Network Extension setup continues to require current
+  runtime health before protection is shown as ready.
+
+### Fixed
+
+- Prevented the Network Filter from disrupting browsers, Git, developer tools,
+  AirDrop, Handoff, and other legitimate connections.
+- Corrected network observations so known-rule matches remain visible for
+  review without being converted into drop verdicts.
+
+### Verification
+
+- All 321 automated tests passed; 4 platform-dependent tests were skipped.
+- The signed package and disk image were notarized, stapled, and accepted by
+  Gatekeeper.
 
 ## [4.0] - 2026-07-27
 
@@ -71,7 +97,8 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.0.1...HEAD
+[4.0.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.0.1
 [4.0]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.0.0
 [3.0]: https://github.com/EhsanAzish80/Nick/releases/tag/V3.0
 [1.2]: https://github.com/EhsanAzish80/Nick/releases/tag/v1.2

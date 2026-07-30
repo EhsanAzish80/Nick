@@ -106,7 +106,8 @@ struct ProtectionSetupGate<Content: View>: View {
     private func needsGuidance(_ check: ProtectionCheck) -> Bool {
         guard check.status != .protected else { return false }
         switch check.resolution {
-        case .autoEnable, .requiresPermission, .installExtension, .revealAppForInstallation, .none:
+        case .autoEnable, .requiresPermission, .installExtension,
+             .revealAppForInstallation, .restartApplication, .none:
             return true
         case .pendingApproval:
             return false
@@ -128,7 +129,8 @@ private struct ProtectionSetupView: View {
         status.checks.filter { check in
             guard check.status != .protected else { return false }
             switch check.resolution {
-            case .autoEnable, .requiresPermission, .installExtension, .revealAppForInstallation, .none:
+            case .autoEnable, .requiresPermission, .installExtension,
+                 .revealAppForInstallation, .restartApplication, .none:
                 return true
             case .pendingApproval:
                 return false
@@ -286,6 +288,7 @@ private struct ProtectionSetupView: View {
         switch check.resolution {
         case .requiresPermission: return "Open System Settings"
         case .revealAppForInstallation: return "Show Nick in Finder"
+        case .restartApplication: return "Reopen Nick"
         case .installExtension: return "Install and Continue"
         case .autoEnable: return "Enable and Continue"
         case .pendingApproval, .none: return "Check Again"
@@ -295,6 +298,7 @@ private struct ProtectionSetupView: View {
     private func workingLabel(for check: ProtectionCheck) -> String {
         switch check.resolution {
         case .installExtension: return "Installing…"
+        case .restartApplication: return "Reopening…"
         case .autoEnable: return "Enabling…"
         default: return "Checking…"
         }

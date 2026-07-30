@@ -32,8 +32,11 @@
 - [ ] Endpoint Security activates and reports the current build.
 - [ ] Full Disk Access guidance covers Nick and NickExtension.
 - [ ] Scam Guardian activates after one approval flow.
-- [ ] A reserved malicious test domain is blocked.
+- [ ] A reserved malicious test domain is reported without interrupting its
+      connection.
 - [ ] Normal Safari and third-party app networking remains available.
+- [ ] Git fetch/push, developer tools, AirDrop, Handoff, and clipboard
+      continuity remain available with both extensions enabled.
 - [ ] Email Guard detects a safe test fixture and an actionable attachment
       fixture.
 - [ ] Quarantine re-validation, move, listing, and restore work.

@@ -307,6 +307,40 @@ struct SettingsView: View {
                 }
             }
 
+            if !networkProtection.temporaryAllowedDomains.isEmpty
+                || !networkProtection.temporaryAllowedAppIdentifiers.isEmpty {
+                DisclosureGroup(
+                    "Temporary Access (\(networkProtection.temporaryAllowedDomains.count + networkProtection.temporaryAllowedAppIdentifiers.count))"
+                ) {
+                    ForEach(
+                        networkProtection.temporaryAllowedDomains.keys.sorted(),
+                        id: \.self
+                    ) { domain in
+                        temporaryAllowlistRow(
+                            domain,
+                            expiry: networkProtection.temporaryAllowedDomains[domain]
+                        ) {
+                            Task {
+                                await networkProtection.removeTemporaryAllowedDomain(domain)
+                            }
+                        }
+                    }
+                    ForEach(
+                        networkProtection.temporaryAllowedAppIdentifiers.keys.sorted(),
+                        id: \.self
+                    ) { identifier in
+                        temporaryAllowlistRow(
+                            identifier,
+                            expiry: networkProtection.temporaryAllowedAppIdentifiers[identifier]
+                        ) {
+                            Task {
+                                await networkProtection.removeTemporaryAllowedApp(identifier)
+                            }
+                        }
+                    }
+                }
+            }
+
             LabeledTile(
                 icon: "exclamationmark.octagon.fill", tint: .red,
                 title: "Emergency disable",
@@ -321,9 +355,30 @@ struct SettingsView: View {
         } header: {
             Text("Network Protection")
         } footer: {
-            Text("Allowed websites and apps always take priority over blocking. Nick stores only blocked destinations, reasons, and source app identifiers—not page contents or browsing history.")
+            Text("Allowed websites and apps always take priority. Nick interrupts only verified signed blocklist matches; heuristic findings remain review-only. Nick never stores page contents or browsing history.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func temporaryAllowlistRow(
+        _ value: String,
+        expiry: Date?,
+        remove: @escaping () -> Void
+    ) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value)
+                    .textSelection(.enabled)
+                if let expiry {
+                    Text("Allowed until \(expiry.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Button("Remove", role: .destructive, action: remove)
+                .controlSize(.small)
         }
     }
 

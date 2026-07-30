@@ -17,6 +17,8 @@ final class NetworkProtectionManager {
     private(set) var state: State = .loading
     private(set) var allowedDomains: [String] = []
     private(set) var allowedAppIdentifiers: [String] = []
+    private(set) var temporaryAllowedDomains: [String: Date] = [:]
+    private(set) var temporaryAllowedAppIdentifiers: [String: Date] = [:]
     private(set) var blockEvents: [NetworkBlockEvent] = []
 
     var isEnabled: Bool { state == .enabled }
@@ -30,6 +32,12 @@ final class NetworkProtectionManager {
             )
             allowedDomains = configuration.allowedDomains.sorted()
             allowedAppIdentifiers = configuration.allowedAppIdentifiers.sorted()
+            temporaryAllowedDomains = Self.activeDates(
+                configuration.temporaryAllowedDomains
+            )
+            temporaryAllowedAppIdentifiers = Self.activeDates(
+                configuration.temporaryAllowedAppIdentifiers
+            )
             if !manager.isEnabled {
                 state = .disabled
             } else if NetworkProtectionSharedStore.hasCurrentHealth() {
@@ -83,13 +91,49 @@ final class NetworkProtectionManager {
         }
         var domains = Set(allowedDomains)
         domains.insert(domain)
-        return await saveAllowlist(domains: domains, apps: Set(allowedAppIdentifiers))
+        return await saveAllowlist(
+            domains: domains,
+            apps: Set(allowedAppIdentifiers),
+            temporaryDomains: Self.timestamps(temporaryAllowedDomains),
+            temporaryApps: Self.timestamps(temporaryAllowedAppIdentifiers)
+        )
+    }
+
+    @discardableResult
+    func allowDomain(_ rawDomain: String, for duration: TimeInterval) async -> Bool {
+        guard duration > 0,
+              let domain = NetworkProtectionConfiguration.normalizedDomain(rawDomain)
+        else { return false }
+        var temporary = Self.timestamps(temporaryAllowedDomains)
+        temporary[domain] = Date().addingTimeInterval(duration).timeIntervalSince1970
+        return await saveAllowlist(
+            domains: Set(allowedDomains),
+            apps: Set(allowedAppIdentifiers),
+            temporaryDomains: temporary,
+            temporaryApps: Self.timestamps(temporaryAllowedAppIdentifiers)
+        )
     }
 
     func removeAllowedDomain(_ domain: String) async {
         var domains = Set(allowedDomains)
         domains.remove(domain)
-        _ = await saveAllowlist(domains: domains, apps: Set(allowedAppIdentifiers))
+        _ = await saveAllowlist(
+            domains: domains,
+            apps: Set(allowedAppIdentifiers),
+            temporaryDomains: Self.timestamps(temporaryAllowedDomains),
+            temporaryApps: Self.timestamps(temporaryAllowedAppIdentifiers)
+        )
+    }
+
+    func removeTemporaryAllowedDomain(_ domain: String) async {
+        var temporary = Self.timestamps(temporaryAllowedDomains)
+        temporary.removeValue(forKey: domain)
+        _ = await saveAllowlist(
+            domains: Set(allowedDomains),
+            apps: Set(allowedAppIdentifiers),
+            temporaryDomains: temporary,
+            temporaryApps: Self.timestamps(temporaryAllowedAppIdentifiers)
+        )
     }
 
     @discardableResult
@@ -98,13 +142,48 @@ final class NetworkProtectionManager {
         guard !identifier.isEmpty else { return false }
         var apps = Set(allowedAppIdentifiers)
         apps.insert(identifier)
-        return await saveAllowlist(domains: Set(allowedDomains), apps: apps)
+        return await saveAllowlist(
+            domains: Set(allowedDomains),
+            apps: apps,
+            temporaryDomains: Self.timestamps(temporaryAllowedDomains),
+            temporaryApps: Self.timestamps(temporaryAllowedAppIdentifiers)
+        )
+    }
+
+    @discardableResult
+    func allowApp(_ rawIdentifier: String, for duration: TimeInterval) async -> Bool {
+        let identifier = rawIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard duration > 0, !identifier.isEmpty else { return false }
+        var temporary = Self.timestamps(temporaryAllowedAppIdentifiers)
+        temporary[identifier] = Date().addingTimeInterval(duration).timeIntervalSince1970
+        return await saveAllowlist(
+            domains: Set(allowedDomains),
+            apps: Set(allowedAppIdentifiers),
+            temporaryDomains: Self.timestamps(temporaryAllowedDomains),
+            temporaryApps: temporary
+        )
     }
 
     func removeAllowedApp(_ identifier: String) async {
         var apps = Set(allowedAppIdentifiers)
         apps.remove(identifier)
-        _ = await saveAllowlist(domains: Set(allowedDomains), apps: apps)
+        _ = await saveAllowlist(
+            domains: Set(allowedDomains),
+            apps: apps,
+            temporaryDomains: Self.timestamps(temporaryAllowedDomains),
+            temporaryApps: Self.timestamps(temporaryAllowedAppIdentifiers)
+        )
+    }
+
+    func removeTemporaryAllowedApp(_ identifier: String) async {
+        var temporary = Self.timestamps(temporaryAllowedAppIdentifiers)
+        temporary.removeValue(forKey: identifier)
+        _ = await saveAllowlist(
+            domains: Set(allowedDomains),
+            apps: Set(allowedAppIdentifiers),
+            temporaryDomains: Self.timestamps(temporaryAllowedDomains),
+            temporaryApps: temporary
+        )
     }
 
     func clearEvents() {
@@ -131,7 +210,12 @@ final class NetworkProtectionManager {
         NSWorkspace.shared.open(url)
     }
 
-    private func saveAllowlist(domains: Set<String>, apps: Set<String>) async -> Bool {
+    private func saveAllowlist(
+        domains: Set<String>,
+        apps: Set<String>,
+        temporaryDomains: [String: TimeInterval],
+        temporaryApps: [String: TimeInterval]
+    ) async -> Bool {
         let manager = NEFilterManager.shared()
         do {
             try await manager.loadFromPreferences()
@@ -139,8 +223,11 @@ final class NetworkProtectionManager {
                 ?? NEFilterProviderConfiguration()
             let configuration = NetworkProtectionConfiguration(
                 protectionEnabled: true,
+                blockingEnabled: false,
                 allowedDomains: domains,
-                allowedAppIdentifiers: apps
+                allowedAppIdentifiers: apps,
+                temporaryAllowedDomains: temporaryDomains,
+                temporaryAllowedAppIdentifiers: temporaryApps
             )
             provider.filterSockets = true
             provider.filterPackets = false
@@ -151,10 +238,28 @@ final class NetworkProtectionManager {
             try await manager.saveToPreferences()
             allowedDomains = configuration.allowedDomains.sorted()
             allowedAppIdentifiers = configuration.allowedAppIdentifiers.sorted()
+            temporaryAllowedDomains = Self.activeDates(
+                configuration.temporaryAllowedDomains
+            )
+            temporaryAllowedAppIdentifiers = Self.activeDates(
+                configuration.temporaryAllowedAppIdentifiers
+            )
             return true
         } catch {
             state = .failed(error.localizedDescription)
             return false
         }
+    }
+
+    private static func activeDates(_ values: [String: TimeInterval]) -> [String: Date] {
+        let now = Date()
+        return values.reduce(into: [:]) { result, entry in
+            let date = Date(timeIntervalSince1970: entry.value)
+            if date > now { result[entry.key] = date }
+        }
+    }
+
+    private static func timestamps(_ values: [String: Date]) -> [String: TimeInterval] {
+        values.mapValues(\.timeIntervalSince1970)
     }
 }

@@ -235,6 +235,9 @@ final class YARAEngineIntegrationTests: XCTestCase {
         let projectRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+        if projectRoot.path.contains("/Documents/") {
+            throw XCTSkip("Bundled-rule source check runs in CI outside macOS protected folders")
+        }
         let bundledRules = projectRoot.appendingPathComponent("Rules")
         let engine = try YARAEngine(rulesDirectory: bundledRules.path)
         try engine.reloadRules()
@@ -267,6 +270,9 @@ final class YARAEngineIntegrationTests: XCTestCase {
         let projectRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+        if projectRoot.path.contains("/Documents/") {
+            throw XCTSkip("Bundled-rule source check runs in CI outside macOS protected folders")
+        }
         let bundledRules = projectRoot.appendingPathComponent("Rules")
         let engine = try YARAEngine(rulesDirectory: bundledRules.path)
         try engine.reloadRules()

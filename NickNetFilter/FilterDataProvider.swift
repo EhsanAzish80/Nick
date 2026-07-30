@@ -11,13 +11,14 @@ import Security
 /// `NEFilterDataProvider` subclass that evaluates outbound network flows
 /// against multiple detection layers:
 ///
-/// 1. **Blocklist** (`NetworkBlocklist`) — known malware C2 domains and IPs.
+/// 1. **Blocklist** (`NetworkBlocklist`) — known malware C2 domains and IPs,
+///    reported for review without interrupting connectivity.
 /// 2. **Suspicious port check** — allow-list of well-known safe ports; flag unknown.
 /// 3. **ScamGuardian** — phishing / typosquat heuristics.
 /// 4. **ConnectionTracker** — per-app connection-rate anomaly detection.
 ///
-/// Flows that pass all checks are allowed; flows that fail any check are
-/// dropped and logged.
+/// In Nick 4.0.1, all findings are debounced and recorded for review without
+/// interrupting connectivity. The provider does not return a drop verdict.
 final class FilterDataProvider: NEFilterDataProvider {
 
     // MARK: - Private Properties
@@ -26,6 +27,8 @@ final class FilterDataProvider: NEFilterDataProvider {
     private let tracker        = ConnectionTracker()
     private let scamGuardian   = ScamGuardian()
     private let eventStore     = NetworkBlockEventStore()
+    private let observationLock = NSLock()
+    private var observationTimestamps: [String: Date] = [:]
     private var healthTimer: DispatchSourceTimer?
     /// Resolving a source audit token through Security.framework is relatively
     /// expensive and can emit trust errors for unsigned/system-generated flows.
@@ -143,34 +146,85 @@ final class FilterDataProvider: NEFilterDataProvider {
 
         if case .block(let reason) = verdict {
             Self.logger.warning(
-                "NickNetFilter: BLOCKED (\(reason.rawValue)) \(appID) → \(host):\(portString)"
+                "NickNetFilter: OBSERVED enforcement candidate (\(reason.rawValue)) \(appID) → \(host):\(portString)"
             )
-            eventStore.append(NetworkBlockEvent(
-                host: NetworkProtectionConfiguration.normalizedDomain(host) ?? host,
-                appIdentifier: appID == "unknown" ? nil : appID,
-                reason: reason
-            ))
-            let result = NEFilterNewFlowVerdict.drop()
-            result.shouldReport = true
-            return result
+            recordObservation(
+                reason: .knownThreat,
+                host: host,
+                appID: appID,
+                port: port
+            )
+            return .allow()
+        }
+
+        if case .observe(let reason) = verdict {
+            recordObservation(
+                reason: reason,
+                host: host,
+                appID: appID,
+                port: port
+            )
         }
 
         // ── Layer 2: Suspicious port ──────────────────────────────────────
         if port > 1024 && !allowlistedPorts.contains(port) {
-            Self.logger.info("NickNetFilter: suspicious port \(port) from \(appID) → \(host)")
-            // Warn but do not block — not all high-port traffic is malicious.
-            // ConnectionTracker will escalate if rates are abnormal.
+            recordObservation(
+                reason: .unusualPort,
+                host: host,
+                appID: appID,
+                port: port
+            )
         }
 
         // ── Layer 3: Connection-rate tracking ─────────────────────────────
-        if tracker.shouldBlock(appID: appID, remoteHost: host) {
-            // Browsers routinely create hundreds of connections across many
-            // hosts. A rate anomaly is useful telemetry, but is not sufficient
-            // evidence to cut off an app's networking.
-            Self.logger.warning("NickNetFilter: rate anomaly (allowed) \(appID) → \(host):\(portString)")
+        if tracker.recordAndIsAnomalous(appID: appID, remoteHost: host) {
+            recordObservation(
+                reason: .connectionRate,
+                host: host,
+                appID: appID,
+                port: port
+            )
         }
 
         return .allow()
+    }
+
+    /// Record review-only telemetry at most once per app/reason every five
+    /// minutes. Browsers create many short-lived flows, so doing file I/O or
+    /// unified logging for each flow can itself disrupt networking.
+    private func recordObservation(
+        reason: NetworkObservationReason,
+        host: String,
+        appID: String,
+        port: Int
+    ) {
+        let normalizedHost = NetworkProtectionConfiguration.normalizedDomain(host) ?? host
+        let throttleKey = "\(appID)|\(reason.rawValue)"
+        let now = Date()
+        let shouldRecord = observationLock.withLock {
+            if let previous = observationTimestamps[throttleKey],
+               now.timeIntervalSince(previous) < 300 {
+                return false
+            }
+            observationTimestamps[throttleKey] = now
+            if observationTimestamps.count > 1_024 {
+                observationTimestamps = observationTimestamps.filter {
+                    now.timeIntervalSince($0.value) < 600
+                }
+            }
+            return true
+        }
+        guard shouldRecord else { return }
+
+        eventStore.append(NetworkBlockEvent(
+            timestamp: now,
+            host: normalizedHost,
+            appIdentifier: appID == "unknown" ? nil : appID,
+            decision: .observed,
+            reason: reason.rawValue,
+            reasonTitle: reason.userTitle,
+            port: port >= 0 ? port : nil
+        ))
     }
 
     private func signingIdentifier(for auditToken: Data?) -> String? {
@@ -228,7 +282,9 @@ private final class NetworkBlockEventStore {
                 events.removeAll {
                     $0.host == event.host
                         && $0.appIdentifier == event.appIdentifier
-                        && event.timestamp.timeIntervalSince($0.timestamp) < 10
+                        && $0.decision == event.decision
+                        && $0.reason == event.reason
+                        && event.timestamp.timeIntervalSince($0.timestamp) < 300
                 }
                 events.insert(event, at: 0)
                 if events.count > NetworkProtectionSharedStore.maximumEventCount {

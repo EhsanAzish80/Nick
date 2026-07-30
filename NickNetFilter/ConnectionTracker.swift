@@ -7,15 +7,14 @@ import Foundation
 // MARK: - ConnectionTracker
 
 /// Tracks per-app outbound connection rates over a rolling 5-minute window
-/// and flags applications that exhibit beaconing or data-exfiltration patterns.
+/// and flags applications that may exhibit beaconing or data-exfiltration
+/// patterns. A flag is telemetry, not a blocking verdict.
 ///
 /// **Thresholds (conservative — tuned to reduce false positives):**
 /// - More than **50 unique remote hosts** in any 5-minute window → suspicious.
 /// - More than **100 total outbound connections** in any 5-minute window → suspicious.
 ///
-/// The tracker is not a blocker by itself; `FilterDataProvider` calls
-/// `shouldBlock(appID:remoteHost:)` which returns `true` only when BOTH
-/// thresholds are exceeded simultaneously.
+/// The tracker is review-only; a rate anomaly never interrupts connectivity.
 final class ConnectionTracker: @unchecked Sendable {
 
     // MARK: - Types
@@ -51,8 +50,8 @@ final class ConnectionTracker: @unchecked Sendable {
 
     /// Records a new connection attempt from `appID` to `remoteHost`.
     ///
-    /// - Returns: `true` if the app should be blocked (both thresholds exceeded).
-    func shouldBlock(appID: String, remoteHost: String) -> Bool {
+    /// - Returns: `true` when both review thresholds are exceeded.
+    func recordAndIsAnomalous(appID: String, remoteHost: String) -> Bool {
         lock.withLock {
             var window = windows[appID, default: Window()]
             window.purgeExpired()

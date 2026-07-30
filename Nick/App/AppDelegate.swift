@@ -47,6 +47,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// even when the main window is hidden.
     private var forceQuit = false
 
+    private var isRunningTests: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["XCInjectBundleInto"] != nil
+            || environment["DYLD_INSERT_LIBRARIES"]?.contains("XCTest") == true
+            || NSClassFromString("XCTestCase") != nil
+            || Bundle.allBundles.contains { $0.bundlePath.hasSuffix(".xctest") }
+            || CommandLine.arguments.contains("-ApplePersistenceIgnoreState")
+    }
+
     /// Injected by `MainWindowView.onAppear`. Calls SwiftUI's `openSettings` environment
     /// action so the status-bar "Settings..." menu item opens the Settings scene through
     /// the official path instead of the private `showSettingsWindow:` selector.
@@ -74,17 +85,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // installed system extensions, and mutate persistent state while unit tests
         // are running. Keep the test host inert; individual tests construct only the
         // services they exercise.
-        let environment = ProcessInfo.processInfo.environment
-        let isRunningTests =
-            environment["XCTestConfigurationFilePath"] != nil
-            || environment["XCTestBundlePath"] != nil
-            || environment["XCInjectBundleInto"] != nil
-            || environment["DYLD_INSERT_LIBRARIES"]?.contains("XCTest") == true
-            || NSClassFromString("XCTestCase") != nil
-            || Bundle.allBundles.contains { $0.bundlePath.hasSuffix(".xctest") }
-            // Xcode's macOS XCTest host launches the app with this persistence
-            // suppression argument before the XCTest bundle itself is visible.
-            || CommandLine.arguments.contains("-ApplePersistenceIgnoreState")
         if isRunningTests {
             return
         }
@@ -126,10 +126,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Task { @MainActor in
             await networkProtection.refresh()
-            engine.runFullScan()
             xpcClient.connect()
             let coord = MonitorCoordinator(engine: engine, correlator: ThreatCorrelator())
             coordinator = coord
+            // The coordinator's first tick performs the initial full scan.
+            // Starting another scan here duplicates process signature validation
+            // and can saturate a CPU core during launch.
             coord.startRealTimePipeline()
             NotificationManager.shared.setup()
             NSApp.servicesProvider = NickServicesProvider()
@@ -358,6 +360,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// right-click menu (`forceQuit == true`), or (b) the main window is currently
     /// visible (i.e. ⌘Q is meaningful to the user).
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
+        // XCTest owns the lifecycle of its host process. Never apply Nick's
+        // menu-bar "stay alive while hidden" policy to a test host, otherwise
+        // xcodebuild waits forever after the final test has completed.
+        if isRunningTests { return .terminateNow }
         if forceQuit { return .terminateNow }
         // canBecomeMain is unreliable during .accessory→.regular transitions; filter by
         // class instead. Prefer the titled "Nick" window over any other non-panel window.

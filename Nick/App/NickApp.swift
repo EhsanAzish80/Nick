@@ -25,6 +25,15 @@ struct NickApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    private var isRunningTests: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["XCInjectBundleInto"] != nil
+            || environment["DYLD_INSERT_LIBRARIES"]?.contains("XCTest") == true
+            || CommandLine.arguments.contains("-ApplePersistenceIgnoreState")
+    }
+
     private var isUninstallMaintenanceMode: Bool {
         CommandLine.arguments.contains("--prepare-uninstall")
     }
@@ -33,7 +42,7 @@ struct NickApp: App {
         // The scenes always exist because SceneBuilder cannot branch, but their
         // view closures avoid touching SecurityEngine in maintenance mode.
         Window("Nick", id: "main") {
-            if isUninstallMaintenanceMode {
+            if isUninstallMaintenanceMode || isRunningTests {
                 EmptyView()
             } else {
                 MainWindowView()
@@ -46,14 +55,14 @@ struct NickApp: App {
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
         .defaultSize(
-            width: isUninstallMaintenanceMode ? 1 : 900,
-            height: isUninstallMaintenanceMode ? 1 : 620
+            width: isUninstallMaintenanceMode || isRunningTests ? 1 : 900,
+            height: isUninstallMaintenanceMode || isRunningTests ? 1 : 620
         )
         .defaultPosition(.center)
         .windowResizability(.contentMinSize)
 
         Settings {
-            if isUninstallMaintenanceMode {
+            if isUninstallMaintenanceMode || isRunningTests {
                 EmptyView()
             } else {
                 SettingsView()

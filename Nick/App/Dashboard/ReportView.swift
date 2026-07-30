@@ -40,13 +40,13 @@ struct ReportView: View {
             $0.decision == .deny && $0.timestamp > cutoff
         }.count
         let networkBlocks = networkProtection.blockEvents.filter {
-            $0.timestamp > cutoff
+            $0.decision == .blocked && $0.timestamp > cutoff
         }.count
         return endpointBlocks + networkBlocks
     }
 
     private var networkBlockCount: Int {
-        networkProtection.blockEvents.count
+        networkProtection.blockEvents.filter { $0.decision == .blocked }.count
     }
 
     private var failedChecks: [SystemCheckResult] {

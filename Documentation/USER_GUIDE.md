@@ -48,7 +48,11 @@ malware exclusion.
 Scam Guardian evaluates connection hostnames. It does not read page contents,
 form data, messages, or full browsing history.
 
-If normal browsing stops:
+Nick 4.0.1 observes suspected phishing destinations but does not block
+connections. A finding appears in Nick for review while the application
+connection remains available.
+
+If normal browsing stops while the extension is enabled:
 
 1. Open Nick Settings.
 2. Disable Network Protection using the emergency control.
@@ -56,7 +60,8 @@ If normal browsing stops:
 4. Review website and app allowlists.
 5. Report the affected domain and app as a false positive.
 
-Nick's policy is fail-open when configuration is missing or invalid.
+Nick's policy is fail-open when configuration is missing, stale, or invalid.
+Build 408 also contains no Network Extension traffic-drop path.
 
 ## Email Guard
 

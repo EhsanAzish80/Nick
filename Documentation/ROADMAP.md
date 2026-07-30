@@ -17,11 +17,16 @@ Delivered in source and release packaging:
 - YARA 4.5.5 and confidence-aware enforcement.
 - Native uninstaller and signed installer/disk-image pipeline.
 - Background performance, event-volume, and cache bounds.
+- Version 4.0.1 safety correction: Scam Guardian is observation-only and the
+  Network Filter cannot drop ordinary traffic.
 
 The clean-Mac checklist remains the release gate for every published build.
 
 ## Version 4.1: reliability and explainability
 
+- Add a reviewed, explicit enforcement design only after per-app controls,
+  time-limited allowances, recovery tests, and connectivity regression tests
+  are complete.
 - Persist setup diagnostics that users can export without exposing personal
   content.
 - Group repeated alerts by app, behavior, and time window.

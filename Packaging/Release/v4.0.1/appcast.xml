@@ -10,27 +10,24 @@
 
     <item>
       <title>Nick 4.0.1</title>
-      <pubDate>Wed, 29 Jul 2026 14:45:06 +0000</pubDate>
-      <sparkle:version>405</sparkle:version>
+      <pubDate>Thu, 30 Jul 2026 11:35:00 +0000</pubDate>
+      <sparkle:version>408</sparkle:version>
       <sparkle:shortVersionString>4.0.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
       <description><![CDATA[
-        <h2>Nick 4.0.1 — Safety and Reliability</h2>
+        <h2>Nick 4.0.1 — Network Safety Update</h2>
         <ul>
-          <li>Trusted applications no longer create permanent security blind spots</li>
-          <li>Behavior approvals are limited by signed identity, context, and time</li>
-          <li>Malware, persistence, reverse-shell, and critical evidence always alert</li>
-          <li>Normal Xcode, AirDrop, Handoff, and Universal Clipboard activity is no longer blocked</li>
-          <li>Heuristic YARA matches are reviewed instead of automatically quarantined</li>
-          <li>Scam Guardian status now requires a live Network Filter heartbeat</li>
-          <li>Dashboard and Smart Scan protection states now agree</li>
+          <li>Scam Guardian now observes suspected destinations without interrupting connections</li>
+          <li>Network policy fails open when configuration is missing, stale, or invalid</li>
+          <li>Improved protection-state wording and runtime verification</li>
+          <li>Normal browsers, Git, developer tools, AirDrop, and Handoff remain available</li>
         </ul>
       ]]></description>
       <enclosure
-        url="https://3nsofts.com/nick/releases/Nick-4.0.1-build-405.pkg"
-        length="14699919"
+        url="https://3nsofts.com/nick/releases/Nick-4.0.1.pkg"
+        length="14787149"
         type="application/octet-stream"
-        sparkle:edSignature="E6Sb8hcRK6STxh5cK4T/9SzPFG4kxczqI5FoK/fSDuXajXVDDE8muH9TYoP1v12fhKrLCMkbzvqzevB/iLmjCw=="
+        sparkle:edSignature="+oyF5VM6nrP6mojJ/gG8QjysGdp2KWz22Xk7V6Zi0KsUxRJsAjZnvf7H+tzaMPRiI3EUkP36EWzkvSPDLiJ0AA=="
       />
     </item>
 

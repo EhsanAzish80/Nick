@@ -23,6 +23,8 @@
 		E40000000000000000000001 /* NetworkProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000000 /* NetworkProtectionPolicy.swift */; };
 		E40000000000000000000002 /* NetworkProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000000 /* NetworkProtectionPolicy.swift */; };
 		E40000000000000000000004 /* ScamGuardian.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000003 /* ScamGuardian.swift */; };
+		E40000000000000000000006 /* RansomwareNotePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000005 /* RansomwareNotePolicy.swift */; };
+		E40000000000000000000007 /* RansomwareNotePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000005 /* RansomwareNotePolicy.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -113,6 +115,7 @@
 		BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		D10000000000000000000002 /* Nick Uninstaller.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Nick Uninstaller.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E40000000000000000000000 /* NetworkProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NetworkProtectionPolicy.swift; path = Shared/NetworkProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000005 /* RansomwareNotePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RansomwareNotePolicy.swift; path = Shared/RansomwareNotePolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000003 /* ScamGuardian.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScamGuardian.swift; path = NickNetFilter/ScamGuardian.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -266,6 +269,7 @@
 				AA11223344556677AABB0005 /* YARAEngine.swift */,
 				AA11223344556677AABB0006 /* YARAMatch.swift */,
 				E40000000000000000000000 /* NetworkProtectionPolicy.swift */,
+				E40000000000000000000005 /* RansomwareNotePolicy.swift */,
 				E40000000000000000000003 /* ScamGuardian.swift */,
 			);
 			name = "Recovered References";
@@ -633,6 +637,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E40000000000000000000007 /* RansomwareNotePolicy.swift in Sources */,
 				AA11223344556677AABB0015 /* YARAEngine.swift in Sources */,
 				AA11223344556677AABB0016 /* YARAMatch.swift in Sources */,
 			);
@@ -665,6 +670,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E40000000000000000000001 /* NetworkProtectionPolicy.swift in Sources */,
+				E40000000000000000000006 /* RansomwareNotePolicy.swift in Sources */,
 				E40000000000000000000004 /* ScamGuardian.swift in Sources */,
 				AA11223344556677AABB0011 /* ESEvent.swift in Sources */,
 				AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */,
@@ -743,7 +749,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 405;
+				CURRENT_PROJECT_VERSION = 408;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -868,7 +874,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 405;
+				CURRENT_PROJECT_VERSION = 408;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -998,7 +1004,7 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_ENTITLEMENTS = NickExtension/NickExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 405;
+				CURRENT_PROJECT_VERSION = 408;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -1055,7 +1061,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 405;
+				CURRENT_PROJECT_VERSION = 408;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1129,7 +1135,7 @@
 				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 405;
+				CURRENT_PROJECT_VERSION = 408;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1152,7 +1158,7 @@
 				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.Release.entitlements;
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 405;
+				CURRENT_PROJECT_VERSION = 408;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1176,7 +1182,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 405;
+				CURRENT_PROJECT_VERSION = 408;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1204,7 +1210,7 @@
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 405;
+				CURRENT_PROJECT_VERSION = 408;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;

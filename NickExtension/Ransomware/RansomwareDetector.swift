@@ -74,8 +74,7 @@ final class RansomwareDetector {
         if !ext.isEmpty && knownRansomwareExtensions.contains(ext) {
             return true
         }
-        let filename = path.lastPathComponent.lowercased()
-        return ransomNotePatterns.contains { filename.contains($0) }
+        return Self.isLikelyRansomNote(path.lastPathComponent)
     }
 
     /// Evaluates a file-write event for ransomware signals.
@@ -120,7 +119,7 @@ final class RansomwareDetector {
 
         // 4. Ransom note filename
         let filename = path.lastPathComponent.lowercased()
-        if ransomNotePatterns.contains(where: { filename.contains($0) }) {
+        if Self.isLikelyRansomNote(filename) {
             indicators.append("Ransom note: \(filename)")
             confidence += 0.5
             hasRansomwareSpecificIndicator = true
@@ -174,11 +173,13 @@ final class RansomwareDetector {
         "micro", "xtbl", "wallet", "dharma", "onion", "wncry",
     ]
 
-    private let ransomNotePatterns: [String] = [
-        "readme", "decrypt", "restore", "recover",
-        "how_to", "howto", "ransom", "help_decrypt",
-        "your_files", "attention", "warning",
-    ]
+    /// Ransom-note matching must be deliberately narrow. Common words such as
+    /// "readme", "recovery", "warning", and "ransomware" occur constantly in
+    /// developer projects and normal applications; substring matching them
+    /// caused event storms while Xcode was compiling Nick itself.
+    static func isLikelyRansomNote(_ filename: String) -> Bool {
+        RansomwareNotePolicy.matches(filename: filename)
+    }
 }
 
 // MARK: - CanaryFileManager

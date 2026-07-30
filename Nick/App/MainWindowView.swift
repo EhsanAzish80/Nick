@@ -327,6 +327,24 @@ struct OverviewDetailView: View {
         return parts.joined(separator: " · ")
     }
 
+    /// Uses the same live extension heartbeat as Smart Scan. The former
+    /// UserDefaults flag could remain false even after the extension deployed
+    /// and verified its sentinels, making Overview contradict Smart Scan.
+    private var ransomwareShieldActive: Bool {
+        let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
+        guard
+            let data = FileManager.default.contents(atPath: path),
+            let health = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            health["active"] as? Bool == true,
+            (health["canaryCount"] as? Int ?? 0) > 0,
+            let updatedAt = health["updatedAt"] as? TimeInterval
+        else {
+            return false
+        }
+        let age = Date().timeIntervalSince1970 - updatedAt
+        return age >= 0 && age <= 30
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -421,8 +439,8 @@ struct OverviewDetailView: View {
         }.count
         let rtpSub = todayCount == 0 ? "Monitoring · no threats" : "\(todayCount) event\(todayCount == 1 ? "" : "s") today"
 
-        let canariesDeployed = UserDefaults.standard.bool(forKey: "ransomwareCanariesDeployed")
-        let ransomSub = canariesDeployed ? "Active · 0 threats" : "Not enabled"
+        let canariesDeployed = ransomwareShieldActive
+        let ransomSub = canariesDeployed ? "Sentinels active" : "Not enabled"
 
         let qCount = xpcClient.quarantineRecords.count
         let qSub = qCount == 0 ? "Empty" : "\(qCount) item\(qCount == 1 ? "" : "s")"
@@ -437,7 +455,7 @@ struct OverviewDetailView: View {
         case .loading:
             scamSub = "Checking filter status"
         case .enabled:
-            scamSub = "Blocking phishing destinations"
+            scamSub = "Monitoring phishing destinations"
         case .awaitingApproval:
             scamSub = "Approval required"
         case .disabled:
