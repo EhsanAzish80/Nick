@@ -286,6 +286,7 @@ the extension remains installed.
 
 ## Documentation
 
+- [Engineering case study: Building a Local macOS Endpoint Security Monitor in Swift](https://3nsofts.com/insights/building-local-macos-endpoint-security-monitor-swift)
 - [Documentation index](Documentation/README.md)
 - [Changelog](CHANGELOG.md)
 - [Architecture and security boundaries](ARCHITECTURE.md)
