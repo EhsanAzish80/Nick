@@ -8,7 +8,6 @@ import NetworkExtension
 import OSLog
 import ServiceManagement
 import Sparkle
-import SwiftData
 import SystemExtensions
 
 // MARK: - AppDelegate
@@ -117,14 +116,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             userDriverDelegate: nil
         )
         setupStatusItem()
-        // Prune stale threat log entries (> 90 days) on every launch.
-        Task.detached(priority: .background) {
-            if let container = try? ModelContainer(for: ThreatLogEntry.self, migrationPlan: ThreatLogMigrationPlan.self) {
-                let threatLogger = ThreatLogger(container: container)
-                await threatLogger.pruneOlderThan(days: 90)
-            }
-        }
         Task { @MainActor in
+            // A healthy older Network Filter is not sufficient after an app
+            // update. Submit a replacement request once per bundled build so
+            // macOS runs the provider shipped with this version of Nick.
+            await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()
             await networkProtection.refresh()
             xpcClient.connect()
             let coord = MonitorCoordinator(engine: engine, correlator: ThreatCorrelator())

@@ -49,12 +49,12 @@ Nick's historical Sparkle key is stored in the login Keychain under the
 `nick-legacy` account. Keep that key available so existing installations can
 authenticate future updates. Never commit or upload an exported private key.
 
-For v4.0.1, upload `Nick-4.0.1.pkg` to:
+For v4.1, upload the immutable build 416 package as `Nick-4.1.pkg` to:
 
-`https://3nsofts.com/nick/releases/Nick-4.0.1.pkg`
+`https://3nsofts.com/nick/releases/Nick-4.1.pkg`
 
 Then replace the hosted `https://3nsofts.com/nick/appcast.xml` with
-`Packaging/Release/v4.0.1/appcast.xml`. The package must not be modified after
+`Packaging/Release/v4.1.0/appcast.xml`. The package must not be modified after
 its Sparkle signature and length have been recorded in the appcast.
 
 ## Website and GitHub disk image
@@ -63,8 +63,8 @@ Keep Sparkle pointed directly at the signed package. For manual downloads,
 wrap that same notarized package in Nick's branded disk image:
 
 ```sh
-PKG_PATH=/Users/Shared/Nick-4.0.1-build-408.pkg \
-OUTPUT_PATH=/Users/Shared/Nick-4.0.1-build-408.dmg \
+PKG_PATH=/Users/Shared/Nick-4.1-build-416.pkg \
+OUTPUT_PATH=/Users/Shared/Nick-4.1-build-416.dmg \
 ./Packaging/build-dmg.sh
 ```
 
@@ -73,5 +73,5 @@ image. It is independently Developer ID signed, notarized, stapled, and checked
 by Gatekeeper.
 
 The published checksums are recorded in
-`Packaging/Release/v4.0.1/SHA256SUMS.txt`. Recreate that file whenever either
+`Packaging/Release/v4.1.0/SHA256SUMS.txt`. Recreate that file whenever either
 immutable release artifact changes.

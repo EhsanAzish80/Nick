@@ -22,22 +22,26 @@ Delivered in source and release packaging:
 
 The clean-Mac checklist remains the release gate for every published build.
 
-## Version 4.1: reliability and explainability
+## Version 4.1: Runtime Compare and Network Diagnostics
 
-- Add a reviewed, explicit enforcement design only after per-app controls,
-  time-limited allowances, recovery tests, and connectivity regression tests
-  are complete.
-- Persist setup diagnostics that users can export without exposing personal
-  content.
-- Group repeated alerts by app, behavior, and time window.
-- Improve accepted-behavior management with review, expiry, and revocation.
-- Add clearer provenance for downloaded, mail, browser, and temporary files.
-- Replace remaining subprocess-based process and connection inspection with
-  direct macOS APIs where practical.
-- Expand Email Guard fixtures across supported Apple Mail and Outlook layouts.
-- Add update and uninstall regression tests for active system extensions.
-- Establish resource budgets for idle CPU, memory, event throughput, and scan
-  concurrency in CI and release acceptance.
+Released in build 416:
+
+- Local, read-only before-and-after snapshots for processes, persistence,
+  listeners, outbound connections, system extensions, and sensor health.
+- Restart-resumable same-Mac comparison with deterministic stable identities.
+- Evidence classification, provider-health limitations, and bounded retention.
+- Sanitized Markdown and JSON support-bundle preview and export.
+- Cross-restart process-noise suppression and deterministic handling of
+  overlapping active and retiring system-extension records.
+- Explicit limits for observation duration, imports, snapshots, connections,
+  exports, and stored comparisons.
+
+Nick 4.1 does not enforce compliance, remediate MDM state, block network
+traffic, integrate with an MDM server, or collect fleet data.
+
+The accepted product, UI, schema, privacy, testing, and implementation record
+is maintained in the
+[Nick 4.1 Runtime Compare roadmap](NICK_4_1_RUNTIME_COMPARE_ROADMAP.md).
 
 ## Version 4.2: trusted rule updates
 

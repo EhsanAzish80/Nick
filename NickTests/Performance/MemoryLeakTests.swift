@@ -114,9 +114,11 @@ final class MemoryLeakTests: XCTestCase {
 
     // MARK: - ProcessScanner
 
-    func test_processScanner_repeatedScans_signalCountDoesNotGrow() throws {
+    func test_processScanner_repeatedScans_signalCountDoesNotGrow() async throws {
+        let processes = try await Task.detached(priority: .utility) {
+            try ProcessScanner().scan()
+        }.value
         let scanner = ProcessScanner()
-        let processes = try scanner.scan()
 
         var previousCount = -1
         for _ in 0..<5 {

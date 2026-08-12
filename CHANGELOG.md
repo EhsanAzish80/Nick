@@ -8,7 +8,49 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
-No user-facing changes have been released since 4.0.1.
+No user-facing changes have been released since 4.1.
+
+## [4.1] - 2026-08-12
+
+### Added
+
+- Runtime Compare captures local before-and-after snapshots of processes,
+  persistence, listening ports, connections, system extensions, and sensor
+  health.
+- Deterministic comparison explains observed changes, evidence quality, and
+  visibility limitations without presenting the result as compliance proof.
+- Sanitized Markdown and JSON support bundles can be previewed and exported
+  without modifying the locally stored comparison.
+- Interrupted comparisons can be resumed after a restart on the same Mac.
+
+### Changed
+
+- Runtime snapshots and imports now have explicit event, record, file-size,
+  retention, and observation-time limits.
+- Cross-restart comparison ignores short-lived process churn and prefers the
+  active system-extension generation when macOS reports overlapping records.
+- Provider health is part of comparison accuracy: unavailable evidence creates
+  a visibility warning instead of unsupported added or removed findings.
+- Process enumeration retries the macOS process-table sizing race rather than
+  treating a transient `ENOMEM` result as an empty inventory.
+
+### Fixed
+
+- Prevented duplicate process and extension identities from crashing a
+  follow-up comparison.
+- Prevented hundreds of misleading process-removal findings after restart.
+- Prevented retiring system-extension records from creating false Nick
+  extension state changes.
+
+### Verification
+
+- 349 automated tests executed: 345 passed, 4 platform-dependent tests were
+  skipped, and 0 failed.
+- A real baseline, restart, and follow-up comparison reduced the prior 496
+  noisy findings to 40 evidence-backed observations with no process flood or
+  false Nick extension transitions.
+- The signed package and disk image are notarized, stapled, and accepted by
+  Gatekeeper.
 
 ## [4.0.1] - 2026-07-30
 
@@ -97,7 +139,8 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.0.1...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.1.0...HEAD
+[4.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.1.0
 [4.0.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.0.1
 [4.0]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.0.0
 [3.0]: https://github.com/EhsanAzish80/Nick/releases/tag/V3.0

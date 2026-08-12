@@ -48,7 +48,7 @@ malware exclusion.
 Scam Guardian evaluates connection hostnames. It does not read page contents,
 form data, messages, or full browsing history.
 
-Nick 4.0.1 observes suspected phishing destinations but does not block
+Nick 4.1 observes suspected phishing destinations but does not block
 connections. A finding appears in Nick for review while the application
 connection remains available.
 
@@ -61,7 +61,7 @@ If normal browsing stops while the extension is enabled:
 5. Report the affected domain and app as a false positive.
 
 Nick's policy is fail-open when configuration is missing, stale, or invalid.
-Build 408 also contains no Network Extension traffic-drop path.
+Build 416 also contains no Network Extension traffic-drop path.
 
 ## Email Guard
 
@@ -81,6 +81,49 @@ item. Restoring a known malicious file can make it executable again.
 The Performance view reports storage opportunities and reviewed cleanup
 actions. Read the item description before deleting data. Nick avoids deleting
 documents and does not treat cache size alone as a security problem.
+
+## Runtime Compare
+
+Runtime Compare is a local diagnostic for understanding a Mac before and after
+a controlled change. It is useful when installing or removing security, VPN,
+MDM, or network software, changing extension approvals, or restarting after a
+migration.
+
+### Capture a comparison
+
+1. Open **Runtime Compare** in the Diagnostics section.
+2. Choose **Start a comparison** and select the scenario that best describes
+   the planned change.
+3. Let Nick finish the baseline capture.
+4. Make the intended change. If a restart is required, restart normally; Nick
+   preserves the bounded baseline locally.
+5. Return to the pending comparison and capture the follow-up.
+6. Review important changes, changes to review, informational changes, and
+   sensor-visibility warnings separately.
+
+A finding is not automatically a threat. Listening ports and connections are
+point-in-time observations, and a destination absent from one capture may still
+be available later. Nick suppresses raw process churn across restarts and uses
+stable owner identities where practical.
+
+### Evidence quality
+
+- **Observed** means the provider directly reported the state in a capture.
+- **Inferred** means Nick compared two observations, such as a destination not
+  being seen again.
+- **Cannot confirm** means a permission or sensor was unavailable. Nick reports
+  that limitation instead of treating missing data as a removal.
+
+### Export a support bundle
+
+Use the export control to preview sanitized Markdown or JSON before saving it.
+Sanitization redacts identifying paths, hostnames, addresses, and local account
+values. Export does not upload anything, and it does not modify the original
+comparison stored on the Mac.
+
+Runtime Compare supports comparisons from the same Mac only. It does not
+certify compliance, remediate MDM state, change extension settings, block
+network traffic, or send fleet telemetry.
 
 ## Uninstall
 

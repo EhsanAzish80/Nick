@@ -122,7 +122,8 @@ struct MainWindowView: View {
                     SidebarNavItem(section: .persistence).tag(SidebarSection.persistence)
                 }
 
-                Section("TOOLS") {
+                Section("DIAGNOSTICS") {
+                    SidebarNavItem(section: .runtimeCompare).tag(SidebarSection.runtimeCompare)
                     SidebarNavItem(section: .performance).tag(SidebarSection.performance)
                 }
 
@@ -142,6 +143,7 @@ struct MainWindowView: View {
             case .network:     NetworkConnectionsView()
             case .processes:   ProcessListView()
             case .persistence: PersistenceDetailView()
+            case .runtimeCompare: RuntimeCompareView()
             case .performance: PerformanceView()
             case .settings:    SettingsView()
             }
@@ -190,6 +192,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case network     = "Network"
     case processes   = "Processes"
     case persistence = "Persistence"
+    case runtimeCompare = "Runtime Compare"
     case performance = "Performance"
     case settings    = "Settings"
 
@@ -208,6 +211,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .network:     return "network"
         case .processes:   return "cpu"
         case .persistence: return "arrow.triangle.2.circlepath"
+        case .runtimeCompare: return "square.split.2x1"
         case .performance: return "gauge.medium"
         case .settings:    return "gearshape.fill"
         }
@@ -225,6 +229,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .network:     return .blue
         case .processes:   return .purple
         case .persistence: return .orange
+        case .runtimeCompare: return .indigo
         case .performance: return .mint
         case .settings:    return Color(NSColor.systemGray)
         }

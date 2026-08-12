@@ -7,9 +7,33 @@ import XCTest
 
 @MainActor
 final class SmartScanStatusTests: XCTestCase {
+    func testNetworkFilterVersionActivationIsRequiredWhenVersionChanges() {
+        XCTAssertTrue(
+            NetworkFilterInstaller.needsBundledVersionActivation(
+                bundledVersion: "410",
+                activatedVersion: "408"
+            )
+        )
+    }
+
+    func testNetworkFilterVersionActivationIsSkippedForCurrentVersion() {
+        XCTAssertFalse(
+            NetworkFilterInstaller.needsBundledVersionActivation(
+                bundledVersion: "410",
+                activatedVersion: "410"
+            )
+        )
+        XCTAssertFalse(
+            NetworkFilterInstaller.needsBundledVersionActivation(
+                bundledVersion: nil,
+                activatedVersion: "410"
+            )
+        )
+    }
+
 
     func test_runScan_withoutVerifiedDependencies_neverShowsFalseGreen() {
-        let checker = SmartScanChecker()
+        let checker = SmartScanChecker(useLiveRuntimeState: false)
 
         let status = checker.runScan()
 

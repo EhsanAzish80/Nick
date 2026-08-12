@@ -100,23 +100,36 @@ struct ProcessScanner {
     /// Calls `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_ALL)` and returns the raw kinfo_proc array.
     private func fetchKinfoList() throws -> [kinfo_proc] {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-        var size = 0
+        let stride = MemoryLayout<kinfo_proc>.stride
+        var lastError: Int32 = 0
 
-        // First call to determine buffer size
-        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0 else {
-            throw ProcessScannerError.sysctlFailed(errno: errno)
+        // The process table can grow between the sizing and data calls. macOS
+        // reports that race as ENOMEM. Retry with a freshly sized buffer plus
+        // headroom instead of failing the entire runtime snapshot.
+        for _ in 0..<5 {
+            var requiredSize = 0
+            guard sysctl(&mib, 4, nil, &requiredSize, nil, 0) == 0 else {
+                throw ProcessScannerError.sysctlFailed(errno: errno)
+            }
+
+            let requiredCount = max(1, (requiredSize + stride - 1) / stride)
+            let countWithHeadroom = requiredCount + max(16, requiredCount / 8)
+            var buffer = [kinfo_proc](repeating: kinfo_proc(), count: countWithHeadroom)
+            var suppliedSize = buffer.count * stride
+            let status = buffer.withUnsafeMutableBytes { bytes in
+                sysctl(&mib, 4, bytes.baseAddress, &suppliedSize, nil, 0)
+            }
+            if status == 0 {
+                return Array(buffer.prefix(suppliedSize / stride))
+            }
+
+            lastError = errno
+            if lastError != ENOMEM {
+                throw ProcessScannerError.sysctlFailed(errno: lastError)
+            }
         }
 
-        let count = size / MemoryLayout<kinfo_proc>.stride
-        var buffer = [kinfo_proc](repeating: kinfo_proc(), count: count)
-
-        guard sysctl(&mib, 4, &buffer, &size, nil, 0) == 0 else {
-            throw ProcessScannerError.sysctlFailed(errno: errno)
-        }
-
-        // Trim to actual count in case size changed between the two calls
-        let actualCount = size / MemoryLayout<kinfo_proc>.stride
-        return Array(buffer.prefix(actualCount))
+        throw ProcessScannerError.sysctlFailed(errno: lastError == 0 ? ENOMEM : lastError)
     }
 
     private func buildProcessInfo(from kinfo: kinfo_proc, skipSigning: Bool = false) -> NickProcessInfo? {

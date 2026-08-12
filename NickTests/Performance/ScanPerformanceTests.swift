@@ -18,42 +18,48 @@ final class ScanPerformanceTests: XCTestCase {
 
     // MARK: - Process Scanner
 
-    func test_processScanner_scan_completesWithinBudget() throws {
-        let scanner = ProcessScanner()
+    func test_processScanner_scan_completesWithinBudget() async throws {
         let start = Date()
-        _ = try scanner.scan()
+        _ = try await Task.detached(priority: .utility) {
+            try ProcessScanner().scan()
+        }.value
         // First-run budget is generous — SignatureValidator cache is cold.
         // Subsequent scans (cached) are < 3s; tested separately.
         XCTAssertLessThan(Date().timeIntervalSince(start), 120.0, "Process scan exceeded 120s budget (cold cache)")
     }
 
-    func test_processScanner_secondScan_benefitsFromCache() throws {
+    func test_processScanner_secondScan_benefitsFromCache() async throws {
         // Warm cache
-        let scanner = ProcessScanner()
-        _ = try scanner.scan()
+        _ = try await Task.detached(priority: .utility) {
+            try ProcessScanner().scan()
+        }.value
 
         // Second scan should be much faster (cached signatures)
         let start = Date()
-        _ = try scanner.scan()
+        _ = try await Task.detached(priority: .utility) {
+            try ProcessScanner().scan()
+        }.value
         XCTAssertLessThan(Date().timeIntervalSince(start), 10.0, "Second process scan exceeded 10s (cache not effective)")
     }
 
-    func test_processScanner_signalGeneration_completesWithinBudget() throws {
-        let scanner = ProcessScanner()
-        let processes = try scanner.scan()
+    func test_processScanner_signalGeneration_completesWithinBudget() async throws {
+        let processes = try await Task.detached(priority: .utility) {
+            try ProcessScanner().scan()
+        }.value
 
         let start = Date()
-        _ = scanner.signals(from: processes)
+        _ = ProcessScanner().signals(from: processes)
         XCTAssertLessThan(Date().timeIntervalSince(start), 1.0, "Signal generation exceeded 1s budget")
     }
 
-    func test_processScanner_signalGenerationWithTrustedList_completesWithinBudget() throws {
-        let scanner = ProcessScanner()
-        let processes = try scanner.scan()
+    func test_processScanner_signalGenerationWithTrustedList_completesWithinBudget() async throws {
+        let processes = try await Task.detached(priority: .utility) {
+            try ProcessScanner().scan()
+        }.value
         let trusted = TrustedProcessList()
 
         let start = Date()
-        _ = scanner.signals(from: processes, trustedProcessList: trusted)
+        _ = ProcessScanner().signals(from: processes, trustedProcessList: trusted)
         XCTAssertLessThan(Date().timeIntervalSince(start), 1.0, "Signal generation with trusted list exceeded 1s budget")
     }
 

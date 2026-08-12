@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Nick Updates</title>
+    <link>https://3nsofts.com/nick/appcast.xml</link>
+    <description>Nick macOS security app updates</description>
+    <language>en</language>
+
+    <item>
+      <title>Nick 4.1</title>
+      <pubDate>Wed, 12 Aug 2026 12:00:00 +0000</pubDate>
+      <sparkle:version>416</sparkle:version>
+      <sparkle:shortVersionString>4.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <h2>Nick 4.1 — Runtime Compare and Network Diagnostics</h2>
+        <ul>
+          <li>Before-and-after runtime snapshots with deterministic evidence comparison</li>
+          <li>Restart-resumable same-Mac comparisons</li>
+          <li>Sanitized Markdown and JSON support bundles</li>
+          <li>Provider-health and visibility warnings instead of unsupported findings</li>
+          <li>Cross-restart process and extension-noise suppression</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://3nsofts.com/nick/releases/Nick-4.1.pkg"
+        length="15636565"
+        type="application/octet-stream"
+        sparkle:edSignature="2hbomU3p0cOL0StU4nRBfL0uYF5hSzrucW1jM/lT/z6Uw2pS8nvtfj223mBEMcXbZBZqrpVlcFL0Fmsuj9enAA=="
+      />
+    </item>
+
+    <item>
+      <title>Nick 4.0.1</title>
+      <pubDate>Thu, 30 Jul 2026 11:35:00 +0000</pubDate>
+      <sparkle:version>408</sparkle:version>
+      <sparkle:shortVersionString>4.0.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <h2>Nick 4.0.1 — Network Safety Update</h2>
+        <ul>
+          <li>Scam Guardian observes suspected destinations without interrupting connections</li>
+          <li>Network policy fails open when configuration is missing, stale, or invalid</li>
+          <li>Improved protection-state wording and runtime verification</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://3nsofts.com/nick/releases/Nick-4.0.1.pkg"
+        length="14787149"
+        type="application/octet-stream"
+        sparkle:edSignature="+oyF5VM6nrP6mojJ/gG8QjysGdp2KWz22Xk7V6Zi0KsUxRJsAjZnvf7H+tzaMPRiI3EUkP36EWzkvSPDLiJ0AA=="
+      />
+    </item>
+
+    <item>
+      <title>Nick 4.0</title>
+      <pubDate>Mon, 27 Jul 2026 10:33:00 +0000</pubDate>
+      <sparkle:version>404</sparkle:version>
+      <sparkle:shortVersionString>4.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <h2>Nick 4.0 — Network Protection</h2>
+        <ul>
+          <li>Endpoint Security and Network Filter onboarding with verified status checks</li>
+          <li>Scam Guardian, Email Guard, clearer alerts, and native uninstall</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://3nsofts.com/nick/releases/Nick-4.0.pkg"
+        length="14668174"
+        type="application/octet-stream"
+        sparkle:edSignature="0keXdknNtb6xdsNDrNLnRej09JJ6JNfFZF8TrmohIimnYHJjEkgJcYE0Mmweo+7Hsrz9yOF1UgqzrnHHAqbFDw=="
+      />
+    </item>
+  </channel>
+</rss>

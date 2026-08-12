@@ -46,6 +46,12 @@ event can be explained without automatically being called malware; stronger,
 correlated evidence can be blocked, quarantined, and presented with a clear
 next action.
 
+Version 4.1 also adds Runtime Compare: a local, read-only workflow for capturing
+the Mac before and after a restart, installation, removal, MDM migration, VPN
+change, or security configuration change. It compares stable evidence rather
+than raw PIDs and timestamps, reports missing sensor visibility explicitly, and
+exports sanitized Markdown or JSON support bundles.
+
 ## Protection layers
 
 | Layer | What it does |
@@ -60,6 +66,7 @@ next action.
 | Threat Timeline | Keeps a bounded, searchable record of relevant security activity. |
 | Quarantine | Re-verifies and isolates actionable files while preserving recovery information. |
 | Performance | Explains disk usage and offers reviewed, opt-in cleanup actions. |
+| Runtime Compare | Captures before-and-after runtime evidence and exports sanitized support bundles. |
 
 ### Endpoint Security
 
@@ -120,6 +127,27 @@ data.
 - A bundled native uninstaller removes Nick, its protection components,
   generated data, settings, and installed applications.
 
+### Runtime Compare and network diagnostics
+
+Runtime Compare captures two bounded snapshots of the same Mac and explains
+what changed across:
+
+- processes and persistent startup items;
+- listening ports and observed connection destinations;
+- Endpoint Security and Network Extension inventory;
+- provider and sensor health.
+
+Comparisons can pause across a restart and resume after Nick opens again.
+Findings distinguish observed evidence, inference, and information Nick could
+not confirm. Cross-restart process churn is suppressed, overlapping retiring
+extension generations are coalesced, and incomplete providers produce a
+visibility warning instead of unsupported findings.
+
+Support bundles are generated locally. Sanitized export redacts identifying
+paths, hostnames, addresses, and account-specific values while retaining the
+technical structure needed for diagnosis. Runtime Compare does not remediate
+MDM state, certify compliance, collect fleet data, or enforce network policy.
+
 ## Product principles
 
 - **Local by default.** Detection and correlation happen on the Mac.
@@ -140,7 +168,7 @@ Nick ships as a signed application bundle containing two system extensions:
 Nick.app
 ├── SwiftUI application
 │   ├── SecurityEngine and MonitorCoordinator
-│   ├── Smart Scan, Alerts, Timeline, Quarantine, and Reports
+│   ├── Smart Scan, Alerts, Timeline, Quarantine, and Runtime Compare
 │   └── Setup, settings, Sparkle updates, and maintenance
 ├── NickExtension.systemextension
 │   ├── Endpoint Security client
@@ -175,7 +203,7 @@ For implementation details and trust boundaries, see
 
 ### Published release
 
-The current stable release is **Nick 4.0.1 (build 408)** for macOS 26 and later.
+The current stable release is **Nick 4.1 (build 416)** for macOS 26 and later.
 
 1. Download the notarized Nick disk image from
    [the latest GitHub release](https://github.com/EhsanAzish80/Nick/releases/latest).
@@ -252,8 +280,8 @@ The production release pipeline is documented in
 - The appcast enclosure must reference the exact, unmodified signed package.
 - Manual website and GitHub downloads may use the disk image.
 
-Version 4.0.1 release notes are in
-[Packaging/Release/v4.0.1/RELEASE_NOTES.md](Packaging/Release/v4.0.1/RELEASE_NOTES.md).
+Version 4.1 release notes are in
+[Packaging/Release/v4.1.0/RELEASE_NOTES.md](Packaging/Release/v4.1.0/RELEASE_NOTES.md).
 
 ## Quality gates
 
@@ -301,7 +329,7 @@ the extension remains installed.
 
 ## Project status
 
-Nick 4.0.1 is the current production release. Every future release remains gated
+Nick 4.1 is the current production release. Every future release remains gated
 on clean-Mac validation of Endpoint Security, Email Guard, Scam Guardian,
 updates, performance, quarantine, and uninstall behavior.
 

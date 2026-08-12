@@ -149,6 +149,15 @@ extension SmartScanStatus {
 @MainActor
 final class SmartScanChecker {
 
+    /// Tests and offline diagnostics can opt out of persisted runtime health so
+    /// an installed Nick extension on the developer Mac cannot make an
+    /// otherwise isolated check appear protected.
+    private let useLiveRuntimeState: Bool
+
+    init(useLiveRuntimeState: Bool = true) {
+        self.useLiveRuntimeState = useLiveRuntimeState
+    }
+
     // MARK: - Dependencies
 
     /// Set by SecurityEngine on init — provides access to module states.
@@ -275,9 +284,6 @@ final class SmartScanChecker {
         let extensionNeedsUpdate = endpointExtensionNeedsUpdate
         let extensionFullDiskAccessReady =
             endpointExtensionHealth?["fullDiskAccessReady"] as? Bool == true
-        let appFullDiskAccessReady = Self.hasFullDiskAccess
-        let fullDiskAccessReady =
-            extensionFullDiskAccessReady && appFullDiskAccessReady
         let appIsInstalled = Bundle.main.bundleURL.path.hasPrefix("/Applications/")
         let managerState = extensionManager?.extensionState ?? .unknown
 
@@ -359,18 +365,7 @@ final class SmartScanChecker {
             )
         }
 
-        if isActive, !fullDiskAccessReady {
-            if extensionFullDiskAccessReady, !appFullDiskAccessReady {
-                return ProtectionCheck(
-                    id: "endpoint_security",
-                    title: "Real-Time Protection",
-                    status: .warning,
-                    headline: "Reopen Nick to finish Full Disk Access",
-                    explanation: "Full Disk Access is enabled for NickExtension. Reopen Nick so macOS applies the newly enabled permission to the app itself.",
-                    icon: "shield.checkered",
-                    resolution: .restartApplication
-                )
-            }
+        if isActive, !extensionFullDiskAccessReady {
             return ProtectionCheck(
                 id: "endpoint_security",
                 title: "Real-Time Protection",
@@ -699,6 +694,7 @@ final class SmartScanChecker {
     }
 
     private var endpointExtensionHealth: [String: Any]? {
+        guard useLiveRuntimeState else { return nil }
         let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
         guard
             let data = FileManager.default.contents(atPath: path),
@@ -707,19 +703,6 @@ final class SmartScanChecker {
             return nil
         }
         return object
-    }
-
-    /// Full Disk Access has no public grant API. An actual open of the protected
-    /// TCC database is a stronger proof than trusting a preference or assuming
-    /// that the app appearing in System Settings means its switch is enabled.
-    private static var hasFullDiskAccess: Bool {
-        guard let handle = FileHandle(
-            forReadingAtPath: "/Library/Application Support/com.apple.TCC/TCC.db"
-        ) else {
-            return false
-        }
-        try? handle.close()
-        return true
     }
 
     static func isEmailScannerReady(
@@ -898,6 +881,31 @@ final class NetworkFilterInstaller: NSObject, OSSystemExtensionRequestDelegate {
     private var continuation: CheckedContinuation<Void, Never>?
     private var shouldOpenSettingsForCurrentRequest = false
     private var activeInstallation: Task<Void, Never>?
+    private static let activatedVersionKey = "networkFilterActivatedVersion"
+
+    static var bundledExtensionVersion: String? {
+        let extensionURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Library/SystemExtensions")
+            .appendingPathComponent("com.ehsanazish.nick.NickNetFilter.systemextension")
+        return Bundle(url: extensionURL)?
+            .object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
+    }
+
+    static func needsBundledVersionActivation(
+        bundledVersion: String?,
+        activatedVersion: String?
+    ) -> Bool {
+        guard let bundledVersion, !bundledVersion.isEmpty else { return false }
+        return activatedVersion != bundledVersion
+    }
+
+    func ensureBundledVersionIsActive() async {
+        guard Self.needsBundledVersionActivation(
+            bundledVersion: Self.bundledExtensionVersion,
+            activatedVersion: UserDefaults.standard.string(forKey: Self.activatedVersionKey)
+        ) else { return }
+        await installAndEnable()
+    }
 
     func installAndEnable() async {
         if let activeInstallation {
@@ -989,6 +997,10 @@ final class NetworkFilterInstaller: NSObject, OSSystemExtensionRequestDelegate {
             if let errorMessage = await configureFilter() {
                 state = .failed(errorMessage)
             } else {
+                UserDefaults.standard.set(
+                    Self.bundledExtensionVersion,
+                    forKey: Self.activatedVersionKey
+                )
                 state = .idle
             }
             finishCurrentAction()

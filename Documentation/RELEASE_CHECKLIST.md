@@ -12,6 +12,28 @@
 - [ ] The full test suite passes with coverage.
 - [ ] `git diff --check` passes.
 
+## Runtime Compare (4.1)
+
+- [ ] Baseline and follow-up captures cover processes, persistence, listeners,
+      connections, system extensions, and provider health.
+- [ ] PID, ordering, timestamps, and ephemeral-port noise do not create false
+      findings.
+- [ ] Missing permissions, inactive providers, different boots, and mismatched
+      observation windows are shown as visibility limitations.
+- [ ] Cancel stops collection and never persists an incomplete snapshot.
+- [ ] Finding rows provide an evidence drill-down rather than explanation text
+      alone.
+- [ ] A same-Mac comparison can be exported, imported after restart, and
+      compared again when the device identity matches.
+- [ ] Sanitized Markdown and JSON can be previewed before export; tests prove
+      the original stored comparison remains unchanged.
+- [ ] Retention remains bounded and old comparisons are removed predictably.
+- [ ] Release-build CPU, memory, capture duration, cancellation latency, event
+      loss, and disk-use measurements meet the budgets in
+      `NICK_4_1_RUNTIME_COMPARE_ROADMAP.md`.
+- [ ] A signed, notarized build completes the Runtime Compare clean-Mac flow
+      with both Nick system extensions active.
+
 ## Signing and packaging
 
 - [ ] Nick, NickExtension, NickNetFilter, NickHelper, Nick Uninstaller, and
