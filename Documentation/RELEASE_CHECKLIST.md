@@ -47,6 +47,23 @@
 - [ ] Disk image signing, notarization, stapling, and Gatekeeper assessment
       succeed.
 
+## Enterprise pilot
+
+- [ ] The Organization destination is absent without managed preferences and
+      appears only when macOS reports forced organization-managed values.
+- [ ] Deployment Readiness is green only with current provider evidence and
+      keeps `cannot verify` distinct from inactive or removed.
+- [ ] The copied administrator summary contains versions, policy provenance,
+      component evidence, limitations, and no sensitive file contents.
+- [ ] `/usr/local/bin/nickctl status --json` validates against the checked-in
+      health schema and returns the documented exit code.
+- [ ] Invalid and unsupported managed values are visible and cannot silently
+      become effective policy.
+- [ ] The pilot PKG upgrades the public build in place without replacing the
+      user's system-extension approvals or repeating completed onboarding.
+- [ ] The pilot administrator records Intune enrollment type, current EDR/VPN/
+      filter coexistence, architectures, macOS versions, and required logs.
+
 ## Clean-Mac acceptance
 
 - [ ] Install from the published package, not an Xcode build.

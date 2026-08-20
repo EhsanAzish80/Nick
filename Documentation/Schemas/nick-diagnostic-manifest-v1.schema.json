@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nick.3nsofts.com/schemas/diagnostic-manifest-v1.schema.json",
+  "title": "Nick Diagnostic Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "nickVersion", "sanitized", "healthReportPath", "artifacts", "limitations"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "nickVersion": { "type": "string" },
+    "sanitized": { "const": true },
+    "healthReportPath": { "type": "string", "pattern": "^(?!/)(?!.*\\.\\.).+$" },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["relativePath", "mediaType", "byteCount", "sha256"],
+        "properties": {
+          "relativePath": { "type": "string", "pattern": "^(?!/)(?!.*\\.\\.).+$" },
+          "mediaType": { "type": "string" },
+          "byteCount": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" }
+        }
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  }
+}

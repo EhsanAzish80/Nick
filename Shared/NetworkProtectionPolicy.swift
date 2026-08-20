@@ -285,7 +285,8 @@ enum NetworkProtectionSharedStore {
 
     static func hasCurrentHealth(
         fileManager: FileManager = .default,
-        now: TimeInterval = Date().timeIntervalSince1970
+        now: TimeInterval = Date().timeIntervalSince1970,
+        expectedProviderVersion: String? = nil
     ) -> Bool {
         guard
             let url = healthURL(fileManager: fileManager),
@@ -294,12 +295,40 @@ enum NetworkProtectionSharedStore {
         else {
             return false
         }
-        return isCurrentHealth(object, now: now)
+        return isCurrentHealth(
+            object,
+            now: now,
+            expectedProviderVersion: expectedProviderVersion
+        )
+    }
+
+    /// Returns the provider-authored health timestamp only when the complete
+    /// record passes the same freshness and fail-open checks used by the app.
+    static func currentHealthDate(
+        fileManager: FileManager = .default,
+        now: TimeInterval = Date().timeIntervalSince1970,
+        expectedProviderVersion: String? = nil
+    ) -> Date? {
+        guard
+            let url = healthURL(fileManager: fileManager),
+            let data = fileManager.contents(atPath: url.path),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            isCurrentHealth(
+                object,
+                now: now,
+                expectedProviderVersion: expectedProviderVersion
+            ),
+            let updatedAt = object["updatedAt"] as? TimeInterval
+        else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: updatedAt)
     }
 
     static func isCurrentHealth(
         _ object: [String: Any],
-        now: TimeInterval
+        now: TimeInterval,
+        expectedProviderVersion: String? = nil
     ) -> Bool {
         guard
             object["active"] as? Bool == true,
@@ -310,7 +339,33 @@ enum NetworkProtectionSharedStore {
         else {
             return false
         }
+        if let expectedProviderVersion,
+           object["version"] as? String != expectedProviderVersion {
+            return false
+        }
         let age = now - updatedAt
         return age >= 0 && age <= 30
+    }
+
+    static func providerVersion(fileManager: FileManager = .default) -> String? {
+        guard
+            let url = healthURL(fileManager: fileManager),
+            let data = fileManager.contents(atPath: url.path),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        return object["version"] as? String
+    }
+
+    static func bundledProviderVersion(in hostBundle: Bundle = .main) -> String? {
+        if hostBundle.bundleIdentifier == "com.ehsanazish.nick.NickNetFilter" {
+            return hostBundle.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
+        }
+        let extensionURL = hostBundle.bundleURL
+            .appendingPathComponent("Contents/Library/SystemExtensions")
+            .appendingPathComponent("com.ehsanazish.nick.NickNetFilter.systemextension")
+        return Bundle(url: extensionURL)?
+            .object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
     }
 }

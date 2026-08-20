@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+nick_app=${NICK_APP_PATH:-/Applications/Nick.app}
+nick_executable="$nick_app/Contents/MacOS/Nick"
+
+if [ ! -x "$nick_executable" ]; then
+    echo "nickctl: Nick is not installed at $nick_app" >&2
+    exit 30
+fi
+
+result_file=$(mktemp "${TMPDIR:-/tmp}/nickctl.XXXXXX")
+trap 'rm -f "$result_file"' EXIT HUP INT TERM
+
+# Enterprise mode changes Nick to a prohibited activation policy before any UI
+# is created, so invoke the signed executable directly. Launch Services can
+# retain a stale bundle registration across package upgrades and return
+# kLSNoExecutableErr even while the new Nick executable is present and running.
+set +e
+"$nick_executable" --enterprise-cli "$@" --result "$result_file"
+launch_status=$?
+set -e
+
+if [ ! -s "$result_file" ]; then
+    echo "nickctl: Nick did not return a status result (launch status $launch_status)" >&2
+    exit 31
+fi
+
+cat "$result_file"
+exit_code=$(plutil -extract exitCode raw -o - "$result_file" 2>/dev/null || true)
+case "$exit_code" in
+    ''|*[!0-9]*)
+        echo "nickctl: Nick returned a result without a valid exit code" >&2
+        exit 31
+        ;;
+    *)
+        exit "$exit_code"
+        ;;
+esac

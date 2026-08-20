@@ -725,7 +725,9 @@ final class SmartScanChecker {
 
     private var isNetworkFilterActive: Bool {
         networkFilterPreferenceEnabled &&
-            NetworkProtectionSharedStore.hasCurrentHealth()
+            NetworkProtectionSharedStore.hasCurrentHealth(
+                expectedProviderVersion: NetworkProtectionSharedStore.bundledProviderVersion()
+            )
     }
 
     private static var bundledEndpointExtensionVersion: String? {
@@ -741,9 +743,14 @@ final class SmartScanChecker {
     /// behavior version makes updates re-run guided setup and replace it.
     static func isCurrentNetworkFilterHealth(
         _ object: [String: Any],
-        now: TimeInterval
+        now: TimeInterval,
+        expectedProviderVersion: String? = nil
     ) -> Bool {
-        NetworkProtectionSharedStore.isCurrentHealth(object, now: now)
+        NetworkProtectionSharedStore.isCurrentHealth(
+            object,
+            now: now,
+            expectedProviderVersion: expectedProviderVersion
+        )
     }
 
     // MARK: - Resolution Execution
@@ -884,11 +891,7 @@ final class NetworkFilterInstaller: NSObject, OSSystemExtensionRequestDelegate {
     private static let activatedVersionKey = "networkFilterActivatedVersion"
 
     static var bundledExtensionVersion: String? {
-        let extensionURL = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Library/SystemExtensions")
-            .appendingPathComponent("com.ehsanazish.nick.NickNetFilter.systemextension")
-        return Bundle(url: extensionURL)?
-            .object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
+        NetworkProtectionSharedStore.bundledProviderVersion()
     }
 
     static func needsBundledVersionActivation(
@@ -900,9 +903,11 @@ final class NetworkFilterInstaller: NSObject, OSSystemExtensionRequestDelegate {
     }
 
     func ensureBundledVersionIsActive() async {
+        let runningVersion = NetworkProtectionSharedStore.providerVersion()
+        let recordedVersion = UserDefaults.standard.string(forKey: Self.activatedVersionKey)
         guard Self.needsBundledVersionActivation(
             bundledVersion: Self.bundledExtensionVersion,
-            activatedVersion: UserDefaults.standard.string(forKey: Self.activatedVersionKey)
+            activatedVersion: runningVersion ?? recordedVersion
         ) else { return }
         await installAndEnable()
     }
@@ -1065,7 +1070,8 @@ final class NetworkFilterInstaller: NSObject, OSSystemExtensionRequestDelegate {
                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                SmartScanChecker.isCurrentNetworkFilterHealth(
                    object,
-                   now: Date().timeIntervalSince1970
+                   now: Date().timeIntervalSince1970,
+                   expectedProviderVersion: Self.bundledExtensionVersion
                ) {
                 return true
             }

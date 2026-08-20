@@ -9,6 +9,14 @@ documentation.
 - [Nick 4.1 Release Readiness](NICK_4_1_RELEASE_READINESS.md)
 - [Release Checklist](RELEASE_CHECKLIST.md)
 
+## Enterprise pilot
+
+- [Pilot Roadmap and Acceptance Checklist](NICK_ENTERPRISE_PILOT_ROADMAP.md)
+- [Managed Configuration, Health, and CLI Contracts](NICK_ENTERPRISE_CONTRACTS.md)
+- [Privacy and Threat Model](NICK_ENTERPRISE_PRIVACY_AND_THREAT_MODEL.md)
+- [Resource Budgets](NICK_ENTERPRISE_RESOURCE_BUDGETS.md)
+- [Versioned JSON Schemas](Schemas/)
+
 ## Contributors
 
 - [Development and CI](DEVELOPMENT.md)

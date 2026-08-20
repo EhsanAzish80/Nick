@@ -31,6 +31,13 @@ public final class ExtensionXPCClient: NSObject {
     /// Whether the XPC connection to the extension is currently active.
     public private(set) var isConnected = false
 
+    /// Last time the extension answered an explicit status request. This is
+    /// runtime evidence, not an installation preference or cached UI flag.
+    public private(set) var lastStatusResponseAt: Date?
+
+    /// Last live Endpoint Security event received from the extension.
+    public private(set) var lastEventReceivedAt: Date?
+
     /// Live log of `ESEvent` objects received from the extension.
     /// Capped at `maxEventCount` to avoid unbounded memory growth.
     public private(set) var events: [ESEvent] = []
@@ -111,6 +118,7 @@ public final class ExtensionXPCClient: NSObject {
         let statusReply: @Sendable (Bool) -> Void = { [weak self] active in
             Task { @MainActor [weak self] in
                 self?.isConnected = active
+                self?.lastStatusResponseAt = .now
                 Self.logger.info("Verified extension status: isActive=\(active)")
                 if active {
                     self?.loadPersistedEvents()
@@ -278,6 +286,7 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
         Task { @MainActor [weak self] in
             guard let self else { return }
             events.insert(event, at: 0)
+            lastEventReceivedAt = .now
             if events.count > maxEventCount {
                 events.removeLast(events.count - maxEventCount)
             }
@@ -321,6 +330,7 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
         Task { @MainActor [weak self] in
             Self.logger.info("Extension status changed: isActive=\(isActive)")
             self?.isConnected = isActive
+            self?.lastStatusResponseAt = .now
         }
     }
 

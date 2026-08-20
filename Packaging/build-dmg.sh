@@ -3,12 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h}
-PKG_PATH=${PKG_PATH:-"/Users/Shared/Nick-4.1-build-416.pkg"}
-OUTPUT_PATH=${OUTPUT_PATH:-"/Users/Shared/Nick-4.1-build-416.dmg"}
-WORK_DIR=${WORK_DIR:-"${TMPDIR%/}/NickDMG416"}
+PKG_PATH=${PKG_PATH:-"/Users/Shared/Nick-4.1-build-419.pkg"}
+OUTPUT_PATH=${OUTPUT_PATH:-"/Users/Shared/Nick-4.1-build-419.dmg"}
+WORK_DIR=${WORK_DIR:-"${TMPDIR%/}/NickDMG419"}
 VOLUME_NAME="Install Nick"
 APP_SIGNING_IDENTITY=${APP_SIGNING_IDENTITY:-"Developer ID Application: ehsan azish (UXGW5V3BY6)"}
 NOTARY_PROFILE=${NOTARY_PROFILE:-NickNotary}
+NOTARIZE=${NOTARIZE:-1}
 ICON_PATH="${PROJECT_DIR}/Nick/Resources/Assets.xcassets/AppIcon.appiconset/icon_1024x1024.png"
 
 [[ -f "${PKG_PATH}" ]] || { print -u2 "Installer package not found: ${PKG_PATH}"; exit 1; }
@@ -76,8 +77,13 @@ trap - EXIT
 hdiutil convert "${RW_DMG}" -format UDZO -imagekey zlib-level=9 -o "${OUTPUT_PATH}"
 
 codesign --force --timestamp --sign "${APP_SIGNING_IDENTITY}" "${OUTPUT_PATH}"
-xcrun notarytool submit "${OUTPUT_PATH}" --keychain-profile "${NOTARY_PROFILE}" --wait
-xcrun stapler staple "${OUTPUT_PATH}"
-xcrun stapler validate "${OUTPUT_PATH}"
-spctl -a -vv -t open --context context:primary-signature "${OUTPUT_PATH}"
+if [[ "${NOTARIZE}" == "1" ]]; then
+  xcrun notarytool submit "${OUTPUT_PATH}" --keychain-profile "${NOTARY_PROFILE}" --wait
+  xcrun stapler staple "${OUTPUT_PATH}"
+  xcrun stapler validate "${OUTPUT_PATH}"
+  spctl -a -vv -t open --context context:primary-signature "${OUTPUT_PATH}"
+else
+  print "Skipping Apple notarization (NOTARIZE=${NOTARIZE})."
+  codesign --verify --verbose=2 "${OUTPUT_PATH}"
+fi
 shasum -a 256 "${OUTPUT_PATH}"

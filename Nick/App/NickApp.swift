@@ -38,11 +38,15 @@ struct NickApp: App {
         CommandLine.arguments.contains("--prepare-uninstall")
     }
 
+    private var isHeadlessCommandMode: Bool {
+        CommandLine.arguments.contains("--enterprise-cli")
+    }
+
     var body: some Scene {
         // The scenes always exist because SceneBuilder cannot branch, but their
         // view closures avoid touching SecurityEngine in maintenance mode.
         Window("Nick", id: "main") {
-            if isUninstallMaintenanceMode || isRunningTests {
+            if isUninstallMaintenanceMode || isHeadlessCommandMode || isRunningTests {
                 EmptyView()
             } else {
                 MainWindowView()
@@ -55,14 +59,14 @@ struct NickApp: App {
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
         .defaultSize(
-            width: isUninstallMaintenanceMode || isRunningTests ? 1 : 900,
-            height: isUninstallMaintenanceMode || isRunningTests ? 1 : 620
+            width: isUninstallMaintenanceMode || isHeadlessCommandMode || isRunningTests ? 1 : 900,
+            height: isUninstallMaintenanceMode || isHeadlessCommandMode || isRunningTests ? 1 : 620
         )
         .defaultPosition(.center)
         .windowResizability(.contentMinSize)
 
         Settings {
-            if isUninstallMaintenanceMode || isRunningTests {
+            if isUninstallMaintenanceMode || isHeadlessCommandMode || isRunningTests {
                 EmptyView()
             } else {
                 SettingsView()

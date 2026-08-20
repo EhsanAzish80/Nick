@@ -68,6 +68,26 @@ exports sanitized Markdown or JSON support bundles.
 | Performance | Explains disk usage and offers reviewed, opt-in cleanup actions. |
 | Runtime Compare | Captures before-and-after runtime evidence and exports sanitized support bundles. |
 
+## Enterprise pilot
+
+The enterprise pilot keeps Nick's Community and managed deployments on the
+same runtime and detection engine. When macOS supplies organization-managed
+preferences, Nick adds an **Organization** view with policy provenance,
+current Endpoint Security and Network Filter evidence, and a deployment
+readiness summary that an administrator can copy into a support ticket.
+
+The signed installer also provides `nickctl status --json` for deterministic,
+machine-readable local health checks. Its output distinguishes healthy runtime
+evidence, attention required, and information Nick cannot verify. It does not
+turn missing visibility into a claim that protection is disabled.
+
+The pilot remains local and observation-first. It does not provide a remote
+shell, automatic remediation, fleet collection, formal compliance
+certification, or direct Intune/Jamf/Kandji API integration. See the
+[enterprise pilot roadmap](Documentation/NICK_ENTERPRISE_PILOT_ROADMAP.md),
+[contracts](Documentation/NICK_ENTERPRISE_CONTRACTS.md), and
+[privacy and threat model](Documentation/NICK_ENTERPRISE_PRIVACY_AND_THREAT_MODEL.md).
+
 ### Endpoint Security
 
 The `NickExtension` system extension uses Apple's Endpoint Security framework
@@ -182,6 +202,9 @@ Nick.app
 
 Nick Uninstaller.app
 └── guided removal and cleanup
+
+/usr/local/bin/nickctl
+└── managed local health status in versioned JSON
 ```
 
 The main architectural rule is that installation is not treated as proof of

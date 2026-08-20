@@ -30,11 +30,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     lazy var xpcClient = ExtensionXPCClient()
     lazy var networkProtection = NetworkProtectionManager()
 
+    /// Produces an evidence-backed enterprise status snapshot from the same
+    /// live providers used by Nick's UI. Future CLI and managed export surfaces
+    /// must call this instead of reconstructing health from cached settings.
+    func currentEnterpriseHealthReport() throws -> EnterpriseHealthReport {
+        try EnterpriseHealthReportBuilder.buildLive(
+            xpcClient: xpcClient,
+            networkProtection: networkProtection
+        )
+    }
+
     // MARK: - Private
 
     private var statusItem: NSStatusItem?
     private let mainWindowDelegate = MainWindowDelegate()
     private var coordinator: MonitorCoordinator?
+    private var endpointExtensionManager: ExtensionManager?
     private var updaterController: SPUStandardUpdaterController?
     private var uninstallPreparationInProgress = false
     private let uninstallLogger = Logger(
@@ -70,6 +81,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_: Notification) {
+        if CommandLine.arguments.contains("--enterprise-cli") {
+            NSApp.setActivationPolicy(.prohibited)
+            Task { @MainActor in
+                await runEnterpriseCommandLine()
+            }
+            return
+        }
         traceUninstall("Nick launched with arguments: \(CommandLine.arguments.joined(separator: " "))")
         if CommandLine.arguments.contains("--prepare-uninstall") {
             traceUninstall("Maintenance mode detected in applicationDidFinishLaunching")
@@ -117,6 +135,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         setupStatusItem()
         Task { @MainActor in
+            let endpointManager = ExtensionManager()
+            endpointExtensionManager = endpointManager
+            endpointManager.ensureBundledVersionIsActive()
             // A healthy older Network Filter is not sufficient after an app
             // update. Submit a replacement request once per bundled build so
             // macOS runs the provider shipped with this version of Nick.
@@ -550,6 +571,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Scheduled Deep Scan
+
+    private func runEnterpriseCommandLine() async {
+        let markerIndex = CommandLine.arguments.firstIndex(of: "--enterprise-cli")
+        var arguments = markerIndex.map {
+            Array(CommandLine.arguments.dropFirst($0 + 1))
+        } ?? []
+        var resultURL: URL?
+        if let resultIndex = arguments.firstIndex(of: "--result"),
+           arguments.indices.contains(resultIndex + 1) {
+            resultURL = URL(fileURLWithPath: arguments[resultIndex + 1])
+            arguments.removeSubrange(resultIndex ... resultIndex + 1)
+        }
+
+        guard arguments == ["status", "--json"] else {
+            writeEnterpriseCLIEnvelope(EnterpriseStatusCommand.invalidArguments(), to: resultURL)
+            Darwin.exit(NickCLIExitCode.invalidArguments.rawValue)
+        }
+
+        let managedState = EnterpriseManagedConfigurationStore().load()
+        xpcClient.connect()
+        await networkProtection.refresh()
+        // XPC connection creation is synchronous, but the provider's status
+        // reply is not. Give the signed provider a short bounded opportunity
+        // to answer; absence of a reply remains `cannotVerify` in the report.
+        try? await Task.sleep(for: .milliseconds(750))
+
+        do {
+            let report = try currentEnterpriseHealthReport()
+            let envelope = EnterpriseStatusCommand.result(
+                report: report,
+                managedConfiguration: managedState
+            )
+            try envelope.validate()
+            writeEnterpriseCLIEnvelope(envelope, to: resultURL)
+            Darwin.exit(envelope.exitCode.rawValue)
+        } catch {
+            let cliError = NickCLIError(
+                code: .outputWriteFailed,
+                message: "Nick could not produce a valid status report.",
+                recoverySuggestion: error.localizedDescription
+            )
+            let envelope = NickCLIEnvelope<EnterpriseHealthReport>(
+                schemaVersion: NickCLIEnvelope<EnterpriseHealthReport>.currentSchemaVersion,
+                command: .status,
+                generatedAt: .now,
+                success: false,
+                exitCode: .outputFailed,
+                payload: nil,
+                errors: [cliError]
+            )
+            writeEnterpriseCLIEnvelope(envelope, to: resultURL)
+            Darwin.exit(NickCLIExitCode.outputFailed.rawValue)
+        }
+    }
+
+    private func writeEnterpriseCLIEnvelope(
+        _ envelope: NickCLIEnvelope<EnterpriseHealthReport>,
+        to resultURL: URL?
+    ) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard var data = try? encoder.encode(envelope) else { return }
+        data.append(0x0A)
+        if let resultURL {
+            try? data.write(to: resultURL, options: .atomic)
+        } else {
+            FileHandle.standardOutput.write(data)
+        }
+    }
 
     /// Called on launch to fire a background deep scan if enough time has elapsed
     /// since the last one, based on the user's scheduled interval preference.

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nick.3nsofts.com/schemas/cli-envelope-v1.schema.json",
+  "title": "Nick CLI Envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "command", "generatedAt", "success", "exitCode", "errors"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "command": { "enum": ["status", "diagnostics", "compare"] },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "success": { "type": "boolean" },
+    "exitCode": { "enum": [0, 2, 10, 20, 21, 22, 30, 31, 40] },
+    "payload": { "type": ["object", "array", "string", "number", "boolean", "null"] },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^NICK-[A-Z]+-[0-9]{3}$" },
+          "message": { "type": "string" },
+          "recoverySuggestion": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

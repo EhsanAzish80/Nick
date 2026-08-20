@@ -36,6 +36,7 @@ struct MainWindowView: View {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
     @State private var notificationsDenied = false
+    @State private var managedConfigurationState = EnterpriseManagedConfigurationStore().load()
 
     private var resolvedColorScheme: ColorScheme? {
         switch appAppearance {
@@ -127,6 +128,12 @@ struct MainWindowView: View {
                     SidebarNavItem(section: .performance).tag(SidebarSection.performance)
                 }
 
+                if managedConfigurationState.isManaged {
+                    Section("MANAGEMENT") {
+                        SidebarNavItem(section: .organization).tag(SidebarSection.organization)
+                    }
+                }
+
                 SidebarNavItem(section: .settings)
                     .tag(SidebarSection.settings)
             }
@@ -145,6 +152,7 @@ struct MainWindowView: View {
             case .persistence: PersistenceDetailView()
             case .runtimeCompare: RuntimeCompareView()
             case .performance: PerformanceView()
+            case .organization: OrganizationView()
             case .settings:    SettingsView()
             }
         }
@@ -179,6 +187,12 @@ struct MainWindowView: View {
             }
             selectedSection = .scan
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            managedConfigurationState = EnterpriseManagedConfigurationStore().load()
+            if !managedConfigurationState.isManaged, selectedSection == .organization {
+                selectedSection = .overview
+            }
+        }
     }
 }
 
@@ -194,6 +208,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case persistence = "Persistence"
     case runtimeCompare = "Runtime Compare"
     case performance = "Performance"
+    case organization = "Organization"
     case settings    = "Settings"
 
     var id: String { rawValue }
@@ -213,6 +228,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .persistence: return "arrow.triangle.2.circlepath"
         case .runtimeCompare: return "square.split.2x1"
         case .performance: return "gauge.medium"
+        case .organization: return "building.2"
         case .settings:    return "gearshape.fill"
         }
     }
@@ -231,6 +247,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .persistence: return .orange
         case .runtimeCompare: return .indigo
         case .performance: return .mint
+        case .organization: return .blue
         case .settings:    return Color(NSColor.systemGray)
         }
     }
@@ -314,6 +331,16 @@ struct OverviewDetailView: View {
     private var totalIssues: Int {
         auditIssues + persistenceIssues + processIssues + networkIssues
             + (xpcClient.isConnected ? 0 : 1)
+    }
+
+    private var versionLabel: String {
+        let version = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "Unknown"
+        let build = Bundle.main.object(
+            forInfoDictionaryKey: kCFBundleVersionKey as String
+        ) as? String ?? "Unknown"
+        return version + " (" + build + ")"
     }
 
     private var statusLine: String {
@@ -643,6 +670,7 @@ struct OverviewDetailView: View {
                 }
             }
             Spacer()
+            footerStat(label: "Nick", value: versionLabel)
         }
     }
 

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nick.3nsofts.com/schemas/baseline-manifest-v1.schema.json",
+  "title": "Nick Runtime Baseline Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "baselineIdentifier", "baselineVersion", "publisher",
+    "platform", "issuedAt", "contentSHA256", "signingKeyIdentifier", "assertions"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "baselineIdentifier": { "type": "string", "minLength": 1 },
+    "baselineVersion": { "type": "string", "minLength": 1 },
+    "publisher": { "type": "string", "minLength": 1 },
+    "platform": { "const": "macOS" },
+    "minimumOSVersion": { "type": ["string", "null"] },
+    "maximumOSVersion": { "type": ["string", "null"] },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": ["string", "null"], "format": "date-time" },
+    "contentSHA256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "signingKeyIdentifier": { "type": "string", "minLength": 1 },
+    "assertions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["identifier", "ruleIdentifier", "kind", "subject", "explanation"],
+        "properties": {
+          "identifier": { "type": "string", "minLength": 1 },
+          "ruleIdentifier": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["processPresent", "processAbsent", "persistencePresent", "persistenceAbsent", "listenerPresent", "listenerAbsent", "extensionActive", "extensionInactive", "sensorResponsive"] },
+          "subject": { "type": "string", "minLength": 1 },
+          "explanation": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

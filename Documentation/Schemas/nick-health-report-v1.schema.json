@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nick.3nsofts.com/schemas/health-report-v1.schema.json",
+  "title": "Nick Enterprise Health Report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "generatedAt", "nickVersion", "nickBuild",
+    "macOSVersion", "architecture", "managedConfigurationDetected",
+    "components", "limitations"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "nickVersion": { "type": "string" },
+    "nickBuild": { "type": "string" },
+    "macOSVersion": { "type": "string" },
+    "architecture": { "type": "string" },
+    "managedConfigurationDetected": { "type": "boolean" },
+    "organizationName": { "type": ["string", "null"] },
+    "components": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/component" }
+    },
+    "limitations": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identifier", "displayName", "state"],
+      "properties": {
+        "identifier": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "displayName": { "type": "string" },
+        "state": { "enum": ["available", "degraded", "unavailable", "notConfigured", "cannotVerify"] },
+        "installed": { "type": ["boolean", "null"] },
+        "enabled": { "type": ["boolean", "null"] },
+        "responsive": { "type": ["boolean", "null"] },
+        "version": { "type": ["string", "null"] },
+        "lastSuccessfulEventAt": { "type": ["string", "null"], "format": "date-time" },
+        "errorCode": { "type": ["string", "null"], "pattern": "^NICK-[A-Z]+-[0-9]{3}$" },
+        "message": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

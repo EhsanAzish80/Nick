@@ -13,15 +13,16 @@ BUILD_DIR=${BUILD_DIR:-"/private/tmp/NickReleaseBuild"}
 ARCHIVE_PATH=${ARCHIVE_PATH:-"${BUILD_DIR}/Nick.xcarchive"}
 DERIVED_DATA_PATH=${DERIVED_DATA_PATH:-"${BUILD_DIR}/DerivedData"}
 EXPECTED_VERSION=${EXPECTED_VERSION:-4.1}
-EXPECTED_BUILD=${EXPECTED_BUILD:-416}
+EXPECTED_BUILD=${EXPECTED_BUILD:-419}
 OUTPUT_PATH=${OUTPUT_PATH:-"${BUILD_DIR}/Nick-${EXPECTED_VERSION}-build-${EXPECTED_BUILD}.pkg"}
 LOCAL_PACKAGE_PATH=${LOCAL_PACKAGE_PATH:-"${BUILD_DIR}/Nick-${EXPECTED_VERSION}-build-${EXPECTED_BUILD}.pkg"}
 STAGING_DIR=${STAGING_DIR:-"/private/tmp/NickReleaseStaging"}
 APP_SIGNING_IDENTITY=${APP_SIGNING_IDENTITY:-"Developer ID Application: ehsan azish (UXGW5V3BY6)"}
 INSTALLER_SIGNING_IDENTITY=${INSTALLER_SIGNING_IDENTITY:-"Developer ID Installer: ehsan azish (UXGW5V3BY6)"}
 NOTARY_PROFILE=${NOTARY_PROFILE:-NickNotary}
+NOTARIZE=${NOTARIZE:-1}
 SPARKLE_ACCOUNT=${SPARKLE_ACCOUNT:-nick-legacy}
-SPARKLE_BIN=${SPARKLE_BIN:-"${HOME}/Library/Developer/Xcode/DerivedData/Nick-gzbanxnqyyulqpeimhnitfvuobud/SourcePackages/artifacts/sparkle/Sparkle/bin"}
+SPARKLE_BIN=${SPARKLE_BIN:-"${DERIVED_DATA_PATH}/SourcePackages/artifacts/sparkle/Sparkle/bin"}
 
 mkdir -p "${BUILD_DIR}"
 
@@ -96,11 +97,14 @@ codesign --verify --deep --strict --verbose=2 "${NICK_APP}"
 # `._*` files even when the source bundle itself is clean.
 PAYLOAD_ROOT="${BUILD_DIR}/InstallerRoot"
 rm -rf "${PAYLOAD_ROOT}"
-mkdir -p "${PAYLOAD_ROOT}/Applications"
+mkdir -p "${PAYLOAD_ROOT}/Applications" "${PAYLOAD_ROOT}/usr/local/bin"
 COPYFILE_DISABLE=1 ditto --noextattr --noqtn \
   "${NICK_APP}" "${PAYLOAD_ROOT}/Applications/Nick.app"
 COPYFILE_DISABLE=1 ditto --noextattr --noqtn \
   "${UNINSTALLER}" "${PAYLOAD_ROOT}/Applications/Nick Uninstaller.app"
+COPYFILE_DISABLE=1 ditto --noextattr --noqtn \
+  "${PROJECT_DIR}/Tools/nickctl" "${PAYLOAD_ROOT}/usr/local/bin/nickctl"
+chmod 755 "${PAYLOAD_ROOT}/usr/local/bin/nickctl"
 
 # Copying must not change the signed application that users will install.
 codesign --verify --deep --strict --verbose=2 \
@@ -134,12 +138,17 @@ if [[ "${LOCAL_PACKAGE_PATH}" != "${OUTPUT_PATH}" ]]; then
     "${LOCAL_PACKAGE_PATH}" "${OUTPUT_PATH}"
 fi
 
-xcrun notarytool submit "${OUTPUT_PATH}" \
-  --keychain-profile "${NOTARY_PROFILE}" \
-  --wait
-xcrun stapler staple "${OUTPUT_PATH}"
-xcrun stapler validate "${OUTPUT_PATH}"
-spctl -a -vv -t install "${OUTPUT_PATH}"
+if [[ "${NOTARIZE}" == "1" ]]; then
+  xcrun notarytool submit "${OUTPUT_PATH}" \
+    --keychain-profile "${NOTARY_PROFILE}" \
+    --wait
+  xcrun stapler staple "${OUTPUT_PATH}"
+  xcrun stapler validate "${OUTPUT_PATH}"
+  spctl -a -vv -t install "${OUTPUT_PATH}"
+else
+  print "Skipping Apple notarization (NOTARIZE=${NOTARIZE})."
+  pkgutil --check-signature "${OUTPUT_PATH}"
+fi
 
 print
 print "Sparkle enclosure attributes:"

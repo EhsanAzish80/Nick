@@ -43,6 +43,22 @@ The accepted product, UI, schema, privacy, testing, and implementation record
 is maintained in the
 [Nick 4.1 Runtime Compare roadmap](NICK_4_1_RUNTIME_COMPARE_ROADMAP.md).
 
+## Enterprise Pilot: managed runtime evidence
+
+Nick's enterprise track will reuse the same runtime engine while adding managed
+deployment, bounded configuration, machine-readable health, administrator
+diagnostics, and optional signed-baseline evidence mapping. It remains
+observation-first and does not become an MDM, compliance certifier, remote
+shell, or fleet collector during the pilot.
+
+The first implementation slice now includes managed-configuration provenance,
+an Organization view, evidence-backed Deployment Readiness, versioned JSON
+contracts, and `nickctl status --json`. It is still a private pilot candidate,
+not a generally available enterprise release.
+
+The remaining deployment and administrator acceptance checklist is maintained in the
+[Nick Enterprise Pilot roadmap](NICK_ENTERPRISE_PILOT_ROADMAP.md).
+
 ## Version 4.2: trusted rule updates
 
 - Publish Nick-maintained, signed YARA and network rule bundles.

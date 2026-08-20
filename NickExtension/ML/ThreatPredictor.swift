@@ -4,7 +4,6 @@
 
 import CoreML
 import Foundation
-import Security
 
 // MARK: - ThreatPredictor
 
@@ -47,9 +46,24 @@ final class ThreatPredictor {
     /// Keeps AUTH_EXEC latency low even for very large binaries.
     private let maxReadBytes = 512 * 1024   // 512 KB
 
+    /// Keeps repeated launches of the same unchanged executable from rereading
+    /// and reprocessing up to 512 KB every time. Xcode and Simulator can launch
+    /// hundreds of identical helpers in a short period, so the cache must be
+    /// bounded even though the Endpoint Security event queue is serial.
+    private let maximumCacheEntries = 512
+
     // MARK: - Private
 
     private var model: MLModel?
+    private var predictionCache: [CacheKey: PredictionResult] = [:]
+    private var cacheOrder: [CacheKey] = []
+
+    private struct CacheKey: Hashable {
+        let path: String
+        let fileSize: Int
+        let modificationTime: TimeInterval
+        let isSigned: Bool
+    }
 
     // MARK: - Init
 
@@ -63,20 +77,38 @@ final class ThreatPredictor {
     ///
     /// - Returns: `nil` if the file cannot be read (e.g. it was deleted before
     ///   the AUTH_EXEC fired), otherwise a `PredictionResult`.
-    func predict(filePath: String) -> PredictionResult? {
-        guard let features = extractFeatures(from: filePath) else { return nil }
-
-        if let model {
-            return coreMLPredict(features: features, model: model)
+    func predict(filePath: String, isSigned: Bool) -> PredictionResult? {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: filePath) else { return nil }
+        let key = CacheKey(
+            path: filePath,
+            fileSize: (attrs[.size] as? Int) ?? 0,
+            modificationTime: (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0,
+            isSigned: isSigned
+        )
+        if let cached = predictionCache[key] {
+            return cached
         }
-        return heuristicPredict(features: features)
+
+        guard let features = extractFeatures(
+            from: filePath,
+            attributes: attrs,
+            isSigned: isSigned
+        ) else { return nil }
+
+        let result = model.map { coreMLPredict(features: features, model: $0) }
+            ?? heuristicPredict(features: features)
+        store(result, for: key)
+        return result
     }
 
     // MARK: - Feature Extraction
 
-    private func extractFeatures(from filePath: String) -> PredictionInput? {
-        let fm = FileManager.default
-        guard let attrs = try? fm.attributesOfItem(atPath: filePath) else { return nil }
+    private func extractFeatures(
+        from filePath: String,
+        attributes attrs: [FileAttributeKey: Any],
+        isSigned: Bool
+    ) -> PredictionInput? {
         let fileSize = (attrs[.size] as? Int) ?? 0
 
         // Read capped slice for analysis
@@ -97,7 +129,10 @@ final class ThreatPredictor {
         return PredictionInput(
             fileSize:           fileSize,
             entropy:            entropy,
-            isSigned:           checkCodeSigning(path: filePath),
+            // AUTH_EXEC already supplies CS_VALID. Revalidating through
+            // SecStaticCodeCheckValidity for every launch caused measurable
+            // CPU spikes during Xcode and Simulator process storms.
+            isSigned:           isSigned,
             suspiciousAPICount: suspiciousAPICount,
             obfuscationScore:   obfuscation,
             hasNetworkStrings:  hasNetworkStrings,
@@ -216,12 +251,12 @@ final class ThreatPredictor {
         return 0.1
     }
 
-    private func checkCodeSigning(path: String) -> Bool {
-        var staticCode: SecStaticCode?
-        let url = URL(fileURLWithPath: path) as CFURL
-        guard SecStaticCodeCreateWithPath(url, [], &staticCode) == errSecSuccess,
-              let code = staticCode else { return false }
-        return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: 0), nil) == errSecSuccess
+    private func store(_ result: PredictionResult, for key: CacheKey) {
+        predictionCache[key] = result
+        cacheOrder.append(key)
+        while cacheOrder.count > maximumCacheEntries {
+            predictionCache.removeValue(forKey: cacheOrder.removeFirst())
+        }
     }
 
     private func classifyFromProbability(_ prob: Double) -> PredictionResult.Classification {
