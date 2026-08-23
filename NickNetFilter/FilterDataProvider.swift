@@ -80,6 +80,9 @@ final class FilterDataProvider: NEFilterDataProvider {
         let health: [String: Any] = [
             "active": true,
             "updatedAt": Date().timeIntervalSince1970,
+            "version": Bundle.main.object(
+                forInfoDictionaryKey: kCFBundleVersionKey as String
+            ) as? String ?? "unknown",
             // Keep health and provider configuration on the same behavior
             // version so an old running filter never receives a false green.
             "configurationVersion": NetworkProtectionConfiguration.configurationVersion,

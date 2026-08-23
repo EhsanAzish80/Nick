@@ -316,6 +316,16 @@ struct OverviewDetailView: View {
             + (xpcClient.isConnected ? 0 : 1)
     }
 
+    private var versionLabel: String {
+        let version = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "Unknown"
+        let build = Bundle.main.object(
+            forInfoDictionaryKey: kCFBundleVersionKey as String
+        ) as? String ?? "Unknown"
+        return version + " (" + build + ")"
+    }
+
     private var statusLine: String {
         guard !engine.isScanning else { return "Scan in progress…" }
         var parts: [String] = []
@@ -643,6 +653,7 @@ struct OverviewDetailView: View {
                 }
             }
             Spacer()
+            footerStat(label: "Nick", value: versionLabel)
         }
     }
 

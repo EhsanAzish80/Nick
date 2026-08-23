@@ -40,7 +40,9 @@ final class NetworkProtectionManager {
             )
             if !manager.isEnabled {
                 state = .disabled
-            } else if NetworkProtectionSharedStore.hasCurrentHealth() {
+            } else if NetworkProtectionSharedStore.hasCurrentHealth(
+                expectedProviderVersion: NetworkProtectionSharedStore.bundledProviderVersion()
+            ) {
                 state = .enabled
             } else {
                 state = .failed(

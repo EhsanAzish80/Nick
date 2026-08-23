@@ -130,7 +130,10 @@ final class ESEventHandler {
                     targetPath.hasPrefix("/System/") ||
                     targetPath.hasPrefix("/usr/lib/")
                 if !isTrustedSystem {
-                    _ = self.threatPredictor?.predict(filePath: targetPath)
+                    _ = self.threatPredictor?.predict(
+                        filePath: targetPath,
+                        isSigned: isSigned
+                    )
                 }
 
                 _ = self.behaviorTracker?.analyze(pid: pid)

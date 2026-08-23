@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let mainWindowDelegate = MainWindowDelegate()
     private var coordinator: MonitorCoordinator?
+    private var endpointExtensionManager: ExtensionManager?
     private var updaterController: SPUStandardUpdaterController?
     private var uninstallPreparationInProgress = false
     private let uninstallLogger = Logger(
@@ -117,6 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         setupStatusItem()
         Task { @MainActor in
+            let endpointManager = ExtensionManager()
+            endpointExtensionManager = endpointManager
+            endpointManager.ensureBundledVersionIsActive()
             // A healthy older Network Filter is not sufficient after an app
             // update. Submit a replacement request once per bundled build so
             // macOS runs the provider shipped with this version of Nick.

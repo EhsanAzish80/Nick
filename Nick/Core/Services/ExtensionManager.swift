@@ -88,6 +88,25 @@ public final class ExtensionManager: NSObject {
         return bundle.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
     }
 
+    private static var runningExtensionVersion: String? {
+        let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
+        guard
+            let data = FileManager.default.contents(atPath: path),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        return object["version"] as? String
+    }
+
+    static func needsBundledVersionActivation(
+        bundledVersion: String?,
+        runningVersion: String?
+    ) -> Bool {
+        guard let bundledVersion, !bundledVersion.isEmpty else { return false }
+        return runningVersion != bundledVersion
+    }
+
     // MARK: - Public API
 
     /// Requests activation of the `NickExtension` System Extension.
@@ -106,6 +125,24 @@ public final class ExtensionManager: NSObject {
         request.delegate = self
         OSSystemExtensionManager.shared.submitRequest(request)
         Self.logger.info("Submitted extension activation request")
+    }
+
+    /// Replaces an already-approved extension when the running provider is
+    /// older than the provider embedded in the updated app. First-run setup is
+    /// intentionally left to onboarding so this cannot create surprise prompts
+    /// for users who have never enabled Endpoint Security.
+    func ensureBundledVersionIsActive() {
+        guard UserDefaults.standard.bool(forKey: Self.activationCompletedKey) else { return }
+        let recordedVersion = UserDefaults.standard.string(forKey: Self.activatedVersionKey)
+        guard Self.needsBundledVersionActivation(
+            bundledVersion: Self.bundledExtensionVersion,
+            runningVersion: Self.runningExtensionVersion ?? recordedVersion
+        ) else {
+            extensionState = .installed
+            return
+        }
+        Self.logger.info("Running Endpoint Security build differs from bundled build; requesting replacement")
+        installExtension()
     }
 
     /// Requests deactivation (removal) of the `NickExtension` System Extension.

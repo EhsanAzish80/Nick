@@ -20,8 +20,9 @@ STAGING_DIR=${STAGING_DIR:-"/private/tmp/NickReleaseStaging"}
 APP_SIGNING_IDENTITY=${APP_SIGNING_IDENTITY:-"Developer ID Application: ehsan azish (UXGW5V3BY6)"}
 INSTALLER_SIGNING_IDENTITY=${INSTALLER_SIGNING_IDENTITY:-"Developer ID Installer: ehsan azish (UXGW5V3BY6)"}
 NOTARY_PROFILE=${NOTARY_PROFILE:-NickNotary}
+NOTARIZE=${NOTARIZE:-1}
 SPARKLE_ACCOUNT=${SPARKLE_ACCOUNT:-nick-legacy}
-SPARKLE_BIN=${SPARKLE_BIN:-"${HOME}/Library/Developer/Xcode/DerivedData/Nick-gzbanxnqyyulqpeimhnitfvuobud/SourcePackages/artifacts/sparkle/Sparkle/bin"}
+SPARKLE_BIN=${SPARKLE_BIN:-"${DERIVED_DATA_PATH}/SourcePackages/artifacts/sparkle/Sparkle/bin"}
 
 mkdir -p "${BUILD_DIR}"
 
@@ -134,12 +135,17 @@ if [[ "${LOCAL_PACKAGE_PATH}" != "${OUTPUT_PATH}" ]]; then
     "${LOCAL_PACKAGE_PATH}" "${OUTPUT_PATH}"
 fi
 
-xcrun notarytool submit "${OUTPUT_PATH}" \
-  --keychain-profile "${NOTARY_PROFILE}" \
-  --wait
-xcrun stapler staple "${OUTPUT_PATH}"
-xcrun stapler validate "${OUTPUT_PATH}"
-spctl -a -vv -t install "${OUTPUT_PATH}"
+if [[ "${NOTARIZE}" == "1" ]]; then
+  xcrun notarytool submit "${OUTPUT_PATH}" \
+    --keychain-profile "${NOTARY_PROFILE}" \
+    --wait
+  xcrun stapler staple "${OUTPUT_PATH}"
+  xcrun stapler validate "${OUTPUT_PATH}"
+  spctl -a -vv -t install "${OUTPUT_PATH}"
+else
+  print "Skipping Apple notarization (NOTARIZE=${NOTARIZE})."
+  pkgutil --check-signature "${OUTPUT_PATH}"
+fi
 
 print
 print "Sparkle enclosure attributes:"

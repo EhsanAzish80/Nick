@@ -71,12 +71,25 @@ final class SmartScanStatusTests: XCTestCase {
         let currentHealth: [String: Any] = [
             "active": true,
             "updatedAt": now - 5,
+            "version": "417",
             "configurationVersion": NetworkProtectionConfiguration.configurationVersion,
             "failOpen": true
         ]
 
         XCTAssertTrue(
-            SmartScanChecker.isCurrentNetworkFilterHealth(currentHealth, now: now)
+            SmartScanChecker.isCurrentNetworkFilterHealth(
+                currentHealth,
+                now: now,
+                expectedProviderVersion: "417"
+            )
+        )
+
+        XCTAssertFalse(
+            SmartScanChecker.isCurrentNetworkFilterHealth(
+                currentHealth,
+                now: now,
+                expectedProviderVersion: "416"
+            )
         )
 
         var staleHealth = currentHealth
@@ -129,6 +142,21 @@ final class SmartScanStatusTests: XCTestCase {
             SmartScanChecker.extensionNeedsUpdate(
                 runningVersion: nil,
                 bundledVersion: "407"
+            )
+        )
+    }
+
+    func test_endpointExtensionActivationIsRequiredForOlderRunningBuild() {
+        XCTAssertTrue(
+            ExtensionManager.needsBundledVersionActivation(
+                bundledVersion: "417",
+                runningVersion: "416"
+            )
+        )
+        XCTAssertFalse(
+            ExtensionManager.needsBundledVersionActivation(
+                bundledVersion: "417",
+                runningVersion: "417"
             )
         )
     }
