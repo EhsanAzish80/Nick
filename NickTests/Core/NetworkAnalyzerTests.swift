@@ -28,7 +28,7 @@ final class NetworkAnalyzerTests: XCTestCase {
 
     // MARK: - Reverse Shell Detection
 
-    func test_signals_bashWithEstablishedOutbound_returnsHighSignal() {
+    func test_signals_bashWithEstablishedOutbound_returnsMediumObservation() {
         let conn = makeConnection(
             processName: "bash",
             remoteAddress: "203.0.113.99",
@@ -37,20 +37,20 @@ final class NetworkAnalyzerTests: XCTestCase {
         )
         let signals = scanner.signals(from: [conn])
         XCTAssertEqual(signals.count, 1)
-        XCTAssertEqual(signals[0].severity, .high)
-        XCTAssertEqual(signals[0].metadata["reason"], "reverse_shell")
+        XCTAssertEqual(signals[0].severity, .medium)
+        XCTAssertEqual(signals[0].metadata["reason"], "shell_network_observation")
     }
 
-    func test_signals_zshWithEstablishedOutbound_returnsHighSignal() {
+    func test_signals_zshWithEstablishedOutbound_returnsMediumObservation() {
         let conn = makeConnection(processName: "zsh", remoteAddress: "1.2.3.4", remotePort: 9001, state: .established)
         let signals = scanner.signals(from: [conn])
-        XCTAssertEqual(signals[0].severity, .high)
+        XCTAssertEqual(signals[0].severity, .medium)
     }
 
-    func test_signals_ncWithEstablishedOutbound_returnsHighSignal() {
+    func test_signals_ncWithEstablishedOutbound_returnsMediumObservation() {
         let conn = makeConnection(processName: "nc", remoteAddress: "10.0.0.1", remotePort: 1234, state: .established)
         let signals = scanner.signals(from: [conn])
-        XCTAssertEqual(signals[0].severity, .high)
+        XCTAssertEqual(signals[0].severity, .medium)
     }
 
     func test_signals_safariWithEstablishedOutbound_returnsNoReverseShellSignal() {
@@ -110,11 +110,11 @@ final class NetworkAnalyzerTests: XCTestCase {
         XCTAssertTrue(signals.isEmpty)
     }
 
-    func test_signals_trustedProcess_returnsNoRawIPSignal() {
+    func test_signals_unresolvedTrustedName_failsClosed() {
         for process in ["Spotify", "Xcode", "Claude Helper", "rapportd", "identityservicesd", "Safari"] {
-            // Use a PID that cannot accidentally identify a real, unsigned process
-            // on the machine running the suite. An unresolvable synthetic PID uses
-            // the documented name-only fallback.
+            // A trusted-looking name is not proof of identity. If proc_pidpath cannot
+            // resolve the executable, Nick must keep the observation instead of
+            // silently trusting a potentially impersonated process.
             let conn = makeConnection(
                 pid: Int32.max,
                 processName: process,
@@ -123,7 +123,7 @@ final class NetworkAnalyzerTests: XCTestCase {
                 state: .established
             )
             let signals = scanner.signals(from: [conn]).filter { $0.metadata["reason"] == "raw_ip_outbound" }
-            XCTAssertTrue(signals.isEmpty, "Expected no raw_ip_outbound signal for trusted process '\(process)'")
+            XCTAssertEqual(signals.count, 1, "Expected unresolved trusted-looking process to fail closed: \(process)")
         }
     }
 

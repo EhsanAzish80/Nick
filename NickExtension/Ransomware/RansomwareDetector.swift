@@ -16,7 +16,8 @@ import os
 /// 4. **Ransom note filename** — README_DECRYPT, RESTORE_FILES, etc.
 /// 5. **Behavioural score** — from `BehaviorTracker` (rapid renames, burst ops)
 ///
-/// Confidence ≥ 0.8 → `.block` (kill + quarantine immediately)
+/// Confidence ≥ 0.8 plus ransomware-specific evidence → `.block`
+/// (kill + quarantine immediately). Entropy or write volume alone never blocks.
 /// Confidence 0.5–0.8 → `.alert` (alert user; do not freeze a process on heuristics alone)
 /// Confidence < 0.5 → `.monitor` (continue watching)
 final class RansomwareDetector {
@@ -28,6 +29,9 @@ final class RansomwareDetector {
         let processPath: String
         let indicators: [String]
         let confidence: Double
+        /// True only when evidence is specific enough to justify terminating
+        /// the writer without waiting for user review.
+        let automaticBlockAllowed: Bool
 
         enum Recommendation {
             case block      // high confidence — kill and quarantine now
@@ -36,8 +40,8 @@ final class RansomwareDetector {
         }
         var recommendation: Recommendation {
             switch confidence {
-            case 0.8...:     return .block
-            case 0.5..<0.8:  return .alert
+            case 0.8... where automaticBlockAllowed: return .block
+            case 0.5...:     return .alert
             default:          return .monitor
             }
         }
@@ -90,12 +94,16 @@ final class RansomwareDetector {
         var indicators: [String] = []
         var confidence = 0.0
         var hasRansomwareSpecificIndicator = false
+        var canaryTouched = false
+        var familyExtensionObserved = false
+        var ransomNoteObserved = false
 
         // 1. Canary file touched
         if canaryManager.isCanary(path: filePath) {
             indicators.append("Canary file touched: \(filePath)")
             confidence += 0.6
             hasRansomwareSpecificIndicator = true
+            canaryTouched = true
             Self.logger.warning("Canary file touched by pid=\(pid) path=\(filePath)")
         }
 
@@ -115,6 +123,7 @@ final class RansomwareDetector {
             indicators.append("Known ransomware extension: .\(ext)")
             confidence += 0.4
             hasRansomwareSpecificIndicator = true
+            familyExtensionObserved = true
         }
 
         // 4. Ransom note filename
@@ -123,6 +132,7 @@ final class RansomwareDetector {
             indicators.append("Ransom note: \(filename)")
             confidence += 0.5
             hasRansomwareSpecificIndicator = true
+            ransomNoteObserved = true
         }
 
         // 5. Behavioural analysis
@@ -142,7 +152,9 @@ final class RansomwareDetector {
             pid:         pid,
             processPath: processPath,
             indicators:  indicators,
-            confidence:  min(confidence, 1.0)
+            confidence:  min(confidence, 1.0),
+            automaticBlockAllowed: canaryTouched
+                || (behavior.isSuspicious && (familyExtensionObserved || ransomNoteObserved))
         )
 
         Self.logger.notice(
@@ -168,7 +180,6 @@ final class RansomwareDetector {
     // MARK: - Known Patterns
 
     private let knownRansomwareExtensions: Set<String> = [
-        "locked", "encrypted", "crypto", "crypt", "enc",
         "locky", "cerber", "zepto", "odin", "aesir", "thor", "zzzzz",
         "micro", "xtbl", "wallet", "dharma", "onion", "wncry",
     ]

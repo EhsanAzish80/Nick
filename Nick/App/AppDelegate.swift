@@ -5,6 +5,7 @@
 import AppKit
 import Darwin
 import NetworkExtension
+import Observation
 import OSLog
 import ServiceManagement
 import Sparkle
@@ -388,6 +389,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         button.action = #selector(handleStatusItemClick(_:))
         button.target = self
+        observeMenuBarAttentionState()
+    }
+
+    private func observeMenuBarAttentionState() {
+        withObservationTracking {
+            updateStatusItemAppearance()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.observeMenuBarAttentionState()
+            }
+        }
+    }
+
+    private func updateStatusItemAppearance() {
+        guard let button = statusItem?.button else { return }
+        let state = engine.hasCompletedFirstScan
+            ? engine.menuBarAttentionState
+            : MenuBarAttentionState.review
+
+        switch state {
+        case .protected:
+            button.contentTintColor = .systemGreen
+            button.toolTip = "Nick: Protected"
+            button.image?.accessibilityDescription = "Nick is protected"
+        case .review:
+            button.contentTintColor = .systemOrange
+            button.toolTip = "Nick: Review needed"
+            button.image?.accessibilityDescription = "Nick needs your review"
+        case .urgent:
+            button.contentTintColor = .systemRed
+            button.toolTip = "Nick: Immediate attention needed"
+            button.image?.accessibilityDescription = "Nick needs immediate attention"
+        }
     }
 
     @objc private func handleStatusItemClick(_: NSStatusBarButton) {

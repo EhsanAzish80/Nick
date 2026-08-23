@@ -223,16 +223,28 @@ final class MonitorCoordinator {
                 $0.hasPrefix("/tmp/") || $0.hasPrefix("/private/tmp/") || $0.hasPrefix("/var/tmp/")
             }
 
-            if isTempExec || (isInterpreter && scriptInTmp != nil) {
+            if (isTempExec || (isInterpreter && scriptInTmp != nil)), info.signingStatus == .invalid {
                 let detectedPath = scriptInTmp ?? p
                 newSignals.append(ThreatSignal(
                     source: .process,
                     severity: .high,
-                    title: "Script executing from temp directory",
-                    description: "'\(info.name)' (PID \(pid)) is executing '\(detectedPath)' from a writable temporary location.",
+                    title: "Invalidly signed script executing from temp directory",
+                    description: "'\(info.name)' (PID \(pid)) has an invalid signature and is executing '\(detectedPath)' from a writable temporary location.",
                     context: ThreatSignalContext(
                         processInfo: info,
-                        metadata: ["reason": "temp_path_spawn", "script_path": detectedPath]
+                        metadata: ["reason": "invalid_temp_signature", "script_path": detectedPath]
+                    )
+                ))
+            } else if (isTempExec || (isInterpreter && scriptInTmp != nil)), info.signingStatus == .unsigned {
+                let detectedPath = scriptInTmp ?? p
+                newSignals.append(ThreatSignal(
+                    source: .process,
+                    severity: .medium,
+                    title: "Unsigned script executing from temp directory",
+                    description: "'\(info.name)' (PID \(pid)) is executing '\(detectedPath)' from a writable temporary location. This is common during development and installation; Nick will look for additional suspicious behavior.",
+                    context: ThreatSignalContext(
+                        processInfo: info,
+                        metadata: ["reason": "unsigned_temp_path", "script_path": detectedPath]
                     )
                 ))
             }

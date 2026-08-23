@@ -27,4 +27,22 @@ final class RansomwareNotePolicyTests: XCTestCase {
             RansomwareNotePolicy.matches(filename: "HOW_TO_DECRYPT.html")
         )
     }
+
+    func test_containerIdentifierMatchesOwningWhatsAppBundle() {
+        XCTAssertTrue(
+            DeepScanner.containerIdentifier(
+                "group.net.whatsapp.WhatsApp.shared",
+                matchesBundleIdentifier: "net.whatsapp.WhatsApp"
+            )
+        )
+    }
+
+    func test_containerIdentifierRejectsUnrelatedSignedApp() {
+        XCTAssertFalse(
+            DeepScanner.containerIdentifier(
+                "group.attacker.unrelated.shared",
+                matchesBundleIdentifier: "net.whatsapp.WhatsApp"
+            )
+        )
+    }
 }

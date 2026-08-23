@@ -335,10 +335,12 @@ final class ESEventHandler {
                         self.xpcServer?.sendThreatToApp(data)
                     }
                     if alert.recommendation == .block,
-                       let engine = self.remediationEngine {
+                       let engine = self.remediationEngine,
+                       let hash = self.fileScanner?.scan(filePath: filePath).hash,
+                       !hash.isEmpty {
                         let report = engine.remediate(
                             threatPath: filePath,
-                            hash: "",
+                            hash: hash,
                             threatName: "Ransomware (\(alert.indicators.first ?? "unknown"))",
                             processPath: processPath,
                             pid: pid

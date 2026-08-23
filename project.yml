@@ -29,8 +29,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
-    MARKETING_VERSION: "4.0"
-    CURRENT_PROJECT_VERSION: "404"
+    MARKETING_VERSION: "4.2"
+    CURRENT_PROJECT_VERSION: "420"
     DEVELOPMENT_TEAM: ""          # Set your Team ID here
 
 targets:

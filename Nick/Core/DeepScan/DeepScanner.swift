@@ -290,27 +290,66 @@ final class DeepScanner {
 
     /// Returns `true` when `path` is inside the data container of a signed `.app` bundle.
     ///
-    /// Extracts the app name from paths containing `/Application Support/`, `/Caches/`, or
-    /// `/WebKit/`, locates a matching `.app` in standard install directories, and verifies
-    /// it carries a valid Developer ID signature.
+    /// Extracts an app name or bundle identifier from standard app-data paths, locates
+    /// the owning `.app` in standard install directories, and verifies its signature.
     nonisolated static func isInsideSignedAppData(path: String) -> Bool {
-        let markers = ["/Application Support/", "/Caches/", "/WebKit/"]
-        guard markers.contains(where: { path.range(of: $0, options: .caseInsensitive) != nil }) else {
-            return false
-        }
-        for marker in markers {
+        let namedMarkers = ["/Application Support/", "/Caches/", "/WebKit/"]
+        for marker in namedMarkers {
             guard let range = path.range(of: marker, options: .caseInsensitive) else { continue }
-            let afterMarker = String(path[range.upperBound...])
-            let appName = afterMarker.components(separatedBy: "/").first ?? ""
+            let appName = path[range.upperBound...].split(separator: "/").first.map(String.init) ?? ""
             guard !appName.isEmpty else { continue }
-            let fm = FileManager.default
-            for candidate in appBundleSearchDirectories(for: appName) {
-                guard fm.fileExists(atPath: candidate) else { continue }
-                let status = SignatureValidator.shared.evaluate(binaryPath: candidate)
-                if case .signed = status { return true }
+            for candidate in appBundleSearchDirectories(for: appName)
+                where signedAppExists(atPath: candidate) {
+                return true
             }
         }
+
+        let identifierMarkers = ["/Group Containers/", "/Containers/"]
+        for marker in identifierMarkers {
+            guard let range = path.range(of: marker, options: .caseInsensitive) else { continue }
+            let containerID = path[range.upperBound...]
+                .split(separator: "/").first.map(String.init)?.lowercased() ?? ""
+            guard !containerID.isEmpty else { continue }
+            for appURL in installedApplicationURLs() {
+                guard let bundleID = Bundle(url: appURL)?.bundleIdentifier?.lowercased(),
+                      containerIdentifier(containerID, matchesBundleIdentifier: bundleID),
+                      signedAppExists(atPath: appURL.path) else { continue }
+                return true
+            }
+        }
+
         return false
+    }
+
+    nonisolated static func containerIdentifier(
+        _ containerID: String,
+        matchesBundleIdentifier bundleID: String
+    ) -> Bool {
+        let container = containerID.lowercased()
+        let bundle = bundleID.lowercased()
+        return !container.isEmpty && !bundle.isEmpty && container.contains(bundle)
+    }
+
+    nonisolated private static func signedAppExists(atPath path: String) -> Bool {
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+        if case .signed = SignatureValidator.shared.evaluate(binaryPath: path) { return true }
+        return false
+    }
+
+    nonisolated private static func installedApplicationURLs() -> [URL] {
+        let roots = [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications", isDirectory: true),
+            URL(fileURLWithPath: NSHomeDirectory() + "/Applications", isDirectory: true),
+        ]
+        let fm = FileManager.default
+        return roots.flatMap { root in
+            (try? fm.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ))?.filter { $0.pathExtension.caseInsensitiveCompare("app") == .orderedSame } ?? []
+        }
     }
 
     /// Returns the canonical app bundle paths to search for a given app name.

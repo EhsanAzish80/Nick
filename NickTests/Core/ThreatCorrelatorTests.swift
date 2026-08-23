@@ -101,11 +101,18 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(reverseShellAlerts.first?.severity, .critical)
     }
 
-    func test_correlate_unsignedTmpBinarySignal_returnsHighAlert() async {
+    func test_correlate_shellNetworkObservation_returnsNoAlert() async {
+        let signal = makeSignal(source: .network, severity: .medium, metadata: ["reason": "shell_network_observation", "process": "zsh"])
+        await correlator.ingest([signal])
+        let alerts = await correlator.correlate()
+        XCTAssertTrue(alerts.isEmpty)
+    }
+
+    func test_correlate_invalidTmpBinarySignal_returnsHighAlert() async {
         let signal = makeSignal(
             source: .process,
             severity: .high,
-            metadata: ["reason": "unsigned_temp_path"]
+            metadata: ["reason": "invalid_temp_signature"]
         )
         await correlator.ingest([signal])
         let alerts = await correlator.correlate()
@@ -113,20 +120,51 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertFalse(highAlerts.isEmpty)
     }
 
+    func test_correlate_unsignedTmpBinarySignal_returnsNoStandaloneAlert() async {
+        let signal = makeSignal(source: .process, severity: .medium, metadata: ["reason": "unsigned_temp_path"])
+        await correlator.ingest([signal])
+        let alerts = await correlator.correlate()
+        XCTAssertTrue(alerts.isEmpty)
+    }
+
     func test_correlate_unsignedLaunchAgentSignal_returnsHighAlert() async {
-        let signal = makeSignal(source: .persistence, severity: .high, title: "Unsigned launch agent")
+        let signal = makeSignal(source: .persistence, severity: .high, title: "Unsigned launch agent", metadata: ["reason": "unsigned_launch_agent"])
         await correlator.ingest([signal])
         let alerts = await correlator.correlate()
         let persistenceAlerts = alerts.filter { $0.contributingSignals.contains { $0.source == .persistence } }
         XCTAssertFalse(persistenceAlerts.isEmpty)
     }
 
-    func test_correlate_threeMediumSignals_returnsHighAlert() async {
-        let signals = (0..<3).map { _ in makeSignal(source: .process, severity: .medium) }
+    func test_correlate_missingPersistenceExecutable_returnsReviewAlert() async {
+        let signal = makeSignal(
+            source: .persistence,
+            severity: .medium,
+            title: "Launch item with missing executable",
+            metadata: ["reason": "persist_executable_missing"]
+        )
+        await correlator.ingest([signal])
+        let alerts = await correlator.correlate()
+        XCTAssertTrue(alerts.contains {
+            $0.title == "Startup item points to a missing file" && $0.severity == .medium
+        })
+    }
+
+    func test_correlate_threeUnrelatedMediumSignals_returnsNoCombinedAlert() async {
+        let signals = (0..<3).map { index in
+            makeSignal(source: .process, severity: .medium, metadata: ["reason": "reason_\(index)"])
+        }
         await correlator.ingest(signals)
         let alerts = await correlator.correlate()
-        let multipleSignalsAlerts = alerts.filter { $0.contributingSignals.count >= 3 }
-        XCTAssertFalse(multipleSignalsAlerts.isEmpty)
+        XCTAssertTrue(alerts.allSatisfy { $0.contributingSignals.count < 3 })
+    }
+
+    func test_correlate_threeDistinctSignalsForSameProcess_returnsHighAlert() async {
+        let signals = ["unsigned_temp_path", "suspicious_parent_chain", "unusual_network"].map {
+            makeSignedSignal(severity: .medium, reason: $0)
+        }
+        await correlator.ingest(signals)
+        let alerts = await correlator.correlate()
+        XCTAssertTrue(alerts.contains { $0.contributingSignals.count >= 3 && $0.score == 0.75 })
     }
 
     func test_correlate_twoMediumSignals_noMultipleSignalsAlert() async {
@@ -243,6 +281,136 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(decoded.severity, alert.severity)
     }
 
+    func test_threatAlert_deduplicationKey_ignoresSeverityAndUUID() {
+        let signal = makeProcessSignal(reason: "unsigned_temp_path")
+        let low = makeAlert(signal: signal, severity: .medium)
+        let high = makeAlert(signal: signal, severity: .high)
+
+        XCTAssertNotEqual(low.id, high.id)
+        XCTAssertEqual(low.deduplicationKey, high.deduplicationKey)
+    }
+
+    func test_threatAlert_deduplicationKey_changesWithParentContext() {
+        let terminal = makeProcessSignal(reason: "shell_child", parentName: "Terminal")
+        let document = makeProcessSignal(reason: "shell_child", parentName: "Microsoft Word")
+
+        XCTAssertNotEqual(
+            makeAlert(signal: terminal).deduplicationKey,
+            makeAlert(signal: document).deduplicationKey
+        )
+    }
+
+    func test_threatAlert_mergingOccurrence_preservesIncidentAndCountsRepeats() {
+        let firstDate = Date(timeIntervalSince1970: 100)
+        let secondDate = Date(timeIntervalSince1970: 200)
+        let signal = makeProcessSignal(reason: "developer_command")
+        let first = makeAlert(signal: signal, severity: .medium, timestamp: firstDate)
+        let second = makeAlert(signal: signal, severity: .high, timestamp: secondDate)
+
+        let merged = first.mergingOccurrence(second)
+
+        XCTAssertEqual(merged.id, first.id)
+        XCTAssertEqual(merged.firstSeen, firstDate)
+        XCTAssertEqual(merged.lastSeen, secondDate)
+        XCTAssertEqual(merged.occurrenceCount, 2)
+        XCTAssertEqual(merged.severity, .high)
+    }
+
+    func test_threatAlert_decodesPersistedAlertWithoutOccurrenceFields() throws {
+        let original = makeAlert(signal: makeProcessSignal(reason: "legacy"))
+        let encoded = try JSONEncoder().encode(original)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "firstSeen")
+        object.removeValue(forKey: "lastSeen")
+        object.removeValue(forKey: "occurrenceCount")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(ThreatAlert.self, from: legacyData)
+
+        XCTAssertEqual(decoded.firstSeen, decoded.timestamp)
+        XCTAssertEqual(decoded.lastSeen, decoded.timestamp)
+        XCTAssertEqual(decoded.occurrenceCount, 1)
+    }
+
+    func test_threatAlert_evidenceState_marksMissingFileResolved() {
+        let fileSignal = ThreatSignal(
+            source: .filesystem,
+            severity: .high,
+            title: "Temporary VM artifact",
+            description: "Test",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: "/private/tmp/deleted-vm-artifact",
+                    sha256Hash: nil,
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: nil
+                )
+            )
+        )
+        let alert = makeAlert(signal: fileSignal)
+
+        XCTAssertEqual(
+            alert.evidenceState(fileExists: { _ in false }, processIsRunning: { _ in false }),
+            .fileNoLongerExists("/private/tmp/deleted-vm-artifact")
+        )
+    }
+
+    func test_threatAlert_evidenceState_rejectsReusedPIDIdentity() {
+        let alert = makeAlert(signal: makeProcessSignal(reason: "pid_reuse"))
+
+        XCTAssertEqual(
+            alert.evidenceState(fileExists: { _ in false }, processIsRunning: { process in
+                process.name == "different-process"
+            }),
+            .processEnded
+        )
+    }
+
+    func test_menuBarAttentionState_isProtectedWithoutActionableAlerts() {
+        let trusted = makeAlert(
+            signal: makeSignal(severity: .info),
+            severity: .info
+        )
+
+        XCTAssertEqual(MenuBarAttentionState.evaluate([]), .protected)
+        XCTAssertEqual(MenuBarAttentionState.evaluate([trusted]), .protected)
+    }
+
+    func test_menuBarAttentionState_requestsReviewForMediumAlert() {
+        let alert = makeAlert(signal: makeSignal(), severity: .medium)
+
+        XCTAssertEqual(MenuBarAttentionState.evaluate([alert]), .review)
+    }
+
+    func test_menuBarAttentionState_isUrgentForHighAlert() {
+        let alert = makeAlert(signal: makeSignal(severity: .high), severity: .high)
+
+        XCTAssertEqual(MenuBarAttentionState.evaluate([alert]), .urgent)
+    }
+
+    func test_menuBarAttentionState_ignoresAlertWhoseFileIsGone() {
+        let path = "/private/tmp/nick-menu-bar-test-\(UUID().uuidString)"
+        let fileSignal = ThreatSignal(
+            source: .filesystem,
+            severity: .critical,
+            title: "Removed temporary artifact",
+            description: "Test",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: path,
+                    sha256Hash: nil,
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: nil
+                )
+            )
+        )
+        let alert = makeAlert(signal: fileSignal, severity: .critical)
+
+        XCTAssertEqual(MenuBarAttentionState.evaluate([alert]), .protected)
+    }
+
     // MARK: - Helpers
 
     private func makeSignal(
@@ -284,6 +452,49 @@ final class ThreatCorrelatorTests: XCTestCase {
                 processInfo: process,
                 metadata: ["reason": reason]
             )
+        )
+    }
+
+    private func makeProcessSignal(
+        reason: String,
+        parentName: String = "Xcode"
+    ) -> ThreatSignal {
+        let process = NickProcessInfo(
+            pid: 42,
+            path: "/usr/bin/curl",
+            name: "curl",
+            parentPID: 41,
+            parentName: parentName,
+            signingStatus: .signed(teamID: "APPLE"),
+            metadata: ProcessMetadata(startTime: Date(timeIntervalSince1970: 50))
+        )
+        return ThreatSignal(
+            source: .process,
+            severity: .medium,
+            title: "curl behavior",
+            description: "Test process behavior",
+            context: ThreatSignalContext(
+                processInfo: process,
+                metadata: ["reason": reason]
+            )
+        )
+    }
+
+    private func makeAlert(
+        signal: ThreatSignal,
+        severity: SignalSeverity = .medium,
+        timestamp: Date = Date(timeIntervalSince1970: 100)
+    ) -> ThreatAlert {
+        ThreatAlert(
+            score: severity == .high ? 0.85 : 0.6,
+            content: AlertContent(
+                title: "Command needs review",
+                description: "Test",
+                severity: severity,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal],
+            timestamp: timestamp
         )
     }
 

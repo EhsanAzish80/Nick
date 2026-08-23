@@ -41,6 +41,7 @@ struct CorrelationRule: Sendable {
         unsignedBinaryInTmpRule,
         reverseShellRule,
         unsignedLaunchAgentRule,
+        missingPersistenceExecutableRule,
         sshKeysRule,
         shellProfileRule,
         unexpectedCaptureDeviceRule,
@@ -76,9 +77,7 @@ struct CorrelationRule: Sendable {
         )
     }
 
-    /// Unsigned binary running from /tmp or similar writable directory.
-    /// Also matches `temp_path_spawn` signals from the fast-check path, which fire
-    /// before code-signing validation completes but still indicate high-risk placement.
+    /// Binary with a confirmed invalid signature running from a writable temporary directory.
     private static let unsignedBinaryInTmpRule = CorrelationRule(
         name: "unsigned_binary_in_tmp",
         score: 0.85,
@@ -87,16 +86,15 @@ struct CorrelationRule: Sendable {
         let matches = signals.filter {
             $0.source == .process &&
             $0.severity == .high &&
-            ($0.metadata["reason"] == "unsigned_temp_path" ||
-             $0.metadata["reason"] == "temp_path_spawn")
+            $0.metadata["reason"] == "invalid_temp_signature"
         }
         guard !matches.isEmpty else { return nil }
         let names = matches.compactMap { $0.processInfo?.name }.joined(separator: ", ")
         return ThreatAlert(
             score: 0.85,
             content: AlertContent(
-                title: "Unsigned binary executing from temporary directory",
-                description: "Process(es) '\(names)' are unsigned and running from writable temporary locations — a common technique used by droppers and implants.",
+                title: "Invalidly signed binary executing from temporary directory",
+                description: "Process(es) '\(names)' have invalid code signatures and are running from writable temporary locations. This is stronger evidence than an ordinary unsigned development build.",
                 severity: .high,
                 recommendedAction: "Terminate the process and investigate the file at the reported path."
             ),
@@ -104,17 +102,14 @@ struct CorrelationRule: Sendable {
         )
     }
 
-    /// Shell interpreter or netcat with an active outbound network connection (reverse shell indicator).
-    /// Matches signals from both ConnectionScanner (reason: "reverse_shell") and
-    /// ReverseShellDetector (reason: "reverse_shell_port", "netcat_connection", "temp_binary_network").
+    /// A detector-confirmed reverse-shell signal. Generic shell socket observations
+    /// are deliberately excluded because SSH and developer tools use them normally.
     private static let reverseShellRule = CorrelationRule(
         name: "reverse_shell",
         score: 0.95,
         severity: .critical
     ) { signals in
-        let reverseShellReasons: Set<String> = [
-            "reverse_shell", "reverse_shell_port", "netcat_connection", "temp_binary_network"
-        ]
+        let reverseShellReasons: Set<String> = ["reverse_shell"]
         let matches = signals.filter {
             $0.source == .network &&
             reverseShellReasons.contains($0.metadata["reason"] ?? "")
@@ -141,9 +136,10 @@ struct CorrelationRule: Sendable {
         score: 0.7,
         severity: .high
     ) { signals in
+        let reasons: Set<String> = ["unsigned_launch_agent", "unsigned_launch_daemon"]
         let matches = signals.filter {
             $0.source == .persistence &&
-            ($0.severity == .high || $0.severity == .critical)
+            reasons.contains($0.metadata["reason"] ?? "")
         }
         guard !matches.isEmpty else { return nil }
         let names = matches.map { $0.title }.joined(separator: "; ")
@@ -154,6 +150,31 @@ struct CorrelationRule: Sendable {
                 description: "One or more launch agents/daemons reference unsigned executables: \(names). Malware commonly installs unsigned persistence items.",
                 severity: .high,
                 recommendedAction: "Inspect the plist file and its referenced executable. Remove if you do not recognise the software."
+            ),
+            contributingSignals: matches
+        )
+    }
+
+    /// A launch item whose target disappeared is commonly stale software, but can
+    /// also indicate incomplete cleanup or staged persistence. Keep it reviewable
+    /// without presenting it as confirmed malware.
+    private static let missingPersistenceExecutableRule = CorrelationRule(
+        name: "missing_persistence_executable",
+        score: 0.45,
+        severity: .medium
+    ) { signals in
+        let matches = signals.filter {
+            $0.source == .persistence &&
+            $0.metadata["reason"] == "persist_executable_missing"
+        }
+        guard !matches.isEmpty else { return nil }
+        return ThreatAlert(
+            score: 0.45,
+            content: AlertContent(
+                title: "Startup item points to a missing file",
+                description: "A startup configuration references a file that no longer exists. This is usually leftover app configuration, but it is worth reviewing.",
+                severity: .medium,
+                recommendedAction: "If you recognize the app and recently removed or updated it, remove the stale startup item. Otherwise, inspect its path and creation time."
             ),
             contributingSignals: matches
         )
@@ -344,24 +365,32 @@ struct CorrelationRule: Sendable {
         )
     }
 
-    /// Three or more medium-severity signals within the correlation window.
+    /// Three or more related medium-severity signals for the same process or file.
     private static let multipleHighSignalsRule = CorrelationRule(
         name: "multiple_medium_signals",
         score: 0.75,
         severity: .high
     ) { signals in
-        let mediumOrAbove = signals.filter { $0.severity >= .medium }
-        guard mediumOrAbove.count >= 3 else { return nil }
-        let sources = Set(mediumOrAbove.map { $0.source.rawValue }).sorted().joined(separator: ", ")
+        let candidates = signals.filter { $0.severity >= .medium }
+        let grouped = Dictionary(grouping: candidates) { signal -> String in
+            if let process = signal.processInfo { return "process:\(process.pid):\(process.path)" }
+            if let file = signal.fileInfo { return "file:\(file.sha256Hash ?? file.path)" }
+            if let network = signal.networkInfo { return "network-process:\(network.pid)" }
+            return "isolated:\(signal.id)"
+        }
+        guard let related = grouped.values
+            .filter({ $0.count >= 3 && Set($0.compactMap { $0.metadata["reason"] }).count >= 2 })
+            .max(by: { $0.count < $1.count }) else { return nil }
+        let sources = Set(related.map { $0.source.rawValue }).sorted().joined(separator: ", ")
         return ThreatAlert(
             score: 0.75,
             content: AlertContent(
-                title: "Multiple concurrent threat indicators",
-                description: "\(mediumOrAbove.count) medium-or-higher signals observed within the correlation window across: \(sources). This pattern suggests coordinated or multi-stage activity.",
+                title: "Multiple related threat indicators",
+                description: "\(related.count) related signals were observed for the same process or file across: \(sources). This may indicate coordinated activity.",
                 severity: .high,
-                recommendedAction: "Review the contributing signals below and investigate each affected component."
+                recommendedAction: "Review the related evidence and investigate the affected process or file."
             ),
-            contributingSignals: mediumOrAbove
+            contributingSignals: Array(related)
         )
     }
 
@@ -369,8 +398,8 @@ struct CorrelationRule: Sendable {
     /// Matches signals emitted by `FileSystemWatcher` with `reason == "shell_profile_modified"`.
     private static let shellProfileRule = CorrelationRule(
         name: "shell_profile_modified",
-        score: 0.70,
-        severity: .high
+        score: 0.55,
+        severity: .medium
     ) { signals in
         let matches = signals.filter {
             $0.source == .persistence &&
@@ -379,12 +408,12 @@ struct CorrelationRule: Sendable {
         guard !matches.isEmpty else { return nil }
         let paths = matches.compactMap { $0.metadata["path"] }.joined(separator: "; ")
         return ThreatAlert(
-            score: 0.70,
+            score: 0.55,
             content: AlertContent(
                 title: "Shell profile modified",
-                description: "One or more shell startup files were written: \(paths). Attackers inject commands here for persistent code execution on every shell launch.",
-                severity: .high,
-                recommendedAction: "Inspect the modified file(s) immediately. Look for new lines at the end or obfuscated base64/eval commands and remove anything unfamiliar."
+                description: "A shell startup file changed: \(paths). This is common during development and tool installation, but it can also establish persistence.",
+                severity: .medium,
+                recommendedAction: "Review the recent lines and the application or command that made the change. Remove only entries you do not recognize."
             ),
             contributingSignals: matches
         )
@@ -394,8 +423,8 @@ struct CorrelationRule: Sendable {
     /// Matches signals emitted by `FileSystemWatcher` with `reason == "ssh_keys_modified"`.
     private static let sshKeysRule = CorrelationRule(
         name: "ssh_keys_modified",
-        score: 0.90,
-        severity: .critical
+        score: 0.75,
+        severity: .high
     ) { signals in
         let matches = signals.filter {
             $0.source == .persistence &&
@@ -404,11 +433,11 @@ struct CorrelationRule: Sendable {
         guard !matches.isEmpty else { return nil }
         let paths = matches.compactMap { $0.metadata["path"] }.joined(separator: "; ")
         return ThreatAlert(
-            score: 0.90,
+            score: 0.75,
             content: AlertContent(
                 title: "SSH authorized_keys modified",
                 description: "The SSH authorized keys file was written: \(paths). Adding a public key here grants persistent, password-free remote access.",
-                severity: .critical,
+                severity: .high,
                 recommendedAction: "Review ~/.ssh/authorized_keys immediately. Remove any unrecognised public keys and audit recent SSH login attempts in /var/log/system.log."
             ),
             contributingSignals: matches
@@ -433,14 +462,16 @@ struct CorrelationRule: Sendable {
             parentChainReasons.contains($0.metadata["reason"] ?? "")
         }
         guard !matches.isEmpty else { return nil }
-        let isCritical = matches.contains { $0.metadata["reason"] == "deep_shell_nesting" }
+        let hasExploitLikeParent = matches.contains {
+            ["browser_to_shell", "office_to_shell", "pdf_to_shell"].contains($0.metadata["reason"] ?? "")
+        }
         let processNames = matches.compactMap { $0.processInfo?.name }.joined(separator: ", ")
         return ThreatAlert(
-            score: isCritical ? 0.90 : 0.75,
+            score: hasExploitLikeParent ? 0.80 : 0.65,
             content: AlertContent(
                 title: "Suspicious process chain detected",
                 description: "Process(es) '\(processNames)' exhibit a suspicious parent-child relationship. This pattern is commonly used by exploit payloads and document-based malware.",
-                severity: isCritical ? .critical : .high,
+                severity: hasExploitLikeParent ? .high : .medium,
                 recommendedAction: "Investigate the parent application and terminate suspicious child processes. Check browser/office extensions and recently opened documents."
             ),
             contributingSignals: matches

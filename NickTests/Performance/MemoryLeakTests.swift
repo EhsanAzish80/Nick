@@ -54,13 +54,28 @@ final class MemoryLeakTests: XCTestCase {
         }
         await correlator.ingest(lowSignals)
 
-        // Now inject high-severity signals
+        // Now inject related high-severity signals. They share one process identity
+        // but have distinct evidence reasons, so the correlation rule can verify
+        // that the retained signals are still reachable.
+        let process = NickProcessInfo(
+            pid: 42,
+            path: "/private/tmp/retained-test",
+            name: "retained-test",
+            parentPID: 1,
+            parentName: nil,
+            signingStatus: .unsigned,
+            metadata: ProcessMetadata(startTime: Date())
+        )
         let highSignals = (0..<10).map { i -> ThreatSignal in
             ThreatSignal(
                 source: .process,
                 severity: .high,
                 title: "High \(i)",
-                description: "High severity signal"
+                description: "High severity signal",
+                context: ThreatSignalContext(
+                    processInfo: process,
+                    metadata: ["reason": "retention_test_\(i)"]
+                )
             )
         }
         await correlator.ingest(highSignals)

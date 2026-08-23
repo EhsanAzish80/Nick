@@ -244,6 +244,13 @@ final class PersistenceWatcher: MonitorProtocol {
             let name     = parts.first ?? trimmed
             let itemPath = parts.count > 1 ? parts[1] : ""
             let execPath = itemPath.isEmpty ? nil : itemPath
+            let signingStatus: SigningStatus? = await {
+                guard let path = execPath else { return nil }
+                guard FileManager.default.fileExists(atPath: path) else { return .unknown }
+                return await Task.detached(priority: .userInitiated) {
+                    SignatureValidator.shared.evaluate(binaryPath: path)
+                }.value
+            }()
             items.append(PersistenceItem(
                 id: UUID(),
                 type: .loginItem,
@@ -251,7 +258,7 @@ final class PersistenceWatcher: MonitorProtocol {
                 path: itemPath.isEmpty ? "Login Items" : itemPath,
                 executablePath: execPath,
                 isEnabled: true,
-                signingStatus: nil,
+                signingStatus: signingStatus,
                 scope: .user,
                 lastModified: nil
             ))
@@ -316,7 +323,7 @@ final class PersistenceWatcher: MonitorProtocol {
                 severity: .high,
                 title: "Unsigned launch \(item.type == .launchDaemon ? "daemon" : "agent")",
                 description: "'\(item.name)' at \(item.path) points to an unsigned executable at \(item.executablePath ?? "unknown").",
-                context: ThreatSignalContext(metadata: ["path": item.path, "executable": item.executablePath ?? ""])
+                context: ThreatSignalContext(metadata: ["path": item.path, "executable": item.executablePath ?? "", "reason": item.type == .launchDaemon ? "unsigned_launch_daemon" : "unsigned_launch_agent"])
             )
         }
 
@@ -329,7 +336,11 @@ final class PersistenceWatcher: MonitorProtocol {
                 severity: .medium,
                 title: "Launch item with missing executable",
                 description: "'\(item.name)' references executable at \(execPath) which does not exist.",
-                context: ThreatSignalContext(metadata: ["path": item.path, "executable": execPath])
+                context: ThreatSignalContext(metadata: [
+                    "path": item.path,
+                    "executable": execPath,
+                    "reason": "persist_executable_missing"
+                ])
             )
         }
 

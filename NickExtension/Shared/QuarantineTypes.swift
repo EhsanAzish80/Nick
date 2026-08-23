@@ -28,7 +28,7 @@ public struct RemediationReport: Codable, Sendable {
     public let timestamp: Date
     public let threatPath: String
     public let threatName: String
-    /// `nil` when quarantine failed (file was deleted as fallback).
+    /// `nil` when quarantine failed. The original file remains in place.
     public let quarantineRecord: QuarantineRecord?
     public let actions: [RemediationAction]
 }

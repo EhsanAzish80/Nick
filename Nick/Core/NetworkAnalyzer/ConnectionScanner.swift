@@ -36,7 +36,7 @@ struct ConnectionScanner {
         category: "ConnectionScanner"
     )
 
-    /// Names of common shell/scripting interpreters — used for reverse-shell detection.
+    /// Names of common shell/scripting interpreters — used to preserve network context for the dedicated reverse-shell detector.
     private static let shellNames: Set<String> = [
         "bash", "sh", "zsh", "csh", "tcsh", "ksh", "fish", "python", "python3",
         "ruby", "perl", "node", "nc", "netcat", "ncat"
@@ -264,10 +264,10 @@ struct ConnectionScanner {
         var buffer = [CChar](repeating: 0, count: maxSize)
         let ret = proc_pidpath(pid, &buffer, UInt32(maxSize))
         guard ret > 0 else {
-            // Path is unresolvable: the process has already exited, the PID is synthetic
-            // (e.g. in unit tests), or proc_info access is restricted. Fall back to
-            // name-only trust — the name was already verified against the screened list above.
-            return true
+            // Never grant trust from a process name alone. The process may have
+            // exited, access may be restricted, or an attacker may be impersonating
+            // a trusted name. Unverifiable identity remains untrusted.
+            return false
         }
         let processPath = buffer.withUnsafeBufferPointer { bp in
             String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
@@ -291,7 +291,8 @@ struct ConnectionScanner {
     /// Derives threat signals from a list of active connections.
     ///
     /// Detection rules:
-    /// - Shell process with outbound `ESTABLISHED` connection → `.high` (reverse shell)
+    /// - Shell process with outbound `ESTABLISHED` connection → `.medium` observation
+    ///   (the context-aware `ReverseShellDetector` decides whether it is a threat)
     /// - Unexpected listener on well-known ports → `.info`
     /// - Raw IP (no hostname) outbound connection from unknown process → `.low`
     ///
@@ -303,16 +304,20 @@ struct ConnectionScanner {
         for conn in connections {
             let name = conn.processName.lowercased()
 
-            // Reverse shell: shell with outbound established connection
+            // A shell owning a socket is not enough to call it a reverse shell.
+            // SSH, developer tools, package managers, and remote terminals all do
+            // this legitimately. Preserve the observation for correlation; the
+            // context-aware ReverseShellDetector separately checks signing, parent,
+            // protocol, direction, and port before emitting high-confidence evidence.
             if Self.shellNames.contains(name),
                conn.state == .established,
                conn.isOutbound {
                 signals.append(ThreatSignal(
                     source: .network,
-                    severity: .high,
-                    title: "Potential reverse shell",
-                    description: "'\(conn.processName)' (PID \(conn.pid)) has an outbound ESTABLISHED connection to \(conn.remoteAddress ?? "unknown"):\(conn.remotePort.map(String.init) ?? "?").",
-                    context: ThreatSignalContext(networkInfo: conn, metadata: ["reason": "reverse_shell", "process": conn.processName])
+                    severity: .medium,
+                    title: "Shell process has a network connection",
+                    description: "'\(conn.processName)' (PID \(conn.pid)) has an outbound connection to \(conn.remoteAddress ?? "unknown"):\(conn.remotePort.map(String.init) ?? "?"). This is common for SSH and developer tools and is not proof of a reverse shell.",
+                    context: ThreatSignalContext(networkInfo: conn, metadata: ["reason": "shell_network_observation", "process": conn.processName])
                 ))
                 continue
             }

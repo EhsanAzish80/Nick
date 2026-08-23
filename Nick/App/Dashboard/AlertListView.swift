@@ -25,11 +25,15 @@ struct AlertListView: View {
     @State private var timelineSearch = ""
 
     private var visibleAlerts: [ThreatAlert] {
-        showTrustedAlerts
-            ? engine.alerts
-            : engine.alerts.filter {
-                UserFacingAlertBuilder.shared.build(from: $0).severity != .safe
+        engine.alerts.filter { alert in
+            switch alert.evidenceState() {
+            case .fileNoLongerExists, .processEnded:
+                return false
+            case .fileAvailable, .processActive, .historical:
+                return showTrustedAlerts
+                    || UserFacingAlertBuilder.shared.build(from: alert).severity != .safe
             }
+        }
     }
 
     var body: some View {
@@ -141,13 +145,27 @@ private struct AlertRow: View {
         userAlert.severity == .critical && !isCaptureAlert
     }
 
-    private var detectedFilePath: String? {
-        for signal in alert.contributingSignals {
-            if let path = signal.fileInfo?.path, !path.isEmpty { return path }
-            if let path = signal.metadata["script_path"], !path.isEmpty { return path }
-            if let path = signal.metadata["path"], !path.isEmpty { return path }
+    private var detectedFilePath: String? { alert.detectedFilePath }
+
+    private var evidenceState: AlertEvidenceState { alert.evidenceState() }
+
+    private var fileIsAvailable: Bool {
+        if case .fileAvailable = evidenceState { return true }
+        return false
+    }
+
+    private var attributionSummary: String? {
+        guard let process = alert.contributingSignals.compactMap(\.processInfo).first else {
+            return nil
         }
-        return nil
+        let child = process.name.isEmpty ? "this process" : process.name
+        if let parent = process.parentName, !parent.isEmpty, parent != "unknown" {
+            return "Origin: \(parent) started \(child)."
+        }
+        if process.parentPID > 0 {
+            return "Origin: \(child) was started by process \(process.parentPID); macOS did not provide its name."
+        }
+        return "Origin: Nick could not determine which app started \(child)."
     }
 
     private var detectionRule: String? {
@@ -218,6 +236,14 @@ private struct AlertRow: View {
                 Text(alert.timestamp.formatted(date: .omitted, time: .shortened))
                     .font(.nickMonoSmall)
                     .foregroundStyle(Color.textTertiary)
+                if alert.occurrenceCount > 1 {
+                    Text("·")
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textTertiary)
+                    Text("Seen \(alert.occurrenceCount) times")
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textSecondary)
+                }
                 Spacer()
             }
 
@@ -226,6 +252,13 @@ private struct AlertRow: View {
                 .font(.nickBody)
                 .foregroundStyle(isTrustedActivity ? Color.textTertiary : Color.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let attributionSummary {
+                Label(attributionSummary, systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    .font(.nickBodySmall)
+                    .foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if isMalwareDetection {
                 detectionSummary
@@ -291,13 +324,14 @@ private struct AlertRow: View {
             // Buttons
             HStack(spacing: NickSpacing.md) {
                 if (!isMalwareDetection || isHeuristicDetection), reviewProcessName != nil {
-                    Button("Accept Once") {
+                    Button("Expected for 24 Hours") {
                         engine.allowAlertOnce(alert.id)
                     }
                     .buttonStyle(.nickSecondary)
+                    .help("Mutes only this exact behavior for 24 hours. Different, critical, persistence, and malware activity still alerts.")
 
                     if hasStableSignedIdentity {
-                        Button("Always Allow This App") {
+                        Button("Allow This Behavior for 7 Days") {
                             engine.alwaysAllowBehavior(from: alert.id)
                         }
                         .buttonStyle(.nickSecondary)
@@ -305,7 +339,7 @@ private struct AlertRow: View {
                     }
                 }
 
-                if isMalwareDetection, let path = detectedFilePath {
+                if isMalwareDetection, fileIsAvailable, let path = detectedFilePath {
                     Button("Allow Once") {
                         xpcClient.requestAllowFileOnce(path: path) { success in
                             if success {
@@ -333,7 +367,7 @@ private struct AlertRow: View {
                     }
                 }
 
-                if isMalwareDetection, detectedFilePath != nil {
+                if isMalwareDetection, fileIsAvailable, detectedFilePath != nil {
                     Button {
                         showQuarantineConfirmation = true
                     } label: {
@@ -426,7 +460,10 @@ private struct AlertRow: View {
                 // Show in Finder
                 let finderPath = detectedFilePath
                     ?? alert.contributingSignals.first?.processInfo?.path
-                if let path = finderPath, !path.isEmpty, !simpleAlertMode || !isCaptureAlert {
+                if let path = finderPath,
+                   !path.isEmpty,
+                   FileManager.default.fileExists(atPath: path),
+                   !simpleAlertMode || !isCaptureAlert {
                     Button {
                         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
                     } label: {
@@ -443,7 +480,7 @@ private struct AlertRow: View {
                         .font(.nickButton)
                         .foregroundStyle(Color.textSecondary)
                 }
-                Button(simpleAlertMode ? "Hide alert" : "Dismiss") {
+                Button(simpleAlertMode ? "Hide This Occurrence" : "Dismiss") {
                     if simpleAlertMode {
                         engine.hideAlert(alert.id)
                     } else {
@@ -511,7 +548,7 @@ private struct AlertRow: View {
 
     @ViewBuilder
     private var detectionSummary: some View {
-        if let path = detectedFilePath {
+        if let path = detectedFilePath, fileIsAvailable {
             VStack(alignment: .leading, spacing: NickSpacing.xs) {
                 Label("Detected file", systemImage: "doc.fill")
                     .font(.nickBodyMedium)
@@ -535,6 +572,13 @@ private struct AlertRow: View {
                     .foregroundStyle(Color.textSecondary)
             }
             .padding(.leading, NickSpacing.lg)
+        } else if detectedFilePath != nil {
+            Label(
+                evidenceState.endedMessage ?? "The detected file is no longer available.",
+                systemImage: "checkmark.circle"
+            )
+            .font(.nickBodySmall)
+            .foregroundStyle(Color.textSecondary)
         } else {
             Label(
                 "The detector did not provide a usable file location, so Nick cannot safely quarantine this item. Open Details before taking action.",

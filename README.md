@@ -46,7 +46,7 @@ event can be explained without automatically being called malware; stronger,
 correlated evidence can be blocked, quarantined, and presented with a clear
 next action.
 
-Version 4.1 also adds Runtime Compare: a local, read-only workflow for capturing
+Nick also includes Runtime Compare: a local, read-only workflow for capturing
 the Mac before and after a restart, installation, removal, MDM migration, VPN
 change, or security configuration change. It compares stable evidence rather
 than raw PIDs and timestamps, reports missing sensor visibility explicitly, and
@@ -203,7 +203,7 @@ For implementation details and trust boundaries, see
 
 ### Published release
 
-The current stable release is **Nick 4.1 (build 416)** for macOS 26 and later.
+The current stable release is **Nick 4.2 (build 420)** for macOS 26 and later.
 
 1. Download the notarized Nick disk image from
    [the latest GitHub release](https://github.com/EhsanAzish80/Nick/releases/latest).
@@ -280,8 +280,8 @@ The production release pipeline is documented in
 - The appcast enclosure must reference the exact, unmodified signed package.
 - Manual website and GitHub downloads may use the disk image.
 
-Version 4.1 release notes are in
-[Packaging/Release/v4.1.0/RELEASE_NOTES.md](Packaging/Release/v4.1.0/RELEASE_NOTES.md).
+Version 4.2 release notes are in
+[Packaging/Release/v4.2.0/RELEASE_NOTES.md](Packaging/Release/v4.2.0/RELEASE_NOTES.md).
 
 ## Quality gates
 
@@ -329,7 +329,7 @@ the extension remains installed.
 
 ## Project status
 
-Nick 4.1 is the current production release. Every future release remains gated
+Nick 4.2 is the current production release. Every future release remains gated
 on clean-Mac validation of Endpoint Security, Email Guard, Scam Guardian,
 updates, performance, quarantine, and uninstall behavior.
 

@@ -28,17 +28,17 @@ final class ProcessMonitorTests: XCTestCase {
 
     // MARK: - Signal: Unsigned binary in temp path
 
-    func test_signals_unsignedBinaryInTmpPath_returnsHighSeverity() {
+    func test_signals_unsignedBinaryInTmpPath_returnsMediumContext() {
         let proc = makeProcess(pid: 100, name: "evil", path: "/tmp/evil", signing: .unsigned)
         let signals = scanner.signals(from: [proc])
         XCTAssertEqual(signals.count, 1)
-        XCTAssertEqual(signals[0].severity, .high)
+        XCTAssertEqual(signals[0].severity, .medium)
     }
 
-    func test_signals_unsignedBinaryInVarFolders_returnsHighSeverity() {
+    func test_signals_unsignedBinaryInVarFolders_returnsMediumContext() {
         let proc = makeProcess(pid: 101, name: "payload", path: "/var/folders/ab/cd/T/payload", signing: .unsigned)
         let signals = scanner.signals(from: [proc])
-        XCTAssertEqual(signals[0].severity, .high)
+        XCTAssertEqual(signals[0].severity, .medium)
     }
 
     func test_signals_invalidBinaryInPrivateTmp_returnsHighSeverity() {
@@ -100,6 +100,15 @@ final class ProcessMonitorTests: XCTestCase {
         XCTAssertTrue(lolbinSignals.isEmpty)
     }
 
+    func test_signals_shellAndDownloaderSiblings_withoutExplicitPipe_returnsNoCriticalSignal() {
+        let parent = makeProcess(pid: 450, name: "Code Helper", path: "/Applications/Visual Studio Code.app/Contents/MacOS/Electron", signing: .signed(teamID: "MICROSOFT"))
+        let shell = makeProcess(pid: 451, name: "zsh", path: "/bin/zsh", signing: .signed(teamID: "APPLE"), parentPID: 450)
+        let curl = makeProcess(pid: 452, name: "curl", path: "/usr/bin/curl", signing: .signed(teamID: "APPLE"), parentPID: 450)
+        let signals = scanner.signals(from: [parent, shell, curl])
+        XCTAssertFalse(signals.contains { $0.metadata["reason"] == "curl_pipe_shell" })
+        XCTAssertFalse(signals.contains { $0.severity == .critical })
+    }
+
     // MARK: - Multiple processes
 
     func test_signals_multipleIssues_returnsAllSignals() {
@@ -109,7 +118,7 @@ final class ProcessMonitorTests: XCTestCase {
             makeProcess(pid: 3, name: "downloader",path: "/Users/u/Downloads/dl", signing: .unsigned, parentPID: 1),
         ]
         let signals = scanner.signals(from: processes)
-        // /tmp/evil → high, downloader → medium = 2 signals
+        // /tmp/evil and downloader both remain medium context = 2 signals
         XCTAssertEqual(signals.count, 2)
     }
 

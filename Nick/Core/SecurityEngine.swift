@@ -6,6 +6,28 @@ import Foundation
 import Observation
 import os
 
+enum MenuBarAttentionState: Int, Comparable, Sendable {
+    case protected
+    case review
+    case urgent
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    static func evaluate(_ alerts: [ThreatAlert]) -> Self {
+        alerts.reduce(.protected) { current, alert in
+            guard alert.severity != .info else { return current }
+            switch alert.evidenceState() {
+            case .fileNoLongerExists, .processEnded:
+                return current
+            case .fileAvailable, .processActive, .historical:
+                return max(current, alert.severity >= .high ? .urgent : .review)
+            }
+        }
+    }
+}
+
 // MARK: - SecurityEngine
 
 /// Central coordinator that owns all detection monitors and the threat correlator.
@@ -112,6 +134,11 @@ final class SecurityEngine {
         }
     }
 
+    /// Short-lived acknowledgements for one exact, non-critical behavior.
+    /// These never apply to persistence, malware-rule, or critical detections.
+    private var expectedAlertCooldowns: [String: TimeInterval] =
+        UserDefaults.standard.dictionary(forKey: "nickExpectedAlertCooldowns") as? [String: TimeInterval] ?? [:]
+
     // MARK: - Overall Health Score (0–100)
 
     /// Computed security health score: 100 = all clear, 0 = critical issues.
@@ -126,6 +153,12 @@ final class SecurityEngine {
 
     /// Returns `true` once the first full scan has completed and audit results are populated.
     var hasCompletedFirstScan: Bool { !auditResults.isEmpty }
+
+    /// Highest attention level among alerts that are still actionable. Historical
+    /// records whose file/process has gone away do not keep the menu-bar icon red.
+    var menuBarAttentionState: MenuBarAttentionState {
+        MenuBarAttentionState.evaluate(alerts)
+    }
 
     // MARK: - Private
 
@@ -219,8 +252,10 @@ final class SecurityEngine {
         alerts = []
         totalThreatsDetected = 0
         dismissedAlertKeys = []
+        expectedAlertCooldowns = [:]
         UserDefaults.standard.set(0, forKey: "nickTotalThreatsDetected")
         UserDefaults.standard.removeObject(forKey: "nickDismissedAlertKeys")
+        UserDefaults.standard.removeObject(forKey: "nickExpectedAlertCooldowns")
         UserDefaults.standard.removeObject(forKey: "nickPersistedAlerts")
     }
 
@@ -294,14 +329,18 @@ final class SecurityEngine {
 
         await correlator.resetEmittedRules()
         await correlator.ingest(allSignals)
-        let newAlerts = await correlator.correlate()
-        // Capture existing keys before merge so we can detect genuinely new alerts.
-        let existingKeys = Set(alerts.map { $0.deduplicationKey })
-        mergeAlerts(newAlerts)
-        // Notify for alerts whose deduplication key was not already present, preventing
-        // re-notification on every deep scan for a persistent threat (e.g. SIP still off).
-        var genuinelyNew = newAlerts.filter {
-            $0.severity != .info && !existingKeys.contains($0.deduplicationKey)
+        var newAlerts = await correlator.correlate()
+        // A repeat observation updates the existing incident. It is not another
+        // notification unless its severity has increased.
+        newAlerts.removeAll(where: shouldTemporarilySuppress)
+        let existingSeverity = Dictionary(
+            alerts.map { ($0.deduplicationKey, $0.severity) },
+            uniquingKeysWith: { max($0, $1) }
+        )
+        var genuinelyNew = newAlerts.filter { alert in
+            guard alert.severity != .info else { return false }
+            guard let priorSeverity = existingSeverity[alert.deduplicationKey] else { return true }
+            return alert.severity > priorSeverity
         }
         // Enrich new alerts with a plain-English explanation before surfacing them.
         if !genuinelyNew.isEmpty {
@@ -315,7 +354,17 @@ final class SecurityEngine {
                     topFeatures: topFeatures
                 )
             }
+            let explanations = Dictionary(
+                genuinelyNew.compactMap { alert in
+                    alert.explanation.map { (alert.deduplicationKey, $0) }
+                },
+                uniquingKeysWith: { _, newest in newest }
+            )
+            for i in newAlerts.indices {
+                newAlerts[i].explanation = explanations[newAlerts[i].deduplicationKey]
+            }
         }
+        mergeAlerts(newAlerts)
         for alert in genuinelyNew {
             await NotificationManager.shared.send(for: alert)
             let (fmt, outs) = buildPipeline()
@@ -325,7 +374,7 @@ final class SecurityEngine {
         scanTask = nil
         lastScanDate = Date()
         totalScanCount += 1
-        let newThreatCount = newAlerts.filter { $0.severity != .info }.count
+        let newThreatCount = genuinelyNew.count
         if newThreatCount > 0 { totalThreatsDetected += newThreatCount }
         let ud = UserDefaults.standard
         ud.set(totalScanCount, forKey: "nickTotalScanCount")
@@ -349,7 +398,7 @@ final class SecurityEngine {
         )
 
         // Log each actionable threat alert.
-        for alert in newAlerts where alert.severity != .info {
+        for alert in genuinelyNew {
             activityLog.log(
                 icon: "exclamationmark.triangle", color: "red",
                 title: "Threat detected: \(alert.title)",
@@ -404,21 +453,42 @@ final class SecurityEngine {
         await correlator.flush()
     }
 
-    /// Adds a single alert from the real-time pipeline.
-    /// Skips dismissed alerts and alerts already shown (matched by `deduplicationKey`).
+    /// Adds a single alert from the real-time pipeline. Repeat evidence updates
+    /// the existing incident rather than creating another card.
     @MainActor
     func addAlert(_ alert: ThreatAlert) {
         guard !dismissedAlertKeys.contains(alert.deduplicationKey) else { return }
-        guard !alerts.contains(where: { $0.deduplicationKey == alert.deduplicationKey }) else { return }
+        guard !shouldTemporarilySuppress(alert) else { return }
         mergeAlerts([alert])
     }
 
-    /// Merges new alerts from the real-time pipeline, deduplicating by ID.
+    /// Merges new alerts from the real-time pipeline by stable incident identity.
     /// Alerts whose `deduplicationKey` has been previously dismissed are silently dropped.
     func mergeAlerts(_ newAlerts: [ThreatAlert]) {
-        let filtered = newAlerts.filter { !dismissedAlertKeys.contains($0.deduplicationKey) }
-        let newIDs = Set(filtered.map { $0.id })
-        alerts = alerts.filter { !newIDs.contains($0.id) } + filtered
+        // Consolidate alerts restored from older builds before adding new
+        // evidence. Their UUIDs differed even when they described one incident.
+        var consolidated: [String: ThreatAlert] = [:]
+        for existing in alerts {
+            if let prior = consolidated[existing.deduplicationKey] {
+                consolidated[existing.deduplicationKey] = prior.mergingOccurrence(existing)
+            } else {
+                consolidated[existing.deduplicationKey] = existing
+            }
+        }
+        alerts = Array(consolidated.values)
+
+        let filtered = newAlerts.filter {
+            !dismissedAlertKeys.contains($0.deduplicationKey) && !shouldTemporarilySuppress($0)
+        }
+        for candidate in filtered {
+            if let index = alerts.firstIndex(where: {
+                $0.deduplicationKey == candidate.deduplicationKey
+            }) {
+                alerts[index] = alerts[index].mergingOccurrence(candidate)
+            } else {
+                alerts.append(candidate)
+            }
+        }
         alerts.sort { $0.score > $1.score }
         saveAlerts()
         rebuildUserFacingAlerts()
@@ -453,11 +523,48 @@ final class SecurityEngine {
         rebuildUserFacingAlerts()
     }
 
-    /// Accepts the current occurrence without teaching Nick a permanent rule.
+    /// Acknowledges this exact, non-critical behavior for 24 hours. Exact malware
+    /// detections cannot be muted; reviewable shell-profile and SSH-key changes
+    /// may be acknowledged so normal developer workflows do not alert repeatedly.
     func allowAlertOnce(_ id: UUID) {
         guard let alert = alerts.first(where: { $0.id == id }) else { return }
         SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
+        if isEligibleForExpectedCooldown(alert) {
+            expectedAlertCooldowns[alert.deduplicationKey] = Date().addingTimeInterval(86_400).timeIntervalSince1970
+            persistExpectedAlertCooldowns()
+        }
         hideAlert(id)
+    }
+
+    private func isEligibleForExpectedCooldown(_ alert: ThreatAlert) -> Bool {
+        guard alert.severity < .critical,
+              !alert.contributingSignals.contains(where: { $0.source == .yara }) else {
+            return false
+        }
+
+        let reviewablePersistenceReasons: Set<String> = [
+            "shell_profile_modified",
+            "ssh_keys_modified",
+        ]
+        return alert.contributingSignals
+            .filter { $0.source == .persistence }
+            .allSatisfy { signal in
+                reviewablePersistenceReasons.contains(signal.metadata["reason"] ?? "")
+            }
+    }
+
+    private func shouldTemporarilySuppress(_ alert: ThreatAlert) -> Bool {
+        let now = Date().timeIntervalSince1970
+        if expectedAlertCooldowns.values.contains(where: { $0 <= now }) {
+            expectedAlertCooldowns = expectedAlertCooldowns.filter { $0.value > now }
+            persistExpectedAlertCooldowns()
+        }
+        guard isEligibleForExpectedCooldown(alert) else { return false }
+        return (expectedAlertCooldowns[alert.deduplicationKey] ?? 0) > now
+    }
+
+    private func persistExpectedAlertCooldowns() {
+        UserDefaults.standard.set(expectedAlertCooldowns, forKey: "nickExpectedAlertCooldowns")
     }
 
     /// Trusts a user-confirmed application/process for future behavioural

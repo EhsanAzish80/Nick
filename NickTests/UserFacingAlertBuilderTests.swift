@@ -182,6 +182,89 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         XCTAssertTrue(result.actions.contains(.keepBlocked))
     }
 
+    func test_developerCommand_namesParentAndDoesNotCallToolMalware() {
+        let process = NickProcessInfo(
+            pid: 100,
+            path: "/usr/bin/curl",
+            name: "curl",
+            parentPID: 99,
+            parentName: "Xcode",
+            signingStatus: .signed(teamID: "APPLE")
+        )
+        let signal = ThreatSignal(
+            source: .process,
+            severity: .medium,
+            title: "Suspicious parent-child relationship",
+            description: "Test",
+            context: ThreatSignalContext(
+                processInfo: process,
+                metadata: ["reason": "suspicious_parent_child"]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.65,
+            content: AlertContent(
+                title: "curl needs review",
+                description: "Test",
+                severity: .medium,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(result.assessment, "Likely developer activity")
+        XCTAssertTrue(result.explanation.contains("Xcode started curl"))
+        XCTAssertTrue(result.explanation.contains("common during builds"))
+        XCTAssertFalse(result.explanation.lowercased().contains("curl is malware"))
+    }
+
+    func test_signedInstalledUpdaterYARA_isPresentedAsRuleMatchNotMalwareIdentity() {
+        let path = "/Applications/GoogleUpdater.app/Contents/MacOS/GoogleUpdater"
+        let process = NickProcessInfo(
+            pid: 101,
+            path: path,
+            name: "GoogleUpdater",
+            parentPID: 1,
+            parentName: "launchd",
+            signingStatus: .signed(teamID: "EQHXZ8M8AV")
+        )
+        let signal = ThreatSignal(
+            source: .yara,
+            severity: .high,
+            title: "YARA match: updater_heuristic",
+            description: "Matched updater behavior",
+            context: ThreatSignalContext(
+                processInfo: process,
+                fileInfo: FileInfo(
+                    path: path,
+                    sha256Hash: nil,
+                    entropy: nil,
+                    signingStatus: .signed(teamID: "EQHXZ8M8AV"),
+                    sizeBytes: nil
+                ),
+                metadata: ["yaraRules": "updater_heuristic"]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.85,
+            content: AlertContent(
+                title: "Known threat detected",
+                description: "Test",
+                severity: .high,
+                recommendedAction: "Quarantine"
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(result.headline, "Signed software matched a detection rule")
+        XCTAssertTrue(result.explanation.contains("not proof of malware"))
+        XCTAssertEqual(result.assessment, "Needs your review")
+    }
+
     private func makeCaptureAlert(
         processName: String,
         path: String,

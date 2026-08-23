@@ -216,14 +216,28 @@ struct ProcessScanner {
         let pidToName = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0.name) })
 
         for proc in processes {
-            // Unsigned binary in temp/scratch directories → high
-            if proc.signingStatus == .unsigned || proc.signingStatus == .invalid,
-               isTemporaryPath(proc.path) {
+            // An invalid signature is strong evidence of tampering. An absent
+            // signature in a writable build directory is only contextual evidence:
+            // SwiftPM, Xcode, test runners, and installers commonly execute ad-hoc or
+            // unsigned intermediates there. Keep unsigned observations for
+            // correlation without presenting them as confirmed threats on their own.
+            if proc.signingStatus == .invalid, isTemporaryPath(proc.path) {
                 signals.append(ThreatSignal(
                     source: .process,
                     severity: .high,
-                    title: "Unsigned binary in temporary directory",
-                    description: "Process '\(proc.name)' (PID \(proc.pid)) is running from \(proc.path), which is a writable temporary location.",
+                    title: "Invalidly signed binary in temporary directory",
+                    description: "Process '\(proc.name)' (PID \(proc.pid)) has an invalid signature and is running from \(proc.path), a writable temporary location.",
+                    context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "invalid_temp_signature"])
+                ))
+                continue
+            }
+
+            if proc.signingStatus == .unsigned, isTemporaryPath(proc.path) {
+                signals.append(ThreatSignal(
+                    source: .process,
+                    severity: .medium,
+                    title: "Unsigned process in temporary directory",
+                    description: "Process '\(proc.name)' (PID \(proc.pid)) is unsigned and running from \(proc.path). This is common for development and installer intermediates; Nick will look for additional suspicious behavior.",
                     context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "unsigned_temp_path"])
                 ))
                 continue
@@ -252,8 +266,9 @@ struct ProcessScanner {
                     || parentName.contains("ssh")
                     || parentName.contains("bash")
                     || parentName.contains("zsh")
-                let hasPipeAttack = Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
-                    || Self.hasPipeDownloadPattern(Self.parentCommandLine(for: proc.parentPID) ?? "")
+                let hasPipeAttack = Self.hasPipeDownloadPattern(
+                    Self.parentCommandLine(for: proc.parentPID) ?? ""
+                )
                 if hasPipeAttack {
                     // Strong evidence is never hidden merely because a familiar app
                     // launched the shell.
@@ -261,7 +276,7 @@ struct ProcessScanner {
                         source: .process,
                         severity: .critical,
                         title: "Shell piped from download tool",
-                        description: "'\(proc.name)' (PID \(proc.pid)) is running concurrently with a download tool under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a download-to-shell pipe attack.",
+                        description: "'\(proc.name)' (PID \(proc.pid)) is running from an explicit download-to-shell pipeline under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a download-to-shell pipe attack.",
                         context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "curl_pipe_shell", "parent": rawParentName])
                     ))
                 } else if !hasTerminalParent {
@@ -298,24 +313,6 @@ struct ProcessScanner {
 
     // MARK: - Pipe-Download Detection Helpers
 
-    /// Download tools that, when sharing a parent PID with a shell, indicate a
-    /// `curl | bash` style pipeline attack.
-    private static let downloaderNames: Set<String> = [
-        "curl", "wget", "python3", "python", "ruby", "perl", "php"
-    ]
-
-    /// Returns `true` when a sibling process (same parent PID) is a known download
-    /// tool.  Used to detect concurrent `curl | bash` pipelines in a process snapshot.
-    private static func hasConcurrentDownloaderSibling(
-        proc: NickProcessInfo,
-        in processes: [NickProcessInfo]
-    ) -> Bool {
-        processes.contains {
-            $0.pid != proc.pid
-                && $0.parentPID == proc.parentPID
-                && downloaderNames.contains($0.name.lowercased())
-        }
-    }
 
     /// Reads a process's full argv via `KERN_PROCARGS2`.
     /// Returns `nil` if the process is inaccessible (different UID, sandboxed, etc.).
@@ -382,14 +379,26 @@ struct ProcessScanner {
         let pidToName = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0.name) })
 
         for proc in processes where newPIDs.contains(proc.pid) {
-            // Path-based temp check — fires even when signing status is .pending.
-            if !proc.path.isEmpty, isTemporaryPath(proc.path) {
+            // Only an invalid signature is strong enough for an immediate high signal.
+            // Unsigned temporary build products remain correlation evidence.
+            if !proc.path.isEmpty, isTemporaryPath(proc.path), proc.signingStatus == .invalid {
                 results.append(ThreatSignal(
                     source: .process,
                     severity: .high,
-                    title: "Process spawned from temporary directory",
-                    description: "New process '\(proc.name)' (PID \(proc.pid)) appeared at \(proc.path), a writable temporary location.",
-                    context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "temp_path_spawn"])
+                    title: "Invalidly signed process spawned from temporary directory",
+                    description: "New process '\(proc.name)' (PID \(proc.pid)) has an invalid signature and appeared at \(proc.path), a writable temporary location.",
+                    context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "invalid_temp_signature"])
+                ))
+                continue
+            }
+
+            if !proc.path.isEmpty, isTemporaryPath(proc.path), proc.signingStatus == .unsigned {
+                results.append(ThreatSignal(
+                    source: .process,
+                    severity: .medium,
+                    title: "Unsigned process spawned from temporary directory",
+                    description: "New process '\(proc.name)' (PID \(proc.pid)) appeared at \(proc.path). Nick will require additional suspicious behavior before treating it as a threat.",
+                    context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "unsigned_temp_path"])
                 ))
                 continue
             }
@@ -404,14 +413,15 @@ struct ProcessScanner {
                     || parentName.contains("ssh")
                     || parentName.contains("bash")
                     || parentName.contains("zsh")
-                let hasPipeAttack = Self.hasConcurrentDownloaderSibling(proc: proc, in: processes)
-                    || Self.hasPipeDownloadPattern(Self.parentCommandLine(for: proc.parentPID) ?? "")
+                let hasPipeAttack = Self.hasPipeDownloadPattern(
+                    Self.parentCommandLine(for: proc.parentPID) ?? ""
+                )
                 if hasPipeAttack {
                     results.append(ThreatSignal(
                         source: .process,
                         severity: .critical,
                         title: "Shell piped from download tool",
-                        description: "'\(proc.name)' (PID \(proc.pid)) appeared concurrently with a download tool under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a pipe attack.",
+                        description: "'\(proc.name)' (PID \(proc.pid)) appeared from an explicit download-to-shell pipeline under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a pipe attack.",
                         context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "curl_pipe_shell", "parent": rawParentName])
                     ))
                 } else if !hasTerminalParent {
@@ -437,12 +447,22 @@ struct ProcessScanner {
         guard proc.signingStatus.isSuspicious else { return nil }
         if proc.path.isEmpty { return nil }
 
-        if isTemporaryPath(proc.path) {
+        if isTemporaryPath(proc.path), proc.signingStatus == .invalid {
             return ThreatSignal(
                 source: .process,
                 severity: .high,
-                title: "Unsigned binary in temporary directory",
-                description: "Process '\(proc.name)' (PID \(proc.pid)) is running from \(proc.path), which is a writable temporary location.",
+                title: "Invalidly signed binary in temporary directory",
+                description: "Process '\(proc.name)' (PID \(proc.pid)) has an invalid signature and is running from \(proc.path), a writable temporary location.",
+                context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "invalid_temp_signature", "phase": "backfill"])
+            )
+        }
+
+        if isTemporaryPath(proc.path), proc.signingStatus == .unsigned {
+            return ThreatSignal(
+                source: .process,
+                severity: .medium,
+                title: "Unsigned process in temporary directory",
+                description: "Process '\(proc.name)' (PID \(proc.pid)) is unsigned and running from \(proc.path). Nick will require corroborating behavior before raising a threat alert.",
                 context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "unsigned_temp_path", "phase": "backfill"])
             )
         }

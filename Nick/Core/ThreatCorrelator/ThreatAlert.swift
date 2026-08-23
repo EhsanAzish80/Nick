@@ -41,6 +41,14 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
     /// `nil` until the explanation pipeline has run.
     var explanation: String?
 
+    /// First and most recent observation of this logical incident. These values
+    /// let the UI group repeat detections without presenting each scan as a new threat.
+    let firstSeen: Date
+    let lastSeen: Date
+
+    /// Number of times the same evidence-backed incident has been observed.
+    let occurrenceCount: Int
+
     // MARK: - Init
 
     init(
@@ -48,7 +56,10 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         score: Double,
         content: AlertContent,
         contributingSignals: [ThreatSignal],
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        firstSeen: Date? = nil,
+        lastSeen: Date? = nil,
+        occurrenceCount: Int = 1
     ) {
         self.id = id
         self.score = max(0, min(1, score)) // clamp to [0, 1]
@@ -59,6 +70,9 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         self.timestamp = timestamp
         self.recommendedAction = content.recommendedAction
         self.explanation = content.explanation
+        self.firstSeen = firstSeen ?? timestamp
+        self.lastSeen = lastSeen ?? timestamp
+        self.occurrenceCount = max(1, occurrenceCount)
     }
 
     /// Returns a copy of this alert with a different severity level.
@@ -77,22 +91,189 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
                 explanation: self.explanation
             ),
             contributingSignals: self.contributingSignals,
-            timestamp: self.timestamp
+            timestamp: self.timestamp,
+            firstSeen: self.firstSeen,
+            lastSeen: self.lastSeen,
+            occurrenceCount: self.occurrenceCount
         )
     }
 
     /// Stable key that identifies the same logical threat scenario across scan runs.
     ///
-    /// Because `id` is a fresh `UUID` on every `correlate()` call, it cannot be
-    /// used to recognise a previously-dismissed alert. This key uses the alert title,
-    /// severity, and the sorted names of all contributing processes — none of which
-    /// change between scans for the same underlying condition.
+    /// The key deliberately includes executable identity, behavior, file evidence,
+    /// ancestry, and network destination. Process names alone are not identities and
+    /// would incorrectly merge unrelated shell/developer activity.
     var deduplicationKey: String {
-        let procNames = contributingSignals
-            .compactMap { $0.processInfo?.name }
-            .sorted()
-            .joined(separator: ",")
-        return "\(title)|\(severity.rawValue)|\(procNames)"
+        let evidence = contributingSignals.map(Self.signalFingerprint).sorted()
+        return ([title.lowercased()] + evidence).joined(separator: "||")
+    }
+
+    /// The most specific on-disk evidence supplied by a monitor.
+    var detectedFilePath: String? {
+        for signal in contributingSignals {
+            if let path = signal.fileInfo?.path, !path.isEmpty { return path }
+            if let path = signal.metadata["script_path"], !path.isEmpty { return path }
+            if let path = signal.metadata["path"], !path.isEmpty { return path }
+        }
+        return nil
+    }
+
+    /// Revalidates the evidence captured by this incident. The closures make
+    /// lifecycle behavior deterministic in tests and avoid treating a snapshot
+    /// from an earlier scan as proof that a process or file still exists.
+    func evidenceState(
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        processIsRunning: (NickProcessInfo) -> Bool = { expected in
+            guard let current = ProcessScanner.quickInfo(pid: expected.pid) else { return false }
+            let samePath = expected.path.isEmpty || current.path.isEmpty
+                || URL(fileURLWithPath: current.path).standardizedFileURL.path
+                    == URL(fileURLWithPath: expected.path).standardizedFileURL.path
+            let sameName = expected.name.isEmpty
+                || current.name.caseInsensitiveCompare(expected.name) == .orderedSame
+            let sameStart = expected.startTime == nil || current.startTime == nil
+                || abs(current.startTime!.timeIntervalSince(expected.startTime!)) < 1
+            return samePath && sameName && sameStart
+        }
+    ) -> AlertEvidenceState {
+        if let path = detectedFilePath {
+            return fileExists(path) ? .fileAvailable(path) : .fileNoLongerExists(path)
+        }
+
+        let processEvidence = contributingSignals.compactMap(\.processInfo)
+        if !processEvidence.isEmpty {
+            return processEvidence.contains(where: processIsRunning) ? .processActive : .processEnded
+        }
+        return .historical
+    }
+
+    /// Returns one incident containing the newest evidence and an incremented
+    /// occurrence count while preserving the original identity and first-seen time.
+    func mergingOccurrence(_ newer: ThreatAlert) -> ThreatAlert {
+        let preferred = newer.severity >= severity ? newer : self
+        return ThreatAlert(
+            id: id,
+            score: max(score, newer.score),
+            content: AlertContent(
+                title: preferred.title,
+                description: preferred.description,
+                severity: max(severity, newer.severity),
+                recommendedAction: preferred.recommendedAction,
+                explanation: newer.explanation ?? explanation
+            ),
+            contributingSignals: newer.contributingSignals,
+            timestamp: firstSeen,
+            firstSeen: firstSeen,
+            lastSeen: max(lastSeen, newer.lastSeen),
+            occurrenceCount: occurrenceCount + max(1, newer.occurrenceCount)
+        )
+    }
+
+    private static func signalFingerprint(_ signal: ThreatSignal) -> String {
+        var parts = [
+            signal.source.rawValue.lowercased(),
+            (signal.metadata["reason"] ?? signal.title).lowercased()
+        ]
+        if let process = signal.processInfo {
+            let signer: String
+            if case .signed(let teamID) = process.signingStatus {
+                signer = teamID.lowercased()
+            } else {
+                signer = String(describing: process.signingStatus).lowercased()
+            }
+            parts += [
+                signer,
+                normalizedPath(process.path),
+                process.name.lowercased(),
+                (process.parentName ?? "").lowercased()
+            ]
+        }
+        if let file = signal.fileInfo {
+            parts += [file.sha256Hash?.lowercased() ?? normalizedPath(file.path)]
+        } else if let path = signal.metadata["script_path"] ?? signal.metadata["path"] {
+            parts += [normalizedPath(path)]
+        }
+        if let network = signal.networkInfo {
+            parts += [
+                network.remoteAddress?.lowercased() ?? "local",
+                network.remotePort.map { String($0) } ?? "none",
+                network.transportProtocol.rawValue.lowercased()
+            ]
+        }
+        return parts.joined(separator: "|")
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        guard !path.isEmpty else { return "" }
+        return URL(fileURLWithPath: path).standardizedFileURL.path.lowercased()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, score, title, description, severity, contributingSignals
+        case timestamp, recommendedAction, explanation
+        case firstSeen, lastSeen, occurrenceCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        score = try container.decode(Double.self, forKey: .score)
+        title = try container.decode(String.self, forKey: .title)
+        description = try container.decode(String.self, forKey: .description)
+        severity = try container.decode(SignalSeverity.self, forKey: .severity)
+        contributingSignals = try container.decode([ThreatSignal].self, forKey: .contributingSignals)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        recommendedAction = try container.decode(String.self, forKey: .recommendedAction)
+        explanation = try container.decodeIfPresent(String.self, forKey: .explanation)
+        firstSeen = try container.decodeIfPresent(Date.self, forKey: .firstSeen) ?? timestamp
+        lastSeen = try container.decodeIfPresent(Date.self, forKey: .lastSeen) ?? timestamp
+        occurrenceCount = max(1, try container.decodeIfPresent(Int.self, forKey: .occurrenceCount) ?? 1)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(score, forKey: .score)
+        try container.encode(title, forKey: .title)
+        try container.encode(description, forKey: .description)
+        try container.encode(severity, forKey: .severity)
+        try container.encode(contributingSignals, forKey: .contributingSignals)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(recommendedAction, forKey: .recommendedAction)
+        try container.encodeIfPresent(explanation, forKey: .explanation)
+        try container.encode(firstSeen, forKey: .firstSeen)
+        try container.encode(lastSeen, forKey: .lastSeen)
+        try container.encode(occurrenceCount, forKey: .occurrenceCount)
+    }
+}
+
+// MARK: - AlertEvidenceState
+
+/// Current actionability of evidence attached to a persisted alert.
+enum AlertEvidenceState: Equatable {
+    case fileAvailable(String)
+    case fileNoLongerExists(String)
+    case processActive
+    case processEnded
+    case historical
+
+    var isActionable: Bool {
+        switch self {
+        case .fileAvailable, .processActive: true
+        case .fileNoLongerExists, .processEnded, .historical: false
+        }
+    }
+
+    var endedMessage: String? {
+        switch self {
+        case .fileNoLongerExists:
+            "The detected file is no longer on this Mac. No file action is needed."
+        case .processEnded:
+            "The process has ended. This incident is kept as history, but there is nothing running to terminate."
+        case .historical:
+            "This is historical evidence. Nick cannot verify a current file or process for it."
+        case .fileAvailable, .processActive:
+            nil
+        }
     }
 }
 

@@ -84,6 +84,8 @@ final class UserFacingAlertBuilder: Sendable {
         let firstProcess   = signals.compactMap(\.processInfo).first
         let processName    = firstProcess?.name ?? signals.compactMap { $0.metadata["process"] }.first
         let displayProcess = userReadableProcessName(processName)
+        let parentName     = firstProcess?.parentName.flatMap(userReadableProcessName)
+        let isDeveloperWorkflow = signals.contains(where: isDeveloperWorkflowSignal)
 
         // Alerts persisted by an older development build can include Nick's own
         // unsigned Xcode products. They are build artifacts, not user threats.
@@ -160,6 +162,23 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
+        // --- Developer shell / build workflow ---
+        // Shell and transfer utilities are dual-use. Attribute the concrete parent
+        // and executable instead of treating names such as curl, zsh, or swift-build
+        // as malware identities.
+        if isDeveloperWorkflow && !hasYARA && !hasPersistence {
+            let origin = parentName.map { "\($0) started \(displayProcess ?? "a command-line tool")" }
+                ?? "Nick could not identify the app that started \(displayProcess ?? "this command-line tool")"
+            return AlertPattern(
+                headline: "Developer command needs context",
+                explanation: "\(origin). This is common during builds, SSH sessions, package downloads, and local development. The same tools can also be misused by scripts, so Nick is showing the exact origin instead of calling the tool itself malware.",
+                assessment: "Likely developer activity",
+                recommendedAction: "Keep it if you started this build, terminal, SSH, or editor task. If not, review the origin and command details before allowing this behavior.",
+                severity: .warning,
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
         // --- Reverse shell ---
         if features.contains("shell") && hasNetwork {
             return AlertPattern(
@@ -204,9 +223,14 @@ final class UserFacingAlertBuilder: Sendable {
             // A YARA rule is pattern evidence, not identity evidence. Severity
             // expresses the rule author's concern; it does not turn a heuristic
             // into a confirmed malicious hash.
+            let signedSoftware = signals.contains(where: isSignedInstalledSoftware)
             return AlertPattern(
-                headline: "A file matched a suspicious behavior pattern",
-                explanation: "A file contains instructions sometimes used to change startup settings or perform other sensitive actions. Legitimate installers, developer builds, and security tools can contain the same instructions, so this is not a confirmed malware detection.",
+                headline: signedSoftware
+                    ? "Signed software matched a detection rule"
+                    : "A file matched a suspicious behavior pattern",
+                explanation: signedSoftware
+                    ? "\(displayProcess ?? "A signed app") matched a broad malware-detection pattern. Its valid signature and installed location are important evidence that this may be legitimate updater or application code; a rule match alone is not proof of malware."
+                    : "A file contains instructions sometimes used to change startup settings or perform other sensitive actions. Legitimate installers, developer builds, and security tools can contain the same instructions, so this is not a confirmed malware detection.",
                 assessment: "Needs your review",
                 recommendedAction: "Check the file name, location, and detection rule. Accept it if you recognize the app or build; quarantine it only after reviewing the file.",
                 severity: .warning,
@@ -267,6 +291,37 @@ final class UserFacingAlertBuilder: Sendable {
         return path.contains("/CoreSimulator/") || path.contains(".simruntime/")
     }
 
+    private func isDeveloperWorkflowSignal(_ signal: ThreatSignal) -> Bool {
+        guard let process = signal.processInfo else { return false }
+        let processName = process.name.lowercased()
+        let parentName = process.parentName?.lowercased() ?? ""
+        let developerTools = [
+            "xcode", "swift", "swift-build", "sourcekit", "terminal", "iterm",
+            "warp", "code", "visual studio code", "git", "ssh", "sshd"
+        ]
+        let commandLineTools: Set<String> = [
+            "bash", "zsh", "sh", "fish", "curl", "git", "ssh", "scp", "rsync",
+            "swift", "swift-build", "xcodebuild", "make", "cmake", "python", "node"
+        ]
+        let hasDeveloperParent = developerTools.contains { parentName.contains($0) }
+        let isKnownTool = commandLineTools.contains(processName)
+        let isSystemTool = process.path.hasPrefix("/usr/bin/") || process.path.hasPrefix("/bin/")
+        let isValidlySigned: Bool
+        if case .signed = process.signingStatus { isValidlySigned = true } else { isValidlySigned = false }
+        return hasDeveloperParent || (isKnownTool && isSystemTool && isValidlySigned)
+    }
+
+    private func isSignedInstalledSoftware(_ signal: ThreatSignal) -> Bool {
+        let path = signal.fileInfo?.path ?? signal.processInfo?.path ?? ""
+        let installedPath = path.hasPrefix("/Applications/")
+            || path.hasPrefix("/Library/")
+            || path.hasPrefix("/System/")
+        let signingStatus = signal.fileInfo?.signingStatus ?? signal.processInfo?.signingStatus
+        guard installedPath, let signingStatus else { return false }
+        if case .signed(let teamID) = signingStatus { return !teamID.isEmpty }
+        return false
+    }
+
     private func isNickDevelopmentArtifact(_ signal: ThreatSignal) -> Bool {
         let paths = [
             signal.fileInfo?.path,
@@ -300,8 +355,14 @@ final class UserFacingAlertBuilder: Sendable {
     }
 
     private func genericExplanation(alert: ThreatAlert, processName: String?) -> String {
-        let subject = processName.map { "\($0) triggered a security check." }
+        let process = alert.contributingSignals.compactMap(\.processInfo).first
+        let subject: String
+        if let processName, let parent = process?.parentName, !parent.isEmpty {
+            subject = "\(parent) started \(processName), which triggered a security check."
+        } else {
+            subject = processName.map { "\($0) triggered a security check." }
             ?? "Nick observed an event that matched a security check."
+        }
         let detail = alert.description.trimmingCharacters(in: .whitespacesAndNewlines)
         return "\(subject) This does not by itself prove that your Mac is infected. "
             + (detail.isEmpty ? "Use the technical details if you need more context." : detail)

@@ -84,7 +84,8 @@ enum ReverseShellDetector {
             guard conn.transportProtocol == .tcp,
                   conn.state == .established,
                   let remotePort = conn.remotePort,
-                  remotePort > 0
+                  remotePort > 0,
+                  conn.isOutbound
             else { continue }
 
             guard let proc = pidToProcess[conn.pid] else { continue }
@@ -93,7 +94,7 @@ enum ReverseShellDetector {
             let isSuspiciousProcess = suspiciousProcessNames.contains(procNameLower)
 
             // Rule 1: Shell/interpreter with outbound connection on unusual port
-            if isSuspiciousProcess, !safePorts.contains(remotePort) {
+            if isSuspiciousProcess, !safePorts.contains(remotePort), conn.isOutbound, isHighRiskShellContext(proc) {
                 let remote = "\(conn.remoteAddress ?? "?"):\(remotePort)"
                 results.append(ThreatSignal(
                     source: .network,
@@ -103,7 +104,7 @@ enum ReverseShellDetector {
                     context: ThreatSignalContext(
                         processInfo: proc,
                         metadata: [
-                            "reason": "reverse_shell_port",
+                            "reason": "reverse_shell",
                             "detector": "ReverseShellDetector",
                             "remote": remote,
                             "remote_port": String(remotePort)
@@ -114,7 +115,7 @@ enum ReverseShellDetector {
             }
 
             // Rule 2: Any process with binary in temp directory making outbound connections
-            if !proc.path.isEmpty, isTemporaryPath(proc.path), !safePorts.contains(remotePort) {
+            if !proc.path.isEmpty, isTemporaryPath(proc.path), !safePorts.contains(remotePort), conn.isOutbound, proc.signingStatus.isSuspicious {
                 let remote = "\(conn.remoteAddress ?? "?"):\(remotePort)"
                 results.append(ThreatSignal(
                     source: .network,
@@ -133,8 +134,9 @@ enum ReverseShellDetector {
                 ))
             }
 
-            // Rule 3: netcat / ncat with any established connection → always suspicious
-            if procNameLower == "nc" || procNameLower == "ncat" || procNameLower == "netcat" {
+            // Rule 3: netcat is dual-use. Only escalate when its invocation exposes
+            // an execution/listener primitive or the binary context is suspicious.
+            if isNetcat(procNameLower), isHighRiskNetcatContext(proc) {
                 let remote = "\(conn.remoteAddress ?? "?"):\(remotePort)"
                 results.append(ThreatSignal(
                     source: .network,
@@ -144,7 +146,7 @@ enum ReverseShellDetector {
                     context: ThreatSignalContext(
                         processInfo: proc,
                         metadata: [
-                            "reason": "netcat_connection",
+                            "reason": "reverse_shell",
                             "detector": "ReverseShellDetector",
                             "remote": remote
                         ]
@@ -176,7 +178,10 @@ enum ReverseShellDetector {
         else { return nil }
 
         let procNameLower = proc.name.lowercased()
-        guard suspiciousProcessNames.contains(procNameLower), !safePorts.contains(remotePort) else {
+        guard suspiciousProcessNames.contains(procNameLower),
+              !safePorts.contains(remotePort),
+              connection.isOutbound,
+              isHighRiskShellContext(proc) else {
             return nil
         }
 
@@ -189,7 +194,7 @@ enum ReverseShellDetector {
             context: ThreatSignalContext(
                 processInfo: proc,
                 metadata: [
-                    "reason": "reverse_shell_port",
+                    "reason": "reverse_shell",
                     "detector": "ReverseShellDetector",
                     "remote": remote,
                     "remote_port": String(remotePort)
@@ -199,6 +204,33 @@ enum ReverseShellDetector {
     }
 
     // MARK: - Private Helpers
+
+    private static func isHighRiskShellContext(_ process: NickProcessInfo) -> Bool {
+        if isNetcat(process.name.lowercased()) { return isHighRiskNetcatContext(process) }
+        guard process.signingStatus.isSuspicious || isTemporaryPath(process.path) else { return false }
+        let parent = (process.parentName ?? "").lowercased()
+        let expectedParents = ["terminal", "iterm", "warp", "ssh", "xcode", "code", "swift", "launchd"]
+        return !expectedParents.contains { parent.contains($0) }
+    }
+
+    private static func isNetcat(_ name: String) -> Bool {
+        ["nc", "ncat", "netcat"].contains(name)
+    }
+
+    private static func isHighRiskNetcatContext(_ process: NickProcessInfo) -> Bool {
+        let arguments = process.arguments.map { $0.lowercased() }
+        let hasExecutionPrimitive = arguments.contains("-e")
+            || arguments.contains("--exec")
+            || arguments.contains("--sh-exec")
+            || arguments.contains("-c")
+        let isListener = arguments.contains("-l") || arguments.contains("--listen")
+        if hasExecutionPrimitive || isListener { return true }
+
+        guard process.signingStatus.isSuspicious || isTemporaryPath(process.path) else { return false }
+        let parent = (process.parentName ?? "").lowercased()
+        let expectedParents = ["terminal", "iterm", "warp", "ssh", "xcode", "code", "make", "swift"]
+        return !expectedParents.contains { parent.contains($0) }
+    }
 
     private static func isTemporaryPath(_ path: String) -> Bool {
         let lp = path.lowercased()

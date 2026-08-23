@@ -148,6 +148,40 @@ enum LOLBinDetector {
         ),
     ]
 
+    /// Applies the command semantics that a substring alone cannot prove.
+    /// This keeps read-only administration and ordinary development commands
+    /// from becoming high-severity LOLBin alerts.
+    private static func isSpecificMatch(
+        reason: String,
+        arguments: [String],
+        command: String
+    ) -> Bool {
+        let lower = command.lowercased()
+        switch reason {
+        case "curl_pipe_shell", "wget_pipe_shell":
+            return lower.contains("|") && lower.range(
+                of: #"\b(bash|zsh|sh|ksh|csh|fish|dash)\b"#,
+                options: .regularExpression
+            ) != nil
+        case "quarantine_removal":
+            return arguments.contains("-d") || arguments.contains("-c")
+        case "base64_payload":
+            let executionTerms = ["exec(", "eval(", "system(", "popen(", "`"]
+            let decodeTerms = ["b64decode", "decode64", "base64"]
+            return executionTerms.contains { lower.contains($0) }
+                && decodeTerms.contains { lower.contains($0) }
+        case "launchctl_tmp":
+            let modifyingCommands: Set<String> = ["load", "bootstrap", "submit"]
+            return !modifyingCommands.isDisjoint(with: arguments.map { $0.lowercased() })
+        case "crontab_modify":
+            return arguments.contains("-e") || arguments.contains("-r") || arguments == ["-"]
+        case "mktemp_execute":
+            return lower.contains("&&") || lower.contains(";") || lower.contains("$(")
+        default:
+            return true
+        }
+    }
+
     // MARK: - Public API
 
     /// Evaluates a process for LOLBin abuse patterns.
@@ -167,13 +201,13 @@ enum LOLBinDetector {
         parentName: String?,
         trustedProcessList: TrustedProcessList = TrustedProcessList()
     ) -> ThreatSignal? {
-        // Include parentName in the search string so pipe-based patterns
-        // (e.g., `curl … | bash`) are detected via the parent process name.
-        let argv = proc.path + " " + proc.name + " " + (parentName ?? "")
+        // Inspect the actual argv captured from KERN_PROCARGS2. A parent process name alone is not evidence that a download was piped to a shell.
+        let argv = ([proc.path, proc.name] + proc.arguments).joined(separator: " ")
 
         for sig in signatures {
             guard proc.name.lowercased() == sig.processName.lowercased() else { continue }
             guard argv.lowercased().contains(sig.argumentPattern.lowercased()) else { continue }
+            guard isSpecificMatch(reason: sig.reason, arguments: proc.arguments, command: argv) else { continue }
 
             return ThreatSignal(
                 source: .process,

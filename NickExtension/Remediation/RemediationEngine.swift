@@ -2,6 +2,7 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
+import CryptoKit
 import Darwin
 import Foundation
 import os
@@ -11,7 +12,7 @@ import os
 /// Orchestrates automated threat response:
 /// 1. Sends `SIGKILL` to the offending process
 /// 2. Quarantines the threat file
-/// 3. Scans and removes persistence mechanisms (LaunchAgents / LaunchDaemons)
+/// 3. Quarantines persistence mechanisms (LaunchAgents / LaunchDaemons)
 ///
 /// All methods are synchronous and must be called from a background queue
 /// (never from the ES callback queue directly).
@@ -106,32 +107,44 @@ final class RemediationEngine {
         )
     }
 
-    /// Finds and removes `.plist` files in LaunchAgent / LaunchDaemon directories
+    /// Finds and quarantines `.plist` files in LaunchAgent / LaunchDaemon directories
     /// that explicitly reference `threatPath`.
     private func cleanPersistence(threatPath: String) -> [RemediationAction] {
         var actions: [RemediationAction] = []
 
-        let launchDirs = [
-            (NSHomeDirectory() as NSString).appendingPathComponent("Library/LaunchAgents"),
+        var launchDirs: Set<String> = [
             "/Library/LaunchAgents",
             "/Library/LaunchDaemons",
         ]
+        let components = URL(fileURLWithPath: threatPath).standardizedFileURL.pathComponents
+        if components.count > 2, components[1] == "Users" {
+            launchDirs.insert("/Users/\(components[2])/Library/LaunchAgents")
+        }
 
         for dir in launchDirs {
             for plistPath in maliciousPlists(in: dir, referencingPath: threatPath) {
-                var ok = false
-                do {
-                    try FileManager.default.removeItem(atPath: plistPath)
-                    ok = true
-                } catch {
-                    Self.logger.warning("Failed to remove persistence plist \(plistPath): \(error.localizedDescription)")
+                guard let hash = sha256(of: plistPath) else {
+                    actions.append(RemediationAction(
+                        type: .removeLaunchItem, target: plistPath,
+                        success: false, detail: "Could not hash persistence item; left unchanged"
+                    ))
+                    continue
                 }
-
+                let record = quarantineManager.quarantine(
+                    filePath: plistPath,
+                    hash: hash,
+                    threatName: "Persistence linked to quarantined threat",
+                    severity: "high",
+                    processPath: threatPath,
+                    pid: 0
+                )
                 actions.append(RemediationAction(
-                    type:    .removeLaunchItem,
-                    target:  plistPath,
-                    success: ok,
-                    detail:  ok ? "Persistence plist removed" : "Failed to remove plist"
+                    type: .removeLaunchItem,
+                    target: plistPath,
+                    success: record != nil,
+                    detail: record != nil
+                        ? "Persistence plist moved to quarantine"
+                        : "Failed to quarantine plist; left unchanged"
                 ))
             }
         }
@@ -142,16 +155,16 @@ final class RemediationEngine {
     /// Returns paths of `.plist` files in `directory` whose `Program` or
     /// `ProgramArguments[0]` explicitly references `targetPath`.
     ///
-    /// - Important: Only returns plists that contain the exact threat path
-    ///   or its basename. Never removes system or Apple-signed plists.
+    /// - Important: Only returns non-Apple plists that contain the exact,
+    ///   standardized absolute threat path. Matching plists are quarantined, never deleted.
     private func maliciousPlists(in directory: String, referencingPath targetPath: String) -> [String] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(atPath: directory) else { return [] }
 
-        let targetName = (targetPath as NSString).lastPathComponent
+        let normalizedTarget = URL(fileURLWithPath: targetPath).standardizedFileURL.path
         var matches: [String] = []
 
-        for file in files where file.hasSuffix(".plist") {
+        for file in files where file.hasSuffix(".plist") && !file.hasPrefix("com.apple.") {
             let fullPath = (directory as NSString).appendingPathComponent(file)
 
             guard let data  = fm.contents(atPath: fullPath),
@@ -159,18 +172,20 @@ final class RemediationEngine {
                       from: data, format: nil) as? [String: Any]
             else { continue }
 
-            let program: String? =
-                (plist["Program"] as? String) ??
-                (plist["ProgramArguments"] as? [String])?.first
-
-            guard let p = program else { continue }
-
-            // Require the full path to match, or the basename when it's > 4 chars
-            if p.contains(targetPath) || (targetName.count > 4 && p.contains(targetName)) {
-                matches.append(fullPath)
+            let candidates = ([plist["Program"] as? String].compactMap { value in value })
+                + (plist["ProgramArguments"] as? [String] ?? [])
+            let hasExactReference = candidates.contains { candidate in
+                guard candidate.hasPrefix("/") else { return false }
+                return URL(fileURLWithPath: candidate).standardizedFileURL.path == normalizedTarget
             }
+            if hasExactReference { matches.append(fullPath) }
         }
 
         return matches
+    }
+
+    private func sha256(of path: String) -> String? {
+        guard let data = FileManager.default.contents(atPath: path) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }

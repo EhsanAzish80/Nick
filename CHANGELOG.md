@@ -8,7 +8,34 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
-No user-facing changes have been released since 4.1.
+No user-facing changes have been released since 4.2.
+
+## [4.2] - 2026-08-23
+
+### Added
+
+- Alert explanations now identify the originating parent application when that evidence is available, including clearer context for shells, build tools, SSH, Git, curl, and other dual-use developer commands.
+- The menu bar icon now reflects protection state with green, orange, and red attention levels.
+
+### Changed
+
+- Signed software in installed locations is described as a rule match that needs review rather than a confirmed malware identity.
+- Reverse-shell and living-off-the-land detections now require stronger command, parent, signing, path, or network context before escalating.
+- Ransomware detection recognizes application-managed encrypted cache traffic and requires corroborating behavior before quarantine.
+- Persistence results distinguish a missing executable from an unsigned or malicious executable.
+
+### Fixed
+
+- Prevented common developer workflows and signed updaters from repeatedly producing high-confidence malware wording without supporting evidence.
+- Prevented WhatsApp encrypted media-cache writes from being quarantined solely because the files have high entropy.
+- Quarantine now validates evidence hashes, preserves duplicate samples with unique vault records, and never deletes the original when isolation fails.
+- Restore and remediation paths now fail safely when a file has disappeared or no longer matches the recorded evidence.
+
+### Verification
+
+- 373 automated tests executed: 369 passed, 4 platform-dependent tests were skipped, and 0 failed.
+- The app, Endpoint Security extension, Network Filter extension, and uninstaller all report version 4.2, build 420.
+- The signed package and disk image are notarized, stapled, and accepted by Gatekeeper.
 
 ## [4.1] - 2026-08-12
 
@@ -139,7 +166,8 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.2.0...HEAD
+[4.2]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.2.0
 [4.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.1.0
 [4.0.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.0.1
 [4.0]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.0.0

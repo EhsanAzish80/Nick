@@ -13,10 +13,10 @@ import os
 /// **Vault:** `/Library/Application Support/com.ehsanazish.nick/Quarantine/`
 ///
 /// Each quarantined file is:
-/// - Renamed to `<sha256>.quarantine` (prevents accidental execution)
+/// - Renamed to `<sha256>-<record-id>.quarantine` (prevents accidental execution)
 /// - Chmod'd to `0o000` (no read/write/execute for anyone)
 /// - All extended attributes stripped via `removexattr(2)`
-/// - A companion `<sha256>.meta.json` written in the same directory
+/// - A companion `<sha256>-<record-id>.meta.json` written in the same directory
 /// - Persisted in `QuarantineDatabase` for display and restore operations
 final class QuarantineManager {
 
@@ -53,7 +53,7 @@ final class QuarantineManager {
     /// Moves `filePath` to the vault and records a `QuarantineRecord`.
     ///
     /// - Returns: The `QuarantineRecord` on success; `nil` if the file could
-    ///   not be moved (it is then deleted as a safety fallback).
+    ///   not be moved. A failed quarantine never deletes the original file.
     @discardableResult
     func quarantine(
         filePath:    String,
@@ -64,19 +64,27 @@ final class QuarantineManager {
         pid:         Int32
     ) -> QuarantineRecord? {
         let fm = FileManager.default
+        let normalizedHash = hash.lowercased()
+        guard normalizedHash.count == 64,
+              normalizedHash.allSatisfy({ character in character.isHexDigit }) else {
+            Self.logger.error("Quarantine refused because the SHA-256 hash is invalid")
+            return nil
+        }
         guard fm.fileExists(atPath: filePath) else {
             Self.logger.warning("Quarantine skipped — file no longer exists: \(filePath)")
             return nil
         }
 
-        let quarantinedPath = (vaultPath as NSString).appendingPathComponent("\(hash).quarantine")
-        let metaPath        = (vaultPath as NSString).appendingPathComponent("\(hash).meta.json")
+        let recordID = UUID()
+        let vaultName = "\(normalizedHash)-\(recordID.uuidString)"
+        let quarantinedPath = (vaultPath as NSString).appendingPathComponent("\(vaultName).quarantine")
+        let metaPath = (vaultPath as NSString).appendingPathComponent("\(vaultName).meta.json")
 
         let record = QuarantineRecord(
-            id:               UUID(),
+            id:               recordID,
             originalPath:     filePath,
             quarantinedPath:  quarantinedPath,
-            hash:             hash,
+            hash:             normalizedHash,
             threatName:       threatName,
             severity:         severity,
             quarantinedAt:    Date(),
@@ -85,18 +93,14 @@ final class QuarantineManager {
         )
 
         do {
-            // Replace any previously quarantined copy with the same hash
-            if fm.fileExists(atPath: quarantinedPath) {
-                try fm.removeItem(atPath: quarantinedPath)
-            }
-
+            // Every record receives a unique vault path, so identical files never
+            // overwrite earlier evidence or share a stale database reference.
             try fm.moveItem(atPath: filePath, toPath: quarantinedPath)
 
-            // Lock down the quarantined file completely
-            try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: quarantinedPath)
-
-            // Strip all extended attributes (e.g. com.apple.quarantine, custom xattrs)
+            // Strip attributes while the owner can still access the file, then
+            // lock the vault copy against reading, writing, and execution.
             stripXattrs(path: quarantinedPath)
+            try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: quarantinedPath)
 
             // Write companion metadata (allows restore even if DB is lost)
             let metaData = try JSONEncoder().encode(record)
@@ -104,13 +108,18 @@ final class QuarantineManager {
 
             database.insert(record: record)
 
-            Self.logger.info("Quarantined '\(filePath)' → '\(hash).quarantine' (threat: \(threatName))")
+            Self.logger.info("Quarantined '\(filePath)' → .\(vaultName).quarantine. (threat: \(threatName))")
             return record
 
         } catch {
             Self.logger.error("Quarantine failed for '\(filePath)': \(error.localizedDescription)")
-            // Last resort: delete the threat if it couldn't be quarantined
-            try? fm.removeItem(atPath: filePath)
+            // Quarantine is fail-safe: if the move succeeded but a later vault step
+            // failed, put the original back whenever possible. Never delete it.
+            if fm.fileExists(atPath: quarantinedPath), !fm.fileExists(atPath: filePath) {
+                try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: quarantinedPath)
+                try? fm.moveItem(atPath: quarantinedPath, toPath: filePath)
+            }
+            try? fm.removeItem(atPath: metaPath)
             return nil
         }
     }
@@ -126,6 +135,7 @@ final class QuarantineManager {
         let destination = URL(fileURLWithPath: record.originalPath).standardizedFileURL.path
 
         guard source.hasPrefix(vaultRoot),
+              fm.fileExists(atPath: source),
               destination.hasPrefix("/"),
               !destination.hasPrefix("/System/"),
               !destination.hasPrefix("/usr/"),
@@ -157,13 +167,16 @@ final class QuarantineManager {
                 )
             }
 
-            let metaPath = (vaultPath as NSString).appendingPathComponent("\(record.hash).meta.json")
+            let metaPath = metadataPath(for: record)
             try? fm.removeItem(atPath: metaPath)
 
             database.delete(id: id)
             Self.logger.info("Restored '\(record.originalPath)'")
             return true
         } catch {
+            if fm.fileExists(atPath: source) {
+                try? fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: source)
+            }
             Self.logger.error("Restore failed: \(error.localizedDescription)")
             return false
         }
@@ -177,14 +190,14 @@ final class QuarantineManager {
         let fm = FileManager.default
 
         do {
-            // Need at least owner-write to delete
-            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: record.quarantinedPath)
-            try fm.removeItem(atPath: record.quarantinedPath)
+            if fm.fileExists(atPath: record.quarantinedPath) {
+                // Need at least owner-write to delete. Missing vault files are
+                // treated as already deleted and their stale record is cleared.
+                try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: record.quarantinedPath)
+                try fm.removeItem(atPath: record.quarantinedPath)
+            }
 
-            let metaPath = (vaultPath as NSString).appendingPathComponent("\(record.hash).meta.json")
-            try? fm.removeItem(atPath: metaPath)
-
-            database.delete(id: id)
+            removeRecordMetadata(record)
             Self.logger.info("Permanently deleted quarantine entry \(id)")
             return true
         } catch {
@@ -193,12 +206,34 @@ final class QuarantineManager {
         }
     }
 
-    /// Returns all quarantined records, newest first.
+    /// Returns all quarantined records, newest first. Entries whose vault file
+    /// no longer exists are reconciled out of the database so the UI never offers
+    /// restore or delete actions that cannot succeed.
     func listQuarantined() -> [QuarantineRecord] {
-        database.listAll()
+        let fm = FileManager.default
+        return database.listAll().filter { record in
+            guard fm.fileExists(atPath: record.quarantinedPath) else {
+                removeRecordMetadata(record)
+                return false
+            }
+            return true
+        }
+    }
+
+    private func removeRecordMetadata(_ record: QuarantineRecord) {
+        let metaPath = metadataPath(for: record)
+        try? FileManager.default.removeItem(atPath: metaPath)
+        database.delete(id: record.id)
     }
 
     // MARK: - Private Helpers
+
+    private func metadataPath(for record: QuarantineRecord) -> String {
+        URL(fileURLWithPath: record.quarantinedPath)
+            .deletingPathExtension()
+            .appendingPathExtension("meta.json")
+            .path
+    }
 
     /// Strips every extended attribute from the file at `path` using BSD `removexattr(2)`.
     private func stripXattrs(path: String) {
