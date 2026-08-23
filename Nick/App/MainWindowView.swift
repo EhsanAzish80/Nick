@@ -311,9 +311,73 @@ struct OverviewDetailView: View {
     private var persistenceIssues: Int { engine.persistenceItems.filter { $0.signingStatus?.isSuspicious == true }.count }
     private var processIssues:     Int { engine.processes.filter { $0.signingStatus == .unsigned || $0.signingStatus == .invalid }.count }
     private var networkIssues:     Int { engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count }
+
+    private struct AttentionItem: Identifiable {
+        let id: String
+        let title: String
+        let detail: String
+        let count: Int
+        let section: SidebarSection
+    }
+
+    /// Root causes shown by the Overview headline. Related feature symptoms
+    /// share one item; for example, a disconnected security extension also
+    /// pauses Privacy Guard and Email Guard but should not be counted three
+    /// times or left unexplained.
+    private var attentionItems: [AttentionItem] {
+        var items: [AttentionItem] = []
+
+        if !xpcClient.isConnected {
+            items.append(AttentionItem(
+                id: "real_time_protection",
+                title: "Real-Time Protection needs attention",
+                detail: "The security extension is not responding, so Privacy Guard and Email Guard are waiting.",
+                count: 1,
+                section: .smartScan
+            ))
+        }
+        if auditIssues > 0 {
+            items.append(AttentionItem(
+                id: "system_audit",
+                title: "System Security needs attention",
+                detail: "(auditIssues) system setting\(auditIssues == 1 ? "" : "s") did not pass the latest audit.",
+                count: auditIssues,
+                section: .systemAudit
+            ))
+        }
+        if persistenceIssues > 0 {
+            items.append(AttentionItem(
+                id: "persistence",
+                title: "Persistence items need review",
+                detail: "(persistenceIssues) startup item\(persistenceIssues == 1 ? "" : "s") have suspicious signing evidence.",
+                count: persistenceIssues,
+                section: .persistence
+            ))
+        }
+        if processIssues > 0 {
+            items.append(AttentionItem(
+                id: "processes",
+                title: "Running processes need review",
+                detail: "(processIssues) process\(processIssues == 1 ? " has" : "es have") unsigned or invalid signing evidence.",
+                count: processIssues,
+                section: .processes
+            ))
+        }
+        if networkIssues > 0 {
+            items.append(AttentionItem(
+                id: "network",
+                title: "Network activity needs review",
+                detail: "(networkIssues) outbound shell connection\(networkIssues == 1 ? "" : "s") need context.",
+                count: networkIssues,
+                section: .network
+            ))
+        }
+
+        return items
+    }
+
     private var totalIssues: Int {
-        auditIssues + persistenceIssues + processIssues + networkIssues
-            + (xpcClient.isConnected ? 0 : 1)
+        attentionItems.reduce(0) { $0 + $1.count }
     }
 
     private var versionLabel: String {
@@ -434,6 +498,48 @@ struct OverviewDetailView: View {
             Text(statusLine)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            if !attentionItems.isEmpty {
+                attentionSummary
+                    .padding(.top, 6)
+            }
+        }
+    }
+
+    private var attentionSummary: some View {
+        VStack(spacing: 6) {
+            ForEach(attentionItems) { item in
+                Button {
+                    selectedSection = item.section
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(Color.statusOrange)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.textPrimary)
+                            Text(item.detail)
+                                .font(.caption)
+                                .foregroundStyle(Color.textSecondary)
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 12)
+                        Text(item.section == .smartScan ? "Review in Smart Scan" : "Review")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.accentColor)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.textTertiary)
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.statusOrange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(item.title). \(item.detail)")
+                .accessibilityHint("Open \(item.section.rawValue)")
+            }
         }
     }
 
@@ -889,35 +995,27 @@ struct ProcessListView: View {
 
     static func signingText(_ p: NickProcessInfo) -> String {
         guard p.signingStatus == .pending else { return p.signingStatus.displayName }
-        if let start = p.startTime, Date().timeIntervalSince(start) > 10 { return "Unknown" }
         return "Checking…"
     }
 
     static func threatLabel(_ p: NickProcessInfo) -> String? {
-        let path = p.path.lowercased()
-        if p.signingStatus == .unsigned,
-           path.hasPrefix("/tmp") || path.hasPrefix("/var/tmp") || path.hasPrefix("/private/tmp") {
-            return "Temp Path"
-        }
-        let lolBins: Set<String> = ["bash", "sh", "zsh", "python", "python3", "perl",
-                                    "ruby", "curl", "wget", "nc", "ncat", "osascript"]
-        if lolBins.contains(p.name.lowercased()) && p.signingStatus == .unsigned {
-            return "LOLBin"
-        }
-        return nil
+        ProcessScanner().riskAssessment(for: p)?.label
     }
 
     static func threatDotColor(_ p: NickProcessInfo) -> Color {
-        guard let label = threatLabel(p) else {
+        guard let assessment = ProcessScanner().riskAssessment(for: p) else {
             return p.signingStatus == .unknown || p.signingStatus == .pending ? Color.textTertiary : Color.statusGreen
         }
-        _ = label
-        return Color.statusRed
+        return assessment.severity >= .high ? Color.statusRed : Color.statusYellow
     }
 
     static func threatDisplayText(_ p: NickProcessInfo) -> String {
         if let label = threatLabel(p) { return label }
-        return p.signingStatus == .unknown || p.signingStatus == .pending ? "Unknown" : "Clean"
+        switch p.signingStatus {
+        case .pending: return "Checking…"
+        case .unknown: return "Unavailable"
+        default:       return "Clean"
+        }
     }
 }
 
@@ -1191,7 +1289,7 @@ struct PersistenceDetailView: View {
 // MARK: - ThreatVerdict
 
 /// Verdict assigned to each deep-scan YARA match after path + signature analysis.
-enum ThreatVerdict: String {
+enum ThreatVerdict: String, Sendable {
     case threat              = "Threat"
     case suspicious          = "Suspicious"
     case developmentArtifact = "Development artifact"
@@ -1207,11 +1305,10 @@ struct ScannerDetailView: View {
     @Environment(SecurityEngine.self) private var engine
 
     // MARK: - Deep scan state
-    @State private var scanner      = DeepScanner()
-    @State private var hasStarted   = false
     @State private var onlyOnPower  = false
-    @State private var showResults  = false
     @AppStorage("scanNotifyOnCompletion") private var notifyOnCompletion = true
+
+    private var scanner: DeepScanner { engine.deepScanner }
 
     // MARK: - Scan File (specific file/folder picker) state
     @State private var fileScanURL:       URL?          = nil
@@ -1226,13 +1323,15 @@ struct ScannerDetailView: View {
     @AppStorage("deepScanIgnoredPaths") private var ignoredPathsRaw: String = ""
 
     private var ignoredPaths: Set<String> {
-        Set(ignoredPathsRaw.split(separator: "\n").map(String.init))
+        Set(ignoredPathsRaw.split(separator: "\n").map {
+            DeepScanner.canonicalPath(String($0))
+        })
     }
 
     // MARK: - Body
 
     var body: some View {
-        if showResults {
+        if scanner.hasCompletedScan {
             DeepScanResultsView(
                 scanner:      scanner,
                 ignoredPaths: ignoredPaths,
@@ -1270,14 +1369,7 @@ struct ScannerDetailView: View {
         }
         .background(Color.backgroundPrimary)
         .navigationTitle("Nick Scan")
-        .onChange(of: scanner.isScanning) { _, isScanning in
-            if !isScanning && hasStarted && scanner.totalFiles > 0 {
-                engine.recordDeepScan(fileCount: scanner.totalFiles)
-                showResults = true
-            }
-        }
         .onAppear {
-            scanner.engine = engine
             // Consume any pending Finder "Scan with Nick" URL that was stored
             // before this view appeared (fixes race with notification timing).
             if let pendingURL = engine.pendingFinderScanURL {
@@ -1346,11 +1438,13 @@ struct ScannerDetailView: View {
                     isRunning: scanner.isScanning || scanner.isPaused,
                     action: {
                         if scanner.isScanning {
-                            scanner.cancel(); hasStarted = false
+                            scanner.cancel()
                         } else {
-                            hasStarted = true
                             Task { @MainActor in
-                                scanner.start(onlyOnPower: onlyOnPower) { [engine] path in
+                                scanner.start(
+                                    onlyOnPower: onlyOnPower,
+                                    ignoredPaths: ignoredPaths
+                                ) { [engine] path in
                                     try await engine.scanFile(at: URL(fileURLWithPath: path))
                                 }
                             }
@@ -1421,18 +1515,18 @@ struct ScannerDetailView: View {
                         .truncationMode(.middle)
 
                     if scanner.threatsFound > 0 {
-                        Label("\(scanner.threatsFound) threats found", systemImage: "exclamationmark.triangle.fill")
+                        Label("\(scanner.threatsFound) findings need review", systemImage: "exclamationmark.triangle.fill")
                             .font(.system(size: 12))
                             .foregroundStyle(Color.statusRed)
                     }
                 }
 
-                Button("Cancel") {
+                Button(scanner.isCancelling ? "Cancelling…" : "Cancel") {
                     scanner.cancel()
-                    hasStarted = false
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .disabled(scanner.isCancelling)
             }
             .padding(16)
             .background(
@@ -1527,7 +1621,9 @@ struct ScannerDetailView: View {
     // MARK: - Helpers
 
     private var deepScanButtonLabel: String {
-        if scanner.isScanning {
+        if scanner.isCancelling {
+            return "Cancelling…"
+        } else if scanner.isScanning {
             return "Scanning…"
         } else if scanner.isPaused {
             return "Paused"
@@ -1537,16 +1633,13 @@ struct ScannerDetailView: View {
     }
 
     private func resetDeepScan() {
-        showResults = false
-        hasStarted  = false
-        scanner     = DeepScanner()
-        scanner.engine = engine
+        scanner.resetResults()
     }
 
     private func addIgnored(_ path: String) {
         var paths = ignoredPaths
-        paths.insert(path)
-        ignoredPathsRaw = paths.joined(separator: "\n")
+        paths.insert(DeepScanner.canonicalPath(path))
+        ignoredPathsRaw = paths.sorted().joined(separator: "\n")
     }
 
     // MARK: - Scan File helpers
@@ -1632,6 +1725,13 @@ private struct ScanActionRow: View {
 // MARK: - DeepScanResultsView
 // Change 9: grouped results — Threats, Suspicious, Dev Artifacts (collapsed by default).
 
+private struct DeepScanResultItem: Identifiable {
+    let match: YARAMatch
+    let count: Int
+
+    var id: String { DeepScanner.matchKey(for: match) }
+}
+
 private struct DeepScanResultsView: View {
 
     let scanner:      DeepScanner
@@ -1639,35 +1739,57 @@ private struct DeepScanResultsView: View {
     let onIgnore:     (String) -> Void
     let onNewScan:    () -> Void
 
-    @State private var verdicts:         [String: ThreatVerdict] = [:]
     @State private var showDevArtifacts  = false
-    @State private var showAppData         = false
+    @State private var showAppData       = false
 
     // MARK: - Deduplication
 
-    private var deduplicated: [(match: YARAMatch, count: Int)] {
+    private var deduplicated: [DeepScanResultItem] {
         var counts:  [String: Int]       = [:]
         var first:   [String: YARAMatch] = [:]
         var ordered: [String]            = []
         for match in scanner.results {
-            let key = "\(match.filePath)|\(match.ruleName)"
+            let key = DeepScanner.matchKey(for: match)
             if counts[key] == nil { ordered.append(key); first[key] = match }
             counts[key, default: 0] += 1
         }
         return ordered.compactMap { key in
             guard let match = first[key], let count = counts[key] else { return nil }
-            return (match, count)
+            return DeepScanResultItem(match: match, count: count)
         }
     }
 
-    private var visible: [(match: YARAMatch, count: Int)] {
-        deduplicated.filter { !ignoredPaths.contains($0.match.filePath) }
+    private var visible: [DeepScanResultItem] {
+        deduplicated.filter { item in
+            !DeepScanner.canIgnore(match: item.match)
+                || !ignoredPaths.contains(DeepScanner.canonicalPath(item.match.filePath))
+        }
     }
 
-    private var threats:      [(match: YARAMatch, count: Int)] { visible.filter { verdicts[$0.match.filePath] == .threat } }
-    private var suspicious:   [(match: YARAMatch, count: Int)] { visible.filter { let v = verdicts[$0.match.filePath]; return v == .suspicious || v == nil } }
-    private var devArtifacts: [(match: YARAMatch, count: Int)] { visible.filter { let v = verdicts[$0.match.filePath]; return v == .developmentArtifact || v == .likelySafe } }
-    private var appDataItems: [(match: YARAMatch, count: Int)] { visible.filter { verdicts[$0.match.filePath] == .applicationData } }
+    private var threats: [DeepScanResultItem] {
+        visible.filter { verdict(for: $0) == .threat }
+    }
+
+    private var suspicious: [DeepScanResultItem] {
+        visible.filter { verdict(for: $0) == .suspicious }
+    }
+
+    private var devArtifacts: [DeepScanResultItem] {
+        visible.filter {
+            let value = verdict(for: $0)
+            return value == .developmentArtifact || value == .likelySafe
+        }
+    }
+
+    private var appDataItems: [DeepScanResultItem] {
+        visible.filter { verdict(for: $0) == .applicationData }
+    }
+
+    private var actionableCount: Int { threats.count + suspicious.count }
+
+    private func verdict(for item: DeepScanResultItem) -> ThreatVerdict {
+        scanner.resultVerdicts[item.id] ?? .suspicious
+    }
 
     // MARK: - Body
 
@@ -1687,7 +1809,7 @@ private struct DeepScanResultsView: View {
                 Text("Deep Scan Results")
                     .font(.nickSubtitle)
                     .foregroundStyle(Color.textPrimary)
-                Text("\(scanner.totalFiles.formatted()) files · \(scanner.results.count) detection\(scanner.results.count == 1 ? "" : "s") · \(formatTime(scanner.elapsedTime))")
+                Text("\(scanner.totalFiles.formatted()) files · \(scanner.results.count) raw rule match\(scanner.results.count == 1 ? "" : "es") · \(actionableCount) finding\(actionableCount == 1 ? "" : "s") need review · \(formatTime(scanner.elapsedTime))")
                     .font(.nickCaption)
                     .foregroundStyle(Color.textSecondary)
             }
@@ -1703,7 +1825,7 @@ private struct DeepScanResultsView: View {
                         title:   "Threats",
                         items:   threats,
                         color:   .statusRed,
-                        emptyMessage: "No actionable threats found ✓"
+                        emptyMessage: suspicious.isEmpty ? "No actionable findings" : nil
                     )
 
                     resultSection(
@@ -1729,11 +1851,12 @@ private struct DeepScanResultsView: View {
                         .buttonStyle(.plain)
 
                         if showDevArtifacts {
-                            ForEach(devArtifacts, id: \.match.filePath) { item in
+                            ForEach(devArtifacts) { item in
                                 ResultRow(
                                     match:      item.match,
                                     count:      item.count,
-                                    verdict:    verdicts[item.match.filePath],
+                                    verdict:    verdict(for: item),
+                                    canIgnore:  DeepScanner.canIgnore(match: item.match),
                                     onIgnore:   { onIgnore(item.match.filePath) }
                                 )
                                 Divider().padding(.leading, NickSpacing.lg)
@@ -1758,11 +1881,12 @@ private struct DeepScanResultsView: View {
                             .buttonStyle(.plain)
 
                             if showAppData {
-                                ForEach(appDataItems, id: \.match.filePath) { item in
+                                ForEach(appDataItems) { item in
                                     ResultRow(
                                         match:      item.match,
                                         count:      item.count,
-                                        verdict:    verdicts[item.match.filePath],
+                                        verdict:    verdict(for: item),
+                                        canIgnore:  DeepScanner.canIgnore(match: item.match),
                                         onIgnore:   { onIgnore(item.match.filePath) }
                                     )
                                     Divider().padding(.leading, NickSpacing.lg)
@@ -1786,7 +1910,6 @@ private struct DeepScanResultsView: View {
             .background(Color.backgroundSecondary)
         }
         .navigationTitle("Scan Results")
-        .task { await classifyResults() }
     }
 
     // MARK: - Result section builder
@@ -1794,7 +1917,7 @@ private struct DeepScanResultsView: View {
     @ViewBuilder
     private func resultSection(
         title:        String,
-        items:        [(match: YARAMatch, count: Int)],
+        items:        [DeepScanResultItem],
         color:        Color,
         emptyMessage: String?
     ) -> some View {
@@ -1809,30 +1932,18 @@ private struct DeepScanResultsView: View {
                     .foregroundStyle(Color.textTertiary)
                     .padding(.leading, NickSpacing.lg)
             } else {
-                ForEach(items, id: \.match.filePath) { item in
+                ForEach(items) { item in
                     ResultRow(
                         match:    item.match,
                         count:    item.count,
-                        verdict:  verdicts[item.match.filePath],
+                        verdict:  verdict(for: item),
+                        canIgnore: DeepScanner.canIgnore(match: item.match),
                         onIgnore: { onIgnore(item.match.filePath) }
                     )
                     Divider().padding(.leading, NickSpacing.lg)
                 }
             }
         }
-    }
-
-    // MARK: - Verdict classification
-
-    private func classifyResults() async {
-        var result: [String: ThreatVerdict] = [:]
-        for match in scanner.results {
-            let verdict = await Task.detached(priority: .utility) {
-                DeepScanner.classify(match: match)
-            }.value
-            result[match.filePath] = verdict
-        }
-        verdicts = result
     }
 
     // MARK: - Export (Change 10)
@@ -1861,7 +1972,7 @@ private struct DeepScanResultsView: View {
             let size  = (try? fm.attributesOfItem(atPath: item.match.filePath)[.size] as? Int64) ?? 0
             let sev   = item.match.metadata["severity"] ?? "UNKNOWN"
             let desc  = item.match.metadata["description"] ?? ""
-            let verd  = verdicts[item.match.filePath]?.rawValue ?? ThreatVerdict.suspicious.rawValue
+            let verd  = verdict(for: item).rawValue
             return ExportResult(rule_name: item.match.ruleName, severity: sev, verdict: verd,
                                 file_path: item.match.filePath, file_size: size, description: desc)
         }
@@ -1902,6 +2013,7 @@ private struct ResultRow: View {
     let match:   YARAMatch
     let count:   Int
     let verdict: ThreatVerdict?
+    let canIgnore: Bool
     let onIgnore: () -> Void
 
     var body: some View {
@@ -1950,10 +2062,12 @@ private struct ResultRow: View {
                     .font(.nickCaption)
                     .foregroundStyle(Color.statusBlue)
                     .buttonStyle(.plain)
-                    Button("Ignore") { onIgnore() }
-                        .font(.nickCaption)
-                        .foregroundStyle(Color.textTertiary)
-                        .buttonStyle(.plain)
+                    if canIgnore {
+                        Button("Ignore future matches at this path") { onIgnore() }
+                            .font(.nickCaption)
+                            .foregroundStyle(Color.textTertiary)
+                            .buttonStyle(.plain)
+                    }
                 }
             }
         }

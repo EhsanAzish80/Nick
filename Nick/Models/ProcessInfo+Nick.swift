@@ -44,7 +44,7 @@ enum SigningStatus: Sendable, Equatable {
         case .adHoc:          return "Ad-Hoc Signed"
         case .unsigned:       return "Unsigned"
         case .invalid:        return "Invalid Signature"
-        case .unknown:        return "Unknown"
+        case .unknown:        return "Unavailable"
         case .pending:        return "Checking…"
         }
     }

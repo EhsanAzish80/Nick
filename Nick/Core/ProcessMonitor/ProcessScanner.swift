@@ -22,6 +22,16 @@ enum ProcessScannerError: LocalizedError {
     }
 }
 
+// MARK: - ProcessRiskAssessment
+
+/// User-facing assessment derived from the same signing and path evidence used
+/// by process signal generation. Keeping this in the scanner prevents the table
+/// from presenting a suspicious process as "Clean" while the monitor emits it.
+struct ProcessRiskAssessment: Sendable, Equatable {
+    let label: String
+    let severity: SignalSeverity
+}
+
 // MARK: - ProcessScanner
 
 /// Enumerates all running processes using the `sysctl` KERN_PROC_ALL MIB.
@@ -68,8 +78,9 @@ struct ProcessScanner {
             }
         }
 
-        Self.logger.debug("Process scan: \(result.count) processes enumerated")
-        return result
+        let resolved = Self.resolvingParentNames(in: result)
+        Self.logger.debug("Process scan: \(resolved.count) processes enumerated")
+        return resolved
     }
 
     /// Returns a process snapshot immediately with all signing statuses set to `.pending`.
@@ -91,8 +102,35 @@ struct ProcessScanner {
             }
         }
 
-        Self.logger.debug("Fast process scan: \(result.count) processes (signing deferred)")
-        return result
+        let resolved = Self.resolvingParentNames(in: result)
+        Self.logger.debug("Fast process scan: \(resolved.count) processes (signing deferred)")
+        return resolved
+    }
+
+    /// Fills the human-readable parent name from the same process snapshot.
+    /// Keeping this deterministic avoids an additional kernel lookup per row and
+    /// gives the process table useful ancestry evidence immediately.
+    static func resolvingParentNames(in processes: [NickProcessInfo]) -> [NickProcessInfo] {
+        let namesByPID = Dictionary(
+            processes.map { ($0.pid, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        return processes.map { process in
+            NickProcessInfo(
+                pid: process.pid,
+                path: process.path,
+                name: process.name,
+                parentPID: process.parentPID,
+                parentName: namesByPID[process.parentPID],
+                signingStatus: process.signingStatus,
+                metadata: ProcessMetadata(
+                    user: process.user,
+                    startTime: process.startTime,
+                    arguments: process.arguments
+                )
+            )
+        }
     }
 
     // MARK: - Private Helpers
@@ -468,15 +506,43 @@ struct ProcessScanner {
         }
 
         if !isSystemPath(proc.path) {
+            let hasInvalidSignature = proc.signingStatus == .invalid
             return ThreatSignal(
                 source: .process,
                 severity: .medium,
-                title: "Unsigned binary",
-                description: "Process '\(proc.name)' (PID \(proc.pid)) is unsigned and running from \(proc.path).",
-                context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "unsigned", "phase": "backfill"])
+                title: hasInvalidSignature ? "Invalid code signature" : "Unsigned binary",
+                description: hasInvalidSignature
+                    ? "Process '\(proc.name)' (PID \(proc.pid)) has an invalid code signature and is running from \(proc.path)."
+                    : "Process '\(proc.name)' (PID \(proc.pid)) is unsigned and running from \(proc.path).",
+                context: ThreatSignalContext(
+                    processInfo: proc,
+                    metadata: [
+                        "reason": hasInvalidSignature ? "invalid_signature" : "unsigned",
+                        "phase": "backfill"
+                    ]
+                )
             )
         }
 
+        return nil
+    }
+
+    /// Returns the concise assessment shown in the Processes table. `nil` means
+    /// that resolved signing/path evidence does not itself require attention.
+    func riskAssessment(for proc: NickProcessInfo) -> ProcessRiskAssessment? {
+        guard !proc.path.isEmpty else { return nil }
+
+        if proc.signingStatus == .invalid {
+            return ProcessRiskAssessment(label: "Invalid", severity: .high)
+        }
+
+        guard proc.signingStatus == .unsigned else { return nil }
+        if isTemporaryPath(proc.path) {
+            return ProcessRiskAssessment(label: "Temp Path", severity: .medium)
+        }
+        if !isSystemPath(proc.path) {
+            return ProcessRiskAssessment(label: "Unsigned", severity: .medium)
+        }
         return nil
     }
 

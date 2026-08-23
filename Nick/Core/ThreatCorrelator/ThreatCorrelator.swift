@@ -291,7 +291,7 @@ actor ThreatCorrelator {
         if alert.severity == .critical ||
             alert.contributingSignals.contains(where: {
                 $0.source == .persistence ||
-                    $0.source == .yara ||
+                    ($0.source == .yara && $0.metadata["suppressible"] != "true") ||
                     $0.source == .systemAudit ||
                     nonSuppressibleReasons.contains($0.metadata["reason"] ?? "")
             }) {
@@ -325,7 +325,9 @@ actor ThreatCorrelator {
                 }
                 if identities.contains(needle) { return true }
             case .path:
-                let paths = alert.contributingSignals.compactMap { $0.fileInfo?.path.lowercased() }
+                let paths = alert.contributingSignals.compactMap { signal in
+                    (signal.fileInfo?.path ?? signal.metadata["path"])?.lowercased()
+                }
                 if paths.contains(where: { $0.hasPrefix(needle) || $0.contains(needle) }) { return true }
             }
         }

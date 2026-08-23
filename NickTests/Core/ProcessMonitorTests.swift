@@ -122,6 +122,79 @@ final class ProcessMonitorTests: XCTestCase {
         XCTAssertEqual(signals.count, 2)
     }
 
+    // MARK: - Process table evidence
+
+    func test_resolvingParentNames_populatesParentAndPreservesMetadata() throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let parent = makeProcess(pid: 700, name: "Terminal", path: "/System/Terminal", signing: .signed(teamID: "APPLE"))
+        let child = NickProcessInfo(
+            pid: 701,
+            path: "/bin/zsh",
+            name: "zsh",
+            parentPID: 700,
+            parentName: nil,
+            signingStatus: .pending,
+            metadata: ProcessMetadata(user: "tester", startTime: start, arguments: ["-l"])
+        )
+
+        let resolved = ProcessScanner.resolvingParentNames(in: [parent, child])
+        let updated = try XCTUnwrap(resolved.first { $0.pid == child.pid })
+        XCTAssertEqual(updated.parentName, "Terminal")
+        XCTAssertEqual(updated.user, "tester")
+        XCTAssertEqual(updated.startTime, start)
+        XCTAssertEqual(updated.arguments, ["-l"])
+    }
+
+    func test_matchingIndex_acceptsSameSnapshotAndRejectsReusedPID() {
+        let originalStart = Date(timeIntervalSince1970: 100)
+        let original = NickProcessInfo(
+            pid: 800,
+            path: "/Applications/Example.app/Contents/MacOS/Example",
+            name: "Example",
+            parentPID: 1,
+            parentName: "launchd",
+            signingStatus: .pending,
+            metadata: ProcessMetadata(startTime: originalStart)
+        )
+        let matching = NickProcessInfo(
+            pid: original.pid,
+            path: original.path,
+            name: original.name,
+            parentPID: original.parentPID,
+            parentName: original.parentName,
+            signingStatus: .signed(teamID: "TEAM"),
+            metadata: ProcessMetadata(startTime: originalStart)
+        )
+        let reusedPID = NickProcessInfo(
+            pid: original.pid,
+            path: original.path,
+            name: original.name,
+            parentPID: original.parentPID,
+            parentName: original.parentName,
+            signingStatus: .signed(teamID: "TEAM"),
+            metadata: ProcessMetadata(startTime: Date(timeIntervalSince1970: 200))
+        )
+
+        XCTAssertEqual(ProcessMonitor.matchingIndex(for: matching, in: [original]), 0)
+        XCTAssertNil(ProcessMonitor.matchingIndex(for: reusedPID, in: [original]))
+    }
+
+    func test_riskAssessment_matchesSigningAndPathEvidence() {
+        XCTAssertEqual(
+            scanner.riskAssessment(for: makeProcess(pid: 900, name: "bad", path: "/Applications/Bad.app/bad", signing: .invalid)),
+            ProcessRiskAssessment(label: "Invalid", severity: .high)
+        )
+        XCTAssertEqual(
+            scanner.riskAssessment(for: makeProcess(pid: 901, name: "build", path: "/private/tmp/build", signing: .unsigned)),
+            ProcessRiskAssessment(label: "Temp Path", severity: .medium)
+        )
+        XCTAssertEqual(
+            scanner.riskAssessment(for: makeProcess(pid: 902, name: "tool", path: "/Users/test/tool", signing: .unsigned)),
+            ProcessRiskAssessment(label: "Unsigned", severity: .medium)
+        )
+        XCTAssertNil(scanner.riskAssessment(for: makeProcess(pid: 903, name: "Finder", path: "/System/Finder", signing: .signed(teamID: "APPLE"))))
+    }
+
     // MARK: - Helpers
 
     private func makeProcess(

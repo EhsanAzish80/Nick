@@ -109,10 +109,10 @@ final class SignatureValidator: @unchecked Sendable {
 
     /// Resolves `.pending` signing statuses for a list of processes asynchronously.
     ///
-    /// Iterates `processes`, skipping any that already have a non-`.pending` status
-    /// or an empty path. For each `.pending` entry it calls `evaluate(binaryPath:)`
-    /// (which may block the calling thread) and invokes `onUpdate` on `@MainActor`
-    /// with the updated process so callers can refresh their published state.
+    /// Iterates `processes`, skipping entries that already have a resolved status.
+    /// A missing executable path settles to `.unknown`; otherwise each `.pending`
+    /// entry is evaluated and delivered through `onUpdate` on `@MainActor` so
+    /// callers can refresh their published state.
     ///
     /// Designed to run inside a `Task.detached(priority: .background)`. Cancellation
     /// is checked between each evaluation so the caller can cancel the task promptly.
@@ -126,18 +126,22 @@ final class SignatureValidator: @unchecked Sendable {
     ) async {
         for proc in processes {
             guard !Task.isCancelled else { return }
-            guard proc.signingStatus == .pending, !proc.path.isEmpty else { continue }
+            guard proc.signingStatus == .pending else { continue }
 
             // Certificate-chain evaluation is intentionally paced. A cold launch
             // may contain hundreds of third-party helper processes; validating
             // them back-to-back can monopolize a CPU core and make the entire Mac
             // feel stalled. Sealed-system paths use the cheap policy above and do
             // not need the delay.
-            if !Self.isSealedSystemBinaryPath(proc.path) {
+            if !proc.path.isEmpty, !Self.isSealedSystemBinaryPath(proc.path) {
                 try? await Task.sleep(nanoseconds: 75_000_000)
                 guard !Task.isCancelled else { return }
             }
-            let resolved = evaluate(binaryPath: proc.path)
+            // An inaccessible executable path is a genuine unavailable result,
+            // not an indefinitely pending validation.
+            let resolved: SigningStatus = proc.path.isEmpty
+                ? .unknown
+                : evaluate(binaryPath: proc.path)
             let updated = NickProcessInfo(
                 pid: proc.pid,
                 path: proc.path,
@@ -145,7 +149,11 @@ final class SignatureValidator: @unchecked Sendable {
                 parentPID: proc.parentPID,
                 parentName: proc.parentName,
                 signingStatus: resolved,
-                metadata: ProcessMetadata(user: proc.user, startTime: proc.startTime)
+                metadata: ProcessMetadata(
+                    user: proc.user,
+                    startTime: proc.startTime,
+                    arguments: proc.arguments
+                )
             )
             await onUpdate(updated)
         }

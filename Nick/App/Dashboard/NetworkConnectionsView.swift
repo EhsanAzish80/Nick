@@ -247,6 +247,8 @@ private struct NetworkActivityRow: View {
     let event: NetworkBlockEvent
     @Environment(NetworkProtectionManager.self) private var networkProtection
 
+    private var context: NetworkEventContext { NetworkEventContext(event: event) }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: event.decision == .blocked ? "hand.raised.fill" : "eye.fill")
@@ -268,19 +270,38 @@ private struct NetworkActivityRow: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("\(event.decision.userTitle) · \(event.reasonTitle)")
+                Text("\(event.decision.userTitle) · \(context.destinationLabel) · \(event.reasonTitle)")
                     .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Text(context.explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Label("What to do", systemImage: "arrow.right.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(event.decision == .blocked ? .red : .orange)
+
+                Text(context.guidance)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
 
                 HStack {
                     if let app = event.appIdentifier {
-                        Text(app)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(context.appName)
+                                .font(.caption.weight(.medium))
+                            Text(app)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
                     }
                     Spacer()
-                    NetworkAllowanceMenu(label: "Allow Website") { duration in
+                    NetworkAllowanceMenu(
+                        label: context.destinationActionLabel,
+                        scopeDescription: "Only \(event.host)"
+                    ) { duration in
                         Task {
                             if let duration {
                                 _ = await networkProtection.allowDomain(event.host, for: duration)
@@ -290,7 +311,10 @@ private struct NetworkActivityRow: View {
                         }
                     }
                     if let app = event.appIdentifier {
-                        NetworkAllowanceMenu(label: "Allow App") { duration in
+                        NetworkAllowanceMenu(
+                            label: context.appActionLabel,
+                            scopeDescription: "All destinations used by \(context.appName)"
+                        ) { duration in
                             Task {
                                 if let duration {
                                     _ = await networkProtection.allowApp(app, for: duration)
@@ -313,16 +337,20 @@ private struct NetworkActivityRow: View {
 
 private struct NetworkAllowanceMenu: View {
     let label: String
+    let scopeDescription: String
     let action: (TimeInterval?) -> Void
 
     var body: some View {
         Menu(label) {
-            Button("For 1 Hour") { action(60 * 60) }
-            Button("For 24 Hours") { action(24 * 60 * 60) }
+            Text(scopeDescription)
             Divider()
-            Button("Always") { action(nil) }
+            Button("Allow for 1 Hour") { action(60 * 60) }
+            Button("Allow for 24 Hours") { action(24 * 60 * 60) }
+            Divider()
+            Button("Always Allow") { action(nil) }
         }
         .controlSize(.small)
+        .help(scopeDescription)
     }
 }
 

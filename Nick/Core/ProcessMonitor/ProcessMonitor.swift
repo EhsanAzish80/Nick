@@ -30,6 +30,11 @@ final class ProcessMonitor: MonitorProtocol {
     /// then updated in-place as `SignatureValidator.backfill` resolves each entry.
     private(set) var processes: [NickProcessInfo] = []
 
+    /// Delivers each background signing result to the engine that owns the UI
+    /// snapshot. Without this callback the monitor's private array becomes correct
+    /// while the Processes table remains stuck on its initial pending values.
+    var processDidUpdate: (@MainActor (NickProcessInfo) -> Void)?
+
     /// The trusted process list used to suppress false positive signals.
     ///
     /// Set this before calling `start()` to apply the current user configuration.
@@ -92,14 +97,30 @@ final class ProcessMonitor: MonitorProtocol {
 
     @MainActor
     private func handleBackfilledProcess(_ updated: NickProcessInfo) {
-        guard let idx = processes.firstIndex(where: { $0.pid == updated.pid }) else { return }
+        guard let idx = Self.matchingIndex(for: updated, in: processes) else { return }
         processes[idx] = updated
+        processDidUpdate?(updated)
 
         // Emit an additional signal if the resolved status is suspicious
         // and was not already flagged in the initial scan.
         if updated.signingStatus.isSuspicious {
             let signal = ProcessScanner().signalFromResolved(updated)
             if let signal { pendingSignals.append(signal) }
+        }
+    }
+
+    /// Matches a signing update to the exact process snapshot, protecting against
+    /// PID reuse after a process exits and another process receives the same PID.
+    nonisolated static func matchingIndex(
+        for updated: NickProcessInfo,
+        in processes: [NickProcessInfo]
+    ) -> Array<NickProcessInfo>.Index? {
+        processes.firstIndex { candidate in
+            guard candidate.pid == updated.pid, candidate.path == updated.path else { return false }
+            switch (candidate.startTime, updated.startTime) {
+            case let (.some(lhs), .some(rhs)): return lhs == rhs
+            default: return true
+            }
         }
     }
 

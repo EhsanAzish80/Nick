@@ -8,7 +8,33 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
-No user-facing changes have been released since 4.3.
+No user-facing changes have been released since 4.4.
+
+## [4.4] - 2026-08-23
+
+### Added
+
+- Network Activity now explains the responsible app, destination type, port context, observation reason, and the scope of each allow action.
+- Overview identifies the specific protection or scan result that needs attention and provides a direct route to review it.
+
+### Changed
+
+- Deep Scan now separates concrete malware signatures from contextual behavior matches, uses rule metadata for severity, and presents total matches separately from findings that need review.
+- Process signing and threat columns resolve live evidence instead of leaving every process as unknown; pending and unavailable evidence are labeled explicitly.
+- Alert context and remediation wording now distinguish observations, historical evidence, missing files, and actionable threats.
+
+### Fixed
+
+- Deep Scan continues when the user changes sections, prevents overlapping starts, cooperates with cancellation, and avoids mutating results after cancellation.
+- Reduced false positives from application caches, developer repositories, Homebrew wrappers, canonical path aliases, and broad behavior rules without suppressing concrete or critical signatures.
+- Canonical rule/path deduplication prevents duplicate findings for aliases such as `/tmp` and `/private/tmp`.
+- Ignored paths and trusted contexts can suppress only non-critical behavioral findings; malware signatures and critical evidence remain visible.
+
+### Verification
+
+- 406 automated tests executed: 402 passed, 4 platform-dependent tests were skipped, and 0 failed.
+- The app, Endpoint Security extension, Network Filter extension, and uninstaller all report version 4.4, build 422.
+- The signed package and disk image are Developer ID signed, notarized, stapled, and accepted by Gatekeeper.
 
 ## [4.3] - 2026-08-23
 
@@ -186,7 +212,8 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.3.0...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.4.0...HEAD
+[4.4]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.4.0
 [4.3]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.3.0
 [4.2]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.2.0
 [4.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.1.0

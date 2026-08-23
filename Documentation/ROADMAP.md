@@ -43,7 +43,24 @@ The accepted product, UI, schema, privacy, testing, and implementation record
 is maintained in the
 [Nick 4.1 Runtime Compare roadmap](NICK_4_1_RUNTIME_COMPARE_ROADMAP.md).
 
-## Version 4.2: trusted rule updates
+## Versions 4.2-4.4: detection accuracy and operational clarity
+
+Delivered:
+
+- Stronger contextual evidence for developer tools, shell activity, signed
+  updaters, encrypted application caches, and application-managed data.
+- Safer quarantine, restore, and remediation behavior for missing or changed
+  evidence.
+- Consistent active-alert badges and green, orange, and red menu bar state.
+- Persistent Deep Scan with canonical deduplication and strict boundaries
+  between contextual behavior matches and concrete malware signatures.
+- Live process signing and threat assessment instead of all-unknown columns.
+- Network Activity explanations for app identity, destination type, ports,
+  observation reason, and allow-action scope.
+- Actionable Overview attention summaries that identify the root cause and
+  route users to the relevant evidence.
+
+## Version 4.5: trusted rule updates
 
 - Publish Nick-maintained, signed YARA and network rule bundles.
 - Add staged rollout, expiry, rollback, and last-known-good recovery.

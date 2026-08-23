@@ -261,6 +261,124 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+// MARK: - User-facing network evidence
+
+/// Deterministic, offline context for a recorded network decision.
+///
+/// This deliberately avoids reputation claims. It explains only evidence Nick
+/// already has: the destination class, the responsible signing identifier,
+/// the port, the recorded reason, and whether the connection was interrupted.
+struct NetworkEventContext: Equatable, Sendable {
+    enum DestinationKind: Equatable, Sendable {
+        case website
+        case localDevice
+        case localNetworkAddress
+        case internetAddress
+    }
+
+    let appName: String
+    let destinationKind: DestinationKind
+    let destinationLabel: String
+    let portPurpose: String?
+    let explanation: String
+    let guidance: String
+    let destinationActionLabel: String
+    let appActionLabel: String
+
+    init(event: NetworkBlockEvent) {
+        appName = Self.displayName(for: event.appIdentifier)
+        destinationKind = Self.destinationKind(for: event.host)
+        destinationLabel = Self.destinationLabel(for: destinationKind)
+        portPurpose = Self.portPurpose(for: event.port)
+        destinationActionLabel = destinationKind == .website
+            ? "Allow This Website"
+            : "Allow This Destination"
+        appActionLabel = "Allow This App"
+
+        let purpose = portPurpose.map { " It used \($0)." } ?? ""
+        switch event.decision {
+        case .observed:
+            explanation = "\(appName) connected to this \(destinationLabel.lowercased()). Nick recorded it because \(event.reasonTitle.lowercased()). No connection was blocked.\(purpose)"
+            guidance = "If you recognize the app and expected this activity, no action is required. Allow this destination only to stop warnings for this address; allow this app only if you trust all of its network activity."
+        case .blocked:
+            explanation = "Nick blocked \(appName) from connecting to this \(destinationLabel.lowercased()) because \(event.reasonTitle.lowercased()).\(purpose)"
+            guidance = "Review the app and destination first. Allow this destination for the narrowest exception, or allow the app only if you trust all of its network activity."
+        }
+    }
+
+    private static func displayName(for identifier: String?) -> String {
+        guard let identifier, !identifier.isEmpty else { return "An unidentified process" }
+        let knownNames: [String: String] = [
+            "com.apple.rapportd": "Apple Continuity",
+            "com.apple.syncservices.applemobiledevicehelper": "Apple device sync",
+            "com.apple.controlcenter": "Control Center",
+            "com.apple.coredevice.remotepairingd": "Apple device pairing",
+            "com.apple.usbmuxd": "Apple USB device service",
+            "com.apple.remoted": "Apple remote services",
+            "com.apple.ampdevicediscoveryagent": "Apple device discovery",
+            "com.apple.mdnsresponder": "macOS network discovery",
+            "com.spotify.client.helper": "Spotify",
+            "com.spotify.client": "Spotify",
+            "com.openai.codex.helper": "Codex",
+        ]
+        if let name = knownNames[identifier.lowercased()] { return name }
+
+        let component = identifier.split(separator: ".").last.map(String.init) ?? identifier
+        let spaced = component
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+        return spaced.isEmpty ? identifier : spaced
+    }
+
+    private static func destinationKind(for rawHost: String) -> DestinationKind {
+        let host = rawHost.lowercased().split(separator: "%", maxSplits: 1)
+            .first.map(String.init) ?? rawHost.lowercased()
+        if host.contains(":") {
+            return host.hasPrefix("fe8") || host.hasPrefix("fe9")
+                || host.hasPrefix("fea") || host.hasPrefix("feb")
+                ? .localDevice
+                : (host.hasPrefix("fc") || host.hasPrefix("fd")
+                    ? .localNetworkAddress
+                    : .internetAddress)
+        }
+
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        if octets.count == 4 {
+            if octets[0] == 10
+                || (octets[0] == 172 && (16...31).contains(octets[1]))
+                || (octets[0] == 192 && octets[1] == 168)
+                || octets[0] == 127
+                || octets[3] == 255 {
+                return .localNetworkAddress
+            }
+            return .internetAddress
+        }
+        return .website
+    }
+
+    private static func destinationLabel(for kind: DestinationKind) -> String {
+        switch kind {
+        case .website: return "Website"
+        case .localDevice: return "Nearby device"
+        case .localNetworkAddress: return "Local network address"
+        case .internetAddress: return "Internet address"
+        }
+    }
+
+    private static func portPurpose(for port: Int?) -> String? {
+        switch port {
+        case 80: return "port 80, the standard web port"
+        case 443: return "port 443, the standard encrypted web port"
+        case 8080, 8443: return "an alternate port commonly used by web services"
+        case 5353: return "port 5353, commonly used for local device discovery (mDNS)"
+        case 62078: return "port 62078, commonly used for Apple device pairing and sync"
+        case 8009: return "port 8009, commonly used for local media or casting control"
+        case .some(let port): return "port \(port), which is outside common web ports"
+        case nil: return nil
+        }
+    }
+}
+
 enum NetworkProtectionSharedStore {
     static let systemSupportDirectory = URL(
         fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick",

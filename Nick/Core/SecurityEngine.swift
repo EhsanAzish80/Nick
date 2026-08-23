@@ -120,6 +120,10 @@ final class SecurityEngine {
     /// Number of files scanned in the most recent YARA deep scan.
     var lastDeepScanFileCount: Int = 0
 
+    /// App-lifetime deep scanner. Keeping this on the engine allows a scan and its
+    /// progress/results to survive sidebar navigation and Scan view reconstruction.
+    private(set) var deepScanner = DeepScanner()
+
     /// The trusted process list used to suppress false positive signals.
     ///
     /// Changing this takes effect on the next `runFullScan()` call.
@@ -218,6 +222,10 @@ final class SecurityEngine {
     // MARK: - Init
 
     init() {
+        deepScanner.engine = self
+        procMon.processDidUpdate = { [weak self] updated in
+            self?.applyResolvedProcess(updated)
+        }
         let ud = UserDefaults.standard
         if let stored = ud.object(forKey: "nickMonitoringSince") as? Date {
             monitoringSince = stored
@@ -262,6 +270,13 @@ final class SecurityEngine {
 
         // Phase 7: initialise performance monitor
         performanceMonitor = PerformanceMonitor()
+    }
+
+    /// Mirrors asynchronous signing updates from `ProcessMonitor` into the
+    /// published snapshot used by the Processes table.
+    private func applyResolvedProcess(_ updated: NickProcessInfo) {
+        guard let index = ProcessMonitor.matchingIndex(for: updated, in: processes) else { return }
+        processes[index] = updated
     }
 
     // MARK: - Public API

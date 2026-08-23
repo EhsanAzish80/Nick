@@ -264,6 +264,60 @@ final class NetworkProtectionPolicyTests: XCTestCase {
         let normalized = NetworkProtectionConfiguration.normalizedDomain("bücher.de")
         XCTAssertEqual(normalized, "xn--bcher-kva.de")
     }
+
+    func test_networkEventContext_explainsObservedAppleDeviceTraffic() {
+        let event = NetworkBlockEvent(
+            host: "fe80::14ab:8892:d87b:7e8d%anrlo",
+            appIdentifier: "com.apple.SyncServices.AppleMobileDeviceHelper",
+            decision: .observed,
+            reason: NetworkObservationReason.unusualPort.rawValue,
+            reasonTitle: NetworkObservationReason.unusualPort.userTitle,
+            port: 62078
+        )
+
+        let context = NetworkEventContext(event: event)
+        XCTAssertEqual(context.appName, "Apple device sync")
+        XCTAssertEqual(context.destinationKind, .localDevice)
+        XCTAssertEqual(context.destinationLabel, "Nearby device")
+        XCTAssertEqual(context.destinationActionLabel, "Allow This Destination")
+        XCTAssertTrue(context.explanation.contains("No connection was blocked"))
+        XCTAssertTrue(context.explanation.contains("Apple device pairing and sync"))
+        XCTAssertTrue(context.guidance.contains("no action is required"))
+    }
+
+    func test_networkEventContext_distinguishesWebsiteAndNarrowAllowance() {
+        let event = NetworkBlockEvent(
+            host: "login.example.com",
+            appIdentifier: "com.example.browser",
+            decision: .blocked,
+            reason: NetworkBlockReason.blocklist.rawValue,
+            reasonTitle: NetworkBlockReason.blocklist.userTitle,
+            port: 443
+        )
+
+        let context = NetworkEventContext(event: event)
+        XCTAssertEqual(context.destinationKind, .website)
+        XCTAssertEqual(context.destinationActionLabel, "Allow This Website")
+        XCTAssertTrue(context.explanation.contains("Nick blocked"))
+        XCTAssertTrue(context.explanation.contains("standard encrypted web port"))
+        XCTAssertTrue(context.guidance.contains("narrowest exception"))
+    }
+
+    func test_networkEventContext_classifiesPrivateIPv4AsLocalAddress() {
+        let event = NetworkBlockEvent(
+            host: "192.168.50.210",
+            appIdentifier: "com.openai.codex.helper",
+            decision: .observed,
+            reason: NetworkObservationReason.unusualPort.rawValue,
+            reasonTitle: NetworkObservationReason.unusualPort.userTitle,
+            port: 5353
+        )
+
+        let context = NetworkEventContext(event: event)
+        XCTAssertEqual(context.appName, "Codex")
+        XCTAssertEqual(context.destinationKind, .localNetworkAddress)
+        XCTAssertTrue(context.explanation.contains("local device discovery"))
+    }
 }
 
 final class ScamGuardianTests: XCTestCase {

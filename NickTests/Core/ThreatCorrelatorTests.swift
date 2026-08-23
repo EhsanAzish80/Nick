@@ -241,6 +241,42 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertFalse(result.isEmpty)
     }
 
+    func test_pathApprovalSuppressesOnlyMarkedBehavioralYARA() async {
+        let rule = passthroughRule()
+        let localCorrelator = ThreatCorrelator(rules: [rule])
+        let path = "/private/tmp/known-wrapper"
+        let signal = makeSignal(
+            source: .yara,
+            severity: .medium,
+            metadata: ["path": path, "rule": "macos_keychain_access", "suppressible": "true"]
+        )
+        await localCorrelator.updateSuppressionRules([
+            SuppressionRule(type: .path, value: path, expiresAt: Date().addingTimeInterval(3_600))
+        ])
+
+        await localCorrelator.ingest([signal])
+        let suppressedAlerts = await localCorrelator.correlateNew()
+        XCTAssertTrue(suppressedAlerts.isEmpty)
+    }
+
+    func test_pathApprovalCannotSuppressConcreteYARA() async {
+        let rule = passthroughRule()
+        let localCorrelator = ThreatCorrelator(rules: [rule])
+        let path = "/private/tmp/known-wrapper"
+        let signal = makeSignal(
+            source: .yara,
+            severity: .high,
+            metadata: ["path": path, "rule": "osx_known_malware_family", "suppressible": "false"]
+        )
+        await localCorrelator.updateSuppressionRules([
+            SuppressionRule(type: .path, value: path, expiresAt: Date().addingTimeInterval(3_600))
+        ])
+
+        await localCorrelator.ingest([signal])
+        let protectedAlerts = await localCorrelator.correlateNew()
+        XCTAssertFalse(protectedAlerts.isEmpty)
+    }
+
     // MARK: - ThreatAlert
 
     func test_threatAlert_scoreIsClamped_belowZero() {
