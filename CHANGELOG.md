@@ -8,7 +8,27 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
-No user-facing changes have been released since 4.2.
+No user-facing changes have been released since 4.3.
+
+## [4.3] - 2026-08-23
+
+### Changed
+
+- The menu bar shield is rendered as an explicit green, orange, or red image so macOS cannot replace its attention state with a black template icon.
+- Active-alert badges and menu bar state now use the same actionable, user-facing evidence as the Alerts view.
+- Sparkle performs daily automatic update checks while leaving installation under user control.
+
+### Fixed
+
+- Resolved or reclassified alerts no longer leave a stale badge when the Active list is empty.
+- Alerts for disappeared files and ended processes remain historical evidence without being counted as current threats.
+- Check for Updates now invokes Sparkle directly and records update discovery and completion results for diagnosis.
+
+### Verification
+
+- 373 automated tests executed: 369 passed, 4 platform-dependent tests were skipped, and 0 failed.
+- The app, Endpoint Security extension, Network Filter extension, and uninstaller all report version 4.3, build 421.
+- The signed package and disk image are notarized, stapled, and accepted by Gatekeeper.
 
 ## [4.2] - 2026-08-23
 
@@ -166,7 +186,8 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.2.0...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.3.0...HEAD
+[4.3]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.3.0
 [4.2]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.2.0
 [4.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.1.0
 [4.0.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.0.1

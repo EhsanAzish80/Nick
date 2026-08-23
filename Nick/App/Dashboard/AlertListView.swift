@@ -26,13 +26,9 @@ struct AlertListView: View {
 
     private var visibleAlerts: [ThreatAlert] {
         engine.alerts.filter { alert in
-            switch alert.evidenceState() {
-            case .fileNoLongerExists, .processEnded:
-                return false
-            case .fileAvailable, .processActive, .historical:
-                return showTrustedAlerts
-                    || UserFacingAlertBuilder.shared.build(from: alert).severity != .safe
-            }
+            alert.hasActionableEvidence
+                && (showTrustedAlerts
+                    || UserFacingAlertBuilder.shared.build(from: alert).severity != .safe)
         }
     }
 

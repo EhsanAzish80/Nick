@@ -30,6 +30,12 @@
 	<string>https://3nsofts.com/nick/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>E6zQr5EZrhFKhIni4yUt6dq8+bVJhiszfBcdd/6IcNo=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
 	<key>NSCameraUsageDescription</key>
 	<string>Nick monitors camera access to detect unauthorized activation by malicious software.</string>
 	<key>NSHumanReadableCopyright</key>

@@ -28,6 +28,20 @@ enum MenuBarAttentionState: Int, Comparable, Sendable {
     }
 }
 
+extension ThreatAlert {
+    /// Whether this alert still has evidence a user can act on. Keeping this in
+    /// Core gives the sidebar badge, Alerts view, and menu-bar state one source
+    /// of truth instead of letting persisted, expired evidence disagree.
+    var hasActionableEvidence: Bool {
+        switch evidenceState() {
+        case .fileNoLongerExists, .processEnded:
+            return false
+        case .fileAvailable, .processActive, .historical:
+            return true
+        }
+    }
+}
+
 // MARK: - SecurityEngine
 
 /// Central coordinator that owns all detection monitors and the threat correlator.
@@ -157,7 +171,15 @@ final class SecurityEngine {
     /// Highest attention level among alerts that are still actionable. Historical
     /// records whose file/process has gone away do not keep the menu-bar icon red.
     var menuBarAttentionState: MenuBarAttentionState {
-        MenuBarAttentionState.evaluate(alerts)
+        MenuBarAttentionState.evaluate(activeActionableAlerts)
+    }
+
+    /// Consumer-facing alerts that still have actionable evidence.
+    var activeActionableAlerts: [ThreatAlert] {
+        alerts.filter { alert in
+            alert.hasActionableEvidence
+                && UserFacingAlertBuilder.shared.build(from: alert).severity != .safe
+        }
     }
 
     // MARK: - Private

@@ -203,7 +203,7 @@ For implementation details and trust boundaries, see
 
 ### Published release
 
-The current stable release is **Nick 4.2 (build 420)** for macOS 26 and later.
+The current stable release is **Nick 4.3 (build 421)** for macOS 26 and later.
 
 1. Download the notarized Nick disk image from
    [the latest GitHub release](https://github.com/EhsanAzish80/Nick/releases/latest).
@@ -280,8 +280,8 @@ The production release pipeline is documented in
 - The appcast enclosure must reference the exact, unmodified signed package.
 - Manual website and GitHub downloads may use the disk image.
 
-Version 4.2 release notes are in
-[Packaging/Release/v4.2.0/RELEASE_NOTES.md](Packaging/Release/v4.2.0/RELEASE_NOTES.md).
+Version 4.3 release notes are in
+[Packaging/Release/v4.3.0/RELEASE_NOTES.md](Packaging/Release/v4.3.0/RELEASE_NOTES.md).
 
 ## Quality gates
 
@@ -329,7 +329,7 @@ the extension remains installed.
 
 ## Project status
 
-Nick 4.2 is the current production release. Every future release remains gated
+Nick 4.3 is the current production release. Every future release remains gated
 on clean-Mac validation of Endpoint Security, Email Guard, Scam Guardian,
 updates, performance, quarantine, and uninstall behavior.
 

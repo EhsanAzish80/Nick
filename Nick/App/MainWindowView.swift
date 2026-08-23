@@ -47,7 +47,7 @@ struct MainWindowView: View {
 
     // Count only alerts that the consumer-facing assessment considers actionable.
     private var activeAlertCount: Int {
-        engine.userFacingAlerts.filter { $0.severity != .safe }.count
+        engine.activeActionableAlerts.count
     }
 
     var body: some View {

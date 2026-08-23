@@ -38,6 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: MonitorCoordinator?
     private var endpointExtensionManager: ExtensionManager?
     private var updaterController: SPUStandardUpdaterController?
+    private let updateLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "Updates"
+    )
     private var uninstallPreparationInProgress = false
     private let uninstallLogger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -114,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
-            updaterDelegate: nil,
+            updaterDelegate: self,
             userDriverDelegate: nil
         )
         setupStatusItem()
@@ -385,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         guard let button = statusItem?.button else { return }
-        button.image = NSImage(systemSymbolName: "shield.fill", accessibilityDescription: "Nick")
+        button.image = statusImage(color: .systemOrange, description: "Nick is starting")
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         button.action = #selector(handleStatusItemClick(_:))
         button.target = self
@@ -410,18 +414,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch state {
         case .protected:
-            button.contentTintColor = .systemGreen
+            button.image = statusImage(color: .systemGreen, description: "Nick is protected")
             button.toolTip = "Nick: Protected"
-            button.image?.accessibilityDescription = "Nick is protected"
         case .review:
-            button.contentTintColor = .systemOrange
+            button.image = statusImage(color: .systemOrange, description: "Nick needs your review")
             button.toolTip = "Nick: Review needed"
-            button.image?.accessibilityDescription = "Nick needs your review"
         case .urgent:
-            button.contentTintColor = .systemRed
+            button.image = statusImage(color: .systemRed, description: "Nick needs immediate attention")
             button.toolTip = "Nick: Immediate attention needed"
-            button.image?.accessibilityDescription = "Nick needs immediate attention"
         }
+    }
+
+    private func statusImage(color: NSColor, description: String) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(paletteColors: [color])
+        guard let symbol = NSImage(
+            systemSymbolName: "shield.fill",
+            accessibilityDescription: description
+        )?.withSymbolConfiguration(configuration) else { return nil }
+
+        // NSStatusItem may reinterpret an SF Symbol as a monochrome template even
+        // after `isTemplate` is cleared. Rasterizing the configured symbol keeps
+        // the health colour visible in both light and dark menu bars.
+        let size = NSSize(width: 18, height: 18)
+        let image = NSImage(size: size, flipped: false) { rect in
+            symbol.draw(in: rect)
+            return true
+        }
+        image.isTemplate = false
+        image.accessibilityDescription = description
+        return image
     }
 
     @objc private func handleStatusItemClick(_: NSStatusBarButton) {
@@ -558,7 +579,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func checkForUpdates() {
-        updaterController?.checkForUpdates(nil)
+        guard let updaterController else {
+            updateLogger.error("Manual update check requested before Sparkle initialized")
+            return
+        }
+        updateLogger.info("Starting manual update check; canCheck=\(updaterController.updater.canCheckForUpdates)")
+        updaterController.updater.checkForUpdates()
     }
 
     // MARK: - Finder Sync Integration
@@ -613,6 +639,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(Date(), forKey: "nickLastScheduledDeepScanDate")
         Task.detached(priority: .background) { [weak self] in
             await self?.engine.runFullScan()
+        }
+    }
+}
+
+// MARK: - Sparkle diagnostics
+
+extension AppDelegate: SPUUpdaterDelegate {
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        updateLogger.info("Sparkle found update version=\(item.displayVersionString, privacy: .public) build=\(item.versionString, privacy: .public)")
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        updateLogger.info("Sparkle found no update: \(error.localizedDescription, privacy: .public)")
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
+        error: Error?
+    ) {
+        if let error {
+            updateLogger.error("Sparkle update cycle failed: \(error.localizedDescription, privacy: .public)")
+        } else {
+            updateLogger.info("Sparkle update cycle finished successfully")
         }
     }
 }

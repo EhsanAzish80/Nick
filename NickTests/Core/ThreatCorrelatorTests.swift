@@ -354,6 +354,7 @@ final class ThreatCorrelatorTests: XCTestCase {
             alert.evidenceState(fileExists: { _ in false }, processIsRunning: { _ in false }),
             .fileNoLongerExists("/private/tmp/deleted-vm-artifact")
         )
+        XCTAssertFalse(alert.hasActionableEvidence)
     }
 
     func test_threatAlert_evidenceState_rejectsReusedPIDIdentity() {
@@ -409,6 +410,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         let alert = makeAlert(signal: fileSignal, severity: .critical)
 
         XCTAssertEqual(MenuBarAttentionState.evaluate([alert]), .protected)
+        XCTAssertFalse(alert.hasActionableEvidence)
     }
 
     // MARK: - Helpers
