@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>AllowUserOverrides</key>
+			<false/>
+			<key>AllowedSystemExtensionTypes</key>
+			<dict>
+				<key>UXGW5V3BY6</key>
+				<array>
+					<string>EndpointSecurityExtension</string>
+					<string>NetworkExtension</string>
+				</array>
+			</dict>
+			<key>AllowedSystemExtensions</key>
+			<dict>
+				<key>UXGW5V3BY6</key>
+				<array>
+					<string>com.ehsanazish.nick.NickExtension</string>
+					<string>com.ehsanazish.nick.NickNetFilter</string>
+				</array>
+			</dict>
+			<key>PayloadDisplayName</key>
+			<string>Nick System Extensions</string>
+			<key>PayloadIdentifier</key>
+			<string>com.3nsofts.nick.enterprise.system-extensions</string>
+			<key>PayloadType</key>
+			<string>com.apple.system-extension-policy</string>
+			<key>PayloadUUID</key>
+			<string>EDA7588C-70C8-4A01-B980-32AC6FCD982E</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Preapproves Nick's Endpoint Security and Network Filter system extensions.</string>
+	<key>PayloadDisplayName</key>
+	<string>Nick - System Extensions</string>
+	<key>PayloadIdentifier</key>
+	<string>com.3nsofts.nick.enterprise.system-extensions.profile</string>
+	<key>PayloadOrganization</key>
+	<string>3Nsofts</string>
+	<key>PayloadRemovalDisallowed</key>
+	<false/>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>7B18739F-2D4A-450A-B66D-A387795FE3EE</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

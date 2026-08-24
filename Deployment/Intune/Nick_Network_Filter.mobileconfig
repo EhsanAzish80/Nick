@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>FilterBrowsers</key>
+			<false/>
+			<key>FilterDataProviderBundleIdentifier</key>
+			<string>com.ehsanazish.nick.NickNetFilter</string>
+			<key>FilterDataProviderDesignatedRequirement</key>
+			<string>anchor apple generic and identifier "com.ehsanazish.nick.NickNetFilter" and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UXGW5V3BY6)</string>
+			<key>FilterGrade</key>
+			<string>inspector</string>
+			<key>FilterPackets</key>
+			<false/>
+			<key>FilterSockets</key>
+			<true/>
+			<key>FilterType</key>
+			<string>Plugin</string>
+			<key>Organization</key>
+			<string>3Nsofts</string>
+			<key>PluginBundleID</key>
+			<string>com.ehsanazish.nick</string>
+			<key>UserDefinedName</key>
+			<string>Nick Scam Guardian</string>
+			<key>VendorConfig</key>
+			<dict>
+				<key>allowedAppIdentifiers</key>
+				<array/>
+				<key>allowedDomains</key>
+				<array/>
+				<key>blockingEnabled</key>
+				<false/>
+				<key>configurationVersion</key>
+				<integer>5</integer>
+				<key>protectionEnabled</key>
+				<true/>
+				<key>temporaryAllowedAppIdentifiers</key>
+				<dict/>
+				<key>temporaryAllowedDomains</key>
+				<dict/>
+			</dict>
+			<key>PayloadDisplayName</key>
+			<string>Nick Network Filter</string>
+			<key>PayloadIdentifier</key>
+			<string>com.3nsofts.nick.enterprise.network-filter</string>
+			<key>PayloadType</key>
+			<string>com.apple.webcontent-filter</string>
+			<key>PayloadUUID</key>
+			<string>9BBDC62A-2BEA-4EF0-9E89-4E756D373997</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Configures Nick's socket-level Network Filter in fail-open observation mode for the enterprise pilot.</string>
+	<key>PayloadDisplayName</key>
+	<string>Nick - Network Filter</string>
+	<key>PayloadIdentifier</key>
+	<string>com.3nsofts.nick.enterprise.network-filter.profile</string>
+	<key>PayloadOrganization</key>
+	<string>3Nsofts</string>
+	<key>PayloadRemovalDisallowed</key>
+	<false/>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>000CDD99-DA0E-4C87-BD64-62526067C56E</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

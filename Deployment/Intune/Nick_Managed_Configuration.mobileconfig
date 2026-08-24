@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadContent</key>
+			<dict>
+				<key>com.ehsanazish.nick</key>
+				<dict>
+					<key>Forced</key>
+					<array>
+						<dict>
+							<key>mcx_preference_settings</key>
+							<dict>
+								<key>enterpriseManagedConfiguration</key>
+								<dict>
+									<key>captureDurationSeconds</key>
+									<integer>30</integer>
+									<key>exportFormats</key>
+									<array>
+										<string>json</string>
+										<string>markdown</string>
+									</array>
+									<key>logLevel</key>
+									<string>info</string>
+									<key>organizationName</key>
+									<string>Nick Enterprise Pilot</string>
+									<key>retentionDays</key>
+									<integer>14</integer>
+									<key>sanitizeExports</key>
+									<true/>
+									<key>schemaVersion</key>
+									<integer>1</integer>
+									<key>showUserInterface</key>
+									<true/>
+								</dict>
+							</dict>
+						</dict>
+					</array>
+				</dict>
+			</dict>
+			<key>PayloadDisplayName</key>
+			<string>Nick Managed Configuration</string>
+			<key>PayloadIdentifier</key>
+			<string>com.3nsofts.nick.enterprise.managed-configuration</string>
+			<key>PayloadType</key>
+			<string>com.apple.ManagedClient.preferences</string>
+			<key>PayloadUUID</key>
+			<string>C0F8BA93-F09D-44AF-B765-9C8F59413D77</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Applies Nick Enterprise Pilot logging, retention, export, and user-interface settings.</string>
+	<key>PayloadDisplayName</key>
+	<string>Nick - Managed Configuration</string>
+	<key>PayloadIdentifier</key>
+	<string>com.3nsofts.nick.enterprise.managed-configuration.profile</string>
+	<key>PayloadOrganization</key>
+	<string>3Nsofts</string>
+	<key>PayloadRemovalDisallowed</key>
+	<false/>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>C2AA57C8-51DC-48FE-B75F-BAF0BC7C3C47</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

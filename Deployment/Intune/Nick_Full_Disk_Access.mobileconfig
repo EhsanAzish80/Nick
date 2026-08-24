@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>Services</key>
+			<dict>
+				<key>SystemPolicyAllFiles</key>
+				<array>
+					<dict>
+						<key>Authorization</key>
+						<string>Allow</string>
+						<key>CodeRequirement</key>
+						<string>anchor apple generic and identifier "com.ehsanazish.nick" and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UXGW5V3BY6)</string>
+						<key>Identifier</key>
+						<string>com.ehsanazish.nick</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>StaticCode</key>
+						<false/>
+					</dict>
+					<dict>
+						<key>Authorization</key>
+						<string>Allow</string>
+						<key>CodeRequirement</key>
+						<string>anchor apple generic and identifier "com.ehsanazish.nick.NickExtension" and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = UXGW5V3BY6)</string>
+						<key>Identifier</key>
+						<string>com.ehsanazish.nick.NickExtension</string>
+						<key>IdentifierType</key>
+						<string>bundleID</string>
+						<key>StaticCode</key>
+						<false/>
+					</dict>
+				</array>
+			</dict>
+			<key>PayloadDisplayName</key>
+			<string>Nick Full Disk Access</string>
+			<key>PayloadIdentifier</key>
+			<string>com.3nsofts.nick.enterprise.pppc</string>
+			<key>PayloadType</key>
+			<string>com.apple.TCC.configuration-profile-policy</string>
+			<key>PayloadUUID</key>
+			<string>64954901-C8AA-47A4-B348-B38614B9BABE</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Allows Nick and its Endpoint Security extension to inspect protected locations.</string>
+	<key>PayloadDisplayName</key>
+	<string>Nick - Full Disk Access</string>
+	<key>PayloadIdentifier</key>
+	<string>com.3nsofts.nick.enterprise.pppc.profile</string>
+	<key>PayloadOrganization</key>
+	<string>3Nsofts</string>
+	<key>PayloadRemovalDisallowed</key>
+	<false/>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>271E3D08-E7C3-42CF-B114-2D1DBFB0A4AF</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>
