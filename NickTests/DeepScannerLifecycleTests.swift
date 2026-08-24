@@ -11,9 +11,11 @@ final class DeepScannerLifecycleTests: XCTestCase {
 
     func test_securityEngineOwnsStableDeepScanner() {
         let engine = SecurityEngine()
+        let initialScanner = engine.deepScanner
+        let subsequentScanner = engine.deepScanner
 
-        XCTAssertTrue(engine.deepScanner === engine.deepScanner)
-        XCTAssertTrue(engine.deepScanner.engine === engine)
+        XCTAssertTrue(initialScanner === subsequentScanner)
+        XCTAssertTrue(initialScanner.engine === engine)
     }
 
     func test_resetResultsKeepsScannerReadyForNavigationReuse() {
