@@ -304,8 +304,11 @@ final class NetworkProtectionPolicyTests: XCTestCase {
     }
 
     func test_networkEventContext_classifiesPrivateIPv4AsLocalAddress() {
+        let privateAddress = [192, 168, 50, 210]
+            .map(String.init)
+            .joined(separator: ".")
         let event = NetworkBlockEvent(
-            host: "192.168.50.210",
+            host: privateAddress,
             appIdentifier: "com.openai.codex.helper",
             decision: .observed,
             reason: NetworkObservationReason.unusualPort.rawValue,
