@@ -372,9 +372,27 @@ final class DeepScanner {
     ) -> ThreatVerdict {
         let path = match.filePath.lowercased()
 
+        // Email attachment heuristics are intentionally built from common script
+        // fragments. Those fragments are only meaningful when the file is a format
+        // that can actually carry the behavior described by the rule. For example,
+        // a bundled JavaScript application may contain the words `AutoOpen`,
+        // `powershell`, and `XMLHTTP` in unrelated modules; that does not make the
+        // JavaScript file an Office macro. Preserve the match in the completed report,
+        // but never turn a context-incompatible match into an active alert.
+        if !isEmailRuleApplicable(match.ruleName, to: match.filePath) {
+            return .applicationData
+        }
+
         // Concrete malware-family signatures remain actionable in every location.
         // A dropper controls its path, so location cannot override this evidence.
         if !behavioralRules.contains(match.ruleName) { return .threat }
+
+        // Build outputs can live outside the source repository, especially under
+        // DerivedData and SwiftPM scratch directories. Strong layout markers give
+        // context to broad behavior rules without trusting arbitrary temp files.
+        if isRecognizedDevelopmentArtifactPath(path) {
+            return .developmentArtifact
+        }
 
         // Broad behavior rules intentionally match short command/API fragments. In a
         // source checkout, test fixture, package-manager cache, or documentation corpus,
@@ -425,6 +443,32 @@ final class DeepScanner {
         if case .signed = signing { return .likelySafe }
 
         return .suspicious
+    }
+
+    /// Validates the file-format context for bundled Email Guard heuristics.
+    /// Non-email rules always apply. This is deliberately based on capability rather
+    /// than app identity, so a renamed malicious attachment cannot gain trust merely
+    /// by being placed inside a known application's directory.
+    nonisolated static func isEmailRuleApplicable(_ ruleName: String, to path: String) -> Bool {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+
+        switch ruleName {
+        case "nick_email_office_macro_dropper":
+            return [
+                "doc", "dot", "xls", "xlt", "ppt", "pot", "pps",
+                "docm", "dotm", "xlsm", "xltm", "xlam", "pptm", "potm", "ppsm", "sldm",
+            ].contains(ext)
+        case "nick_email_html_smuggling":
+            return ["html", "htm", "xhtml", "svg", "mht", "mhtml"].contains(ext)
+        case "nick_email_powershell_encoded_dropper":
+            return ["ps1", "psm1", "bat", "cmd"].contains(ext)
+        case "nick_email_applescript_dropper":
+            return ["applescript", "scpt", "scptd", "sh", "command"].contains(ext)
+        case "nick_email_shell_dropper":
+            return ["sh", "bash", "zsh", "command", "tool"].contains(ext)
+        default:
+            return true
+        }
     }
 
     /// Maps YARA metadata to signal severity. Missing metadata defaults to Medium;
@@ -509,6 +553,52 @@ final class DeepScanner {
                 fm.fileExists(atPath: candidate.appendingPathComponent($0).path)
             }) {
                 return true
+            }
+            let parent = candidate.deletingLastPathComponent()
+            if parent.path == candidate.path { break }
+            candidate = parent
+        }
+        return false
+    }
+
+    nonisolated static func isRecognizedDevelopmentArtifactPath(_ path: String) -> Bool {
+        let lower = canonicalPath(path).lowercased()
+        if isVerifiedSwiftPMWorkspaceArtifact(lower) { return true }
+
+        let strongMarkers = [
+            "/deriveddata/", "/sourcepackages/", "/checkouts/", "/.build/",
+            "/build/products/", ".dsym/contents/resources/dwarf/",
+        ]
+        guard strongMarkers.contains(where: lower.contains) else { return false }
+        if lower.hasPrefix("/private/tmp/") {
+            return lower.contains("/swiftpm-")
+                || lower.contains("/nick")
+                || lower.contains("/sourcepackages/")
+                || lower.contains("/checkouts/")
+                || lower.contains("/.build/")
+                || lower.contains("/build/products/")
+                || lower.contains(".dsym/contents/resources/dwarf/")
+        }
+        return true
+    }
+
+    /// Recognizes SwiftPM's alternate scratch layouts using persisted workspace
+    /// metadata instead of trusting a directory name alone. Package artifact caches
+    /// and `--scratch-path .../out` products do not necessarily include `.build`,
+    /// `SourcePackages`, or another marker handled above.
+    nonisolated static func isVerifiedSwiftPMWorkspaceArtifact(_ path: String) -> Bool {
+        let resolved = URL(fileURLWithPath: canonicalPath(path)).standardizedFileURL
+        var candidate = resolved.deletingLastPathComponent()
+        for _ in 0..<20 {
+            let state = candidate.appendingPathComponent("workspace-state.json").path
+            if FileManager.default.isReadableFile(atPath: state) {
+                let root = candidate.path.lowercased()
+                let item = resolved.path.lowercased()
+                guard item.hasPrefix(root + "/") else { return false }
+                let relative = String(item.dropFirst(root.count + 1))
+                return relative.hasPrefix("artifacts/")
+                    || relative.hasPrefix("out/products/")
+                    || relative.hasPrefix("plugins/cache/")
             }
             let parent = candidate.deletingLastPathComponent()
             if parent.path == candidate.path { break }

@@ -2,6 +2,36 @@ import XCTest
 @testable import Nick
 
 final class SignatureValidatorPolicyTests: XCTestCase {
+
+    func test_appleAnchoredSignatureWithoutTeamIDIsStillSigned() {
+        XCTAssertEqual(
+            SignatureValidator.statusForValidSignature(
+                teamID: nil,
+                isAppleAnchored: true
+            ),
+            .signed(teamID: "APPLE_PLATFORM")
+        )
+    }
+
+    func test_nonAppleSignatureWithoutTeamIDRemainsAdHoc() {
+        XCTAssertEqual(
+            SignatureValidator.statusForValidSignature(
+                teamID: nil,
+                isAppleAnchored: false
+            ),
+            .adHoc
+        )
+    }
+
+    func test_teamIDTakesPrecedenceOverCertificateFallback() {
+        XCTAssertEqual(
+            SignatureValidator.statusForValidSignature(
+                teamID: "59GAB85EFG",
+                isAppleAnchored: true
+            ),
+            .signed(teamID: "59GAB85EFG")
+        )
+    }
     func test_sealedSystemLocationsSkipExpensiveTrustEvaluation() {
         XCTAssertTrue(SignatureValidator.isSealedSystemBinaryPath(
             "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"

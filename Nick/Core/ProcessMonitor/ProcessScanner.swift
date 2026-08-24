@@ -304,8 +304,9 @@ struct ProcessScanner {
                     || parentName.contains("ssh")
                     || parentName.contains("bash")
                     || parentName.contains("zsh")
-                let hasPipeAttack = Self.hasPipeDownloadPattern(
-                    Self.parentCommandLine(for: proc.parentPID) ?? ""
+                let hasPipeAttack = Self.hasExplicitPipeDownloadExecution(
+                    commandLine: Self.parentCommandLine(for: proc.parentPID) ?? "",
+                    parentName: rawParentName
                 )
                 if hasPipeAttack {
                     // Strong evidence is never hidden merely because a familiar app
@@ -390,6 +391,23 @@ struct ProcessScanner {
         return hasDownloader && hasShell
     }
 
+    /// Requires evidence that the parent is actually executing a download-to-shell
+    /// command. Shell argv can contain unrelated terminal history or task text.
+    nonisolated static func hasExplicitPipeDownloadExecution(
+        commandLine: String,
+        parentName: String
+    ) -> Bool {
+        guard hasPipeDownloadPattern(commandLine) else { return false }
+        let parent = parentName.lowercased()
+        if shellProcessNames.contains(parent) {
+            return commandLine.range(
+                of: #"(^|\s)(-c|--command)(\s|$)"#,
+                options: .regularExpression
+            ) != nil
+        }
+        return parent == "curl" || parent == "wget"
+    }
+
     // MARK: - Fast New-Process Signal Detection
 
     /// Derives signals only for processes whose PID was not present in the previous
@@ -451,8 +469,9 @@ struct ProcessScanner {
                     || parentName.contains("ssh")
                     || parentName.contains("bash")
                     || parentName.contains("zsh")
-                let hasPipeAttack = Self.hasPipeDownloadPattern(
-                    Self.parentCommandLine(for: proc.parentPID) ?? ""
+                let hasPipeAttack = Self.hasExplicitPipeDownloadExecution(
+                    commandLine: Self.parentCommandLine(for: proc.parentPID) ?? "",
+                    parentName: rawParentName
                 )
                 if hasPipeAttack {
                     results.append(ThreatSignal(

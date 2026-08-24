@@ -65,6 +65,41 @@ final class DeepScannerLifecycleTests: XCTestCase {
         XCTAssertEqual(DeepScanner.classify(match: match), .applicationData)
     }
 
+    func test_officeMacroHeuristicInBundledJavaScriptIsContextMismatch() {
+        let match = YARAMatch(
+            ruleName: "nick_email_office_macro_dropper",
+            tags: ["email", "macro"],
+            filePath: "/Applications/Visual Studio Code.app/Contents/Resources/@github/copilot/app.js",
+            metadata: ["severity": "HIGH"]
+        )
+
+        XCTAssertFalse(DeepScanner.isEmailRuleApplicable(match.ruleName, to: match.filePath))
+        XCTAssertEqual(DeepScanner.classify(match: match), .applicationData)
+    }
+
+    func test_officeMacroHeuristicRemainsActionableForMacroDocument() {
+        let match = YARAMatch(
+            ruleName: "nick_email_office_macro_dropper",
+            tags: ["email", "macro"],
+            filePath: "/Users/test/Downloads/invoice.docm",
+            metadata: ["severity": "HIGH"]
+        )
+
+        XCTAssertTrue(DeepScanner.isEmailRuleApplicable(match.ruleName, to: match.filePath))
+        XCTAssertEqual(DeepScanner.classify(match: match), .suspicious)
+    }
+
+    func test_htmlSmugglingHeuristicDoesNotApplyToTestBinary() {
+        let match = YARAMatch(
+            ruleName: "nick_email_html_smuggling",
+            tags: ["email", "html_smuggling"],
+            filePath: "/private/tmp/NickTests.xctest/Contents/MacOS/NickTests",
+            metadata: ["severity": "HIGH"]
+        )
+
+        XCTAssertEqual(DeepScanner.classify(match: match), .applicationData)
+    }
+
     func test_behaviorHeuristicInServiceWorkerCacheIsApplicationData() {
         let match = YARAMatch(
             ruleName: "macos_ptrace_antidebug",
@@ -245,6 +280,112 @@ final class DeepScannerLifecycleTests: XCTestCase {
 
         XCTAssertTrue(DeepScanner.canIgnore(match: behavioral))
         XCTAssertFalse(DeepScanner.canIgnore(match: criticalBehavioral))
+    }
+
+    func test_behavioralRulesInRecognizedBuildArtifactsAreDevelopmentContext() {
+        let paths = [
+            "/Users/test/Library/Developer/Xcode/DerivedData/App/Build/Products/Debug/App",
+            "/private/tmp/Nick44Analyze/SourcePackages/artifacts/sparkle/Sparkle.framework.dSYM/Contents/Resources/DWARF/Sparkle",
+            "/private/tmp/swiftpm-10417-test-build/checkouts/swift-build/Tests/Fixture.swift",
+        ]
+        for path in paths {
+            let match = YARAMatch(ruleName: "macos_mass_file_rename", tags: [], filePath: path, metadata: ["severity": "high"])
+            XCTAssertEqual(DeepScanner.classify(match: match), .developmentArtifact, path)
+        }
+    }
+
+    func test_genericTemporaryPayloadRemainsSuspicious() {
+        let match = YARAMatch(
+            ruleName: "macos_reverse_shell", tags: [],
+            filePath: "/private/tmp/unknown/payload.command",
+            metadata: ["severity": "critical"]
+        )
+        XCTAssertEqual(DeepScanner.classify(match: match), .suspicious)
+    }
+
+    func test_swiftPMArtifactCacheWithWorkspaceStateIsDevelopmentContext() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + "-packages", isDirectory: true)
+        let binary = root.appendingPathComponent(
+            "artifacts/vendor/Library.xcframework/ios-arm64/Library.framework/Library"
+        )
+        try FileManager.default.createDirectory(
+            at: binary.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("{}".utf8).write(to: root.appendingPathComponent("workspace-state.json"))
+        try Data().write(to: binary)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let match = YARAMatch(
+            ruleName: "macos_ptrace_antidebug", tags: [], filePath: binary.path,
+            metadata: ["severity": "high"]
+        )
+        XCTAssertTrue(DeepScanner.isVerifiedSwiftPMWorkspaceArtifact(binary.path))
+        XCTAssertEqual(DeepScanner.classify(match: match), .developmentArtifact)
+    }
+
+    func test_swiftPMScratchProductsWithWorkspaceStateAreDevelopmentContext() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftpm-" + UUID().uuidString, isDirectory: true)
+        let binary = root.appendingPathComponent("out/Products/Debug/swift-build")
+        try FileManager.default.createDirectory(
+            at: binary.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("{}".utf8).write(to: root.appendingPathComponent("workspace-state.json"))
+        try Data().write(to: binary)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let match = YARAMatch(
+            ruleName: "macos_launch_constraints_bypass", tags: [], filePath: binary.path,
+            metadata: ["severity": "high"]
+        )
+        XCTAssertTrue(DeepScanner.isVerifiedSwiftPMWorkspaceArtifact(binary.path))
+        XCTAssertEqual(DeepScanner.classify(match: match), .developmentArtifact)
+    }
+
+    func test_lookalikeArtifactPathWithoutWorkspaceStateRemainsSuspicious() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let binary = root.appendingPathComponent("artifacts/vendor/payload")
+        try FileManager.default.createDirectory(
+            at: binary.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data().write(to: binary)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let match = YARAMatch(
+            ruleName: "macos_ptrace_antidebug", tags: [], filePath: binary.path,
+            metadata: ["severity": "high"]
+        )
+        XCTAssertFalse(DeepScanner.isVerifiedSwiftPMWorkspaceArtifact(binary.path))
+        XCTAssertEqual(DeepScanner.classify(match: match), .suspicious)
+    }
+
+    func test_signedShellDoesNotMakeLaunchItemSafe() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let plist = root.appendingPathComponent("com.example.signed.plist")
+        let value: [String: Any] = ["Label": "com.example.signed", "ProgramArguments": ["/bin/sh", "-c", "exit 0"]]
+        let data = try PropertyListSerialization.data(fromPropertyList: value, format: .xml, options: 0)
+        try data.write(to: plist)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let match = YARAMatch(ruleName: "macos_launchagent_install", tags: [], filePath: plist.path, metadata: ["severity": "high"])
+        XCTAssertEqual(DeepScanner.classify(match: match), .suspicious)
+    }
+
+    func test_launchItemWithMissingTargetRemainsSuspicious() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let plist = root.appendingPathComponent("com.example.missing.plist")
+        let value: [String: Any] = ["Label": "com.example.missing", "Program": "/private/tmp/no-such-executable"]
+        let data = try PropertyListSerialization.data(fromPropertyList: value, format: .xml, options: 0)
+        try data.write(to: plist)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let match = YARAMatch(ruleName: "macos_launchagent_install", tags: [], filePath: plist.path, metadata: ["severity": "high"])
+        XCTAssertEqual(DeepScanner.classify(match: match), .suspicious)
     }
 
     func test_containerMatchingRejectsLookalikeIdentifier() {

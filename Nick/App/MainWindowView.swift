@@ -327,7 +327,7 @@ struct OverviewDetailView: View {
     private var attentionItems: [AttentionItem] {
         var items: [AttentionItem] = []
 
-        if !xpcClient.isConnected {
+        if !endpointProtectionActive {
             items.append(AttentionItem(
                 id: "real_time_protection",
                 title: "Real-Time Protection needs attention",
@@ -340,7 +340,7 @@ struct OverviewDetailView: View {
             items.append(AttentionItem(
                 id: "system_audit",
                 title: "System Security needs attention",
-                detail: "(auditIssues) system setting\(auditIssues == 1 ? "" : "s") did not pass the latest audit.",
+                detail: "\(auditIssues) system setting\(auditIssues == 1 ? "" : "s") did not pass the latest audit.",
                 count: auditIssues,
                 section: .systemAudit
             ))
@@ -349,7 +349,7 @@ struct OverviewDetailView: View {
             items.append(AttentionItem(
                 id: "persistence",
                 title: "Persistence items need review",
-                detail: "(persistenceIssues) startup item\(persistenceIssues == 1 ? "" : "s") have suspicious signing evidence.",
+                detail: "\(persistenceIssues) startup item\(persistenceIssues == 1 ? "" : "s") have suspicious signing evidence.",
                 count: persistenceIssues,
                 section: .persistence
             ))
@@ -358,7 +358,7 @@ struct OverviewDetailView: View {
             items.append(AttentionItem(
                 id: "processes",
                 title: "Running processes need review",
-                detail: "(processIssues) process\(processIssues == 1 ? " has" : "es have") unsigned or invalid signing evidence.",
+                detail: "\(processIssues) process\(processIssues == 1 ? " has" : "es have") unsigned or invalid signing evidence.",
                 count: processIssues,
                 section: .processes
             ))
@@ -367,7 +367,7 @@ struct OverviewDetailView: View {
             items.append(AttentionItem(
                 id: "network",
                 title: "Network activity needs review",
-                detail: "(networkIssues) outbound shell connection\(networkIssues == 1 ? "" : "s") need context.",
+                detail: "\(networkIssues) outbound shell connection\(networkIssues == 1 ? "" : "s") need context.",
                 count: networkIssues,
                 section: .network
             ))
@@ -399,7 +399,7 @@ struct OverviewDetailView: View {
         let n = engine.totalThreatsDetected
         parts.append(n == 0 ? "No threats blocked" : "\(n) threat\(n == 1 ? "" : "s") blocked")
         parts.append(
-            xpcClient.isConnected
+            endpointProtectionActive
                 ? "Real-time protection active"
                 : "Real-time protection needs attention"
         )
@@ -409,19 +409,28 @@ struct OverviewDetailView: View {
     /// Uses the same live extension heartbeat as Smart Scan. The former
     /// UserDefaults flag could remain false even after the extension deployed
     /// and verified its sentinels, making Overview contradict Smart Scan.
-    private var ransomwareShieldActive: Bool {
+    private var endpointExtensionHealth: [String: Any]? {
         let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
         guard
             let data = FileManager.default.contents(atPath: path),
-            let health = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            health["active"] as? Bool == true,
-            (health["canaryCount"] as? Int ?? 0) > 0,
-            let updatedAt = health["updatedAt"] as? TimeInterval
+            let health = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
-            return false
+            return nil
         }
-        let age = Date().timeIntervalSince1970 - updatedAt
-        return age >= 0 && age <= 30
+        return health
+    }
+
+    private var endpointProtectionActive: Bool {
+        SmartScanChecker.isEndpointSecurityActive(
+            endpointExtensionHealth,
+            now: Date().timeIntervalSince1970,
+            bundledVersion: SmartScanChecker.bundledEndpointExtensionVersion
+        )
+    }
+
+    private var ransomwareShieldActive: Bool {
+        endpointProtectionActive &&
+            (endpointExtensionHealth?["canaryCount"] as? Int ?? 0) > 0
     }
 
     // MARK: - Body
@@ -586,14 +595,14 @@ struct OverviewDetailView: View {
         }
 
         let privCount = xpcClient.privacyAlerts.count
-        let privSub = !xpcClient.isConnected
+        let privSub = !endpointProtectionActive
             ? "Waiting for security extension"
             : privCount == 0
                 ? "Monitoring · no alerts"
                 : "\(privCount) alert\(privCount == 1 ? "" : "s")"
 
         let emailCount = xpcClient.events.filter { $0.threatFamily == "EmailThreat" }.count
-        let emailSub = !xpcClient.isConnected
+        let emailSub = !endpointProtectionActive
             ? "Waiting for security extension"
             : emailCount == 0
                 ? "Monitoring · no threats"
@@ -625,7 +634,7 @@ struct OverviewDetailView: View {
 
         return [
             FeatureTileItem(name: "Real-Time Protection", icon: "shield.fill",
-                            tint: .green,   section: .alerts,      subtitle: rtpSub,        active: xpcClient.isConnected),
+                            tint: .green,   section: .alerts,      subtitle: rtpSub,        active: endpointProtectionActive),
             FeatureTileItem(name: "Ransomware Shield",    icon: "lock.shield.fill",
                             tint: .orange,  section: .alerts,      subtitle: ransomSub,     active: canariesDeployed),
             FeatureTileItem(name: "Network Monitor",      icon: "network",
@@ -633,9 +642,9 @@ struct OverviewDetailView: View {
             FeatureTileItem(name: "Scam Guardian",        icon: "globe.badge.chevron.backward",
                             tint: .orange,  section: .smartScan,   subtitle: scamSub,       active: scamActive),
             FeatureTileItem(name: "Privacy Guard",        icon: "hand.raised.fill",
-                            tint: .indigo,  section: .systemAudit, subtitle: privSub,       active: xpcClient.isConnected),
+                            tint: .indigo,  section: .systemAudit, subtitle: privSub,       active: endpointProtectionActive),
             FeatureTileItem(name: "Email Guard",          icon: "envelope.badge.shield.half.filled",
-                            tint: .teal,    section: .alerts,      subtitle: emailSub,      active: xpcClient.isConnected),
+                            tint: .teal,    section: .alerts,      subtitle: emailSub,      active: endpointProtectionActive),
             FeatureTileItem(name: "Performance",          icon: "gauge.medium",
                             tint: .mint,    section: .performance, subtitle: perfSub,       active: perfBytes > 0),
             FeatureTileItem(name: "Smart Scan",           icon: "sparkle.magnifyingglass",

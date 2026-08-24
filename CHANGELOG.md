@@ -8,7 +8,29 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
-No user-facing changes have been released since 4.4.
+No user-facing changes have been released since 4.5.
+
+## [4.5] - 2026-08-24
+
+### Changed
+
+- Deep Scan recognizes verified SwiftPM artifact caches, XCFramework slices, scratch products, and other structured development outputs without hiding raw evidence.
+- Overview and Smart Scan now use the same fresh, version-matched Endpoint Security heartbeat for protection status.
+- Download-to-shell detection requires explicit shell execution evidence.
+
+### Fixed
+
+- Apple platform binaries without conventional Team IDs are no longer misclassified as ad-hoc when they satisfy Apple's signature anchor.
+- Email attachment heuristics no longer become active findings for incompatible file formats.
+- Signed shell interpreters cannot automatically legitimize attacker-controlled LaunchAgent arguments.
+- Attention descriptions now interpolate the actual issue counts.
+
+### Verification
+
+- 424 automated tests executed: 420 passed, 4 platform-dependent tests were skipped, and 0 failed.
+- The app, Endpoint Security extension, Network Filter extension, and uninstaller all report version 4.5, build 426.
+- An installed deep scan examined 96,555 files with no concrete threat verdicts and two remaining review findings for locally installed Zoom updater LaunchAgents.
+- The signed package and disk image are Developer ID signed, notarized, stapled, and accepted by Gatekeeper.
 
 ## [4.4] - 2026-08-23
 

@@ -664,17 +664,33 @@ final class SmartScanChecker {
     /// Mac. The extension writes this heartbeat only after its ES client starts
     /// and subscribes successfully.
     private var isEndpointSecurityActive: Bool {
+        Self.isEndpointSecurityActive(
+            endpointExtensionHealth,
+            now: Date().timeIntervalSince1970,
+            bundledVersion: Self.bundledEndpointExtensionVersion
+        )
+    }
+
+    /// One source of truth for protection status across Smart Scan and
+    /// Overview. A transient XPC disconnect does not mean the Endpoint
+    /// Security client stopped; the extension heartbeat is written only after
+    /// the client is active and subscribed.
+    static func isEndpointSecurityActive(
+        _ object: [String: Any]?,
+        now: TimeInterval,
+        bundledVersion: String?
+    ) -> Bool {
         guard
-            let object = endpointExtensionHealth,
+            let object,
             object["active"] as? Bool == true,
             let runningVersion = object["version"] as? String,
-            runningVersion == Self.bundledEndpointExtensionVersion,
+            runningVersion == bundledVersion,
             let updatedAt = object["updatedAt"] as? TimeInterval
         else {
             return false
         }
 
-        let age = Date().timeIntervalSince1970 - updatedAt
+        let age = now - updatedAt
         return age >= 0 && age <= 30
     }
 
@@ -730,7 +746,7 @@ final class SmartScanChecker {
             )
     }
 
-    private static var bundledEndpointExtensionVersion: String? {
+    static var bundledEndpointExtensionVersion: String? {
         let extensionURL = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Library/SystemExtensions")
             .appendingPathComponent("com.ehsanazish.nick.NickExtension.systemextension")

@@ -146,6 +146,41 @@ final class SmartScanStatusTests: XCTestCase {
         )
     }
 
+    func test_endpointProtectionHealth_requiresFreshMatchingActiveHeartbeat() {
+        let now = Date().timeIntervalSince1970
+        let active: [String: Any] = [
+            "active": true,
+            "version": "422",
+            "updatedAt": now - 5
+        ]
+
+        XCTAssertTrue(
+            SmartScanChecker.isEndpointSecurityActive(
+                active,
+                now: now,
+                bundledVersion: "422"
+            )
+        )
+
+        var stale = active
+        stale["updatedAt"] = now - 31
+        XCTAssertFalse(
+            SmartScanChecker.isEndpointSecurityActive(
+                stale,
+                now: now,
+                bundledVersion: "422"
+            )
+        )
+
+        XCTAssertFalse(
+            SmartScanChecker.isEndpointSecurityActive(
+                active,
+                now: now,
+                bundledVersion: "421"
+            )
+        )
+    }
+
     func test_endpointExtensionActivationIsRequiredForOlderRunningBuild() {
         XCTAssertTrue(
             ExtensionManager.needsBundledVersionActivation(
