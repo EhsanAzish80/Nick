@@ -76,7 +76,8 @@ jobs:
             -destination "platform=macOS" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO
 
       - name: Build shipping components
         run: |
@@ -87,7 +88,8 @@ jobs:
               -destination "platform=macOS" \
               CODE_SIGN_IDENTITY="" \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO
+              CODE_SIGNING_ALLOWED=NO \
+              ENABLE_USER_SCRIPT_SANDBOXING=NO
           done
 
       - name: Run Tests
@@ -101,7 +103,8 @@ jobs:
             -resultBundlePath TestResults.xcresult \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_USER_SCRIPT_SANDBOXING=NO
 
       - name: Test Summary
         if: always()
