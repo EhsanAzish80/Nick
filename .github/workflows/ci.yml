@@ -42,6 +42,30 @@ jobs:
       - name: Validate repository
         run: ./Scripts/validate-repository.sh
 
+      - name: Lint YARA rules
+        run: |
+          python3 -m pip install --user --quiet "yara-python==4.5.4"
+          python3 Scripts/rules_gate.py lint
+
+      - name: YARA false-positive gate (benign corpus)
+        run: |
+          python3 Scripts/rules_gate.py fp \
+            --root /System/Applications \
+            --root /System/Library/CoreServices \
+            --root /usr/bin --root /usr/libexec \
+            --root /Applications \
+            --max-files 120000 \
+            --report yara-fp-report.json
+
+      - name: Upload YARA false-positive report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: yara-fp-report
+          path: yara-fp-report.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Build Nick
         run: |
           xcodebuild build \

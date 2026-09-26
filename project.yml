@@ -25,12 +25,13 @@ options:
   createIntermediateGroups: true
   generateEmptyDirectories: true
 
+# Nick.xcodeproj is the source of truth. Keep these values in sync with it.
 settings:
   base:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
-    MARKETING_VERSION: "4.2"
-    CURRENT_PROJECT_VERSION: "420"
+    MARKETING_VERSION: "4.6"
+    CURRENT_PROJECT_VERSION: "427"
     DEVELOPMENT_TEAM: ""          # Set your Team ID here
 
 targets:

@@ -25,6 +25,12 @@
 		E40000000000000000000004 /* ScamGuardian.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000003 /* ScamGuardian.swift */; };
 		E40000000000000000000006 /* RansomwareNotePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000005 /* RansomwareNotePolicy.swift */; };
 		E40000000000000000000007 /* RansomwareNotePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000005 /* RansomwareNotePolicy.swift */; };
+		E40000000000000000000101 /* YARAVerdictPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000100 /* YARAVerdictPolicy.swift */; };
+		E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000100 /* YARAVerdictPolicy.swift */; };
+		E40000000000000000000201 /* ExecutionTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000200 /* ExecutionTrustPolicy.swift */; };
+		E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000200 /* ExecutionTrustPolicy.swift */; };
+		E40000000000000000000301 /* ScanCandidatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000300 /* ScanCandidatePolicy.swift */; };
+		E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000300 /* ScanCandidatePolicy.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -117,6 +123,9 @@
 		E40000000000000000000000 /* NetworkProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NetworkProtectionPolicy.swift; path = Shared/NetworkProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000005 /* RansomwareNotePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RansomwareNotePolicy.swift; path = Shared/RansomwareNotePolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000003 /* ScamGuardian.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScamGuardian.swift; path = NickNetFilter/ScamGuardian.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000100 /* YARAVerdictPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAVerdictPolicy.swift; path = Shared/YARAVerdictPolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000200 /* ExecutionTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ExecutionTrustPolicy.swift; path = Shared/ExecutionTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000300 /* ScanCandidatePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScanCandidatePolicy.swift; path = Shared/ScanCandidatePolicy.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -271,6 +280,9 @@
 				E40000000000000000000000 /* NetworkProtectionPolicy.swift */,
 				E40000000000000000000005 /* RansomwareNotePolicy.swift */,
 				E40000000000000000000003 /* ScamGuardian.swift */,
+				E40000000000000000000300 /* ScanCandidatePolicy.swift */,
+				E40000000000000000000200 /* ExecutionTrustPolicy.swift */,
+				E40000000000000000000100 /* YARAVerdictPolicy.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -538,6 +550,7 @@
 			files = (
 			);
 			inputFileListPaths = (
+				"$(SRCROOT)/Rules/YARARules.xcfilelist",
 			);
 			inputPaths = (
 			);
@@ -597,6 +610,9 @@
 			);
 			inputPaths = (
 				"$(SRCROOT)/Rules",
+				"$(SRCROOT)/Rules/community",
+				"$(SRCROOT)/Rules/families",
+				"$(SRCROOT)/Rules/families/LICENSES",
 			);
 			name = "Copy YARA Rules";
 			outputFileListPaths = (
@@ -606,7 +622,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules\"\nrm -rf \"${RULES_DST}\"\ncp -R \"${RULES_SRC}\" \"${RULES_DST}\"\necho \"note: Copied YARA rules to ${RULES_DST}\"\n";
+			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules\"\nRULES_LIST=\"${RULES_SRC}/YARARules.xcfilelist\"\nrm -rf \"${RULES_DST}\"\nmkdir -p \"${RULES_DST}\"\nwhile IFS= read -r RULE_FILE || [ -n \"${RULE_FILE}\" ]; do\n  RULE_FILE=$(printf '%s\\n' \"${RULE_FILE}\" | sed \"s|^\\$(SRCROOT)|${SRCROOT}|\")\n  RELATIVE_PATH=\"${RULE_FILE#${RULES_SRC}/}\"\n  mkdir -p \"${RULES_DST}/$(dirname \"${RELATIVE_PATH}\")\"\n  cp \"${RULE_FILE}\" \"${RULES_DST}/${RELATIVE_PATH}\"\ndone < \"${RULES_LIST}\"\necho \"note: Copied YARA rules to ${RULES_DST}\"\n";
 		};
 		CC1AABB4D5E6F78900002301 /* Copy YARA Rules Into Extension */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -614,27 +630,23 @@
 			files = (
 			);
 			inputFileListPaths = (
+				"$(SRCROOT)/Rules/YARARules.xcfilelist",
 			);
 			inputPaths = (
-				"$(SRCROOT)/Rules/community/macos_stealers.yar",
-				"$(SRCROOT)/Rules/community/macos_ransomware.yar",
-				"$(SRCROOT)/Rules/community/macos_adware.yar",
-				"$(SRCROOT)/Rules/community/macos_backdoors.yar",
-				"$(SRCROOT)/Rules/community/email_guard_day_one.yar",
+				"$(SRCROOT)/Rules",
+				"$(SRCROOT)/Rules/community",
+				"$(SRCROOT)/Rules/families",
+				"$(SRCROOT)/Rules/families/LICENSES",
 			);
 			name = "Copy YARA Rules Into Extension";
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/macos_stealers.yar",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/macos_ransomware.yar",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/macos_adware.yar",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/macos_backdoors.yar",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community/email_guard_day_one.yar",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules/community\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules/community\"\nmkdir -p \"${RULES_DST}\"\ncp -f \"${RULES_SRC}/macos_stealers.yar\" \"${RULES_DST}/macos_stealers.yar\"\ncp -f \"${RULES_SRC}/macos_ransomware.yar\" \"${RULES_DST}/macos_ransomware.yar\"\ncp -f \"${RULES_SRC}/macos_adware.yar\" \"${RULES_DST}/macos_adware.yar\"\ncp -f \"${RULES_SRC}/macos_backdoors.yar\" \"${RULES_DST}/macos_backdoors.yar\"\ncp -f \"${RULES_SRC}/email_guard_day_one.yar\" \"${RULES_DST}/email_guard_day_one.yar\"\necho \"note: Copied YARA rules into extension at ${RULES_DST}\"\n";
+			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules\"\nRULES_LIST=\"${RULES_SRC}/YARARules.xcfilelist\"\nrm -rf \"${RULES_DST}\"\nmkdir -p \"${RULES_DST}\"\n# Community heuristics, family signatures, and the license texts that must\n# travel with redistributed third-party rules.\nwhile IFS= read -r RULE_FILE || [ -n \"${RULE_FILE}\" ]; do\n  RULE_FILE=$(printf '%s\\n' \"${RULE_FILE}\" | sed \"s|^\\$(SRCROOT)|${SRCROOT}|\")\n  RELATIVE_PATH=\"${RULE_FILE#${RULES_SRC}/}\"\n  mkdir -p \"${RULES_DST}/$(dirname \"${RELATIVE_PATH}\")\"\n  cp \"${RULE_FILE}\" \"${RULES_DST}/${RELATIVE_PATH}\"\ndone < \"${RULES_LIST}\"\necho \"note: Copied YARA rules into extension at ${RULES_DST}\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -657,6 +669,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */,
+				E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */,
+				E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */,
 				E40000000000000000000007 /* RansomwareNotePolicy.swift in Sources */,
 				AA11223344556677AABB0015 /* YARAEngine.swift in Sources */,
 				AA11223344556677AABB0016 /* YARAMatch.swift in Sources */,
@@ -689,6 +704,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E40000000000000000000301 /* ScanCandidatePolicy.swift in Sources */,
+				E40000000000000000000201 /* ExecutionTrustPolicy.swift in Sources */,
+				E40000000000000000000101 /* YARAVerdictPolicy.swift in Sources */,
 				E40000000000000000000001 /* NetworkProtectionPolicy.swift in Sources */,
 				E40000000000000000000006 /* RansomwareNotePolicy.swift in Sources */,
 				E40000000000000000000004 /* ScamGuardian.swift in Sources */,
@@ -769,7 +787,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 426;
+				CURRENT_PROJECT_VERSION = 427;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -788,7 +806,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -848,7 +866,7 @@
 					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
@@ -894,7 +912,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 426;
+				CURRENT_PROJECT_VERSION = 427;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -911,7 +929,7 @@
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/include",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -1005,7 +1023,7 @@
 					"$(PROJECT_DIR)/Nick/Core/YARAEngine/Vendor",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
@@ -1024,7 +1042,7 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_ENTITLEMENTS = NickExtension/NickExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 426;
+				CURRENT_PROJECT_VERSION = 427;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -1052,7 +1070,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				OTHER_LDFLAGS = (
 					"-lbsm",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
@@ -1081,7 +1099,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 426;
+				CURRENT_PROJECT_VERSION = 427;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				"DEVELOPMENT_TEAM[sdk=macosx*]" = UXGW5V3BY6;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1106,7 +1124,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				OTHER_LDFLAGS = (
 					"-lbsm",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
@@ -1155,13 +1173,13 @@
 				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 426;
+				CURRENT_PROJECT_VERSION = 427;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickNetFilter/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickNetFilter;
 				PRODUCT_NAME = com.ehsanazish.nick.NickNetFilter;
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1178,13 +1196,13 @@
 				CODE_SIGN_ENTITLEMENTS = NickNetFilter/NickNetFilter.Release.entitlements;
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 426;
+				CURRENT_PROJECT_VERSION = 427;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = NickNetFilter/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.NickNetFilter;
 				PRODUCT_NAME = com.ehsanazish.nick.NickNetFilter;
 				PROVISIONING_PROFILE_SPECIFIER = "547cfdac-6a5f-4f1b-91df-87632ac99f54";
@@ -1202,7 +1220,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 426;
+				CURRENT_PROJECT_VERSION = 427;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1214,7 +1232,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.uninstaller;
 				PRODUCT_NAME = "Nick Uninstaller";
 				SDKROOT = macosx;
@@ -1230,7 +1248,7 @@
 				CODE_SIGN_IDENTITY = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 426;
+				CURRENT_PROJECT_VERSION = 427;
 				DEVELOPMENT_TEAM = UXGW5V3BY6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1242,7 +1260,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 4.5;
+				MARKETING_VERSION = 4.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ehsanazish.nick.uninstaller;
 				PRODUCT_NAME = "Nick Uninstaller";
 				PROVISIONING_PROFILE_SPECIFIER = "";

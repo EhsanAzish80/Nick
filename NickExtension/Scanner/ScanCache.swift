@@ -4,6 +4,38 @@
 
 import Foundation
 
+// MARK: - FileIdentity
+
+/// The on-disk identity of a file's content at the time it was scanned.
+///
+/// A path alone is not an identity: a file scanned clean can be overwritten in
+/// place or replaced by a rename, and a path-keyed cache would keep returning
+/// the stale verdict until the TTL expires. Endpoint Security supplies the
+/// `stat` for every file in an event, so comparing identities is free on the
+/// AUTH path.
+struct FileIdentity: Hashable, Sendable {
+    let device: Int64
+    let inode: UInt64
+    let size: Int64
+    let modificationSeconds: Int
+    let modificationNanoseconds: Int
+
+    init(stat info: stat) {
+        device = Int64(info.st_dev)
+        inode = UInt64(info.st_ino)
+        size = Int64(info.st_size)
+        modificationSeconds = Int(info.st_mtimespec.tv_sec)
+        modificationNanoseconds = Int(info.st_mtimespec.tv_nsec)
+    }
+
+    /// `lstat` of `path`; `nil` when the file no longer exists.
+    init?(path: String) {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return nil }
+        self.init(stat: info)
+    }
+}
+
 // MARK: - ScanCache
 
 /// Thread-safe, TTL-based in-memory cache for file scan results.
@@ -20,6 +52,10 @@ final class ScanCache {
 
     /// A single cached scan result.
     struct Entry {
+        /// Monotonic store sequence used by eviction bookkeeping.
+        var sequence: UInt64 = 0
+        /// Content identity at scan time. `nil` only for legacy callers.
+        let identity: FileIdentity?
         let hash: String
         let isThreat: Bool
         /// Only exact, high-confidence evidence may be used by an AUTH event
@@ -42,18 +78,34 @@ final class ScanCache {
     // MARK: - Private
 
     private var store: [String: Entry] = [:]
+    /// Insertion log for O(1) amortised oldest-first eviction. Each store
+    /// appends `(path, sequence)`; a log record is live only while the stored
+    /// entry still carries that sequence, so re-stores and invalidations never
+    /// require searching the log.
+    private var insertionLog: [(path: String, sequence: UInt64)] = []
+    private var insertionHead = 0
+    private var nextSequence: UInt64 = 0
     private var oneTimeAllowances: Set<String> = []
     private let lock = NSLock()
 
     // MARK: - Public API
 
-    /// Returns a valid (non-expired) entry for `path`, or `nil` if absent / stale.
-    func lookup(path: String) -> Entry? {
+    /// Returns a valid (non-expired) entry for `path`, or `nil` if absent /
+    /// stale / describing different content.
+    ///
+    /// - Parameter identity: The file's current identity. When supplied, an
+    ///   entry recorded for a different inode, size, or modification time is
+    ///   discarded — the file changed after it was scanned.
+    func lookup(path: String, identity: FileIdentity? = nil) -> Entry? {
         lock.lock()
         defer { lock.unlock() }
 
         guard let entry = store[path] else { return nil }
         guard entry.expiry > Date() else {
+            store.removeValue(forKey: path)
+            return nil
+        }
+        if let identity, let recorded = entry.identity, identity != recorded {
             store.removeValue(forKey: path)
             return nil
         }
@@ -83,6 +135,8 @@ final class ScanCache {
         lock.withLock {
             guard let entry = store[path], entry.isThreat else { return false }
             store[path] = Entry(
+                sequence: entry.sequence,
+                identity: entry.identity,
                 hash: entry.hash,
                 isThreat: true,
                 mayBlock: true,
@@ -98,6 +152,7 @@ final class ScanCache {
     /// Stores a scan result for `path` with the given TTL (defaults to `defaultTTL`).
     func store(
         path: String,
+        identity: FileIdentity? = nil,
         hash: String,
         isThreat: Bool,
         mayBlock: Bool = false,
@@ -105,7 +160,8 @@ final class ScanCache {
         threatFamily: String? = nil,
         ttl: TimeInterval = defaultTTL
     ) {
-        let entry = Entry(
+        var entry = Entry(
+            identity: identity,
             hash: hash,
             isThreat: isThreat,
             mayBlock: mayBlock,
@@ -115,16 +171,29 @@ final class ScanCache {
         )
 
         lock.lock()
+        defer { lock.unlock() }
+        nextSequence &+= 1
+        entry.sequence = nextSequence
         store[path] = entry
+        insertionLog.append((path, nextSequence))
 
-        if store.count > Self.maxEntries {
-            evictExpired()
-            if store.count > Self.maxEntries,
-               let oldest = store.min(by: { $0.value.expiry < $1.value.expiry })?.key {
-                store.removeValue(forKey: oldest)
+        // Evict the oldest live insertions first.
+        while store.count > Self.maxEntries, insertionHead < insertionLog.count {
+            let record = insertionLog[insertionHead]
+            insertionHead += 1
+            if store[record.path]?.sequence == record.sequence {
+                store.removeValue(forKey: record.path)
             }
         }
-        lock.unlock()
+
+        // Keep the log proportional to the live cache under churn
+        // (the same path re-scanned many times, or frequent invalidation).
+        if insertionLog.count - insertionHead > 2 * Self.maxEntries || insertionHead > Self.maxEntries {
+            insertionLog = insertionLog[insertionHead...].filter {
+                store[$0.path]?.sequence == $0.sequence
+            }
+            insertionHead = 0
+        }
     }
 
     /// Removes the entry for `path`, forcing a fresh scan on next access.
@@ -134,14 +203,10 @@ final class ScanCache {
 
     /// Removes all entries from the cache.
     func invalidateAll() {
-        lock.withLock { store.removeAll() }
-    }
-
-    // MARK: - Private Helpers
-
-    /// Caller must hold `lock`.
-    private func evictExpired() {
-        let now = Date()
-        store = store.filter { $0.value.expiry > now }
+        lock.withLock {
+            store.removeAll()
+            insertionLog.removeAll()
+            insertionHead = 0
+        }
     }
 }

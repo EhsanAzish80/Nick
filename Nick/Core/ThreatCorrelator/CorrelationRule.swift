@@ -353,11 +353,16 @@ struct CorrelationRule: Sendable {
         guard !matches.isEmpty else { return nil }
         let ruleNames = matches.compactMap { $0.metadata["yaraRules"] }.joined(separator: ", ")
         let paths = matches.compactMap { $0.fileInfo?.path }.joined(separator: "; ")
+        let authors = Set(
+            matches.flatMap { ($0.metadata["yaraAuthors"] ?? "").components(separatedBy: ", ") }
+                .filter { !$0.isEmpty }
+        ).sorted().joined(separator: ", ")
+        let attribution = authors.isEmpty ? "" : " Rule author(s): \(authors)."
         return ThreatAlert(
             score: 0.90,
             content: AlertContent(
                 title: "YARA threat signature matched",
-                description: "YARA rule(s) [\(ruleNames.isEmpty ? "unknown" : ruleNames)] matched \(matches.count) file(s). Paths: \(paths.isEmpty ? "unknown" : paths).",
+                description: "YARA rule(s) [\(ruleNames.isEmpty ? "unknown" : ruleNames)] matched \(matches.count) file(s). Paths: \(paths.isEmpty ? "unknown" : paths).\(attribution)",
                 severity: .high,
                 recommendedAction: "Examine the matched files immediately. Quarantine or delete files that cannot be explained by installed software."
             ),

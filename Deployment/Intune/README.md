@@ -1,7 +1,9 @@
 # Nick Enterprise Pilot - Intune profiles
 
-These profiles are the canonical, Nick-owned deployment payloads for Nick 4.1
-build 419. They are intended for deployment through a device-management
+These profiles are the canonical, Nick-owned deployment payloads for Nick. They
+were generated from 4.1 build 419; their designated requirements depend only on
+the Team ID and bundle identifiers, so they remain valid for later builds with
+the same signing identity (re-verify with `codesign -d -r-` before each release). They are intended for deployment through a device-management
 service to a dedicated pilot Mac. Do not manually install them on a personal
 or production Mac.
 

@@ -48,3 +48,41 @@ enum RansomwareNotePolicy {
         }
     }
 }
+
+/// Recognises renames that give a file a new, uncommon extension — the
+/// signature of rename-based ransomware — while ignoring atomic saves,
+/// download completion, and routine format conversions.
+enum RansomwareRenamePolicy {
+    /// The extension a rename introduces, or `nil` when the rename is routine.
+    static func introducedExtension(source: String, destination: String) -> String? {
+        let sourceName = (source as NSString).lastPathComponent
+        let destinationName = (destination as NSString).lastPathComponent
+        guard !sourceName.hasPrefix("."), !destinationName.hasPrefix(".") else { return nil }
+
+        let sourceExtension = (sourceName as NSString).pathExtension.lowercased()
+        let destinationExtension = (destinationName as NSString).pathExtension.lowercased()
+        guard !destinationExtension.isEmpty,
+              destinationExtension != sourceExtension,
+              destinationExtension.count <= 16,
+              !temporaryExtensions.contains(sourceExtension),
+              !sourceName.contains(".sb-"), !destinationName.contains(".sb-"),
+              !routineDestinationExtensions.contains(destinationExtension)
+        else { return nil }
+        return destinationExtension
+    }
+
+    private static let temporaryExtensions: Set<String> = [
+        "tmp", "temp", "download", "crdownload", "part", "partial", "opdownload",
+        "swp", "swx", "lock", "new", "writing", "inprogress",
+    ]
+
+    /// Formats applications routinely produce by renaming. Ransomware never
+    /// "encrypts" into these.
+    private static let routineDestinationExtensions: Set<String> = [
+        "json", "plist", "xml", "db", "sqlite", "sqlite3", "wal", "shm", "log", "txt",
+        "md", "csv", "html", "css", "js", "ts", "swift", "h", "m", "c", "cpp", "o",
+        "png", "jpg", "jpeg", "heic", "gif", "webp", "mov", "mp4", "m4a", "mp3", "wav",
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
+        "zip", "gz", "tar", "dmg", "pkg", "app", "bak", "old", "orig", "backup",
+    ]
+}

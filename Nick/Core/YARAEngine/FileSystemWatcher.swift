@@ -159,7 +159,13 @@ final class FileSystemWatcher: @unchecked Sendable {
 
     /// Called (on `callbackQueue`) for each FSEvents batch.
     fileprivate func handleEvents(paths: [String], flags: [UInt32]) {
-        let createdOrModified = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemModified)
+        // Browsers download to a temporary name and rename on completion, so the
+        // finished file only ever produces a rename event.
+        let createdOrModified = UInt32(
+            kFSEventStreamEventFlagItemCreated
+                | kFSEventStreamEventFlagItemModified
+                | kFSEventStreamEventFlagItemRenamed
+        )
         for (path, flag) in zip(paths, flags) {
             guard (flag & createdOrModified) != 0 else { continue }
 
@@ -181,9 +187,9 @@ final class FileSystemWatcher: @unchecked Sendable {
                 )
             }
 
-            // SECURITY: Only queue files that are executable to avoid
-            // scanning data files and wasting CPU budget.
-            guard isExecutable(at: path) else { continue }
+            // Only queue content that can run. Downloads are not `+x`, so the
+            // executable bit alone missed scripts, installers, and raw Mach-O.
+            guard isScanCandidate(at: path) else { continue }
             queueYARAScan(for: path)
         }
     }
@@ -249,7 +255,14 @@ final class FileSystemWatcher: @unchecked Sendable {
                 }
             }
             do {
-                let matches = try await self.yaraEngine.scanFile(at: path)
+                let rawMatches = try await self.yaraEngine.scanFile(at: path)
+                // Apply the same context classifier as Deep Scan so a behaviour
+                // rule inside a signed app's data or a verified build tree does
+                // not raise a real-time alert that Deep Scan would not.
+                let matches = DeepScanner.uniqueMatches(rawMatches).filter {
+                    let verdict = DeepScanner.classify(match: $0)
+                    return verdict == .threat || verdict == .suspicious
+                }
                 guard !matches.isEmpty else { return }
                 let signal = self.makeThreatSignal(for: path, matches: matches)
                 Self.log.warning("YARA match on \(path, privacy: .private): \(matches.map(\.ruleName).joined(separator: ", "), privacy: .public)")
@@ -265,38 +278,32 @@ final class FileSystemWatcher: @unchecked Sendable {
         }
     }
 
-    private func isExecutable(at path: String) -> Bool {
+    private func isScanCandidate(at path: String) -> Bool {
         let fm = FileManager.default
         guard let attributes = try? fm.attributesOfItem(atPath: path),
               attributes[.type] as? FileAttributeType == .typeRegular,
               let size = (attributes[.size] as? NSNumber)?.uint64Value,
+              size > 0,
               size <= Self.maxRealtimeFileSize
         else {
             return false
         }
-        return fm.isExecutableFile(atPath: path)
+        if fm.isExecutableFile(atPath: path) { return true }
+        return ScanCandidatePolicy.isExecutableContent(ScanCandidatePolicy.kind(atPath: path))
     }
 
     private func makeThreatSignal(for path: String, matches: [YARAMatch]) -> ThreatSignal {
         let ruleNames = matches.map(\.ruleName).joined(separator: ", ")
         let tags = Set(matches.flatMap(\.tags)).sorted().joined(separator: ", ")
-        let declaredSeverity = matches
-            .compactMap { $0.metadata["severity"]?.uppercased() }
-        let severity: SignalSeverity
-        if declaredSeverity.contains("CRITICAL") {
-            severity = .critical
-        } else if declaredSeverity.contains("HIGH") {
-            severity = .high
-        } else if declaredSeverity.contains("MEDIUM") {
-            severity = .medium
-        } else {
-            severity = .high
-        }
+        let severity = matches
+            .map(DeepScanner.signalSeverity(for:))
+            .max() ?? .medium
 
         // Metadata dictionary for correlator use.
         var meta: [String: String] = [
             "yaraRules": ruleNames,
             "yaraTags": tags,
+            "yaraAuthors": Set(matches.compactMap { $0.metadata["author"] }).sorted().joined(separator: ", "),
         ]
         if let firstMeta = matches.first?.metadata {
             for (k, v) in firstMeta { meta["yara_\(k)"] = v }

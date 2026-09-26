@@ -252,6 +252,16 @@ final class FilterDataProvider: NEFilterDataProvider {
               let code
         else { return nil }
 
+        // The signing identifier is chosen by whoever signs the code: an
+        // ad-hoc binary can call itself "com.google.Chrome". Only accept it as
+        // an identity (and therefore as an allow-list key) when the running
+        // code is validly signed by an Apple-issued certificate.
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString("anchor apple generic" as CFString, [], &requirement) == errSecSuccess,
+              let requirement,
+              SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+        else { return nil }
+
         var staticCode: SecStaticCode?
         guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
               let staticCode

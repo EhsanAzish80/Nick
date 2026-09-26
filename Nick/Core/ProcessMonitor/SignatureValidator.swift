@@ -208,33 +208,43 @@ final class SignatureValidator: @unchecked Sendable {
               let dict = info as? [String: Any] else { return .unknown }
 
         let teamID = dict[kSecCodeInfoTeamIdentifier as String] as? String
+        let hasTeamID = !(teamID ?? "").isEmpty
         return Self.statusForValidSignature(
             teamID: teamID,
-            isAppleAnchored: isAppleAnchored(code: code, validationFlags: validationFlags)
+            isAppleAnchored: !hasTeamID && satisfies("anchor apple", code: code, validationFlags: validationFlags),
+            isAppleIssued: hasTeamID && satisfies("anchor apple generic", code: code, validationFlags: validationFlags)
         )
     }
 
-    /// Distinguishes Apple-anchored signatures from ad-hoc signatures when the
-    /// signer does not publish a Team Identifier. Apple ships some nested Xcode
-    /// utilities in this form. Requiring the Apple anchor is important: merely
-    /// having a certificate chain is not enough because a self-signed binary may
-    /// also carry certificates.
+    /// Maps a cryptographically valid signature to a trust status.
+    ///
+    /// - A Team Identifier establishes identity only under a certificate chain
+    ///   issued by Apple (`anchor apple generic`). A self-signed certificate can
+    ///   put any string in the Team ID field, so without the Apple chain the
+    ///   signature carries no more identity than an ad-hoc one.
+    /// - Apple ships some nested Xcode utilities without a Team ID; those are
+    ///   recognised by the Apple anchor itself. A certificate chain alone is not
+    ///   enough because a self-signed binary may also carry certificates.
     static func statusForValidSignature(
         teamID: String?,
-        isAppleAnchored: Bool
+        isAppleAnchored: Bool,
+        isAppleIssued: Bool
     ) -> SigningStatus {
-        if let teamID, !teamID.isEmpty { return .signed(teamID: teamID) }
+        if let teamID, !teamID.isEmpty {
+            return isAppleIssued ? .signed(teamID: teamID) : .adHoc
+        }
         if isAppleAnchored { return .signed(teamID: "APPLE_PLATFORM") }
         return .adHoc
     }
 
-    private func isAppleAnchored(
+    private func satisfies(
+        _ requirementText: String,
         code: SecStaticCode,
         validationFlags: SecCSFlags
     ) -> Bool {
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(
-            "anchor apple" as CFString,
+            requirementText as CFString,
             [],
             &requirement
         ) == errSecSuccess,

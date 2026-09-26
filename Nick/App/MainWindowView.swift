@@ -409,15 +409,26 @@ struct OverviewDetailView: View {
     /// Uses the same live extension heartbeat as Smart Scan. The former
     /// UserDefaults flag could remain false even after the extension deployed
     /// and verified its sentinels, making Overview contradict Smart Scan.
-    private var endpointExtensionHealth: [String: Any]? {
-        let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
-        guard
-            let data = FileManager.default.contents(atPath: path),
-            let health = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
+    ///
+    /// Refreshed off the main thread by `refreshEndpointHealth()`. It used to
+    /// be a computed property that read and parsed the heartbeat file several
+    /// times during every view evaluation.
+    @State private var endpointExtensionHealth: [String: Any]?
+
+    private static let endpointHealthPath =
+        "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
+
+    private func refreshEndpointHealth() async {
+        let path = Self.endpointHealthPath
+        while !Task.isCancelled {
+            let data = await Task.detached(priority: .utility) {
+                FileManager.default.contents(atPath: path)
+            }.value
+            endpointExtensionHealth = data.flatMap {
+                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+            }
+            try? await Task.sleep(for: .seconds(5))
         }
-        return health
     }
 
     private var endpointProtectionActive: Bool {
@@ -463,6 +474,7 @@ struct OverviewDetailView: View {
         }
         .background(Color(.windowBackgroundColor))
         .navigationTitle("Overview")
+        .task { await refreshEndpointHealth() }
         .onAppear {
             focusModeActive = isFocusModeActive()
         }
@@ -2058,6 +2070,12 @@ private struct ResultRow: View {
                         .font(.nickBodySmall)
                         .foregroundStyle(Color.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                // Third-party rule licenses require crediting the rule author.
+                if let author = match.metadata["author"], !author.isEmpty {
+                    Text("Rule by \(author)")
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textSecondary)
                 }
                 Text(match.filePath)
                     .font(.nickMonoSmall)

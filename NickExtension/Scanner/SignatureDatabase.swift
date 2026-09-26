@@ -6,6 +6,13 @@ import Foundation
 import SQLite3
 import os
 
+
+/// `SQLITE_TRANSIENT`: SQLite copies the bound text immediately. Passing `nil`
+/// (`SQLITE_STATIC`) told SQLite to keep using a pointer that Swift only
+/// guarantees for the duration of the bind call — temporaries such as a
+/// formatted date string were already freed when the statement ran.
+nonisolated(unsafe) private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
 // MARK: - SignatureDatabase
 
 /// SQLite-backed store for known-malware SHA-256 hashes.
@@ -96,7 +103,7 @@ final class SignatureDatabase {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, hash, -1, nil)
+        sqlite3_bind_text(stmt, 1, hash, -1, sqliteTransient)
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
 
         return ThreatMatch(
@@ -125,11 +132,11 @@ final class SignatureDatabase {
         defer { sqlite3_finalize(stmt) }
 
         let now = ISO8601DateFormatter().string(from: Date())
-        sqlite3_bind_text(stmt, 1, hash,     -1, nil)
-        sqlite3_bind_text(stmt, 2, name,     -1, nil)
-        sqlite3_bind_text(stmt, 3, family,   -1, nil)
-        sqlite3_bind_text(stmt, 4, severity, -1, nil)
-        sqlite3_bind_text(stmt, 5, now,      -1, nil)
+        sqlite3_bind_text(stmt, 1, hash,     -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 2, name,     -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 3, family,   -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 4, severity, -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 5, now,      -1, sqliteTransient)
 
         if sqlite3_step(stmt) != SQLITE_DONE {
             let msg = String(cString: sqlite3_errmsg(db))
@@ -159,11 +166,11 @@ final class SignatureDatabase {
 
         let now = ISO8601DateFormatter().string(from: Date())
         for entry in entries {
-            sqlite3_bind_text(stmt, 1, entry.hash,     -1, nil)
-            sqlite3_bind_text(stmt, 2, entry.name,     -1, nil)
-            sqlite3_bind_text(stmt, 3, entry.family,   -1, nil)
-            sqlite3_bind_text(stmt, 4, entry.severity, -1, nil)
-            sqlite3_bind_text(stmt, 5, now,            -1, nil)
+            sqlite3_bind_text(stmt, 1, entry.hash,     -1, sqliteTransient)
+            sqlite3_bind_text(stmt, 2, entry.name,     -1, sqliteTransient)
+            sqlite3_bind_text(stmt, 3, entry.family,   -1, sqliteTransient)
+            sqlite3_bind_text(stmt, 4, entry.severity, -1, sqliteTransient)
+            sqlite3_bind_text(stmt, 5, now,            -1, sqliteTransient)
             sqlite3_step(stmt)
             sqlite3_reset(stmt)
         }

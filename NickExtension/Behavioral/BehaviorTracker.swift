@@ -53,6 +53,15 @@ final class BehaviorTracker {
         let timestamp: Date
         let type: BehaviorEventType
         let detail: String
+        /// Rename source path; `detail` holds the destination.
+        var source: String? = nil
+    }
+
+    /// Result of the extension-change analysis for one process.
+    struct ExtensionChangeBurst: Equatable {
+        let newExtension: String
+        let fileCount: Int
+        let directoryCount: Int
     }
 
     enum BehaviorEventType: Equatable {
@@ -103,6 +112,60 @@ final class BehaviorTracker {
                 count - thresholds.maxEventsPerProcess
             )
         }
+    }
+
+    /// Records a completed rename with both paths so extension changes can be
+    /// attributed to the renaming process.
+    func recordRename(pid: Int32, processPath: String, source: String, destination: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if processTimelines[pid] == nil {
+            processTimelines[pid] = ProcessTimeline(
+                pid: pid, processPath: processPath,
+                startTime: Date(), events: [], childPids: []
+            )
+        }
+        processTimelines[pid]?.events.append(
+            BehaviorEvent(timestamp: Date(), type: .fileRename, detail: destination, source: source)
+        )
+        processTimelines[pid]?.prune(window: thresholds.timelineWindowSeconds)
+        if let count = processTimelines[pid]?.events.count,
+           count > thresholds.maxEventsPerProcess {
+            processTimelines[pid]?.events.removeFirst(count - thresholds.maxEventsPerProcess)
+        }
+    }
+
+    /// The most common *new* extension a process has given files by renaming
+    /// within `window` seconds (`a.docx → a.docx.xyz` or `a.docx → a.xyz`).
+    ///
+    /// Atomic saves (`x.json.tmp → x.json`), download completion, and common
+    /// data formats are excluded: they rename many files but never to a new,
+    /// uncommon extension.
+    func extensionChangeBurst(pid: Int32, window: TimeInterval = 10) -> ExtensionChangeBurst? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let timeline = processTimelines[pid] else { return nil }
+        let cutoff = Date().addingTimeInterval(-window)
+        var files: [String: Set<String>] = [:]
+        var directories: [String: Set<String>] = [:]
+        for event in timeline.events where event.type == .fileRename && event.timestamp >= cutoff {
+            guard let source = event.source,
+                  let newExtension = Self.introducedExtension(source: source, destination: event.detail)
+            else { continue }
+            files[newExtension, default: []].insert(event.detail)
+            directories[newExtension, default: []].insert((event.detail as NSString).deletingLastPathComponent)
+        }
+        guard let (ext, paths) = files.max(by: { $0.value.count < $1.value.count }) else { return nil }
+        return ExtensionChangeBurst(
+            newExtension: ext,
+            fileCount: paths.count,
+            directoryCount: directories[ext]?.count ?? 0
+        )
+    }
+
+    static func introducedExtension(source: String, destination: String) -> String? {
+        RansomwareRenamePolicy.introducedExtension(source: source, destination: destination)
     }
 
     /// Records a fork event — links the child PID to the parent's timeline.
@@ -161,16 +224,20 @@ final class BehaviorTracker {
             indicators.append("File op burst: \(fileOps.count) in window")
         }
 
-        // ── Mass renames to a common extension (ransomware) ─────────────
-        let renames = fileOps.filter { $0.type == .fileRename }
-        if renames.count > 10 {
-            let exts = renames.compactMap { $0.detail.components(separatedBy: ".").last }
-            let grouped = Dictionary(grouping: exts, by: { $0 })
-            if let (ext, matches) = grouped.max(by: { $0.value.count < $1.value.count }),
-               matches.count > 5 {
-                score += 0.5
-                indicators.append("Mass rename to .\(ext): \(matches.count) files")
+        // ── Mass extension change (ransomware) ──────────────────────────
+        // Counts only renames that introduce a new, uncommon extension, so
+        // atomic saves and download completion do not contribute.
+        let cutoff = now.addingTimeInterval(-10)
+        var introduced: [String: Int] = [:]
+        for event in fileOps where event.type == .fileRename && event.timestamp >= cutoff {
+            if let source = event.source,
+               let ext = Self.introducedExtension(source: source, destination: event.detail) {
+                introduced[ext, default: 0] += 1
             }
+        }
+        if let (ext, count) = introduced.max(by: { $0.value < $1.value }), count > 5 {
+            score += 0.5
+            indicators.append("Mass rename to .\(ext): \(count) files")
         }
 
         // ── Fork bomb ───────────────────────────────────────────────────

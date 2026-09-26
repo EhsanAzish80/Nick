@@ -41,6 +41,10 @@ final class EmailAttachmentMonitor: @unchecked Sendable {
         ("Library/Group Containers/UBF8T346G9.Office/Outlook/",    "Outlook"),
         ("Library/Containers/com.microsoft.Outlook/",              "Outlook"),
         ("Library/Containers/com.apple.mail/",                     "Apple Mail"),
+        ("Library/Thunderbird/Profiles/",                          "Thunderbird"),
+        ("Library/Containers/com.readdle.SparkDesktop",            "Spark"),
+        ("Library/Containers/com.mimestream.Mimestream/",          "Mimestream"),
+        ("Library/Containers/it.bloop.airmail2/",                  "Airmail"),
     ]
 
     /// File extensions that should always be treated as high-risk when
@@ -50,8 +54,9 @@ final class EmailAttachmentMonitor: @unchecked Sendable {
         "exe", "scr", "bat", "cmd", "pif", "com",
         // Script files
         "js", "jse", "vbs", "vbe", "wsf", "wsh", "ps1",
-        // macOS executables and installers
-        "app", "command", "action", "dmg", "pkg", "mpkg",
+        // macOS executables, scripts, and installers
+        "app", "command", "action", "dmg", "pkg", "mpkg", "scpt", "applescript",
+        "terminal", "workflow", "iso", "img",
         // Macro-enabled Office documents
         "docm", "xlsm", "pptm", "dotm", "xlam",
     ]

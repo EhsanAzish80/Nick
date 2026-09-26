@@ -6,9 +6,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Nick uses semantic versioning for public releases, with an independent
 monotonically increasing macOS bundle build number.
 
-## [Unreleased]
+## [Unreleased] — 4.6 (build 427)
 
-No user-facing changes have been released since 4.5.
+### Added
+
+- Family signatures for macOS malware and cross-platform implants (Lazarus/RustBucket, 3CX, LockBit for macOS, CloudMensis, KeyDnap, EvilQuest, Gimmick, and others) from vetted, redistributable sources, with rule authors credited in every finding.
+- Behaviour rules for Atomic/AMOS-style stealers: fake password prompts verified with `dscl`, and wallet/browser/Keychain/Notes harvesting.
+- Rename-based ransomware detection: bursts of files renamed to a new, uncommon extension, and deletion or renaming of a canary.
+- Known-malware hashes are checked before an unknown binary's first launch, so a known sample is blocked on its first run.
+- A benign-corpus false-positive gate and rule lint in CI.
+
+### Changed
+
+- Real-time scanning trusts only platform binaries and Apple-issued Team ID signatures. Ad-hoc signed code, and anything run from staging or persistence locations, is content-scanned when it launches.
+- One shared verdict policy for Deep Scan, the Downloads watcher, and real-time scanning. Rule semantics (`class`, `severity`) come from rule metadata.
+- Deep Scan runs on several cores, covers hidden files and more staging locations (`/Users/Shared`, `~/.local`, `~/.config`, Application Scripts), and skips opaque caches by file content instead of scanning every extensionless file.
+- USB and disk-image scans only hash and scan content that can run, including hidden files.
+- Ransomware canaries look like documents (hidden from Finder) so ransomware that skips dot-files still touches them.
+- Email Guard reports a risky attachment type as an observation; only scan evidence makes it a threat. Thunderbird, Spark, Mimestream, and Airmail are covered.
+
+### Fixed
+
+- A file rewritten after a clean scan could keep its clean verdict for up to five minutes.
+- A `.git` or `Package.swift` next to a payload, or a dotfiles repository in the home folder, could downgrade findings to "development artifact".
+- After the first YARA or persistence alert, further alerts from the same rule for other files were withheld until the next full scan.
+- Browser downloads (renamed on completion) were never scanned by the Downloads watcher.
+- A self-signed certificate claiming a Team ID was treated as a trusted signature; the network filter trusted signing identifiers that any ad-hoc binary can claim.
+- An invalid rule file silently disabled every rule file after it.
+- Noisy rules: the Electron/JIT entitlement, a two-integer byte pattern, OpenSSL strings, and documentation text no longer produce findings.
+- SQLite text parameters could reference freed memory in the signature and quarantine databases.
+
+### Performance
+
+- YARA scans no longer serialise behind one lock; files are read once for hashing and scanning; libyara fast mode is enabled.
+- Removed an exec-path predictor whose result was discarded, a full code-signature validation whose result was unused, and per-render file reads in Overview.
+
+### Verification
+
+- 443 automated tests executed: 439 passed, 4 platform-dependent tests were skipped, and 0 failed.
+- The optimized app, Endpoint Security extension, Network Filter extension, helper, and uninstaller build successfully; all embedded shipping bundles report version 4.6, build 427.
+- All 80 bundled YARA rules compile and pass metadata validation. A benign corpus of 7,540 executable candidates produced no malware-family/signature matches.
 
 ## [4.5] - 2026-08-24
 

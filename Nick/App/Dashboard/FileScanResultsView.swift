@@ -295,6 +295,12 @@ private struct MatchRow: View {
                         .foregroundStyle(Color.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                // Third-party rule licenses require crediting the rule author.
+                if let author = match.metadata["author"], !author.isEmpty {
+                    Text("Rule by \(author)")
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textSecondary)
+                }
             }
         }
         .padding(.horizontal, NickSpacing.lg)

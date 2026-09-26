@@ -193,6 +193,39 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(afterReset.map(\.title), first.map(\.title))
     }
 
+    func test_correlateNew_alertsAgainForADifferentSubject() async {
+        await correlator.ingest([
+            makeSignal(source: .yara, severity: .high, metadata: ["path": "/private/tmp/first", "rule": "fam"])
+        ])
+        let first = await correlator.correlateNew()
+        let repeated = await correlator.correlateNew()
+
+        await correlator.ingest([
+            makeSignal(source: .yara, severity: .high, metadata: ["path": "/private/tmp/second", "rule": "fam"])
+        ])
+        let second = await correlator.correlateNew()
+
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertTrue(repeated.isEmpty)
+        XCTAssertFalse(second.isEmpty, "A second file matching the same rule must still alert")
+    }
+
+    func test_pathApprovalIsPrefixOnly() async {
+        let rule = passthroughRule()
+        let localCorrelator = ThreatCorrelator(rules: [rule])
+        let signal = makeSignal(
+            source: .yara,
+            severity: .medium,
+            metadata: ["path": "/private/tmp/x/Users/me/Projects/payload", "rule": "macos_keychain_access", "suppressible": "true"]
+        )
+        await localCorrelator.updateSuppressionRules([
+            SuppressionRule(type: .path, value: "/Users/me/Projects", expiresAt: Date().addingTimeInterval(3_600))
+        ])
+        await localCorrelator.ingest([signal])
+        let alerts = await localCorrelator.correlateNew()
+        XCTAssertFalse(alerts.isEmpty)
+    }
+
     func test_learnedApproval_suppressesOnlySameSignedBehavior() async {
         let rule = passthroughRule()
         let localCorrelator = ThreatCorrelator(rules: [rule])

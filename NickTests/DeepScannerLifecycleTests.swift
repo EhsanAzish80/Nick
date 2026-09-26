@@ -39,6 +39,7 @@ final class DeepScannerLifecycleTests: XCTestCase {
             at: root.appendingPathComponent(".git", isDirectory: true),
             withIntermediateDirectories: true
         )
+        try Data("ref: refs/heads/main\n".utf8).write(to: root.appendingPathComponent(".git/HEAD"))
         try FileManager.default.createDirectory(
             at: source.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -284,16 +285,124 @@ final class DeepScannerLifecycleTests: XCTestCase {
         XCTAssertFalse(DeepScanner.canIgnore(match: criticalBehavioral))
     }
 
-    func test_behavioralRulesInRecognizedBuildArtifactsAreDevelopmentContext() {
-        let paths = [
-            "/Users/test/Library/Developer/Xcode/DerivedData/App/Build/Products/Debug/App",
-            "/private/tmp/Nick44Analyze/SourcePackages/artifacts/sparkle/Sparkle.framework.dSYM/Contents/Resources/DWARF/Sparkle",
-            "/private/tmp/swiftpm-10417-test-build/checkouts/swift-build/Tests/Fixture.swift",
-        ]
-        for path in paths {
-            let match = YARAMatch(ruleName: "macos_mass_file_rename", tags: [], filePath: path, metadata: ["severity": "high"])
-            XCTAssertEqual(DeepScanner.classify(match: match), .developmentArtifact, path)
+    func test_behavioralRulesInRecognizedBuildArtifactsAreDevelopmentContext() throws {
+        // Xcode's default per-user DerivedData location.
+        let defaultDerivedData = "/Users/test/Library/Developer/Xcode/DerivedData/App/Build/Products/Debug/App"
+        XCTAssertEqual(
+            DeepScanner.classify(match: behaviorMatch(defaultDerivedData)),
+            .developmentArtifact
+        )
+
+        // A custom -derivedDataPath is trusted only with Xcode's root metadata.
+        let derivedRoot = try makeTemporaryDirectory("Nick44Analyze")
+        let info: [String: Any] = ["WorkspacePath": "/Users/test/Projects/Nick/Nick.xcodeproj"]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: derivedRoot.appendingPathComponent("info.plist"))
+        let dwarf = derivedRoot.appendingPathComponent(
+            "SourcePackages/artifacts/sparkle/Sparkle.framework.dSYM/Contents/Resources/DWARF/Sparkle"
+        )
+        XCTAssertEqual(DeepScanner.classify(match: behaviorMatch(dwarf.path)), .developmentArtifact)
+
+        // SwiftPM scratch directory verified by workspace-state.json.
+        let scratch = try makeTemporaryDirectory("swiftpm-10417-test-build")
+        try Data("{}".utf8).write(to: scratch.appendingPathComponent("workspace-state.json"))
+        let checkout = scratch.appendingPathComponent("checkouts/swift-build/Tests/Fixture.swift")
+        XCTAssertEqual(DeepScanner.classify(match: behaviorMatch(checkout.path)), .developmentArtifact)
+    }
+
+    func test_buildLayoutNameWithoutToolMetadataRemainsSuspicious() throws {
+        let root = try makeTemporaryDirectory("dropper")
+        for relative in [".build/payload", "Build/Products/payload", "SourcePackages/checkouts/x/payload"] {
+            let path = root.appendingPathComponent(relative).path
+            XCTAssertEqual(DeepScanner.classify(match: behaviorMatch(path)), .suspicious, relative)
         }
+    }
+
+    func test_emptyGitDirectoryIsNotRepositoryEvidence() throws {
+        let root = try makeTemporaryDirectory("fake-repo")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".git"), withIntermediateDirectories: true
+        )
+        let payload = root.appendingPathComponent("bin/payload")
+        XCTAssertFalse(DeepScanner.isVerifiedDevelopmentContext(payload.path))
+        XCTAssertEqual(DeepScanner.classify(match: behaviorMatch(payload.path)), .suspicious)
+    }
+
+    func test_dotfilesRepositoryInHomeDoesNotCoverWholeHome() throws {
+        let home = try makeTemporaryDirectory("home")
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(".git"), withIntermediateDirectories: true
+        )
+        try Data("ref: refs/heads/main\n".utf8).write(to: home.appendingPathComponent(".git/HEAD"))
+        let desktopPayload = home.appendingPathComponent("Desktop/stuff/payload").path
+        XCTAssertFalse(DeepScanner.isVerifiedDevelopmentContext(desktopPayload, homeDirectory: home.path))
+
+        // A real project below home still counts.
+        let project = home.appendingPathComponent("Projects/App")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        try Data().write(to: project.appendingPathComponent("Package.swift"))
+        let source = project.appendingPathComponent("Sources/App/main.swift").path
+        XCTAssertTrue(DeepScanner.isVerifiedDevelopmentContext(source, homeDirectory: home.path))
+    }
+
+    func test_persistenceAndDropLocationsNeverReceiveDevelopmentDowngrade() throws {
+        let repo = try makeTemporaryDirectory("repo")
+        try Data().write(to: repo.appendingPathComponent("Package.swift"))
+        for relative in ["Library/LaunchAgents/com.x.plist", "Downloads/payload", "Library/Application Support/x/payload"] {
+            let path = repo.appendingPathComponent(relative).path
+            XCTAssertFalse(DeepScanner.isVerifiedDevelopmentContext(path), relative)
+            XCTAssertEqual(DeepScanner.classify(match: behaviorMatch(path)), .suspicious, relative)
+        }
+    }
+
+    func test_extensionlessFilesAreScannedOnlyForExecutableContent() {
+        XCTAssertTrue(DeepScanner.shouldScanFile(
+            path: "/Users/test/Library/Application Support/x/agent",
+            scanRoot: "/Users/test/Library/Application Support",
+            isExecutable: false,
+            contentKind: { _ in .machO }
+        ))
+        XCTAssertTrue(DeepScanner.shouldScanFile(
+            path: "/Users/Shared/.hidden/run",
+            scanRoot: "/Users/Shared",
+            isExecutable: false,
+            contentKind: { _ in .script }
+        ))
+        XCTAssertFalse(DeepScanner.shouldScanFile(
+            path: "/Users/test/Library/Application Support/Chrome/Default/Code Cache/js/f_0001",
+            scanRoot: "/Users/test/Library/Application Support",
+            isExecutable: false,
+            contentKind: { _ in .other }
+        ))
+    }
+
+    func test_ruleClassMetadataOverridesLegacyList() {
+        let declaredBehavior = YARAMatch(
+            ruleName: "osx_new_generic_rule", tags: [],
+            filePath: "/private/tmp/unknown/payload",
+            metadata: ["severity": "high", "class": "behavior"]
+        )
+        XCTAssertEqual(DeepScanner.classify(match: declaredBehavior), .suspicious)
+        XCTAssertTrue(DeepScanner.canIgnore(match: declaredBehavior))
+
+        let declaredSignature = YARAMatch(
+            ruleName: "macos_reverse_shell", tags: [],
+            filePath: "/Users/test/Library/Developer/Xcode/DerivedData/X/Build/Products/Debug/X",
+            metadata: ["severity": "high", "class": "signature"]
+        )
+        XCTAssertEqual(DeepScanner.classify(match: declaredSignature), .threat)
+    }
+
+    private func behaviorMatch(_ path: String) -> YARAMatch {
+        YARAMatch(ruleName: "macos_mass_file_rename", tags: [], filePath: path, metadata: ["severity": "high"])
+    }
+
+    private func makeTemporaryDirectory(_ name: String) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString)-\(name)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return root
     }
 
     func test_genericTemporaryPayloadRemainsSuspicious() {
@@ -432,14 +541,12 @@ final class DeepScannerLifecycleTests: XCTestCase {
         XCTAssertEqual(DeepScanner.uniqueMatches(matches).count, 2)
     }
 
-    func test_everyBundledCommunityRuleDeclaresSeverity() throws {
+    func test_everyBundledRuleDeclaresSeverityAndClass() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let projectRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
-        let rulesRoot = projectRoot.appendingPathComponent("Rules/community", isDirectory: true)
-        let ruleFiles = try FileManager.default.contentsOfDirectory(
-            at: rulesRoot,
-            includingPropertiesForKeys: nil
-        ).filter { $0.pathExtension == "yar" }
+        let rulesRoot = projectRoot.appendingPathComponent("Rules", isDirectory: true)
+        let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: rulesRoot, includingPropertiesForKeys: nil))
+        let ruleFiles = enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == "yar" }
         XCTAssertFalse(ruleFiles.isEmpty)
 
         let rulePattern = try NSRegularExpression(
@@ -447,6 +554,9 @@ final class DeepScannerLifecycleTests: XCTestCase {
         )
         let severityPattern = try NSRegularExpression(
             pattern: #"(?m)^\s*severity\s*=\s*"(?:INFO|LOW|MEDIUM|HIGH|CRITICAL)"\s*$"#
+        )
+        let classPattern = try NSRegularExpression(
+            pattern: #"(?m)^\s*class\s*=\s*"(?:signature|behavior)"\s*$"#
         )
         var checkedRules = 0
         var missing: [String] = []
@@ -459,14 +569,15 @@ final class DeepScannerLifecycleTests: XCTestCase {
                 let name = Range(match.range(at: 1), in: source).map { String(source[$0]) } ?? file.lastPathComponent
                 let body = Range(match.range(at: 2), in: source).map { String(source[$0]) } ?? ""
                 let bodyRange = NSRange(body.startIndex..., in: body)
-                if severityPattern.firstMatch(in: body, range: bodyRange) == nil {
+                if severityPattern.firstMatch(in: body, range: bodyRange) == nil
+                    || classPattern.firstMatch(in: body, range: bodyRange) == nil {
                     missing.append(name)
                 }
             }
         }
 
         XCTAssertGreaterThan(checkedRules, 0)
-        XCTAssertTrue(missing.isEmpty, "Rules missing explicit severity: \(missing.joined(separator: ", "))")
+        XCTAssertTrue(missing.isEmpty, "Rules missing explicit severity or class: \(missing.joined(separator: ", "))")
     }
 
     func test_startIsSynchronousAndRejectsOverlappingScan() async {

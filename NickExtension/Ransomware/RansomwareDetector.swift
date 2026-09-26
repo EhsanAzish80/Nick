@@ -90,7 +90,9 @@ final class RansomwareDetector {
     ///   - fileData: Contents written (pass `nil` if unavailable — entropy check skipped).
     /// - Returns: A `RansomwareAlert` when one or more signals fire, `nil` if clean.
     func evaluate(pid: Int32, processPath: String,
-                  filePath: String, fileData: Data?) -> RansomwareAlert? {
+                  filePath: String, fileData: Data?,
+                  actorIsPlatformBinary: Bool = false,
+                  actorHasTrustedSigner: Bool = false) -> RansomwareAlert? {
         var indicators: [String] = []
         var confidence = 0.0
         var hasRansomwareSpecificIndicator = false
@@ -98,8 +100,10 @@ final class RansomwareDetector {
         var familyExtensionObserved = false
         var ransomNoteObserved = false
 
-        // 1. Canary file touched
-        if canaryManager.isCanary(path: filePath) {
+        // 1. Canary file touched. Apple platform processes (iCloud Drive's
+        //    file provider, Spotlight, backup) legitimately rewrite files in
+        //    synced folders and must never trigger an automatic block.
+        if !actorIsPlatformBinary, canaryManager.isCanary(path: filePath) {
             indicators.append("Canary file touched: \(filePath)")
             confidence += 0.6
             hasRansomwareSpecificIndicator = true
@@ -153,8 +157,11 @@ final class RansomwareDetector {
             processPath: processPath,
             indicators:  indicators,
             confidence:  min(confidence, 1.0),
-            automaticBlockAllowed: canaryTouched
-                || (behavior.isSuspicious && (familyExtensionObserved || ransomNoteObserved))
+            // Sync clients (Dropbox, OneDrive, Google Drive) are identity-signed
+            // and legitimately rewrite synced canaries; they get a prompt, not
+            // an automatic kill.
+            automaticBlockAllowed: !actorHasTrustedSigner && (canaryTouched
+                || (behavior.isSuspicious && (familyExtensionObserved || ransomNoteObserved)))
         )
 
         Self.logger.notice(
@@ -162,6 +169,70 @@ final class RansomwareDetector {
         )
         return alert
     }
+
+    /// Evaluates a completed rename.
+    ///
+    /// Rename-based ransomware writes ciphertext and then renames the file to
+    /// a new extension; it may never modify a file under a ransomware-specific
+    /// name, so `evaluate` alone never fired for it. A burst of renames that
+    /// introduce the same uncommon extension across several files is
+    /// ransomware-specific evidence on its own.
+    func evaluateRename(
+        pid: Int32,
+        processPath: String,
+        source: String,
+        destination: String,
+        actorIsPlatformBinary: Bool,
+        actorHasTrustedSigner: Bool = false
+    ) -> RansomwareAlert? {
+        guard !actorIsPlatformBinary else { return nil }
+        var indicators: [String] = []
+        var confidence = 0.0
+        var canaryTouched = false
+        var strongEvidence = false
+
+        if canaryManager.isCanary(path: source) {
+            indicators.append("Canary file renamed: \(source)")
+            confidence += 0.6
+            canaryTouched = true
+        }
+
+        let destinationExtension = (destination as NSString).pathExtension.lowercased()
+        if !destinationExtension.isEmpty, knownRansomwareExtensions.contains(destinationExtension) {
+            indicators.append("Known ransomware extension: .\(destinationExtension)")
+            confidence += 0.4
+            strongEvidence = true
+        }
+
+        if let burst = behaviorTracker.extensionChangeBurst(pid: pid),
+           burst.fileCount >= Self.extensionBurstThreshold {
+            indicators.append(
+                "Mass extension change to .\(burst.newExtension): \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
+            )
+            confidence += burst.fileCount >= Self.extensionBurstThreshold * 3 ? 0.6 : 0.5
+            strongEvidence = strongEvidence || burst.directoryCount >= 2
+        }
+
+        guard canaryTouched || !indicators.isEmpty else { return nil }
+        let alert = RansomwareAlert(
+            pid: pid,
+            processPath: processPath,
+            indicators: indicators,
+            confidence: min(confidence, 1.0),
+            // A rename burst alone prompts the user; combined with a canary or a
+            // known family extension it justifies stopping the writer.
+            automaticBlockAllowed: !actorHasTrustedSigner
+                && (canaryTouched || (strongEvidence && confidence >= 0.9))
+        )
+        Self.logger.notice(
+            "Ransomware rename alert pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) action=\(String(describing: alert.recommendation))"
+        )
+        return alert
+    }
+
+    /// Files renamed to one new extension within the burst window before the
+    /// pattern counts as mass encryption.
+    static let extensionBurstThreshold = 8
 
     // MARK: - Entropy
 
@@ -179,9 +250,18 @@ final class RansomwareDetector {
 
     // MARK: - Known Patterns
 
+    /// Family extensions. Modern families mostly use per-victim random
+    /// extensions, which the extension-burst heuristic covers; these add
+    /// confidence when a known one appears.
     private let knownRansomwareExtensions: Set<String> = [
-        "locky", "cerber", "zepto", "odin", "aesir", "thor", "zzzzz",
-        "micro", "xtbl", "wallet", "dharma", "onion", "wncry",
+        // macOS families
+        "turtle", "lockbit", "encrypted_by_lockbit",
+        // Distinctive cross-platform family extensions. Generic words that
+        // real applications use as file formats (e.g. "encrypted", "hive",
+        // "wallet") are deliberately excluded: an extension match alone
+        // raises an alert on file close.
+        "locky", "cerber", "zepto", "odin", "aesir", "zzzzz",
+        "xtbl", "dharma", "wncry", "wnry", "ryk", "akira", "rhysida",
     ]
 
     /// Ransom-note matching must be deliberately narrow. Common words such as
@@ -225,24 +305,21 @@ final class CanaryFileManager {
 
                 // Adopt canaries from an earlier extension process. The
                 // in-memory set is rebuilt on every launch, but the files are
-                // deliberately persistent.
-                if let existingNames = try? FileManager.default.contentsOfDirectory(atPath: directory.path),
-                   let existing = existingNames.first(where: {
-                       $0.hasPrefix(".~nick_canary_") && $0.hasSuffix(".tmp")
-                   }) {
-                    canaryPaths.insert(directory.appendingPathComponent(existing).path)
-                    continue
+                // deliberately persistent. Legacy dot-file canaries stay
+                // registered alongside the document canary.
+                let existingNames = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+                for name in existingNames where Self.isCanaryName(name) {
+                    canaryPaths.insert(directory.appendingPathComponent(name).path)
                 }
+                guard !existingNames.contains(where: Self.isDocumentCanaryName) else { continue }
 
+                // Ransomware typically skips dot-files and only encrypts known
+                // document and image extensions, so the canary is a visible
+                // name with a targeted extension, hidden from Finder by flag.
+                let ext = folderName == "Pictures" ? "jpg" : "docx"
                 let canaryPath = directory
-                    .appendingPathComponent(".~nick_canary_\(UUID().uuidString.prefix(8)).tmp")
+                    .appendingPathComponent("\(Self.documentCanaryPrefix)\(UUID().uuidString.prefix(6)).\(ext)")
                     .path
-
-                // Skip if we already have a canary in this directory.
-                let dirAlreadyProtected = canaryPaths.contains(where: {
-                    ($0 as NSString).deletingLastPathComponent == directory.path
-                })
-                guard !dirAlreadyProtected else { continue }
 
                 let content = "NICK_CANARY_DO_NOT_MODIFY_\(Date())"
                 guard (try? content.write(toFile: canaryPath, atomically: true, encoding: .utf8)) != nil
@@ -265,8 +342,17 @@ final class CanaryFileManager {
         if canaryPaths.contains(path) {
             return true
         }
-        let name = (path as NSString).lastPathComponent
-        return name.hasPrefix(".~nick_canary_") && name.hasSuffix(".tmp")
+        return Self.isCanaryName((path as NSString).lastPathComponent)
+    }
+
+    static let documentCanaryPrefix = "Nick Canary - do not modify "
+
+    static func isDocumentCanaryName(_ name: String) -> Bool {
+        name.hasPrefix(documentCanaryPrefix)
+    }
+
+    static func isCanaryName(_ name: String) -> Bool {
+        isDocumentCanaryName(name) || (name.hasPrefix(".~nick_canary_") && name.hasSuffix(".tmp"))
     }
 
     /// Removes all canary files from disk and clears the set.

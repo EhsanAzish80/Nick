@@ -35,7 +35,6 @@ final class FileScanner {
         let mayBlock: Bool
         let threatName: String?
         let threatFamily: String?
-        let isCodeSigned: Bool?   // nil = not evaluated
     }
 
     // MARK: - Configuration
@@ -63,9 +62,6 @@ final class FileScanner {
         category: "FileScanner"
     )
 
-    // CS_VALID bitmask from <sys/codesign.h> — process is dynamically valid
-    private static let csValid: UInt32 = 0x00000001
-
     // MARK: - Init
 
     /// - Parameters:
@@ -89,24 +85,33 @@ final class FileScanner {
     /// - Parameter filePath: Absolute path to the file.
     /// - Returns: `ScanResult` — never throws.
     func scan(filePath: String) -> ScanResult {
-        // 1. Cache hit — return immediately
-        if let entry = cache.lookup(path: filePath) {
+        // Identity is captured before reading so a concurrent rewrite produces
+        // an identity mismatch (and a rescan) rather than a stale clean verdict.
+        let identity = FileIdentity(path: filePath)
+
+        // 1. Cache hit for the same content — return immediately
+        if let entry = cache.lookup(path: filePath, identity: identity) {
             return ScanResult(
                 filePath: filePath,
                 hash: entry.hash,
                 isThreat: entry.isThreat,
                 mayBlock: entry.mayBlock,
                 threatName: entry.threatName,
-                threatFamily: entry.threatFamily,
-                isCodeSigned: nil
+                threatFamily: entry.threatFamily
             )
         }
 
-        // 2. Hash the file
-        guard let hash = computeSHA256(path: filePath) else {
-            Self.logger.debug("Cannot hash \(filePath) — skipping scan")
+        // 2. Read small files once: the same bytes are hashed and YARA-scanned
+        //    in memory. Larger files are hashed by streaming and scanned by path.
+        let size = identity.map { Int($0.size) } ?? Int.max
+        let contents: Data? = size <= Self.streamingThreshold
+            ? FileManager.default.contents(atPath: filePath)
+            : nil
+        guard let hash = contents.map({ SHA256.hash(data: $0).hexString })
+                ?? computeSHA256Streaming(path: filePath) else {
+            Self.logger.debug("Cannot hash \(filePath, privacy: .private) — skipping scan")
             return ScanResult(filePath: filePath, hash: "", isThreat: false,
-                              mayBlock: false, threatName: nil, threatFamily: nil, isCodeSigned: nil)
+                              mayBlock: false, threatName: nil, threatFamily: nil)
         }
 
         // 3. Signature DB lookup (hash-based — catches known exact samples)
@@ -117,7 +122,11 @@ final class FileScanner {
         var yaraMatches: [YARAMatch] = []
         if let yaraEngine {
             do {
-                yaraMatches = try yaraEngine.scanFileBlocking(at: filePath)
+                if let contents {
+                    yaraMatches = try yaraEngine.scanDataBlocking(contents, reportingPath: filePath)
+                } else {
+                    yaraMatches = try yaraEngine.scanFileBlocking(at: filePath)
+                }
             } catch YARAError.scanTimeout(let p) {
                 Self.logger.warning("YARA scan timeout — \(p, privacy: .private)")
             } catch YARAError.fileNotReadable {
@@ -127,12 +136,12 @@ final class FileScanner {
             }
         }
 
-        // 5. Merge results. MEDIUM/LOW YARA rules are behavioral heuristics:
-        // useful in an explicit scan, but not enough evidence to deny execution
-        // or quarantine a file. Only HIGH/CRITICAL rules are treated as threats.
+        // 5. Merge results with the shared verdict policy. Family signatures
+        // at HIGH/CRITICAL are threats; generic behaviour rules need file
+        // context this path does not have, so they are logged for review
+        // unless their author declared them critical.
         let actionableYARAMatches = yaraMatches.filter {
-            let severity = $0.metadata["severity"]?.uppercased() ?? "HIGH"
-            return severity == "HIGH" || severity == "CRITICAL"
+            YARAVerdictPolicy.isContextFreeThreat(ruleName: $0.ruleName, metadata: $0.metadata, tags: $0.tags)
         }
         let isThreat = hashMatch != nil || !actionableYARAMatches.isEmpty
         // YARA rules are pattern/heuristic evidence. Even a high-severity rule
@@ -140,7 +149,10 @@ final class FileScanner {
         // DerivedData). Only an exact curated hash is safe to auto-block.
         let mayBlock = hashMatch != nil
         let threatName = hashMatch?.name
-            ?? actionableYARAMatches.first.map { "YARA:\($0.ruleName)" }
+            ?? actionableYARAMatches.first.map { match in
+                // DRL 1.1 rules require the author in messages based on matches.
+                "YARA:\(match.ruleName)" + (match.metadata["author"].map { " (by \($0))" } ?? "")
+            }
         let threatFamily = hashMatch?.family ?? actionableYARAMatches.first?.tags.first
 
         if let hashMatch {
@@ -151,12 +163,10 @@ final class FileScanner {
             Self.logger.info("YARA heuristic only: \(filePath, privacy: .private) → rule:\(first.ruleName)")
         }
 
-        // 6. Code-signing check
-        let isSigned = evaluateCodeSigning(path: filePath)
-
-        // 7. Populate cache
+        // 6. Populate cache
         cache.store(
             path: filePath,
+            identity: identity,
             hash: hash,
             isThreat: isThreat,
             mayBlock: mayBlock,
@@ -170,15 +180,49 @@ final class FileScanner {
             isThreat: isThreat,
             mayBlock: mayBlock,
             threatName: threatName,
-            threatFamily: threatFamily,
-            isCodeSigned: isSigned
+            threatFamily: threatFamily
         )
     }
 
-    /// Returns `true` if `path` is in a location that warrants suspicion when unsigned.
+    /// Hash-only check that can run before a first launch is allowed.
     ///
-    /// Trusted system paths always return `false` (never suspicious).
-    /// Paths from user home dirs, /tmp, and Downloads are considered untrusted.
+    /// A curated hash match is cached as blockable so the same file is also
+    /// denied on open, mmap, and copy. Everything else is left to the full
+    /// scan that follows the AUTH response.
+    func preLaunchHashMatch(path: String, identity: FileIdentity) -> SignatureDatabase.ThreatMatch? {
+        guard let hash = computeSHA256Streaming(path: path),
+              let match = signatureDB.lookup(hash: hash) else { return nil }
+        cache.store(
+            path: path,
+            identity: identity,
+            hash: hash,
+            isThreat: true,
+            mayBlock: true,
+            threatName: match.name,
+            threatFamily: match.family
+        )
+        return match
+    }
+
+    /// Whether any curated hashes are loaded. Refreshed at most once a minute
+    /// so the AUTH path never runs a COUNT query.
+    var hasSignatures: Bool {
+        signatureCountLock.withLock {
+            if Date().timeIntervalSince(signatureCountCheckedAt) > 60 {
+                cachedHasSignatures = signatureDB.count > 0
+                signatureCountCheckedAt = Date()
+            }
+            return cachedHasSignatures
+        }
+    }
+
+    private let signatureCountLock = NSLock()
+    private var cachedHasSignatures = false
+    private var signatureCountCheckedAt = Date.distantPast
+
+    /// Narrow drop-zone check used only by the AUTH_CREATE observation
+    /// heuristic, where a broad definition would report routine app writes.
+    /// Exec-time scanning uses `ExecutionTrustPolicy.isHighRiskLocation`.
     func isUntrustedLocation(_ path: String) -> Bool {
         let trusted = ["/Applications/", "/System/", "/usr/", "/Library/Apple/", "/sbin/", "/bin/"]
         if trusted.contains(where: { path.hasPrefix($0) }) { return false }
@@ -193,20 +237,6 @@ final class FileScanner {
     }
 
     // MARK: - Hashing
-
-    private func computeSHA256(path: String) -> String? {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-        let size  = (attrs?[.size] as? Int) ?? 0
-
-        return size > Self.streamingThreshold
-            ? computeSHA256Streaming(path: path)
-            : computeSHA256Buffered(path: path)
-    }
-
-    private func computeSHA256Buffered(path: String) -> String? {
-        guard let data = FileManager.default.contents(atPath: path) else { return nil }
-        return SHA256.hash(data: data).hexString
-    }
 
     private func computeSHA256Streaming(path: String) -> String? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
@@ -227,19 +257,6 @@ final class FileScanner {
         return hasher.finalize().hexString
     }
 
-    // MARK: - Code Signing
-
-    private func evaluateCodeSigning(path: String) -> Bool? {
-        var staticCode: SecStaticCode?
-        let url = URL(fileURLWithPath: path)
-        guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
-              let staticCode else {
-            return nil
-        }
-
-        let result = SecStaticCodeCheckValidity(staticCode, SecCSFlags(rawValue: 0), nil)
-        return result == errSecSuccess
-    }
 }
 
 // MARK: - Digest Hex Helpers

@@ -6,6 +6,13 @@ import Foundation
 import SQLite3
 import os
 
+
+/// `SQLITE_TRANSIENT`: SQLite copies the bound text immediately. Passing `nil`
+/// (`SQLITE_STATIC`) told SQLite to keep using a pointer that Swift only
+/// guarantees for the duration of the bind call — temporaries such as a
+/// formatted date string were already freed when the statement ran.
+nonisolated(unsafe) private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
 // MARK: - QuarantineDatabase
 
 /// SQLite-backed persistence for `QuarantineRecord` objects.
@@ -73,14 +80,14 @@ final class QuarantineDatabase {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, record.id.uuidString,             -1, nil)
-        sqlite3_bind_text(stmt, 2, record.originalPath,              -1, nil)
-        sqlite3_bind_text(stmt, 3, record.quarantinedPath,           -1, nil)
-        sqlite3_bind_text(stmt, 4, record.hash,                      -1, nil)
-        sqlite3_bind_text(stmt, 5, record.threatName,                -1, nil)
-        sqlite3_bind_text(stmt, 6, record.severity,                  -1, nil)
-        sqlite3_bind_text(stmt, 7, iso.string(from: record.quarantinedAt), -1, nil)
-        sqlite3_bind_text(stmt, 8, record.processPath,               -1, nil)
+        sqlite3_bind_text(stmt, 1, record.id.uuidString,             -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 2, record.originalPath,              -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 3, record.quarantinedPath,           -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 4, record.hash,                      -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 5, record.threatName,                -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 6, record.severity,                  -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 7, iso.string(from: record.quarantinedAt), -1, sqliteTransient)
+        sqlite3_bind_text(stmt, 8, record.processPath,               -1, sqliteTransient)
         sqlite3_bind_int (stmt, 9, record.pid)
         sqlite3_step(stmt)
     }
@@ -93,7 +100,7 @@ final class QuarantineDatabase {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, id.uuidString, -1, nil)
+        sqlite3_bind_text(stmt, 1, id.uuidString, -1, sqliteTransient)
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
         return decodeRow(stmt)
     }
@@ -121,7 +128,7 @@ final class QuarantineDatabase {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, id.uuidString, -1, nil)
+        sqlite3_bind_text(stmt, 1, id.uuidString, -1, sqliteTransient)
         sqlite3_step(stmt)
     }
 

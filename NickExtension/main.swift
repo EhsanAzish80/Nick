@@ -125,7 +125,6 @@ if !FileManager.default.fileExists(atPath: fimBaselinePath) {
 // MARK: Phase 4 — Advanced Detection
 
 let behaviorTracker    = BehaviorTracker()
-let threatPredictor    = ThreatPredictor()
 let ransomwareDetector = RansomwareDetector(behaviorTracker: behaviorTracker)
 
 // Plant canary files in common user directories
@@ -153,7 +152,6 @@ eventHandler.fileScanner             = fileScanner
 eventHandler.remediationEngine       = remediationEngine
 eventHandler.fileIntegrityMonitor    = fileIntegrityMonitor
 eventHandler.behaviorTracker         = behaviorTracker
-eventHandler.threatPredictor         = threatPredictor
 eventHandler.ransomwareDetector      = ransomwareDetector
 eventHandler.privacyGuard            = privacyGuard
 eventHandler.usbScanner              = usbScanner

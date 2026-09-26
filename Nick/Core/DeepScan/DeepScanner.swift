@@ -28,8 +28,12 @@ final class DeepScanner {
     ]
 
     private nonisolated static let scriptExtensions: Set<String> = [
-        "sh", "py", "rb", "pl", "swift", "command", "tool",
+        "sh", "py", "rb", "pl", "swift", "command", "tool", "scpt", "applescript",
     ]
+
+    /// Directory names whose contents are never executable payloads and are
+    /// expensive to walk (packed VCS objects).
+    private nonisolated static let prunedDirectoryNames: Set<String> = [".git", ".svn", ".hg"]
 
     // MARK: - Progress State
 
@@ -146,108 +150,54 @@ final class DeepScanner {
         totalFiles = files.count
         Self.log.info("DeepScanner: \(files.count) files to scan")
 
-        // Phase 2: scan each file, updating progress after each one.
-        for (index, file) in files.enumerated() {
-            guard !Task.isCancelled else { break }
+        // Phase 2: scan with a bounded pool of workers. libyara scans one rule
+        // set from many threads, so throughput scales with cores; the bound
+        // keeps the Mac responsive and stays under libyara's thread limit.
+        // Classification (signature checks, path context) runs in the worker;
+        // the main actor only merges results and publishes progress, at most
+        // a few times per second.
+        let workerCount = Self.workerCount()
+        var pending = files.makeIterator()
+        var completed = 0
+        var lastPublish = Date.distantPast
 
-            // Battery gate — pause if on battery and the user requested power-only.
-            if storedOnlyOnPower && !Self.isOnPower() {
-                isPaused = true
-                while !Self.isOnPower() {
-                    guard !Task.isCancelled else { break }
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+        await withTaskGroup(of: FileOutcome.self) { group in
+            for _ in 0..<workerCount {
+                guard let file = pending.next() else { break }
+                group.addTask { await Self.scan(file, with: scanFile) }
+            }
+
+            while let outcome = await group.next() {
+                guard !Task.isCancelled else {
+                    group.cancelAll()
+                    continue
                 }
-                isPaused = false
-                guard !Task.isCancelled else { break }
-            }
+                completed += 1
+                await merge(outcome)
 
-            // Show the file currently being inspected. Completed-file progress is
-            // updated only after this operation returns.
-            currentFile  = file
-
-            // Per-file scan — YARAEngine.scanFile dispatches to a background thread
-            // internally, so this await releases the main actor for the scan work.
-            do {
-                let matches = try await scanFile(file)
-                guard !Task.isCancelled else { return finishCancelledScan(scanID: scanID) }
-                if !matches.isEmpty {
-                    let uniqueMatches = Self.uniqueMatches(matches)
-                    results.append(contentsOf: uniqueMatches)
-                    let classified = await Task.detached(priority: .utility) {
-                        uniqueMatches.map { match in
-                            (match, DeepScanner.classify(match: match))
-                        }
-                    }.value
-                    guard !Task.isCancelled else { return finishCancelledScan(scanID: scanID) }
-                    for (match, verdict) in classified {
-                        resultVerdicts[Self.matchKey(for: match)] = verdict
-                    }
-                    let actionableMatches = classified.compactMap { pair -> YARAMatch? in
-                        let (match, verdict) = pair
-                        guard verdict == .threat || verdict == .suspicious else { return nil }
-                        if self.ignoredPaths.contains(Self.canonicalPath(match.filePath)),
-                           Self.canIgnore(match: match) {
-                            return nil
-                        }
-                        return match
-                    }
-                    threatsFound += actionableMatches.count
-                    // Ingest only actionable YARA matches (.threat / .suspicious) into the
-                    // correlator. Safe verdicts (.applicationData, .developmentArtifact,
-                    // .likelySafe) still appear in the Deep Scan results view for transparency
-                    // but do not create alerts or fire notifications.
-                    if let eng = engine {
-                        var signals: [ThreatSignal] = []
-                        for match in actionableMatches {
-                            let severity = Self.signalSeverity(for: match)
-                            signals.append(ThreatSignal(
-                                source: .yara,
-                                severity: severity,
-                                title: "YARA match: \(match.ruleName)",
-                                description: "\(match.metadata["description"] ?? match.ruleName) at \(match.filePath)",
-                                context: ThreatSignalContext(
-                                    fileInfo: FileInfo(
-                                        path: match.filePath,
-                                        sha256Hash: nil,
-                                        entropy: nil,
-                                        signingStatus: nil,
-                                        sizeBytes: nil
-                                    ),
-                                    metadata: [
-                                        "path": match.filePath,
-                                        "rule": match.ruleName,
-                                        "suppressible": Self.canIgnore(match: match) ? "true" : "false",
-                                    ]
-                                )
-                            ))
-                        }
-                        if !signals.isEmpty {
-                            await eng.correlator.ingest(signals)
-                            let alerts = await eng.correlator.correlateNew()
-                            for alert in alerts {
-                                eng.addAlert(alert)
-                                await NotificationManager.shared.send(for: alert)
-                            }
-                        }
-                    }
+                let now = Date()
+                if now.timeIntervalSince(lastPublish) >= 0.2 || completed == files.count {
+                    lastPublish = now
+                    let elapsed = now.timeIntervalSince(startTime)
+                    scannedFiles = completed
+                    currentFile = outcome.path
+                    progress = files.isEmpty ? 0 : Double(completed) / Double(files.count)
+                    elapsedTime = elapsed
+                    estimatedRemaining = elapsed / Double(completed) * Double(files.count - completed)
                 }
-            } catch {
-                // Skip unreadable, timed-out, or otherwise failing files silently.
-            }
 
-            guard !Task.isCancelled else { return finishCancelledScan(scanID: scanID) }
-            let completed = index + 1
-            let elapsed = Date().timeIntervalSince(startTime)
-            scannedFiles = completed
-            progress = files.isEmpty ? 0 : Double(completed) / Double(files.count)
-            elapsedTime = elapsed
-            if completed > 0 {
-                let average = elapsed / Double(completed)
-                estimatedRemaining = average * Double(files.count - completed)
+                // Battery gate — hold new work while on battery if requested.
+                if storedOnlyOnPower && !Self.isOnPower() {
+                    isPaused = true
+                    while !Self.isOnPower(), !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    }
+                    isPaused = false
+                }
+                if !Task.isCancelled, let file = pending.next() {
+                    group.addTask { await Self.scan(file, with: scanFile) }
+                }
             }
-
-            // Yield cooperatively every 10 files to keep the main actor responsive.
-            if index % 10 == 0 { await Task.yield() }
         }
 
         guard !Task.isCancelled else { return finishCancelledScan(scanID: scanID) }
@@ -266,6 +216,85 @@ final class DeepScanner {
         }
         engine?.recordDeepScan(fileCount: totalFiles)
         Self.log.info("DeepScanner: complete — \(self.threatsFound) actionable finding(s)")
+    }
+
+    /// Result of scanning and classifying one file in a worker task.
+    private struct FileOutcome: Sendable {
+        let path: String
+        let classified: [(YARAMatch, ThreatVerdict)]
+    }
+
+    nonisolated private static func workerCount() -> Int {
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        let base = ProcessInfo.processInfo.isLowPowerModeEnabled ? 2 : cores - 1
+        return max(2, min(base, YARAEngine.maximumConcurrentScans / 2))
+    }
+
+    nonisolated private static func scan(
+        _ file: String,
+        with scanFile: @escaping @Sendable (String) async throws -> [YARAMatch]
+    ) async -> FileOutcome {
+        guard let matches = try? await scanFile(file), !matches.isEmpty else {
+            return FileOutcome(path: file, classified: [])
+        }
+        let unique = uniqueMatches(matches)
+        return FileOutcome(path: file, classified: unique.map { ($0, classify(match: $0)) })
+    }
+
+    /// Records one file's findings and forwards actionable ones to the correlator.
+    private func merge(_ outcome: FileOutcome) async {
+        guard !outcome.classified.isEmpty else { return }
+        results.append(contentsOf: outcome.classified.map { $0.0 })
+        for (match, verdict) in outcome.classified {
+            resultVerdicts[Self.matchKey(for: match)] = verdict
+        }
+        let actionableMatches = outcome.classified.compactMap { pair -> YARAMatch? in
+            let (match, verdict) = pair
+            guard verdict == .threat || verdict == .suspicious else { return nil }
+            if ignoredPaths.contains(Self.canonicalPath(match.filePath)), Self.canIgnore(match: match) {
+                return nil
+            }
+            return match
+        }
+        threatsFound += actionableMatches.count
+        // Ingest only actionable YARA matches (.threat / .suspicious) into the
+        // correlator. Safe verdicts (.applicationData, .developmentArtifact,
+        // .likelySafe) still appear in the Deep Scan results view for
+        // transparency but do not create alerts or fire notifications.
+        guard let eng = engine, !actionableMatches.isEmpty else { return }
+        let signals = actionableMatches.map { match in
+            ThreatSignal(
+                source: .yara,
+                severity: Self.signalSeverity(for: match),
+                title: "YARA match: \(match.ruleName)",
+                description: "\(match.metadata["description"] ?? match.ruleName) at \(match.filePath)"
+                    + (match.metadata["author"].map { " (rule author: \($0))" } ?? ""),
+                context: ThreatSignalContext(
+                    fileInfo: FileInfo(
+                        path: match.filePath,
+                        sha256Hash: nil,
+                        entropy: nil,
+                        signingStatus: nil,
+                        sizeBytes: nil
+                    ),
+                    metadata: [
+                        "path": match.filePath,
+                        "rule": match.ruleName,
+                        "yaraRules": match.ruleName,
+                        // Third-party rule licenses (DRL 1.1) require the
+                        // author to be retained in messages based on matches.
+                        "yaraAuthors": match.metadata["author"] ?? "",
+                        "suppressible": Self.canIgnore(match: match) ? "true" : "false",
+                    ]
+                )
+            )
+        }
+        await eng.correlator.ingest(signals)
+        let alerts = await eng.correlator.correlateNew()
+        for alert in alerts {
+            eng.addAlert(alert)
+            await NotificationManager.shared.send(for: alert)
+        }
     }
 
     private func finishCancelledScan(scanID: UUID) {
@@ -305,6 +334,13 @@ final class DeepScanner {
             NSHomeDirectory() + "/Downloads",
             NSHomeDirectory() + "/Desktop",
             NSHomeDirectory() + "/Applications",
+            // Common stealer, loader, and persistence staging locations.
+            NSHomeDirectory() + "/Library/Application Scripts",
+            NSHomeDirectory() + "/Library/Scripts",
+            NSHomeDirectory() + "/.local",
+            NSHomeDirectory() + "/.config",
+            "/Library/Scripts",
+            "/Users/Shared",
             "/tmp",
             "/var/tmp",
             "/private/tmp"
@@ -315,12 +351,13 @@ final class DeepScanner {
                 log.warning("DeepScan: no access to \(scanPath, privacy: .public)")
                 continue
             }
+            // Hidden files are included: dot-prefixed staging directories and
+            // payloads are a hallmark of macOS stealers. Bundles are descended
+            // so their actual Mach-O binaries are scanned.
             guard let enumerator = fm.enumerator(
                 at: URL(fileURLWithPath: scanPath),
-                includingPropertiesForKeys: [.isExecutableKey, .isRegularFileKey],
-                // Descend into application bundles so their actual Mach-O binaries
-                // are scanned; the bundle directory itself is not executable data.
-                options: [.skipsHiddenFiles]
+                includingPropertiesForKeys: [.isExecutableKey, .isRegularFileKey, .isDirectoryKey],
+                options: []
             ) else {
                 log.warning("DeepScan: cannot enumerate \(scanPath, privacy: .public)")
                 continue
@@ -329,8 +366,15 @@ final class DeepScanner {
             var count = 0
             for case let url as URL in enumerator {
                 guard let res = try? url.resourceValues(
-                    forKeys: [.isExecutableKey, .isRegularFileKey]
-                ), res.isRegularFile == true else { continue }
+                    forKeys: [.isExecutableKey, .isRegularFileKey, .isDirectoryKey]
+                ) else { continue }
+                if res.isDirectory == true {
+                    if prunedDirectoryNames.contains(url.lastPathComponent) {
+                        enumerator.skipDescendants()
+                    }
+                    continue
+                }
+                guard res.isRegularFile == true else { continue }
                 if shouldScanFile(
                     path: url.path,
                     scanRoot: scanPath,
@@ -351,13 +395,19 @@ final class DeepScanner {
     nonisolated static func shouldScanFile(
         path: String,
         scanRoot: String,
-        isExecutable: Bool
+        isExecutable: Bool,
+        contentKind: (String) -> ScanCandidatePolicy.Kind = ScanCandidatePolicy.kind(atPath:)
     ) -> Bool {
         let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
         let isLaunchPropertyList = ext == "plist"
             && (scanRoot.hasSuffix("LaunchDaemons") || scanRoot.hasSuffix("LaunchAgents"))
         guard !skippedExtensions.contains(ext) || isLaunchPropertyList else { return false }
-        return isExecutable || scriptExtensions.contains(ext) || isLaunchPropertyList || ext.isEmpty
+        if isExecutable || scriptExtensions.contains(ext) || isLaunchPropertyList { return true }
+        // Extensionless files are mostly opaque application caches. Only scan
+        // the ones whose content can actually run (extensionless Mach-O and
+        // scripts are a common dropper pattern).
+        guard ext.isEmpty else { return false }
+        return ScanCandidatePolicy.isExecutableContent(contentKind(path))
     }
 
     // MARK: - Power Source
@@ -385,7 +435,9 @@ final class DeepScanner {
 
         // Concrete malware-family signatures remain actionable in every location.
         // A dropper controls its path, so location cannot override this evidence.
-        if !behavioralRules.contains(match.ruleName) { return .threat }
+        if YARAVerdictPolicy.ruleClass(ruleName: match.ruleName, metadata: match.metadata) == .signature {
+            return .threat
+        }
 
         // Build outputs can live outside the source repository, especially under
         // DerivedData and SwiftPM scratch directories. Strong layout markers give
@@ -474,15 +526,12 @@ final class DeepScanner {
     /// Maps YARA metadata to signal severity. Missing metadata defaults to Medium;
     /// bundled rules are separately validated to require an explicit value.
     nonisolated static func signalSeverity(for match: YARAMatch) -> SignalSeverity {
-        switch match.metadata["severity"]?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
-        case "INFO": return .info
-        case "LOW": return .low
-        case "MEDIUM": return .medium
-        case "HIGH": return .high
-        case "CRITICAL": return .critical
-        default:
-            return match.tags.contains(where: { $0.caseInsensitiveCompare("critical") == .orderedSame })
-                ? .critical : .medium
+        switch YARAVerdictPolicy.severity(metadata: match.metadata, tags: match.tags) {
+        case .info: return .info
+        case .low: return .low
+        case .medium: return .medium
+        case .high: return .high
+        case .critical: return .critical
         }
     }
 
@@ -493,7 +542,7 @@ final class DeepScanner {
     /// User ignores are available only for broad, non-critical behavioral matches.
     /// Concrete signatures remain visible and actionable on every scan.
     nonisolated static func canIgnore(match: YARAMatch) -> Bool {
-        behavioralRules.contains(match.ruleName) && signalSeverity(for: match) < .critical
+        YARAVerdictPolicy.canIgnore(ruleName: match.ruleName, metadata: match.metadata, tags: match.tags)
     }
 
     /// Removes duplicate rule/path pairs, which can otherwise occur when YARA returns
@@ -531,29 +580,38 @@ final class DeepScanner {
         return resolved
     }
 
-    private nonisolated static let behavioralRules: Set<String> = [
-        "macos_backup_deletion", "macos_browser_credential_theft",
-        "macos_browser_extension_inject", "macos_dns_hijack",
-        "macos_dylib_injection", "macos_icloud_token_theft",
-        "macos_keychain_access", "macos_launch_constraints_bypass",
-        "macos_launchagent_install", "macos_mass_file_rename",
-        "macos_network_proxy_intercept", "macos_ptrace_antidebug",
-        "macos_ransom_note", "macos_reverse_shell", "macos_screenshot_capture",
-        "macos_shadow_copy_delete", "nick_email_applescript_dropper",
-        "nick_email_html_smuggling", "nick_email_office_macro_dropper",
-        "nick_email_powershell_encoded_dropper", "nick_email_shell_dropper",
-    ]
+    /// Staging and persistence locations. A development downgrade is never
+    /// applied here: a payload chooses its own directory names, and no real
+    /// build tree lives in these places.
+    nonisolated static func isDevelopmentDowngradeForbidden(_ path: String) -> Bool {
+        let lower = canonicalPath(path).lowercased()
+        let forbidden = [
+            "/library/launchagents/", "/library/launchdaemons/",
+            "/library/privilegedhelpertools/", "/library/application support/",
+            "/library/application scripts/", "/users/shared/", "/downloads/",
+        ]
+        return forbidden.contains(where: lower.contains)
+    }
 
-    nonisolated static func isVerifiedDevelopmentContext(_ path: String) -> Bool {
-        let fm = FileManager.default
-        var candidate = URL(fileURLWithPath: path).deletingLastPathComponent()
+    /// A match is development context only inside a real repository root that
+    /// sits strictly below the user's home directory. The walk stops at the
+    /// home directory so a dotfiles repository in `~` cannot turn all of
+    /// Downloads, Desktop, and Application Support into "source code".
+    nonisolated static func isVerifiedDevelopmentContext(
+        _ path: String,
+        homeDirectory: String = NSHomeDirectory()
+    ) -> Bool {
+        let canonical = canonicalPath(path)
+        guard !isDevelopmentDowngradeForbidden(canonical) else { return false }
+        let home = canonicalPath(homeDirectory)
+        let boundaries: Set<String> = [
+            "/", "/Users", "/Volumes", "/private", "/private/tmp", "/private/var",
+            "/private/var/tmp", "/private/var/folders", home,
+        ]
+        var candidate = URL(fileURLWithPath: canonical).deletingLastPathComponent()
         for _ in 0..<12 {
-            let markers = [".git", "Package.swift", ".swiftpm", "project.pbxproj"]
-            if markers.contains(where: {
-                fm.fileExists(atPath: candidate.appendingPathComponent($0).path)
-            }) {
-                return true
-            }
+            if boundaries.contains(candidate.path) { break }
+            if isRepositoryRoot(candidate) { return true }
             let parent = candidate.deletingLastPathComponent()
             if parent.path == candidate.path { break }
             candidate = parent
@@ -561,25 +619,71 @@ final class DeepScanner {
         return false
     }
 
-    nonisolated static func isRecognizedDevelopmentArtifactPath(_ path: String) -> Bool {
-        let lower = canonicalPath(path).lowercased()
-        if isVerifiedSwiftPMWorkspaceArtifact(lower) { return true }
+    /// Structured evidence of a working copy or package root — never a bare
+    /// directory name.
+    nonisolated static func isRepositoryRoot(_ directory: URL) -> Bool {
+        let fm = FileManager.default
+        let git = directory.appendingPathComponent(".git")
+        var isDirectory: ObjCBool = false
+        if fm.fileExists(atPath: git.path, isDirectory: &isDirectory) {
+            if isDirectory.boolValue {
+                if fm.fileExists(atPath: git.appendingPathComponent("HEAD").path) { return true }
+            } else if let handle = FileHandle(forReadingAtPath: git.path),
+                      let head = try? handle.read(upToCount: 8) {
+                try? handle.close()
+                // Worktrees and submodules use a `.git` file pointing at the real directory.
+                if head.starts(with: Data("gitdir:".utf8)) { return true }
+            }
+        }
+        if fm.fileExists(atPath: directory.appendingPathComponent("Package.swift").path) { return true }
+        if let children = try? fm.contentsOfDirectory(atPath: directory.path) {
+            return children.contains { name in
+                name.hasSuffix(".xcodeproj")
+                    && fm.fileExists(atPath: directory.appendingPathComponent(name)
+                        .appendingPathComponent("project.pbxproj").path)
+            }
+        }
+        return false
+    }
 
-        let strongMarkers = [
+    nonisolated static func isRecognizedDevelopmentArtifactPath(_ path: String) -> Bool {
+        let canonical = canonicalPath(path)
+        let lower = canonical.lowercased()
+        guard !isDevelopmentDowngradeForbidden(canonical) else { return false }
+        if isVerifiedSwiftPMWorkspaceArtifact(canonical) { return true }
+
+        // Xcode's and SwiftPM's default per-user locations.
+        if lower.contains("/library/developer/xcode/deriveddata/")
+            || lower.contains("/library/caches/org.swift.swiftpm/") {
+            return true
+        }
+
+        let layoutMarkers = [
             "/deriveddata/", "/sourcepackages/", "/checkouts/", "/.build/",
             "/build/products/", ".dsym/contents/resources/dwarf/",
         ]
-        guard strongMarkers.contains(where: lower.contains) else { return false }
-        if lower.hasPrefix("/private/tmp/") {
-            return lower.contains("/swiftpm-")
-                || lower.contains("/nick")
-                || lower.contains("/sourcepackages/")
-                || lower.contains("/checkouts/")
-                || lower.contains("/.build/")
-                || lower.contains("/build/products/")
-                || lower.contains(".dsym/contents/resources/dwarf/")
+        guard layoutMarkers.contains(where: lower.contains) else { return false }
+        // Anywhere else — notably temporary directories — a build-layout name
+        // is attacker-choosable. Require the metadata Xcode writes into a
+        // derived-data root, or a verified repository.
+        return hasXcodeDerivedDataRoot(canonical) || isVerifiedDevelopmentContext(canonical)
+    }
+
+    /// Xcode writes `info.plist` with a `WorkspacePath` key into every
+    /// derived-data root, including custom `-derivedDataPath` locations.
+    nonisolated static func hasXcodeDerivedDataRoot(_ path: String) -> Bool {
+        var candidate = URL(fileURLWithPath: path).deletingLastPathComponent()
+        for _ in 0..<16 {
+            let plist = candidate.appendingPathComponent("info.plist").path
+            if let info = NSDictionary(contentsOfFile: plist),
+               info["WorkspacePath"] is String {
+                return true
+            }
+            let parent = candidate.deletingLastPathComponent()
+            if parent.path == candidate.path { break }
+            candidate = parent
         }
-        return true
+        return false
     }
 
     /// Recognizes SwiftPM's alternate scratch layouts using persisted workspace
@@ -597,6 +701,8 @@ final class DeepScanner {
                 guard item.hasPrefix(root + "/") else { return false }
                 let relative = String(item.dropFirst(root.count + 1))
                 return relative.hasPrefix("artifacts/")
+                    || relative.hasPrefix("checkouts/")
+                    || relative.hasPrefix("repositories/")
                     || relative.hasPrefix("out/products/")
                     || relative.hasPrefix("plugins/cache/")
             }
@@ -650,15 +756,49 @@ final class DeepScanner {
             let containerID = path[range.upperBound...]
                 .split(separator: "/").first.map(String.init)?.lowercased() ?? ""
             guard !containerID.isEmpty else { continue }
-            for appURL in installedApplicationURLs() {
-                guard let bundleID = Bundle(url: appURL)?.bundleIdentifier?.lowercased(),
-                      containerIdentifier(containerID, matchesBundleIdentifier: bundleID),
-                      signedAppExists(atPath: appURL.path) else { continue }
+            let signedBundles = signedInstalledBundleIdentifiers()
+            if candidateBundleIdentifiers(forContainer: containerID).contains(where: signedBundles.contains) {
                 return true
             }
         }
 
         return false
+    }
+
+    /// The bundle identifiers a container name can belong to under the
+    /// conventions accepted by `containerIdentifier(_:matchesBundleIdentifier:)`.
+    nonisolated static func candidateBundleIdentifiers(forContainer containerID: String) -> [String] {
+        let container = containerID.lowercased()
+        var candidates = [container]
+        if container.hasSuffix(".data") { candidates.append(String(container.dropLast(5))) }
+        if container.hasPrefix("group."), container.hasSuffix(".shared") {
+            candidates.append(String(container.dropFirst(6).dropLast(7)))
+        }
+        return candidates.filter { !$0.isEmpty }
+    }
+
+    private nonisolated static let signedBundleCache = OSAllocatedUnfairLock<(builtAt: Date, identifiers: Set<String>)>(
+        initialState: (.distantPast, [])
+    )
+
+    /// Lower-cased bundle identifiers of installed, validly signed apps.
+    /// Built once per scan window instead of enumerating and signature-checking
+    /// every installed app for each finding.
+    nonisolated static func signedInstalledBundleIdentifiers() -> Set<String> {
+        let cached = signedBundleCache.withLock { $0 }
+        if Date().timeIntervalSince(cached.builtAt) < 300 { return cached.identifiers }
+        var identifiers = Set<String>()
+        for appURL in installedApplicationURLs() {
+            guard let bundleID = Bundle(url: appURL)?.bundleIdentifier?.lowercased(),
+                  signedAppExists(atPath: appURL.path) else { continue }
+            identifiers.insert(bundleID)
+        }
+        // Freeze the locally-built set before passing it into the lock closure.
+        // Swift 6 otherwise treats the mutable local as a concurrently captured
+        // variable, even though mutation has finished at this point.
+        let resolvedIdentifiers = identifiers
+        signedBundleCache.withLock { $0 = (Date(), resolvedIdentifiers) }
+        return resolvedIdentifiers
     }
 
     nonisolated static func containerIdentifier(

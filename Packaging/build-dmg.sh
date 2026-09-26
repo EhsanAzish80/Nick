@@ -3,9 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h}
-PKG_PATH=${PKG_PATH:-"/Users/Shared/Nick-4.5-build-426.pkg"}
-OUTPUT_PATH=${OUTPUT_PATH:-"/Users/Shared/Nick-4.5-build-426.dmg"}
-WORK_DIR=${WORK_DIR:-"${TMPDIR%/}/NickDMG426"}
+PKG_PATH=${PKG_PATH:-"/Users/Shared/Nick-4.6-build-427.pkg"}
+OUTPUT_PATH=${OUTPUT_PATH:-"/Users/Shared/Nick-4.6-build-427.dmg"}
+WORK_DIR=${WORK_DIR:-"${TMPDIR%/}/NickDMG427"}
 VOLUME_NAME="Install Nick"
 APP_SIGNING_IDENTITY=${APP_SIGNING_IDENTITY:-"Developer ID Application: ehsan azish (UXGW5V3BY6)"}
 NOTARY_PROFILE=${NOTARY_PROFILE:-NickNotary}

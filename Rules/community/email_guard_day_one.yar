@@ -12,6 +12,7 @@ rule nick_email_shell_dropper : email dropper macos
         description = "Shell attachment downloads and prepares a payload for execution"
         author = "Nick"
         confidence = "high"
+        class = "behavior"
         severity = "HIGH"
     strings:
         $download_1 = "curl -fsSL" ascii nocase
@@ -37,6 +38,7 @@ rule nick_email_applescript_dropper : email dropper macos
         description = "AppleScript attachment downloads and executes a payload"
         author = "Nick"
         confidence = "high"
+        class = "behavior"
         severity = "HIGH"
     strings:
         $applescript = "do shell script" ascii nocase
@@ -59,6 +61,7 @@ rule nick_email_html_smuggling : email html_smuggling
         description = "HTML attachment constructs and downloads a decoded binary payload"
         author = "Nick"
         confidence = "high"
+        class = "behavior"
         severity = "HIGH"
     strings:
         $decode_1 = "atob(" ascii nocase
@@ -80,6 +83,7 @@ rule nick_email_powershell_encoded_dropper : email dropper windows
         description = "Attachment invokes encoded PowerShell and downloads content"
         author = "Nick"
         confidence = "high"
+        class = "behavior"
         severity = "HIGH"
     strings:
         $powershell_1 = "powershell.exe" ascii wide nocase
@@ -102,6 +106,7 @@ rule nick_email_office_macro_dropper : email macro windows
         description = "Office macro attachment launches a command interpreter or script host"
         author = "Nick"
         confidence = "high"
+        class = "behavior"
         severity = "HIGH"
     strings:
         $auto_1 = "AutoOpen" ascii wide nocase

@@ -96,10 +96,14 @@ final class USBScanner {
 
     private func scanVolume(path: String) {
         let fm = FileManager.default
+        // Hidden files are included: removable-media payloads usually hide.
+        // Only content that can run is hashed and YARA-scanned, so a photo or
+        // video drive no longer costs hundreds of gigabytes of reads.
         guard let enumerator = fm.enumerator(
             at: URL(fileURLWithPath: path),
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey,
+                                         .isDirectoryKey, .isExecutableKey],
+            options: []
         ) else {
             Self.logger.warning("Cannot enumerate volume: \(path)")
             return
@@ -116,16 +120,24 @@ final class USBScanner {
             }
             guard let rv = try? fileURL.resourceValues(forKeys: [.isRegularFileKey,
                                                                   .fileSizeKey,
-                                                                  .isSymbolicLinkKey]),
-                  rv.isRegularFile == true,
-                  rv.isSymbolicLink != true
+                                                                  .isSymbolicLinkKey,
+                                                                  .isDirectoryKey,
+                                                                  .isExecutableKey])
             else { continue }
+            if rv.isDirectory == true {
+                if Self.skippedDirectoryNames.contains(fileURL.lastPathComponent) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            guard rv.isRegularFile == true, rv.isSymbolicLink != true else { continue }
 
-            // Skip oversized files
+            // Skip oversized and empty files
             let fileSize = rv.fileSize ?? 0
-            guard fileSize <= Self.scanSizeLimit else { continue }
+            guard fileSize > 0, fileSize <= Self.scanSizeLimit else { continue }
 
             let filePath = fileURL.path
+            guard Self.isScanCandidate(path: filePath, isExecutable: rv.isExecutable == true) else { continue }
             let result = fileScanner.scan(filePath: filePath)
             scannedCount += 1
 
@@ -151,6 +163,34 @@ final class USBScanner {
             "USB scan complete — \(path): \(scannedCount) file(s) scanned, \(threatsFound) threat(s)"
         )
     }
+
+    /// Volume bookkeeping directories that never hold user payloads.
+    private static let skippedDirectoryNames: Set<String> = [
+        ".Spotlight-V100", ".fseventsd", ".Trashes", ".DocumentRevisions-V100", ".TemporaryItems",
+    ]
+
+    /// Extensions that carry executable or installable content even when the
+    /// header alone is ambiguous (for example disk images and archives).
+    private static let riskyExtensions: Set<String> = [
+        "app", "command", "sh", "zsh", "py", "scpt", "applescript", "terminal", "workflow",
+        "pkg", "mpkg", "dmg", "iso", "zip", "jar", "exe", "dll", "bat", "cmd", "ps1", "vbs", "js", "lnk",
+        "docm", "xlsm", "pptm",
+    ]
+
+    static func isScanCandidate(path: String, isExecutable: Bool) -> Bool {
+        if isExecutable { return true }
+        let ext = (path as NSString).pathExtension.lowercased()
+        if riskyExtensions.contains(ext) { return true }
+        // Reading 16 bytes is cheap compared with hashing every media file.
+        guard ext.isEmpty || !mediaExtensions.contains(ext) else { return false }
+        return ScanCandidatePolicy.isExecutableContent(ScanCandidatePolicy.kind(atPath: path))
+    }
+
+    private static let mediaExtensions: Set<String> = [
+        "jpg", "jpeg", "png", "heic", "heif", "gif", "tif", "tiff", "raw", "cr2", "cr3", "nef", "arw", "dng",
+        "mp4", "mov", "m4v", "avi", "mkv", "mts", "mp3", "m4a", "wav", "aif", "aiff", "flac",
+        "pdf", "txt", "csv", "json", "xml", "html", "docx", "xlsx", "pptx", "pages", "numbers", "key",
+    ]
 
     private func isMounted(volumePath: String) -> Bool {
         lock.withLock { mountedVolumes.contains(volumePath) }

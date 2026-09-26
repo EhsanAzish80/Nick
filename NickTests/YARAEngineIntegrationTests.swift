@@ -229,6 +229,48 @@ final class YARAEngineIntegrationTests: XCTestCase {
         XCTAssertEqual(afterBeta.first?.ruleName, "BetaRule")
     }
 
+    // MARK: - Test: invalid rule file does not disable later files
+
+    func test_invalidRuleFileIsSkippedWithoutDroppingLaterFiles() async throws {
+        try "rule broken { condition: $undefined }".write(
+            to: rulesDir.appendingPathComponent("a_broken.yar"), atomically: true, encoding: .utf8
+        )
+        try """
+            rule later_file_rule { strings: $s = "NICK_LATER_RULE_MARKER" condition: $s }
+            """.write(to: rulesDir.appendingPathComponent("z_valid.yar"), atomically: true, encoding: .utf8)
+        let target = tmpDir.appendingPathComponent("marker.bin")
+        try Data("xx NICK_LATER_RULE_MARKER xx".utf8).write(to: target)
+
+        let engine = try YARAEngine(rulesDirectory: rulesDir.path)
+        let matches = try await engine.scanFile(at: target.path)
+        XCTAssertEqual(matches.map(\.ruleName), ["later_file_rule"])
+    }
+
+    // MARK: - Test: concurrent scans and in-memory scans
+
+    func test_concurrentScansAndMemoryScanAgree() async throws {
+        let engine = try makeEngine(rule: """
+            rule concurrent_marker { strings: $s = "NICK_CONCURRENT_MARKER" condition: $s }
+            """)
+        let target = tmpDir.appendingPathComponent("concurrent.bin")
+        let data = Data(String(repeating: "a", count: 4096).utf8) + Data("NICK_CONCURRENT_MARKER".utf8)
+        try data.write(to: target)
+
+        let counts = try await withThrowingTaskGroup(of: Int.self) { group in
+            for _ in 0..<24 {
+                group.addTask { try await engine.scanFile(at: target.path).count }
+            }
+            return try await group.reduce(into: [Int]()) { $0.append($1) }
+        }
+        XCTAssertEqual(counts, Array(repeating: 1, count: 24))
+        XCTAssertEqual(try engine.scanDataBlocking(data, reportingPath: target.path).map(\.ruleName), ["concurrent_marker"])
+
+        // Reloading while scans may still hold the previous rule set is safe.
+        try engine.reloadRules()
+        let afterReload = try await engine.scanFile(at: target.path)
+        XCTAssertEqual(afterReload.count, 1)
+    }
+
     // MARK: - Test 6: bundled Email Guard rules provide offline coverage
 
     func test_bundledEmailGuardRules_detectHighConfidenceDroppers() async throws {

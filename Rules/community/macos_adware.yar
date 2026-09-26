@@ -1,11 +1,14 @@
-// Nick YARA Rules — macOS Adware
-// Detects browser hijacking, extension injection, and network interception.
+// Nick YARA Rules — macOS adware behaviour
+//
+// class = "behavior": see macos_stealers.yar. These capabilities are shared by
+// browsers, VPNs, and proxies, so they are LOW/MEDIUM context signals only.
 
 rule macos_browser_extension_inject
 {
     meta:
-        description = "Detects browser extension directory modification typical of adware"
-        severity = "MEDIUM"
+        description = "Writes browser extension manifests (also every Chromium-based app)"
+        class = "behavior"
+        severity = "LOW"
         tags = "adware,browser"
     strings:
         $ext1 = "/Extensions/" ascii
@@ -19,8 +22,9 @@ rule macos_browser_extension_inject
 rule macos_dns_hijack
 {
     meta:
-        description = "Detects DNS configuration modification typical of redirect adware"
-        severity = "HIGH"
+        description = "Modifies system DNS configuration (also VPN clients)"
+        class = "behavior"
+        severity = "LOW"
         tags = "adware,dns"
     strings:
         $dns1 = "/etc/resolv.conf" ascii
@@ -33,26 +37,32 @@ rule macos_dns_hijack
 rule macos_launch_constraints_bypass
 {
     meta:
-        description = "Detects patterns targeting Launch Constraints bypass for privilege escalation"
-        severity = "HIGH"
-        tags = "adware,privilege"
+        description = "References private AMFI entitlements that third-party code cannot legitimately hold"
+        class = "behavior"
+        severity = "MEDIUM"
+        tags = "privilege,amfi"
     strings:
+        // Note: com.apple.security.cs.allow-unsigned-executable-memory was
+        // removed in 4.6 — it is a standard entitlement of every JIT/Electron app.
         $lc1 = "com.apple.private.amfi" ascii
-        $lc2 = "com.apple.security.cs.allow-unsigned-executable-memory" ascii
+        $lc2 = "amfi_get_out_of_my_way" ascii
     condition:
-        any of them
+        (uint32(0) == 0xFEEDFACF or uint32(0) == 0xCAFEBABE or uint32(0) == 0xBEBAFECA)
+        and any of them
 }
 
 rule macos_network_proxy_intercept
 {
     meta:
-        description = "Detects HTTPS proxy interception used to inject ads"
-        severity = "MEDIUM"
+        description = "Installs a certificate and system proxy together (ad injection pattern)"
+        class = "behavior"
+        severity = "LOW"
         tags = "adware,proxy"
     strings:
         $p1 = "kCFNetworkProxiesHTTPS" ascii
-        $p2 = "CFNetworkCopySystemProxySettings" ascii
+        $p2 = "networksetup -setsecurewebproxy" ascii nocase
         $p3 = "SecCertificateAddToKeychain" ascii
+        $p4 = "add-trusted-cert" ascii
     condition:
-        2 of them
+        ($p1 or $p2) and ($p3 or $p4)
 }

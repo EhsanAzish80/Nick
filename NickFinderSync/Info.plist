@@ -17,9 +17,9 @@
     <key>CFBundlePackageType</key>
     <string>XPC!</string>
     <key>CFBundleShortVersionString</key>
-    <string>4.0</string>
+    <string>4.6</string>
     <key>CFBundleVersion</key>
-    <string>400</string>
+    <string>427</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSExtension</key>

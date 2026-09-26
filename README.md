@@ -77,7 +77,8 @@ before execution.
 
 ### Malware scanning and quarantine
 
-- Vendored libyara 4.5.5 with curated macOS rules.
+- Vendored libyara 4.5.5 with Nick's macOS behaviour heuristics and family
+  signatures from vetted, redistributable sources (`Rules/families`).
 - On-demand, real-time, email attachment, and external-volume scanning.
 - Confidence-aware results: heuristic matches are shown for review; only
   actionable matches can be blocked or quarantined.

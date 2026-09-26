@@ -7,7 +7,8 @@ final class SignatureValidatorPolicyTests: XCTestCase {
         XCTAssertEqual(
             SignatureValidator.statusForValidSignature(
                 teamID: nil,
-                isAppleAnchored: true
+                isAppleAnchored: true,
+                isAppleIssued: false
             ),
             .signed(teamID: "APPLE_PLATFORM")
         )
@@ -17,7 +18,8 @@ final class SignatureValidatorPolicyTests: XCTestCase {
         XCTAssertEqual(
             SignatureValidator.statusForValidSignature(
                 teamID: nil,
-                isAppleAnchored: false
+                isAppleAnchored: false,
+                isAppleIssued: false
             ),
             .adHoc
         )
@@ -27,9 +29,22 @@ final class SignatureValidatorPolicyTests: XCTestCase {
         XCTAssertEqual(
             SignatureValidator.statusForValidSignature(
                 teamID: "59GAB85EFG",
-                isAppleAnchored: true
+                isAppleAnchored: false,
+                isAppleIssued: true
             ),
             .signed(teamID: "59GAB85EFG")
+        )
+    }
+
+    func test_teamIDWithoutAppleIssuedChainIsNotTrusted() {
+        // A self-signed certificate can claim any Team ID.
+        XCTAssertEqual(
+            SignatureValidator.statusForValidSignature(
+                teamID: "59GAB85EFG",
+                isAppleAnchored: false,
+                isAppleIssued: false
+            ),
+            .adHoc
         )
     }
     func test_sealedSystemLocationsSkipExpensiveTrustEvaluation() {

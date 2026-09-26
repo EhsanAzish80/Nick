@@ -45,10 +45,15 @@ actor ThreatCorrelator {
     private var trustedProcessList: TrustedProcessList = TrustedProcessList()
     private var suppressionRules: [SuppressionRule] = []
 
-    /// Tracks which rule names have already fired since the last `resetEmittedRules()` call.
-    /// Prevents the same rule from re-firing every 5-second tick while its contributing
-    /// signals remain in the 30-second correlation window.
-    private var emittedRuleNames: Set<String> = []
+    /// Subjects (file, process, …) each rule has already alerted on since the
+    /// last `resetEmittedRules()` call.
+    ///
+    /// Prevents the same rule from re-firing every 5-second tick while its
+    /// contributing signals remain in the 30-second correlation window, while
+    /// still alerting when the same rule matches a *different* file or process.
+    /// (Keying by rule name alone silenced every YARA or persistence finding
+    /// after the first one until the next full scan.)
+    private var emittedSubjects: [String: Set<String>] = [:]
 
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -126,7 +131,7 @@ actor ThreatCorrelator {
     /// - Some contributing processes trusted → severity downgraded by one level
     /// - No trusted processes involved → severity unchanged
     ///
-    /// Fired rule names are recorded in `emittedRuleNames` so that a subsequent
+    /// Alerted subjects are recorded per rule in `emittedSubjects` so that a subsequent
     /// `correlateNew()` call in the same session does not re-deliver the same alerts.
     ///
     /// - Returns: All alerts produced by the current rule set and signal window.
@@ -143,7 +148,7 @@ actor ThreatCorrelator {
             if let alert = rule.evaluate(window) {
                 let adjusted = applyTrustedDowngrade(to: alert)
                 alerts.append(adjusted)
-                emittedRuleNames.insert(rule.name)
+                emittedSubjects[rule.name, default: []].formUnion(Self.subjectKeys(for: alert))
                 Self.logger.info("Rule '\(rule.name)' fired — score: \(adjusted.score), severity: \(adjusted.severity.displayName)")
             }
         }
@@ -168,16 +173,16 @@ actor ThreatCorrelator {
 
         let sortedRules = rules.sorted { $0.score > $1.score }
         for rule in sortedRules {
-            guard !emittedRuleNames.contains(rule.name) else { continue }
             if let alert = rule.evaluate(window) {
+                let subjects = Self.subjectKeys(for: alert)
+                guard !subjects.isSubset(of: emittedSubjects[rule.name] ?? []) else { continue }
+                emittedSubjects[rule.name, default: []].formUnion(subjects)
                 let adjusted = applyTrustedDowngrade(to: alert)
                 if isSuppressed(adjusted) {
                     Self.logger.info("Rule '\(rule.name)' suppressed by active suppression rule")
-                    emittedRuleNames.insert(rule.name)
                     continue
                 }
                 alerts.append(adjusted)
-                emittedRuleNames.insert(rule.name)
                 Self.logger.info("Rule '\(rule.name)' fired (new) — score: \(adjusted.score), severity: \(adjusted.severity.displayName)")
             }
         }
@@ -191,7 +196,7 @@ actor ThreatCorrelator {
     /// Call this at the start of each full scan (`performFullScan`) so that a rule
     /// suppressed in a previous scan window can re-fire if the same condition persists.
     func resetEmittedRules() {
-        emittedRuleNames.removeAll()
+        emittedSubjects.removeAll()
         Self.logger.debug("Emitted-rule history reset — all rules eligible to fire")
     }
 
@@ -204,6 +209,20 @@ actor ThreatCorrelator {
     var bufferedSignalCount: Int { signalBuffer.count }
 
     // MARK: - Private Helpers
+
+    /// The things an alert is about. Two alerts from one rule about the same
+    /// subjects are the same incident.
+    static func subjectKeys(for alert: ThreatAlert) -> Set<String> {
+        Set(alert.contributingSignals.map(subjectKey(for:)))
+    }
+
+    static func subjectKey(for signal: ThreatSignal) -> String {
+        if let process = signal.processInfo { return "process:\(process.pid):\(process.path)" }
+        if let file = signal.fileInfo { return "file:\(file.path)" }
+        if let path = signal.metadata["path"], !path.isEmpty { return "file:\(path)" }
+        if let network = signal.networkInfo { return "network:\(network.pid):\(signal.title)" }
+        return "signal:\(signal.source.rawValue):\(signal.title)"
+    }
 
     private func pruneOldSignals() {
         let cutoff = Date(timeIntervalSinceNow: -windowDuration)
@@ -328,7 +347,9 @@ actor ThreatCorrelator {
                 let paths = alert.contributingSignals.compactMap { signal in
                     (signal.fileInfo?.path ?? signal.metadata["path"])?.lowercased()
                 }
-                if paths.contains(where: { $0.hasPrefix(needle) || $0.contains(needle) }) { return true }
+                // Prefix-only: a substring match let any path that merely
+                // *contained* an approved folder name inherit the approval.
+                if paths.contains(where: { $0.hasPrefix(needle) }) { return true }
             }
         }
         return false

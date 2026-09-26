@@ -1,55 +1,70 @@
-// Nick YARA Rules — macOS Backdoors & RATs
-// Detects reverse shell indicators and persistence installation patterns.
+// Nick YARA Rules — macOS backdoor and persistence behaviour
+//
+// class = "behavior": see macos_stealers.yar.
 
 rule macos_reverse_shell
 {
     meta:
-        description = "Detects strings associated with interactive reverse shell establishment"
+        description = "Interactive shell wired to a network socket"
+        class = "behavior"
         severity = "HIGH"
         tags = "backdoor,shell"
     strings:
-        $sh1 = "/bin/bash -i" ascii
-        $sh2 = "/bin/sh -i" ascii
-        $sh3 = "mkfifo /tmp/" ascii
-        $sh4 = "nc -e /bin/sh" ascii nocase
-        $sh5 = "0>&1 2>&1" ascii
+        $sock1 = "/dev/tcp/" ascii
+        $sock2 = "nc -e /bin/" ascii nocase
+        $sock3 = "socat exec:" ascii nocase
+        $sock4 = "mkfifo /tmp/" ascii
+        $int1  = "/bin/bash -i" ascii
+        $int2  = "/bin/sh -i" ascii
+        $int3  = "/bin/zsh -i" ascii
+        $int4  = "0>&1" ascii
+        $int5  = "pty.spawn(" ascii
     condition:
-        any of them
+        1 of ($sock*) and 1 of ($int*)
 }
 
 rule macos_launchagent_install
 {
     meta:
-        description = "Detects programmatic LaunchAgent installation for persistence"
+        description = "Programmatic LaunchAgent installation for persistence"
+        class = "behavior"
         severity = "MEDIUM"
         tags = "persistence,launchagent"
     strings:
         $la1 = "Library/LaunchAgents/" ascii
         $la2 = "launchctl load" ascii
-        $la3 = "RunAtLoad" ascii
-        $la4 = "ProgramArguments" ascii
+        $la3 = "launchctl bootstrap" ascii
+        $la4 = "RunAtLoad" ascii
+        $la5 = "ProgramArguments" ascii
     condition:
-        $la1 and 2 of ($la2, $la3, $la4)
+        $la1 and ($la2 or $la3) and ($la4 or $la5)
 }
 
 rule macos_ptrace_antidebug
 {
     meta:
-        description = "Detects PT_DENY_ATTACH anti-debugging technique used by malware"
-        severity = "HIGH"
+        description = "Inline ptrace(PT_DENY_ATTACH) system call that bypasses libc"
+        class = "behavior"
+        severity = "MEDIUM"
         tags = "backdoor,antidebug"
     strings:
-        $pd1 = "PT_DENY_ATTACH" ascii
-        $pd2 = { 1F 00 00 00 1F 00 00 00 }
+        // arm64: mov x0, #0x1f ; ... mov x16, #0x1a ; ... svc #0x80 (either order)
+        $arm_a = { E0 03 80 D2 [0-12] 50 03 80 D2 [0-12] 01 10 00 D4 }
+        $arm_b = { 50 03 80 D2 [0-12] E0 03 80 D2 [0-12] 01 10 00 D4 }
+        // x86_64: mov edi, 0x1f ; ... mov eax, 0x200001a ; ... syscall
+        $x64_a = { BF 1F 00 00 00 [0-16] B8 1A 00 00 02 [0-8] 0F 05 }
+        $x64_b = { B8 1A 00 00 02 [0-16] BF 1F 00 00 00 [0-8] 0F 05 }
     condition:
-        $pd1 or $pd2
+        (uint32(0) == 0xFEEDFACF or uint32(0) == 0xCAFEBABE or uint32(0) == 0xBEBAFECA)
+        and any of them
 }
 
 rule macos_dylib_injection
 {
     meta:
-        description = "Detects DYLD environment variable abuse for code injection"
-        severity = "HIGH"
+        description = "DYLD environment injection strings (also present in sanitizers and dev tools)"
+        class = "behavior"
+        severity = "LOW"
         tags = "backdoor,injection"
     strings:
         $d1 = "DYLD_INSERT_LIBRARIES" ascii
