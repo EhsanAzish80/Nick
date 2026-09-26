@@ -56,7 +56,8 @@ jobs:
             --root /usr/bin --root /usr/libexec \
             --root /Applications \
             --max-files 120000 \
-            --report yara-fp-report.json
+            --time-limit-seconds 1200 \
+            --report
 
       - name: Upload YARA false-positive report
         if: always()
