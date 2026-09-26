@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Nick uses semantic versioning for public releases, with an independent
 monotonically increasing macOS bundle build number.
 
+## [4.6.1] - 2026-09-26
+
+### Fixed
+
+- Deep Scan immediately shows an indexing indicator and continues publishing
+  progress while busy scan workers complete, so the interface no longer appears
+  frozen before results arrive.
+- Manual update checks now show whether Nick is checking, current, has an update
+  available, or encountered an error.
+- Settings now displays the app's actual release version instead of a hardcoded
+  development label.
+
 ## [4.6] - 2026-09-26
 
 ### Added
