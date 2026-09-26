@@ -44,12 +44,13 @@ jobs:
 
       - name: Lint YARA rules
         run: |
-          python3 -m pip install --user --quiet "yara-python==4.5.4"
-          python3 Scripts/rules_gate.py lint
+          python3 -m venv .ci-venv
+          .ci-venv/bin/python -m pip install --quiet "yara-python==4.5.4"
+          .ci-venv/bin/python Scripts/rules_gate.py lint
 
       - name: YARA false-positive gate (benign corpus)
         run: |
-          python3 Scripts/rules_gate.py fp \
+          .ci-venv/bin/python Scripts/rules_gate.py fp \
             --root /System/Applications \
             --root /System/Library/CoreServices \
             --root /usr/bin --root /usr/libexec \
