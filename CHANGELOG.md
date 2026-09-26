@@ -6,7 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Nick uses semantic versioning for public releases, with an independent
 monotonically increasing macOS bundle build number.
 
-## [Unreleased] — 4.6 (build 427)
+## [4.6] - 2026-09-26
 
 ### Added
 
