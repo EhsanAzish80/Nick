@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         subsystem: "com.ehsanazish.nick",
         category: "Updates"
     )
+    private var receivedUpdateCheckResult = false
     private var uninstallPreparationInProgress = false
     private let uninstallLogger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -578,13 +579,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    @objc func checkForUpdates() {
+    @discardableResult
+    @objc func checkForUpdates() -> Bool {
         guard let updaterController else {
             updateLogger.error("Manual update check requested before Sparkle initialized")
-            return
+            postUpdateCheckStatus("Update service is not ready. Please try again.")
+            return false
         }
+        receivedUpdateCheckResult = false
         updateLogger.info("Starting manual update check; canCheck=\(updaterController.updater.canCheckForUpdates)")
         updaterController.updater.checkForUpdates()
+        return true
+    }
+
+    private func postUpdateCheckStatus(_ status: String) {
+        NotificationCenter.default.post(name: .nickUpdateCheckStatus, object: status)
     }
 
     // MARK: - Finder Sync Integration
@@ -647,11 +656,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate: SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        receivedUpdateCheckResult = true
         updateLogger.info("Sparkle found update version=\(item.displayVersionString, privacy: .public) build=\(item.versionString, privacy: .public)")
+        postUpdateCheckStatus("Nick \(item.displayVersionString) is available.")
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        receivedUpdateCheckResult = true
         updateLogger.info("Sparkle found no update: \(error.localizedDescription, privacy: .public)")
+        postUpdateCheckStatus("Nick is up to date.")
     }
 
     func updater(
@@ -661,9 +674,16 @@ extension AppDelegate: SPUUpdaterDelegate {
     ) {
         if let error {
             updateLogger.error("Sparkle update cycle failed: \(error.localizedDescription, privacy: .public)")
+            if !receivedUpdateCheckResult {
+                postUpdateCheckStatus("Update check failed: \(error.localizedDescription)")
+            }
         } else {
             updateLogger.info("Sparkle update cycle finished successfully")
+            if !receivedUpdateCheckResult {
+                postUpdateCheckStatus("Update check completed.")
+            }
         }
+        receivedUpdateCheckResult = false
     }
 }
 

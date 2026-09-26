@@ -595,6 +595,8 @@ final class DeepScannerLifecycleTests: XCTestCase {
         }
 
         XCTAssertTrue(scanner.isScanning)
+        XCTAssertEqual(scanner.currentFile, "Indexing files…")
+        XCTAssertEqual(scanner.totalFiles, 0)
         await waitUntil { scanner.hasCompletedScan }
         let invocationCount = await counter.value
         XCTAssertEqual(invocationCount, 1)

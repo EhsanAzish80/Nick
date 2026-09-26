@@ -85,6 +85,13 @@ final class DeepScanner {
         storedOnlyOnPower = onlyOnPower
         self.ignoredPaths = Set(ignoredPaths.map(Self.canonicalPath))
         activeScanID = scanID
+        progress = 0
+        totalFiles = 0
+        scannedFiles = 0
+        currentFile = "Indexing files…"
+        elapsedTime = 0
+        estimatedRemaining = 0
+        threatsFound = 0
         isScanning = true
         isCancelling = false
         hasCompletedScan = false
@@ -184,6 +191,9 @@ final class DeepScanner {
                     progress = files.isEmpty ? 0 : Double(completed) / Double(files.count)
                     elapsedTime = elapsed
                     estimatedRemaining = elapsed / Double(completed) * Double(files.count - completed)
+                    // A busy task group can keep returning already-completed work
+                    // without suspending. Yield so SwiftUI renders this update.
+                    await Task.yield()
                 }
 
                 // Battery gate — hold new work while on battery if requested.

@@ -217,4 +217,8 @@ extension Notification.Name {
     /// Emitted by `NickServicesProvider` (Finder right-click) and by
     /// `DashboardView.openFileScanPanel()` (manual button).
     static let nickScanFileRequest = Notification.Name("com.ehsanazish.nick.scanFileRequest")
+
+    /// Posted by the Sparkle delegate with a user-facing update-check result.
+    /// `object` contains the status text displayed in Settings.
+    static let nickUpdateCheckStatus = Notification.Name("com.ehsanazish.nick.updateCheckStatus")
 }

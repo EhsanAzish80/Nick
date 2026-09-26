@@ -1504,6 +1504,15 @@ struct ScannerDetailView: View {
                             .foregroundStyle(Color.textSecondary)
                         Spacer()
                     }
+                } else if scanner.totalFiles == 0 {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Indexing files…")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.textSecondary)
+                        Spacer()
+                    }
                 } else {
                     // Progress bar
                     GeometryReader { proxy in

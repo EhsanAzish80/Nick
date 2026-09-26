@@ -65,6 +65,7 @@ struct SettingsView: View {
     @State private var showClearAlertsConfirmation = false
     @State private var showResetHistoryConfirmation = false
     @State private var showRemoveHelperConfirmation = false
+    @State private var updateCheckStatus: String?
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates: Bool = true
 
     // MARK: Body
@@ -868,7 +869,10 @@ struct SettingsView: View {
                 subtitle: "Fetch the latest available version from the server."
             ) {
                 Button("Check Now") {
-                    (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                    updateCheckStatus = "Checking for updates…"
+                    if (NSApp.delegate as? AppDelegate)?.checkForUpdates() != true {
+                        updateCheckStatus = "Update service is not ready. Please try again."
+                    }
                 }
                 .controlSize(.small)
             }
@@ -878,6 +882,15 @@ struct SettingsView: View {
             Text("Update feed: https://3nsofts.com/nick/appcast.xml")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
+            if let updateCheckStatus {
+                Text(updateCheckStatus)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .nickUpdateCheckStatus)) { note in
+            guard let status = note.object as? String else { return }
+            updateCheckStatus = status
         }
     }
 
@@ -926,9 +939,13 @@ struct SettingsView: View {
 
     // MARK: Footer
 
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+    }
+
     private var footer: some View {
         HStack(spacing: 4) {
-            Text("Nick · Version 2026.05 · ")
+            Text("Nick · Version \(appVersion) · ")
             Link("Open Source on GitHub",
                  destination: URL(string: "https://github.com/EhsanAzish80/Nick")!)
         }
