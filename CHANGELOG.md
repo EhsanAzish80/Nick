@@ -6,6 +6,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Nick uses semantic versioning for public releases, with an independent
 monotonically increasing macOS bundle build number.
 
+## [Unreleased] — 4.6.2 (build 429)
+
+### Added
+
+- Simple mode, the new default: a friendly Home with one status card
+  (protected, needs attention, or threat stopped), four plain protection cards,
+  a Mac security settings bar with one-click fix, and "What Nick did lately".
+  The sidebar has four destinations — Home, Scan, Activity, Protection — plus
+  Settings.
+- Simple Scan: Quick Check, Full Scan and "Check a File or Drive", with a
+  plain verdict and Show in Finder / Move to Trash for anything flagged.
+- Simple alert sheet: what happened, what Nick did and what to do, with
+  "I trust this app", Keep in Quarantine and Move to Trash. Rule names,
+  scores and paths sit behind Technical details.
+- Simple Activity: alerts, Quarantine and blocked launches on one timeline,
+  grouped by day, with All · Needs action · Blocked · Quarantined filters.
+  Quarantined files can be kept, restored or deleted from there.
+- Simple Protection: the four protection groups with a one-line explanation,
+  a Websites & Email switch, Fix rows for anything paused, and each Mac
+  security setting in plain words with a button to fix it.
+- Advanced mode keeps every section. Switch with the Simple | Advanced control
+  in the toolbar, View ▸ Advanced Mode (⇧⌘A), or Settings ▸ General ▸ Show
+  advanced tools. Switching keeps you on the equivalent page.
+
+### Changed
+
+- New colour system with one green accent and status colours that meet 4.5:1
+  contrast in light and dark mode.
+- "Simple alerts" is now part of Simple mode. If you had turned simple alerts
+  off, Nick starts in Advanced mode.
+- In Simple mode, Settings hides logging and integrations, monitored folders,
+  trusted processes and alert rules behind "Show advanced settings".
+- In Simple mode the "notifications are off" warning appears as a row on
+  Activity and Protection instead of a strip across the window.
+- Welcome and setup screens explain Simple and Advanced views.
+
+### Fixed
+
+- Deep Scan no longer sits on "Indexing files…" for minutes: files are scanned
+  while locations are still being walked, and progress shows how many files
+  were found and checked so far.
+
 ## [4.6.1] - 2026-09-26
 
 ### Fixed
