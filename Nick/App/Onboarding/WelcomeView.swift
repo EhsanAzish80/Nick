@@ -28,36 +28,31 @@ struct WelcomeView: View {
                 Text("Nick")
                     .font(.system(size: 36, weight: .bold))
 
-                Text("macOS Security Suite")
+                Text("Local Mac security, explained clearly")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Color.textSecondary)
             }
 
             Spacer().frame(height: 40)
 
-            // Feature grid — 2 columns
+            // Feature grid — 2 columns. Lead with user outcomes; technical
+            // subsystem names remain available in Advanced mode.
             LazyVGrid(
                 columns: [GridItem(.flexible()), GridItem(.flexible())],
                 spacing: 20
             ) {
-                FeatureCard(icon: "cpu",
-                            title: "Process Monitor",
-                            description: "Detects unsigned and suspicious executables in real-time")
-                FeatureCard(icon: "network",
-                            title: "Network Watchdog",
-                            description: "Flags unexpected outbound connections and reverse shells")
-                FeatureCard(icon: "arrow.triangle.2.circlepath",
-                            title: "Persistence Watch",
-                            description: "Monitors LaunchAgents and daemons for unauthorized changes")
                 FeatureCard(icon: "checkmark.shield",
-                            title: "System Audit",
-                            description: "Verifies SIP, FileVault, Gatekeeper, and firewall status")
-                FeatureCard(icon: "doc.text.magnifyingglass",
-                            title: "YARA Scanner",
-                            description: "Scans files with industry-standard malware detection rules")
-                FeatureCard(icon: "brain",
-                            title: "AI Scoring",
-                            description: "Correlates signals with on-device Foundation Models")
+                            title: "Check New Apps",
+                            description: "Reviews apps and downloads locally before they open")
+                FeatureCard(icon: "magnifyingglass",
+                            title: "Scan Your Mac",
+                            description: "Runs a quick check or a deeper scan whenever you choose")
+                FeatureCard(icon: "bell.badge",
+                            title: "Explain Alerts",
+                            description: "Shows what happened, what Nick did, and what to do next")
+                FeatureCard(icon: "checkmark.shield",
+                            title: "Verify Mac Settings",
+                            description: "Checks important macOS protections and links to each fix")
             }
             .padding(.horizontal, 40)
 

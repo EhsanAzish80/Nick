@@ -1,0 +1,6 @@
+period_end,measurement_window,campaign,channel,content_or_url,github_views,github_unique_visitors,github_clones,github_unique_cloners,stars,forks,subscribers,open_issues,release_dmg_downloads,release_pkg_downloads,total_historical_release_downloads,website_visits,download_clicks,update_adoption,useful_feedback,external_issues,external_prs,notes
+2026-09-27,baseline available GitHub 14-day window,baseline,organic,https://github.com/EhsanAzish80/Nick,69,20,39,34,18,0,1,0,0,0,55,NA,NA,NA,0,0,0,"GitHub window currently ends 2026-09-23; 4.6.2 was just released. Website analytics and update adoption unavailable. Referrers: github.com 18 views/11 unique; LinkedIn 2/1; 3nsofts.com 1/1; t.co 1/1."
+2026-10-04,weekly,week-1,owned,README onboarding website,,,,,,,,,,,,,,,,,,"Fill seven full days after baseline; record campaign-tagged links separately."
+2026-10-11,weekly,week-2,community-test-1,TBD,,,,,,,,,,,,,,,,,,"Record exact community post URL, disclosure, rule check date, and qualitative feedback."
+2026-10-18,weekly,week-3,community-test-2-or-conversion,TBD,,,,,,,,,,,,,,,,,,"Run a second channel only if week-two evidence supports it."
+2026-10-25,closeout,cycle-summary,all,TBD,,,,,,,,,,,,,,,,,,"Write keep/change/stop decision and next experiment."
