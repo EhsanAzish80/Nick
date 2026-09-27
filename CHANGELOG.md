@@ -41,6 +41,11 @@ monotonically increasing macOS bundle build number.
 - In Simple mode the "notifications are off" warning appears as a row on
   Activity and Protection instead of a strip across the window.
 - Welcome and setup screens explain Simple and Advanced views.
+- Advanced Overview: neutral feature tiles with On / Off / Paused chips (the
+  Smart Scan tile is gone; it duplicated the header button), a compact
+  "Recent activity" card instead of the full-height table, an amber attention
+  card with a Review button, and Smart Scan / Scan a File… in the toolbar.
+- Fixed the Overview headline grammar ("1 issue needs attention").
 
 ### Fixed
 
