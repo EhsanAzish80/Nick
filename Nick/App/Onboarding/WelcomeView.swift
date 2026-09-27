@@ -63,6 +63,27 @@ struct WelcomeView: View {
 
             Spacer().frame(height: 40)
 
+            // Interface mode — Simple is the default for new installs.
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "slider.horizontal.3")
+                    .foregroundStyle(Color.nickAccent)
+                    .accessibilityHidden(true)
+                Text("Nick opens in **Simple** view: one clear status and plain-language alerts. Switch to **Advanced** any time from the toolbar or with ⇧⌘A to see processes, network activity and rule details.")
+                    .font(.nickBodySmall)
+                    .foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: NickLayout.insetCornerRadius, style: .continuous)
+                    .fill(Color.nickInset)
+            )
+            .padding(.horizontal, 60)
+            .accessibilityElement(children: .combine)
+
+            Spacer().frame(height: 16)
+
             // Permissions note — subtle, not alarming
             Text("Nick will ask for notification permission and may request administrator access to install a system monitor.")
                 .font(.nickBodySmall)
@@ -86,7 +107,7 @@ struct WelcomeView: View {
                     .padding(.vertical, 12)
             }
             .buttonStyle(.borderedProminent)
-            .tint(Color.statusBlue)
+            .tint(Color.nickAccent)
 
             Spacer()
         }
