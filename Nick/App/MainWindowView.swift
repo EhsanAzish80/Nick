@@ -1504,14 +1504,28 @@ struct ScannerDetailView: View {
                             .foregroundStyle(Color.textSecondary)
                         Spacer()
                     }
-                } else if scanner.totalFiles == 0 {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Indexing files…")
-                            .font(.system(size: 12))
+                } else if scanner.isIndexing {
+                    // The walk and the scan run together; until the walk ends
+                    // the total is unknown, so show live counts instead of a %.
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                    HStack {
+                        Text("Found \(scanner.discoveredFiles.formatted()) files · checked \(scanner.scannedFiles.formatted())")
+                            .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(Color.textSecondary)
                         Spacer()
+                        Text(scanner.indexingLocation.isEmpty
+                             ? "Finding files…"
+                             : "Looking in \((scanner.indexingLocation as NSString).abbreviatingWithTildeInPath)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.textTertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    if scanner.threatsFound > 0 {
+                        Label("\(scanner.threatsFound) findings need review", systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.statusRed)
                     }
                 } else {
                     // Progress bar
