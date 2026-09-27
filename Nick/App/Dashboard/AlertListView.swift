@@ -107,7 +107,8 @@ private struct AlertRow: View {
     let alert: ThreatAlert
     @Environment(SecurityEngine.self) private var engine
     @Environment(ExtensionXPCClient.self) private var xpcClient
-    @AppStorage("simpleAlertMode") private var simpleAlertMode: Bool = true
+    @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
+    private var simpleAlertMode: Bool { interfaceMode == .simple }
     @State private var killingProcess = false
     @State private var killFailed     = false
     @State private var processKilled  = false   // confirmed dead this session

@@ -50,6 +50,13 @@ final class DeepScanner {
     var hasCompletedScan:   Bool         = false
     var results:            [YARAMatch]  = []
     var resultVerdicts:     [String: ThreatVerdict] = [:]
+    /// `true` while locations are still being walked. Scanning runs at the
+    /// same time, so `totalFiles` is only final once this turns `false`.
+    var isIndexing:         Bool         = false
+    /// Candidate files found so far (grows while `isIndexing`).
+    var discoveredFiles:    Int          = 0
+    /// The location currently being walked, for progress text.
+    var indexingLocation:   String       = ""
 
     // MARK: - Private
 
@@ -88,6 +95,9 @@ final class DeepScanner {
         progress = 0
         totalFiles = 0
         scannedFiles = 0
+        discoveredFiles = 0
+        indexingLocation = ""
+        isIndexing = true
         currentFile = "Indexing files…"
         elapsedTime = 0
         estimatedRemaining = 0
@@ -142,55 +152,73 @@ final class DeepScanner {
         threatsFound  = 0
         currentFile   = "Indexing files…"
 
-        // Phase 1: enumerate executables on a background thread so the UI stays live.
-        let files: [String]
+        // Phase 1 and 2 overlap. Walking /Applications and both Application
+        // Support folders takes minutes on a full Mac; waiting for the whole
+        // walk before scanning left the UI on "Indexing files…" and then the
+        // scan itself finished in seconds. Candidates now stream to the
+        // workers as they are found.
+        let queue = CandidateQueue()
+        let enumeration: Task<Void, Never>
         if let candidateFiles {
-            files = Self.canonicalUniquePaths(candidateFiles)
+            for path in Self.canonicalUniquePaths(candidateFiles) {
+                queue.push(Candidate(path: path, needsContentCheck: false))
+            }
+            queue.finish()
+            enumeration = Task {}
         } else {
-            files = await Task.detached(priority: .utility) {
-                DeepScanner.enumerateExecutables()
-            }.value
+            enumeration = Task.detached(priority: .utility) {
+                DeepScanner.enumerateCandidates(into: queue)
+            }
         }
 
-        guard !Task.isCancelled else { return finishCancelledScan(scanID: scanID) }
-
-        totalFiles = files.count
-        Self.log.info("DeepScanner: \(files.count) files to scan")
-
-        // Phase 2: scan with a bounded pool of workers. libyara scans one rule
-        // set from many threads, so throughput scales with cores; the bound
-        // keeps the Mac responsive and stays under libyara's thread limit.
-        // Classification (signature checks, path context) runs in the worker;
-        // the main actor only merges results and publishes progress, at most
-        // a few times per second.
+        // Classification (signature checks, path context) and content
+        // sniffing run in the workers; the main actor only merges results and
+        // publishes progress, at most a few times per second.
         let workerCount = Self.workerCount()
-        var pending = files.makeIterator()
         var completed = 0
         var lastPublish = Date.distantPast
 
         await withTaskGroup(of: FileOutcome.self) { group in
-            for _ in 0..<workerCount {
-                guard let file = pending.next() else { break }
-                group.addTask { await Self.scan(file, with: scanFile) }
-            }
+            var inFlight = 0
+            var exhausted = false
 
-            while let outcome = await group.next() {
-                guard !Task.isCancelled else {
+            while true {
+                // Keep every worker busy while candidates are available.
+                fill: while !exhausted, inFlight < workerCount, !Task.isCancelled {
+                    switch queue.pop() {
+                    case .item(let candidate):
+                        group.addTask { await Self.scan(candidate, with: scanFile) }
+                        inFlight += 1
+                    case .finished:
+                        exhausted = true
+                    case .empty:
+                        break fill
+                    }
+                }
+
+                if Task.isCancelled {
                     group.cancelAll()
+                    enumeration.cancel()
+                }
+                if inFlight == 0 {
+                    if exhausted || Task.isCancelled { break }
+                    // Only the walker is running: report what it has found.
+                    publishProgress(queue: queue, completed: completed, startTime: startTime)
+                    try? await Task.sleep(for: .milliseconds(50))
                     continue
                 }
+
+                guard let outcome = await group.next() else { break }
+                inFlight -= 1
+                guard !Task.isCancelled else { continue }
                 completed += 1
                 await merge(outcome)
 
                 let now = Date()
-                if now.timeIntervalSince(lastPublish) >= 0.2 || completed == files.count {
+                if now.timeIntervalSince(lastPublish) >= 0.2 {
                     lastPublish = now
-                    let elapsed = now.timeIntervalSince(startTime)
-                    scannedFiles = completed
                     currentFile = outcome.path
-                    progress = files.isEmpty ? 0 : Double(completed) / Double(files.count)
-                    elapsedTime = elapsed
-                    estimatedRemaining = elapsed / Double(completed) * Double(files.count - completed)
+                    publishProgress(queue: queue, completed: completed, startTime: startTime)
                     // A busy task group can keep returning already-completed work
                     // without suspending. Yield so SwiftUI renders this update.
                     await Task.yield()
@@ -204,13 +232,15 @@ final class DeepScanner {
                     }
                     isPaused = false
                 }
-                if !Task.isCancelled, let file = pending.next() {
-                    group.addTask { await Self.scan(file, with: scanFile) }
-                }
             }
         }
+        enumeration.cancel()
+        isIndexing = false
 
         guard !Task.isCancelled else { return finishCancelledScan(scanID: scanID) }
+
+        totalFiles = queue.snapshot().discovered
+        Self.log.info("DeepScanner: \(self.totalFiles) files scanned")
 
         // Finalise only a scan that genuinely reached the end.
         progress     = 1.0
@@ -241,9 +271,17 @@ final class DeepScanner {
     }
 
     nonisolated private static func scan(
-        _ file: String,
+        _ candidate: Candidate,
         with scanFile: @escaping @Sendable (String) async throws -> [YARAMatch]
     ) async -> FileOutcome {
+        let file = candidate.path
+        // Extensionless files are sniffed here, in parallel, rather than
+        // during the walk: reading a header for every cache blob serially was
+        // most of the indexing time.
+        if candidate.needsContentCheck,
+           !ScanCandidatePolicy.isExecutableContent(ScanCandidatePolicy.kind(atPath: file)) {
+            return FileOutcome(path: file, classified: [])
+        }
         guard let matches = try? await scanFile(file), !matches.isEmpty else {
             return FileOutcome(path: file, classified: [])
         }
@@ -307,7 +345,30 @@ final class DeepScanner {
         }
     }
 
+    /// Publishes scan progress. While locations are still being walked the
+    /// total is unknown, so the percentage is withheld (`progress` stays 0 and
+    /// the view shows an indeterminate state with the running counts).
+    private func publishProgress(queue: CandidateQueue, completed: Int, startTime: Date) {
+        let state = queue.snapshot()
+        let elapsed = Date().timeIntervalSince(startTime)
+        discoveredFiles = state.discovered
+        indexingLocation = state.location
+        isIndexing = !state.finished
+        scannedFiles = completed
+        elapsedTime = elapsed
+        if state.finished {
+            totalFiles = state.discovered
+            progress = state.discovered == 0 ? 0 : Double(completed) / Double(state.discovered)
+            estimatedRemaining = completed == 0
+                ? 0
+                : elapsed / Double(completed) * Double(max(0, state.discovered - completed))
+        } else {
+            estimatedRemaining = 0
+        }
+    }
+
     private func finishCancelledScan(scanID: UUID) {
+        isIndexing = false
         guard activeScanID == scanID else { return }
         isScanning = false
         isPaused = false
@@ -319,16 +380,22 @@ final class DeepScanner {
 
     // MARK: - File Enumeration
 
-    /// Enumerates executables and scripts from the standard macOS scan paths.
-    ///
-    /// Media, document, archive, and font files are skipped to keep scan times
-    /// reasonable. Marked `nonisolated` so it can run inside `Task.detached`.
-    nonisolated private static func enumerateExecutables() -> [String] {
-        var files: [String] = []
-        let fm  = FileManager.default
-        let log = Logger(subsystem: "com.ehsanazish.nick", category: "DeepScanner")
+    /// A file to scan. `needsContentCheck` marks extensionless files whose
+    /// header decides whether they are scanned at all.
+    struct Candidate: Sendable, Equatable {
+        let path: String
+        let needsContentCheck: Bool
+    }
 
-        let scanPaths: [String] = [
+    /// What the walk decided about one file.
+    enum CandidateDecision: Equatable {
+        case scan
+        case checkContent
+        case skip
+    }
+
+    nonisolated static var standardScanRoots: [String] {
+        [
             "/Applications",
             "/usr/local/bin",
             "/usr/local/sbin",
@@ -355,17 +422,32 @@ final class DeepScanner {
             "/var/tmp",
             "/private/tmp"
         ]
+    }
 
-        for scanPath in scanPaths {
-            guard fm.isReadableFile(atPath: scanPath) else {
+    /// Walks the standard macOS scan paths and streams candidates into
+    /// `queue`. Media, document, archive, and font files are skipped.
+    /// Runs inside `Task.detached`; stops early when that task is cancelled.
+    nonisolated static func enumerateCandidates(into queue: CandidateQueue) {
+        defer { queue.finish() }
+        let fm  = FileManager.default
+        let log = Logger(subsystem: "com.ehsanazish.nick", category: "DeepScanner")
+        var walkedRoots = Set<String>()
+
+        for scanPath in standardScanRoots {
+            guard !Task.isCancelled else { return }
+            // /tmp and /private/tmp are the same directory; walk it once.
+            let root = canonicalPath(scanPath)
+            guard walkedRoots.insert(root).inserted else { continue }
+            guard fm.isReadableFile(atPath: root) else {
                 log.warning("DeepScan: no access to \(scanPath, privacy: .public)")
                 continue
             }
+            queue.setLocation(scanPath)
             // Hidden files are included: dot-prefixed staging directories and
             // payloads are a hallmark of macOS stealers. Bundles are descended
             // so their actual Mach-O binaries are scanned.
             guard let enumerator = fm.enumerator(
-                at: URL(fileURLWithPath: scanPath),
+                at: URL(fileURLWithPath: root),
                 includingPropertiesForKeys: [.isExecutableKey, .isRegularFileKey, .isDirectoryKey],
                 options: []
             ) else {
@@ -375,6 +457,7 @@ final class DeepScanner {
 
             var count = 0
             for case let url as URL in enumerator {
+                if count % 256 == 0, Task.isCancelled { return }
                 guard let res = try? url.resourceValues(
                     forKeys: [.isExecutableKey, .isRegularFileKey, .isDirectoryKey]
                 ) else { continue }
@@ -385,19 +468,40 @@ final class DeepScanner {
                     continue
                 }
                 guard res.isRegularFile == true else { continue }
-                if shouldScanFile(
+                switch candidateDecision(
                     path: url.path,
                     scanRoot: scanPath,
                     isExecutable: res.isExecutable == true
                 ) {
-                    files.append(url.path)
+                case .scan:
+                    queue.push(Candidate(path: url.path, needsContentCheck: false))
                     count += 1
+                case .checkContent:
+                    queue.push(Candidate(path: url.path, needsContentCheck: true))
+                    count += 1
+                case .skip:
+                    break
                 }
             }
-            log.info("DeepScan: \(count) files from \(scanPath, privacy: .public)")
+            log.info("DeepScan: \(count) candidates from \(scanPath, privacy: .public)")
         }
+    }
 
-        return canonicalUniquePaths(files)
+    /// Decides a file's fate from metadata alone (no I/O).
+    nonisolated static func candidateDecision(
+        path: String,
+        scanRoot: String,
+        isExecutable: Bool
+    ) -> CandidateDecision {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        let isLaunchPropertyList = ext == "plist"
+            && (scanRoot.hasSuffix("LaunchDaemons") || scanRoot.hasSuffix("LaunchAgents"))
+        guard !skippedExtensions.contains(ext) || isLaunchPropertyList else { return .skip }
+        if isExecutable || scriptExtensions.contains(ext) || isLaunchPropertyList { return .scan }
+        // Extensionless files are mostly opaque application caches. Only scan
+        // the ones whose content can actually run (extensionless Mach-O and
+        // scripts are a common dropper pattern).
+        return ext.isEmpty ? .checkContent : .skip
     }
 
     /// Centralizes enumeration policy so launch-item property lists cannot be
@@ -408,16 +512,11 @@ final class DeepScanner {
         isExecutable: Bool,
         contentKind: (String) -> ScanCandidatePolicy.Kind = ScanCandidatePolicy.kind(atPath:)
     ) -> Bool {
-        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
-        let isLaunchPropertyList = ext == "plist"
-            && (scanRoot.hasSuffix("LaunchDaemons") || scanRoot.hasSuffix("LaunchAgents"))
-        guard !skippedExtensions.contains(ext) || isLaunchPropertyList else { return false }
-        if isExecutable || scriptExtensions.contains(ext) || isLaunchPropertyList { return true }
-        // Extensionless files are mostly opaque application caches. Only scan
-        // the ones whose content can actually run (extensionless Mach-O and
-        // scripts are a common dropper pattern).
-        guard ext.isEmpty else { return false }
-        return ScanCandidatePolicy.isExecutableContent(contentKind(path))
+        switch candidateDecision(path: path, scanRoot: scanRoot, isExecutable: isExecutable) {
+        case .scan: return true
+        case .skip: return false
+        case .checkContent: return ScanCandidatePolicy.isExecutableContent(contentKind(path))
+        }
     }
 
     // MARK: - Power Source
@@ -870,5 +969,70 @@ final class DeepScanner {
             return true
         }
         return state == kIOPSACPowerValue
+    }
+}
+
+// MARK: - CandidateQueue
+
+/// Hand-off between the file-system walk (a detached task) and the scan
+/// workers (driven from the main actor). Lock-protected so neither side
+/// depends on the other's isolation.
+final class CandidateQueue: Sendable {
+
+    enum Pop: Sendable {
+        case item(DeepScanner.Candidate)
+        case empty
+        case finished
+    }
+
+    struct Snapshot: Sendable {
+        let discovered: Int
+        let location: String
+        let finished: Bool
+    }
+
+    private struct State: Sendable {
+        var items: [DeepScanner.Candidate] = []
+        var head = 0
+        var discovered = 0
+        var location = ""
+        var finished = false
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func push(_ candidate: DeepScanner.Candidate) {
+        state.withLock {
+            $0.items.append(candidate)
+            $0.discovered += 1
+        }
+    }
+
+    func setLocation(_ location: String) {
+        state.withLock { $0.location = location }
+    }
+
+    func finish() {
+        state.withLock { $0.finished = true }
+    }
+
+    func pop() -> Pop {
+        state.withLock { state -> Pop in
+            if state.head < state.items.count {
+                let candidate = state.items[state.head]
+                state.head += 1
+                // Release consumed storage now and then.
+                if state.head > 4_096, state.head * 2 > state.items.count {
+                    state.items.removeFirst(state.head)
+                    state.head = 0
+                }
+                return .item(candidate)
+            }
+            return state.finished ? .finished : .empty
+        }
+    }
+
+    func snapshot() -> Snapshot {
+        state.withLock { Snapshot(discovered: $0.discovered, location: $0.location, finished: $0.finished) }
     }
 }

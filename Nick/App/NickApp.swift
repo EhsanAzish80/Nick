@@ -25,6 +25,11 @@ struct NickApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    init() {
+        // Must run before any view reads `@AppStorage(InterfaceMode.storageKey)`.
+        InterfaceModeMigration.migrateIfNeeded()
+    }
+
     private var isRunningTests: Bool {
         let environment = ProcessInfo.processInfo.environment
         return environment["XCTestConfigurationFilePath"] != nil
@@ -60,6 +65,10 @@ struct NickApp: App {
         )
         .defaultPosition(.center)
         .windowResizability(.contentMinSize)
+        .commands {
+            InterfaceModeCommands()
+            ScanCommands(engine: appDelegate.engine)
+        }
 
         Settings {
             if isUninstallMaintenanceMode || isRunningTests {
@@ -70,6 +79,38 @@ struct NickApp: App {
                     .environment(appDelegate.xpcClient)
                     .environment(appDelegate.networkProtection)
             }
+        }
+    }
+}
+
+// MARK: - InterfaceModeCommands
+
+/// View ▸ Advanced Mode (⇧⌘A).
+struct InterfaceModeCommands: Commands {
+    @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
+
+    var body: some Commands {
+        CommandGroup(after: .sidebar) {
+            Toggle("Advanced Mode", isOn: Binding(
+                get: { interfaceMode == .advanced },
+                set: { interfaceMode = $0 ? .advanced : .simple }
+            ))
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+        }
+    }
+}
+
+// MARK: - ScanCommands
+
+/// Scan ▸ Run Full Scan (⌘R), available in Simple and Advanced.
+struct ScanCommands: Commands {
+    let engine: SecurityEngine
+
+    var body: some Commands {
+        CommandMenu("Scan") {
+            Button("Run Full Scan") { engine.runFullScan() }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(engine.isScanning)
         }
     }
 }

@@ -59,3 +59,31 @@ extension View {
         modifier(NickElevatedCardModifier())
     }
 }
+
+// MARK: - NickSurfaceModifier (4.6.2)
+
+/// Card surface for the Simple interface: card fill, 0.5 pt hairline, and a
+/// soft 2 pt shadow at 4 %. Content cards never use custom glass — the system
+/// supplies glass for the toolbar and sidebar.
+struct NickSurfaceModifier: ViewModifier {
+    var cornerRadius: CGFloat = NickLayout.surfaceCornerRadius
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.nickCard)
+                    .shadow(color: .black.opacity(0.04), radius: 2, x: 0, y: 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
+            )
+    }
+}
+
+extension View {
+    func nickSurface(cornerRadius: CGFloat = NickLayout.surfaceCornerRadius) -> some View {
+        modifier(NickSurfaceModifier(cornerRadius: cornerRadius))
+    }
+}

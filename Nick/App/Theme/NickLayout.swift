@@ -41,3 +41,16 @@ enum NickLayout {
     /// Height of the score indicator bar below the gauge.
     static let scoreBarHeight:   CGFloat = 3
 }
+
+// MARK: - 4.6.2 surface radii
+
+extension NickLayout {
+    /// The status hero ("guard" card).
+    static let heroCornerRadius: CGFloat = 22
+    /// Content cards (protection cards, activity feed).
+    static let surfaceCornerRadius: CGFloat = 16
+    /// Rows inset inside a card or sheet.
+    static let insetCornerRadius: CGFloat = 14
+    /// Icon tiles inside cards.
+    static let iconTileCornerRadius: CGFloat = 11
+}

@@ -6,6 +6,64 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Nick uses semantic versioning for public releases, with an independent
 monotonically increasing macOS bundle build number.
 
+## [Unreleased] — 4.6.2 (build 429)
+
+### Added
+
+- Simple mode, the new default: a friendly Home with one status card
+  (protected, needs attention, or threat stopped), four plain protection cards,
+  a Mac security settings bar with one-click fix, and "What Nick did lately".
+  The sidebar has four destinations — Home, Scan, Activity, Protection — plus
+  Settings.
+- Simple Scan: Quick Check, Full Scan and "Check a File or Drive", with a
+  plain verdict and Show in Finder / Move to Trash for anything flagged.
+- Simple alert sheet: what happened, what Nick did and what to do, with
+  "I trust this app", Keep in Quarantine and Move to Trash. Rule names,
+  scores and paths sit behind Technical details.
+- Simple Activity: alerts, Quarantine and blocked launches on one timeline,
+  grouped by day, with All · Needs action · Blocked · Quarantined filters.
+  Quarantined files can be kept, restored or deleted from there.
+- Simple Protection: the four protection groups with a one-line explanation,
+  a Websites & Email switch, Fix rows for anything paused, and each Mac
+  security setting in plain words with a button to fix it.
+- Advanced mode keeps every section. Switch with the Simple | Advanced control
+  in the toolbar, View ▸ Advanced Mode (⇧⌘A), or Settings ▸ General ▸ Show
+  advanced tools. Switching keeps you on the equivalent page.
+
+### Changed
+
+- New colour system with one green accent and status colours that meet 4.5:1
+  contrast in light and dark mode.
+- "Simple alerts" is now part of Simple mode. If you had turned simple alerts
+  off, Nick starts in Advanced mode.
+- In Simple mode, Settings hides logging and integrations, monitored folders,
+  trusted processes and alert rules behind "Show advanced settings".
+- In Simple mode the "notifications are off" warning appears as a row on
+  Activity and Protection instead of a strip across the window.
+- Welcome and setup screens explain Simple and Advanced views.
+- Simple Home has subtle motion: the hero crossfades between states, the
+  protected ring breathes slowly while the window is in front, Run Quick
+  Check runs in place with a progress ring, new activity slides in, and
+  protection cards react to hover and status changes. All of it is off with
+  Reduce Motion, and nothing animates while the window isn't visible.
+- Advanced Overview: neutral feature tiles with On / Off / Paused chips (the
+  Smart Scan tile is gone; it duplicated the header button), a compact
+  "Recent activity" card instead of the full-height table, an amber attention
+  card with a Review button, and Smart Scan / Scan a File… in the toolbar.
+- Fixed the Overview headline grammar ("1 issue needs attention").
+- New Scan menu with Run Full Scan (⌘R) in both modes; it replaces the
+  toolbar Run Scan button.
+
+### Fixed
+
+- Clicking the menu bar icon now shows Nick's window in front in one click,
+  and clicking it again hides it. Before, it could just add Nick to the Dock
+  and need a second click there, because the window lookup relied on the
+  window title, which changes with the current page.
+- Deep Scan no longer sits on "Indexing files…" for minutes: files are scanned
+  while locations are still being walked, and progress shows how many files
+  were found and checked so far.
+
 ## [4.6.1] - 2026-09-26
 
 ### Fixed

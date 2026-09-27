@@ -173,7 +173,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
            response.actionIdentifier == UNNotificationDefaultActionIdentifier {
             Task { @MainActor in
                 NSApp.setActivationPolicy(.regular)
-                if let window = NSApp.windows.first(where: { $0.title == "Nick" || $0.title == "Overview" }) {
+                if let window = NSApp.nickMainWindow {
                     window.makeKeyAndOrderFront(nil)
                 }
                 NSApp.activate()

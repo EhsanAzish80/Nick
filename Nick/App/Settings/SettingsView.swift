@@ -41,8 +41,9 @@ struct SettingsView: View {
     @AppStorage("scheduledDeepScanInterval") private var scheduledDeepScanInterval: Int = 0
     @AppStorage("telemetryEnabled") private var telemetryEnabled: Bool = false
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
-    /// Phase 4 — simple vs technical alert presentation
-    @AppStorage("simpleAlertMode") private var simpleAlertMode: Bool = true
+    /// Simple vs Advanced presentation for the whole app.
+    @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
+    private var simpleAlertMode: Bool { interfaceMode == .simple }
 
     // MARK: Private State
 
@@ -66,6 +67,8 @@ struct SettingsView: View {
     @State private var showResetHistoryConfirmation = false
     @State private var showRemoveHelperConfirmation = false
     @State private var updateCheckStatus: String?
+    /// Simple mode keeps the technical sections behind this disclosure.
+    @State private var showsAdvancedSettings = false
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates: Bool = true
 
     // MARK: Body
@@ -81,14 +84,19 @@ struct SettingsView: View {
                     notificationsSection
                     scanningSection
                     networkProtectionSection
-                    integrationsSection
-                    monitoredDirectoriesSection
-                    trustedProcessesSection
-                    suppressionRulesSection
+                    if interfaceMode == .advanced {
+                        technicalSections
+                    }
                     finderIntegrationSection
                     dataSection
                     updatesSection
                     maintenanceSection
+                    if interfaceMode == .simple {
+                        advancedSettingsDisclosure
+                        if showsAdvancedSettings {
+                            technicalSections
+                        }
+                    }
                 }
                 .formStyle(.grouped)
                 .scrollDisabled(true)
@@ -119,7 +127,9 @@ struct SettingsView: View {
                 Text("Settings")
                     .font(.system(size: 18, weight: .semibold))
                     .tracking(-0.005 * 18)
-                Text("Notifications, scanning, monitored locations, and trusted processes.")
+                Text(interfaceMode == .simple
+                     ? "Notifications, scanning, updates and your data."
+                     : "Notifications, scanning, monitored locations, and trusted processes.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.secondary)
             }
@@ -131,6 +141,35 @@ struct SettingsView: View {
     }
 
     // MARK: Sections
+
+    /// Integrations and logging, monitored folders, trusted processes and
+    /// suppression rules. Always shown in Advanced; opt-in in Simple.
+    @ViewBuilder
+    private var technicalSections: some View {
+        integrationsSection
+        monitoredDirectoriesSection
+        trustedProcessesSection
+        suppressionRulesSection
+    }
+
+    private var advancedSettingsDisclosure: some View {
+        Section {
+            LabeledTile(
+                icon: "wrench.and.screwdriver.fill", tint: .gray,
+                title: "Show advanced settings",
+                subtitle: "Logging and integrations, monitored folders, trusted processes and alert rules."
+            ) {
+                Toggle("", isOn: $showsAdvancedSettings.animation())
+                    .labelsHidden()
+                    .accessibilityLabel("Show advanced settings")
+                    .toggleStyle(.switch)
+            }
+        } footer: {
+            Text("Most people never need these. Nick’s defaults are safe.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+        }
+    }
 
     private var generalSection: some View {
         Section("General") {
@@ -144,6 +183,19 @@ struct SettingsView: View {
                     .accessibilityLabel("Launch Nick at login")
                     .toggleStyle(.switch)
                     .onChange(of: launchAtLogin) { _, newValue in toggleLaunchAtLogin(newValue) }
+            }
+            LabeledTile(
+                icon: "slider.horizontal.3", tint: .gray,
+                title: "Show advanced tools",
+                subtitle: "Processes, network, persistence, rule details and diagnostics. You can also press ⇧⌘A."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { interfaceMode == .advanced },
+                    set: { interfaceMode = $0 ? .advanced : .simple }
+                ))
+                .labelsHidden()
+                .accessibilityLabel("Show advanced tools")
+                .toggleStyle(.switch)
             }
         }
     }
@@ -181,21 +233,12 @@ struct SettingsView: View {
                 .labelsHidden()
                 .frame(width: 130)
             }
-            LabeledTile(
-                icon: "person.fill", tint: .purple,
-                title: "Simple alerts",
-                subtitle: "Show plain-English headlines instead of technical details"
-            ) {
-                Toggle("", isOn: $simpleAlertMode)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-            }
         } header: {
             Text("Notifications")
         } footer: {
             Text(
                 simpleAlertMode
-                    ? "Alerts show plain-English headlines. Tap \"Show Details\" to see process paths, PIDs, and scores."
+                    ? "Alerts explain what happened in plain words. Open “Technical details” in an alert to see more."
                     : "Alerts show full technical details inline, including process paths, PIDs, and confidence scores."
             )
             .font(.system(size: 11.5))

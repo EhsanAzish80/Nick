@@ -648,6 +648,40 @@ final class DeepScannerLifecycleTests: XCTestCase {
         XCTAssertEqual(scanner.threatsFound, 1)
     }
 
+    func test_candidateDecisionDefersContentChecksToWorkers() {
+        XCTAssertEqual(DeepScanner.candidateDecision(path: "/Applications/A.app/Contents/MacOS/A", scanRoot: "/Applications", isExecutable: true), .scan)
+        XCTAssertEqual(DeepScanner.candidateDecision(path: "/Users/a/Library/Application Support/x/blob", scanRoot: "/Users/a/Library/Application Support", isExecutable: false), .checkContent)
+        XCTAssertEqual(DeepScanner.candidateDecision(path: "/Users/a/Downloads/photo.jpg", scanRoot: "/Users/a/Downloads", isExecutable: false), .skip)
+        XCTAssertEqual(DeepScanner.candidateDecision(path: "/Library/LaunchAgents/com.x.plist", scanRoot: "/Library/LaunchAgents", isExecutable: false), .scan)
+    }
+
+    func test_candidateQueueDrainsInOrderThenFinishes() {
+        let queue = CandidateQueue()
+        if case .empty = queue.pop() {} else { XCTFail("New queue should be empty") }
+        queue.push(.init(path: "/a", needsContentCheck: false))
+        queue.push(.init(path: "/b", needsContentCheck: true))
+        queue.setLocation("/Applications")
+        queue.finish()
+        XCTAssertEqual(queue.snapshot().discovered, 2)
+        XCTAssertEqual(queue.snapshot().location, "/Applications")
+        guard case .item(let first) = queue.pop(), case .item(let second) = queue.pop() else {
+            return XCTFail("Expected two items")
+        }
+        XCTAssertEqual(first.path, "/a")
+        XCTAssertTrue(second.needsContentCheck)
+        if case .finished = queue.pop() {} else { XCTFail("Drained, finished queue should report finished") }
+    }
+
+    func test_scanReportsDiscoveredCountAndFinishesIndexing() async {
+        let scanner = DeepScanner()
+        scanner.start(onlyOnPower: false, candidateFiles: ["/tmp/one", "/tmp/two", "/tmp/three"]) { _ in [] }
+        XCTAssertTrue(scanner.isIndexing)
+        await waitUntil { scanner.hasCompletedScan }
+        XCTAssertFalse(scanner.isIndexing)
+        XCTAssertEqual(scanner.totalFiles, 3)
+        XCTAssertEqual(scanner.scannedFiles, 3)
+    }
+
     private func waitUntil(
         timeout: Duration = .seconds(2),
         condition: @escaping @MainActor () -> Bool
