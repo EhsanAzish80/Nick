@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Nick uses semantic versioning for public releases, with an independent
 monotonically increasing macOS bundle build number.
 
+## [Unreleased]
+
+### Changed
+
+- Reworked the welcome screen around four user outcomes and clearer Simple and
+  Advanced mode language.
+- Refined the README positioning, first-run path, current release details and
+  false-positive reporting guidance.
+
 ## [4.6.2] - 2026-09-27
 
 ### Added

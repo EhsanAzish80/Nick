@@ -5,8 +5,8 @@
 <h1 align="center">Nick</h1>
 
 <p align="center">
-  Native, local-first protection that explains what happened, why it matters,
-  and what to do next.
+  Open-source, local-first Mac security that explains what happened, why it
+  matters, and what to do next.
 </p>
 
 <p align="center">
@@ -51,6 +51,23 @@ the Mac before and after a restart, installation, removal, MDM migration, VPN
 change, or security configuration change. It compares stable evidence rather
 than raw PIDs and timestamps, reports missing sensor visibility explicitly, and
 exports sanitized Markdown or JSON support bundles.
+
+## Start simple, go deeper when needed
+
+Nick 4.6.2 opens in **Simple mode**. It focuses on four things:
+
+- **Home** — one clear protection state and recent activity;
+- **Scan** — Quick Check, Full Scan, or a specific file, app, folder, or drive;
+- **Activity** — alerts, quarantined files, and blocked launches in one timeline;
+- **Protection** — plain-language status and direct fixes for paused protections.
+
+**Advanced mode** keeps the full process, network, persistence, rule, Runtime
+Compare, performance, and diagnostic views. Switch at any time from the toolbar
+or with `Shift-Command-A`.
+
+Nick is not a promise that every threat can be detected. Its goal is to combine
+Apple security frameworks, local scanning, and explainable evidence without
+turning every unusual developer or system action into a malware claim.
 
 ## Protection layers
 
@@ -204,7 +221,7 @@ For implementation details and trust boundaries, see
 
 ### Published release
 
-The current stable release is **Nick 4.6 (build 427)** for macOS 26 and later.
+The current stable release is **Nick 4.6.2 (build 429)** for macOS 26 and later.
 
 1. Download the notarized Nick disk image from
    [the latest GitHub release](https://github.com/EhsanAzish80/Nick/releases/latest).
@@ -212,11 +229,25 @@ The current stable release is **Nick 4.6 (build 427)** for macOS 26 and later.
 3. Launch Nick from `/Applications`.
 4. Follow the setup walkthrough. macOS requires explicit user approval for
    system extensions, Network Extensions, and Full Disk Access.
-5. Complete Smart Scan and confirm that each enabled protection reports current
-   health.
+5. On Home, confirm that each enabled protection reports current health, then
+   run Quick Check.
 
 The disk image is a presentation wrapper around the installer package. Sparkle
 updates use the signed package directly.
+
+### What to expect in the first five minutes
+
+1. macOS asks you to approve Nick's Endpoint Security system extension.
+2. Nick explains why Full Disk Access is needed before opening the correct
+   System Settings pane.
+3. Network Protection remains optional and observation-only.
+4. Home shows exactly which protection still needs attention.
+5. Quick Check verifies common startup, download, and application locations.
+
+If setup does not complete, see [Support](SUPPORT.md). If Nick flags something
+you recognize, use the dedicated
+[false-positive report](https://github.com/EhsanAzish80/Nick/issues/new?template=false_positive.yml)
+instead of deleting the file immediately.
 
 ### Permissions
 
