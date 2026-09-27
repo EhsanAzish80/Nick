@@ -7,9 +7,9 @@
 - Swift 6.
 - The checked-in `Nick.xcodeproj` is authoritative.
 
-`project.yml` is retained as project-generation documentation but does not
-fully represent the filesystem-synchronized groups and release signing state.
-Do not regenerate the project for ordinary source-file changes.
+Nick does not use a project-generator specification. Make project-structure
+and signing changes in the checked-in Xcode project and review project-file
+merge conflicts explicitly.
 
 ## Local build
 
@@ -63,7 +63,7 @@ baseline and should be raised as production coverage improves.
 
 The GitHub workflow:
 
-1. Checks out full history and Git LFS objects.
+1. Checks out full history.
 2. Selects the newest installed Xcode.
 3. Builds Nick, NickExtension, NickNetFilter, NickHelper, and NickUninstaller
    through the Nick scheme.

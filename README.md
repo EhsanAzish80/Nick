@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="NickIcon.png" width="144" alt="Nick app icon">
+  <img src=".github/NickIcon.png" width="144" alt="Nick app icon">
 </p>
 
 <h1 align="center">Nick</h1>

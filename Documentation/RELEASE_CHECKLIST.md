@@ -30,7 +30,7 @@
 - [ ] Retention remains bounded and old comparisons are removed predictably.
 - [ ] Release-build CPU, memory, capture duration, cancellation latency, event
       loss, and disk-use measurements meet the budgets in
-      `NICK_4_1_RUNTIME_COMPARE_ROADMAP.md`.
+      `archive/NICK_4_1_RUNTIME_COMPARE_ROADMAP.md`.
 - [ ] A signed, notarized build completes the Runtime Compare clean-Mac flow
       with both Nick system extensions active.
 

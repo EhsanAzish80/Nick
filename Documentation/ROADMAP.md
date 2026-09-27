@@ -41,7 +41,7 @@ traffic, integrate with an MDM server, or collect fleet data.
 
 The accepted product, UI, schema, privacy, testing, and implementation record
 is maintained in the
-[Nick 4.1 Runtime Compare roadmap](NICK_4_1_RUNTIME_COMPARE_ROADMAP.md).
+[Nick 4.1 Runtime Compare roadmap](archive/NICK_4_1_RUNTIME_COMPARE_ROADMAP.md).
 
 ## Versions 4.2-4.4: detection accuracy and operational clarity
 

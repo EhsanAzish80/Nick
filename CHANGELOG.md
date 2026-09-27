@@ -350,7 +350,11 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.4.0...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.6.2...HEAD
+[4.6.2]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.6.2
+[4.6.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.6.1
+[4.6]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.6.0
+[4.5]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.5.0
 [4.4]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.4.0
 [4.3]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.3.0
 [4.2]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.2.0

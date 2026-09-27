@@ -9,7 +9,7 @@
 *.json text eol=lf
 *.plist text eol=lf
 *.xcprivacy text eol=lf
-*.pbxproj text eol=lf merge=union
+*.pbxproj text eol=lf
 
 *.png binary
 *.jpg binary
