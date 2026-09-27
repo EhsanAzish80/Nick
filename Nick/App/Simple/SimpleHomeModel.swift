@@ -579,3 +579,25 @@ enum HomeFormatting {
         return date.formatted(.dateTime.day().month(.abbreviated))
     }
 }
+
+// MARK: - Quick Check progress
+
+/// Determinate progress for the hero ring, derived from the steps the engine
+/// already logs while a check runs (no engine changes).
+enum QuickCheckProgress {
+    static let stepTitles: Set<String> = [
+        "System audit complete",
+        "Persistence check passed",
+        "Network baseline updated",
+    ]
+
+    /// 0.08 at the start, +0.25 per finished step, never 1 until the check ends.
+    static func fraction(events: [ActivityEvent], since start: Date) -> Double {
+        let done = Set(
+            events
+                .filter { $0.timestamp >= start && stepTitles.contains($0.title) }
+                .map(\.title)
+        ).count
+        return 0.08 + Double(done) / Double(stepTitles.count + 1)
+    }
+}

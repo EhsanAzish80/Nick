@@ -18,8 +18,15 @@ struct SimpleHomeView: View {
     @Environment(ExtensionXPCClient.self) private var xpcClient
     @Environment(NetworkProtectionManager.self) private var networkProtection
     @Environment(\.openURL) private var openURL
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var controlActiveState
 
     @State private var endpointHealth: [String: Any]?
+    @State private var windowVisible = false
+    @State private var entranceVisible = HomeEntrance.hasRun
+    @State private var checkStartedAt: Date?
+    @State private var userStartedCheck = false
+    @State private var completionBounce = 0
     @State private var healthLoaded = false
     @State private var presentedAlert: ThreatAlert?
     @State private var presentedQuarantine: QuarantineRecord?
@@ -97,6 +104,24 @@ struct SimpleHomeView: View {
         )
     }
 
+    private var scanProgress: Double? {
+        guard engine.isScanning, let checkStartedAt else { return nil }
+        return QuickCheckProgress.fraction(events: engine.activityLog.events, since: checkStartedAt)
+    }
+
+    /// Only the calm, protected state breathes, and only while someone can see it.
+    private var heroBreathes: Bool {
+        hero.state == .protected
+            && !engine.isScanning
+            && windowVisible
+            && controlActiveState == .key
+            && !reduceMotion
+    }
+
+    private var feedAnimation: Animation? {
+        HomeMotion.animation(HomeMotion.stateChange, reduceMotion: reduceMotion)
+    }
+
     private var subtitle: String {
         let current = self.hero
         switch current.state {
@@ -115,12 +140,17 @@ struct SimpleHomeView: View {
             VStack(alignment: .leading, spacing: 22) {
                 GuardHeroView(
                     hero: hero,
+                    scanProgress: scanProgress,
+                    breathes: heroBreathes,
+                    completionBounce: completionBounce,
+                    primaryDisabled: hero.state == .protected && engine.isScanning,
                     primary: performPrimary,
                     secondary: performSecondary
                 )
                 .popover(isPresented: $showsWhy, arrowEdge: .bottom) {
                     whyPopover
                 }
+                .homeFadeUp(visible: entranceVisible, index: 0, reduceMotion: reduceMotion)
 
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 20) {
@@ -144,7 +174,23 @@ struct SimpleHomeView: View {
         .background(Color.nickWindow)
         .navigationTitle("Home")
         .navigationSubtitle(subtitle)
+        .background(WindowVisibilityReader { windowVisible = $0 })
         .task { await refreshHealth() }
+        .onAppear(perform: runEntranceOnce)
+        .onAppear {
+            if engine.isScanning, checkStartedAt == nil { checkStartedAt = Date() }
+        }
+        .onChange(of: engine.isScanning) { _, scanning in
+            if scanning {
+                checkStartedAt = Date()
+            } else {
+                checkStartedAt = nil
+                if userStartedCheck {
+                    userStartedCheck = false
+                    if hero.state == .protected { completionBounce += 1 }
+                }
+            }
+        }
         .sheet(item: $presentedAlert) { alert in
             AlertDetailView(alert: alert)
                 .environment(engine)
@@ -193,12 +239,13 @@ struct SimpleHomeView: View {
                 columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)],
                 spacing: 14
             ) {
-                ForEach(cards) { card in
+                ForEach(Array(cards.enumerated()), id: \.element.id) { index, card in
                     Button { selection = .protection } label: {
                         ProtectionCardView(card: card)
                     }
                     .buttonStyle(.plain)
                     .accessibilityHint("Opens Protection")
+                    .homeFadeUp(visible: entranceVisible, index: index + 1, reduceMotion: reduceMotion)
                 }
             }
 
@@ -209,6 +256,7 @@ struct SimpleHomeView: View {
                     selection = .protection
                 }
             }
+            .homeFadeUp(visible: entranceVisible, index: cards.count + 1, reduceMotion: reduceMotion)
         }
     }
 
@@ -232,16 +280,24 @@ struct SimpleHomeView: View {
                     .foregroundStyle(Color.nickSecondaryText)
                     .padding(.vertical, 12)
             } else {
-                ForEach(activity) { line in
-                    Divider().opacity(0.5)
-                    ActivityLineView(line: line)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(activity) { line in
+                        VStack(alignment: .leading, spacing: 0) {
+                            Divider().opacity(0.5)
+                            ActivityLineView(line: line)
+                        }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
+                .animation(feedAnimation, value: activity.map(\.id))
+                .clipped()
             }
         }
         .padding(.horizontal, 18)
         .padding(.top, 18)
         .padding(.bottom, 8)
         .nickSurface()
+        .homeFadeUp(visible: entranceVisible, index: cards.count + 2, reduceMotion: reduceMotion)
     }
 
     private var whyPopover: some View {
@@ -262,7 +318,10 @@ struct SimpleHomeView: View {
     private func performPrimary() {
         switch hero.state {
         case .protected:
-            selection = .scan
+            // Run the Quick Check in place so the hero ring can show progress.
+            guard !engine.isScanning else { return }
+            userStartedCheck = true
+            engine.runFullScan()
         case .attention:
             guard let fix = issues.first?.simpleFix else { return }
             switch fix {
@@ -323,6 +382,20 @@ struct SimpleHomeView: View {
         }
     }
 
+    private func runEntranceOnce() {
+        guard !HomeEntrance.hasRun else { return }
+        HomeEntrance.hasRun = true
+        if reduceMotion {
+            entranceVisible = true
+        } else {
+            // Let the hidden first frame render so the fade-up is visible.
+            Task { @MainActor in
+                await Task.yield()
+                entranceVisible = true
+            }
+        }
+    }
+
     private func markSeen(_ incident: HomeIncident) {
         var ids = seenIncidentsRaw.split(separator: "\n").map(String.init)
         guard !ids.contains(incident.id) else { return }
@@ -345,10 +418,23 @@ struct SimpleHomeView: View {
 /// with the two buttons reachable separately.
 struct GuardHeroView: View {
     let hero: HomeHero
+    /// Non-nil while a check runs: the inner ring becomes a progress arc.
+    var scanProgress: Double? = nil
+    /// Protected-only breathing of the outer ring. The caller gates it on
+    /// window visibility, key state and Reduce Motion.
+    var breathes: Bool = false
+    /// Incremented when a check the user started finishes.
+    var completionBounce: Int = 0
+    var primaryDisabled: Bool = false
     let primary: () -> Void
     let secondary: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var stateAnimation: Animation? {
+        HomeMotion.animation(HomeMotion.stateChange, reduceMotion: reduceMotion)
+    }
 
     private var ring: Color {
         switch hero.state {
@@ -366,20 +452,26 @@ struct GuardHeroView: View {
         }
     }
 
+    private var meta: String {
+        guard let scanProgress else { return hero.meta }
+        return "Checking your Mac… \(Int((scanProgress * 100).rounded()))%"
+    }
+
     var body: some View {
         HStack(spacing: 40) {
             ZStack {
-                Circle()
-                    .strokeBorder(ring.opacity(0.25), lineWidth: 1)
-                Circle()
-                    .fill(ring.opacity(0.08))
-                    .overlay(Circle().strokeBorder(ring, lineWidth: 2))
+                outerRing
+                innerRing
                     .padding(14)
                 Image(systemName: glyph)
                     .font(.system(size: 54, weight: .light))
                     .foregroundStyle(ring)
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, options: .nonRepeating, value: reduceMotion ? 0 : completionBounce)
             }
             .frame(width: 148, height: 148)
+            .animation(stateAnimation, value: hero.state)
+            .animation(stateAnimation, value: scanProgress == nil)
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 10) {
@@ -388,17 +480,21 @@ struct GuardHeroView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .tracking(0.7)
                         .foregroundStyle(Color.nickHeroEyebrow)
+                        .contentTransition(.opacity)
                     Text(hero.title)
                         .font(.system(size: 36, weight: .semibold))
                         .foregroundStyle(.white)
                         .fixedSize(horizontal: false, vertical: true)
+                        .contentTransition(.opacity)
                     Text(hero.body)
                         .font(.system(size: 15))
                         .lineSpacing(3)
                         .foregroundStyle(Color.nickHeroBody)
                         .frame(maxWidth: 560, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
+                        .contentTransition(.opacity)
                 }
+                .animation(stateAnimation, value: hero)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(hero.title). \(hero.body)")
                 .accessibilityAddTraits(.isHeader)
@@ -406,14 +502,19 @@ struct GuardHeroView: View {
                 HStack(spacing: 12) {
                     Button(hero.primaryTitle, action: primary)
                         .buttonStyle(HeroPrimaryButtonStyle(fill: ring))
+                        .disabled(primaryDisabled)
+                        .opacity(primaryDisabled ? 0.6 : 1)
                     Button(hero.secondaryTitle, action: secondary)
                         .buttonStyle(HeroSecondaryButtonStyle())
-                    Text(hero.meta)
+                    Text(meta)
                         .font(.system(size: 12))
                         .foregroundStyle(Color.nickHeroMeta)
                         .padding(.leading, 6)
                         .lineLimit(1)
+                        .contentTransition(.numericText())
+                        .animation(stateAnimation, value: meta)
                 }
+                .animation(stateAnimation, value: hero.state)
                 .padding(.top, 10)
             }
             Spacer(minLength: 0)
@@ -432,6 +533,41 @@ struct GuardHeroView: View {
             }
         }
         .environment(\.colorScheme, .dark)
+    }
+
+    /// Breathes only while `breathes` is true. The timeline is paused
+    /// otherwise, so a hidden, background or amber/red hero costs no frames.
+    private var outerRing: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !breathes)) { context in
+            let phase = breathes ? HomeMotion.breathPhase(at: context.date) : 0
+            Circle()
+                .strokeBorder(ring.opacity(0.25 + 0.15 * phase), lineWidth: 1)
+                .scaleEffect(1 + 0.04 * phase)
+        }
+    }
+
+    @ViewBuilder
+    private var innerRing: some View {
+        if let scanProgress {
+            Circle()
+                .fill(ring.opacity(0.08))
+                .overlay(Circle().strokeBorder(ring.opacity(0.25), lineWidth: 2))
+                .overlay(
+                    Circle()
+                        .inset(by: 1)
+                        .trim(from: 0, to: scanProgress)
+                        .stroke(ring, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(HomeMotion.animation(.smooth(duration: 0.6), reduceMotion: reduceMotion),
+                                   value: scanProgress)
+                )
+                .transition(.opacity)
+        } else {
+            Circle()
+                .fill(ring.opacity(0.08))
+                .overlay(Circle().strokeBorder(ring, lineWidth: 2))
+                .transition(.opacity)
+        }
     }
 }
 
@@ -467,6 +603,11 @@ private struct HeroSecondaryButtonStyle: ButtonStyle {
 struct ProtectionCardView: View {
     let card: ProtectionCard
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovering = false
+    @State private var statusBounce = 0
+    @State private var appearedAt = Date()
+
     private var tileForeground: Color {
         switch card.status {
         case .on:     .nickAccent
@@ -488,6 +629,7 @@ struct ProtectionCardView: View {
             Image(systemName: card.icon)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(tileForeground)
+                .symbolEffect(.bounce, options: .nonRepeating, value: statusBounce)
                 .frame(width: 38, height: 38)
                 .background(
                     RoundedRectangle(cornerRadius: NickLayout.iconTileCornerRadius, style: .continuous)
@@ -501,6 +643,8 @@ struct ProtectionCardView: View {
                     Spacer(minLength: 4)
                     StatusChip(text: card.status.rawValue, textColor: tileForeground, fillColor: tileFill)
                 }
+                .animation(HomeMotion.animation(HomeMotion.stateChange, reduceMotion: reduceMotion),
+                           value: card.status)
                 Text(card.detail)
                     .font(.system(size: 12))
                     .foregroundStyle(Color.nickSecondaryText)
@@ -511,7 +655,18 @@ struct ProtectionCardView: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .nickSurface()
+        .shadow(color: .black.opacity(hovering ? 0.10 : 0.04), radius: hovering ? 6 : 2, y: hovering ? 3 : 1)
+        .scaleEffect(hovering && !reduceMotion ? 1.01 : 1)
+        .animation(HomeMotion.animation(HomeMotion.hover, reduceMotion: reduceMotion), value: hovering)
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onAppear { appearedAt = Date() }
+        .onChange(of: card.status) {
+            // One bounce per real change. Skip the settle right after Home
+            // appears (the first heartbeat read can flip On to Paused).
+            guard !reduceMotion, Date().timeIntervalSince(appearedAt) > 1.5 else { return }
+            statusBounce += 1
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(card.title), \(card.status.rawValue). \(card.detail)")
     }
@@ -527,6 +682,7 @@ struct StatusChip: View {
         HStack(spacing: 5) {
             Circle().fill(textColor).frame(width: 6, height: 6)
             Text(text)
+                .contentTransition(.opacity)
         }
         .font(.system(size: 11, weight: .semibold))
         .foregroundStyle(textColor)
@@ -541,6 +697,8 @@ struct StatusChip: View {
 struct MacSettingsBar: View {
     let summary: MacSettingsSummary
     let fix: (MacSettingsSummary.Fix) -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 14) {
@@ -559,6 +717,9 @@ struct MacSettingsBar: View {
                     Text(summary.headline)
                         .font(.system(size: 12))
                         .foregroundStyle(Color.nickSecondaryText)
+                        .contentTransition(.numericText())
+                        .animation(HomeMotion.animation(HomeMotion.stateChange, reduceMotion: reduceMotion),
+                                   value: summary.headline)
                 }
                 if summary.total > 0 {
                     HStack(spacing: 4) {

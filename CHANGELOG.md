@@ -41,6 +41,11 @@ monotonically increasing macOS bundle build number.
 - In Simple mode the "notifications are off" warning appears as a row on
   Activity and Protection instead of a strip across the window.
 - Welcome and setup screens explain Simple and Advanced views.
+- Simple Home has subtle motion: the hero crossfades between states, the
+  protected ring breathes slowly while the window is in front, Run Quick
+  Check runs in place with a progress ring, new activity slides in, and
+  protection cards react to hover and status changes. All of it is off with
+  Reduce Motion, and nothing animates while the window isn't visible.
 - Advanced Overview: neutral feature tiles with On / Off / Paused chips (the
   Smart Scan tile is gone; it duplicated the header button), a compact
   "Recent activity" card instead of the full-height table, an amber attention
