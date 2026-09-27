@@ -104,8 +104,10 @@ struct SimpleHomeView: View {
         )
     }
 
+    /// Only checks the user started get the progress arc; automatic checks
+    /// just change the meta line.
     private var scanProgress: Double? {
-        guard engine.isScanning, let checkStartedAt else { return nil }
+        guard engine.isScanning, userStartedCheck, let checkStartedAt else { return nil }
         return QuickCheckProgress.fraction(events: engine.activityLog.events, since: checkStartedAt)
     }
 
@@ -143,6 +145,7 @@ struct SimpleHomeView: View {
                     scanProgress: scanProgress,
                     breathes: heroBreathes,
                     completionBounce: completionBounce,
+                    isBackgroundChecking: engine.isScanning && !userStartedCheck,
                     primaryDisabled: hero.state == .protected && engine.isScanning,
                     primary: performPrimary,
                     secondary: performSecondary
@@ -187,7 +190,7 @@ struct SimpleHomeView: View {
                 checkStartedAt = nil
                 if userStartedCheck {
                     userStartedCheck = false
-                    if hero.state == .protected { completionBounce += 1 }
+                    if hero.state == .protected && !reduceMotion { completionBounce += 1 }
                 }
             }
         }
@@ -425,6 +428,8 @@ struct GuardHeroView: View {
     var breathes: Bool = false
     /// Incremented when a check the user started finishes.
     var completionBounce: Int = 0
+    /// An automatic check is running: meta says "Checking…", no arc.
+    var isBackgroundChecking: Bool = false
     var primaryDisabled: Bool = false
     let primary: () -> Void
     let secondary: () -> Void
@@ -453,8 +458,10 @@ struct GuardHeroView: View {
     }
 
     private var meta: String {
-        guard let scanProgress else { return hero.meta }
-        return "Checking your Mac… \(Int((scanProgress * 100).rounded()))%"
+        if let scanProgress {
+            return "Checking your Mac… \(Int((scanProgress * 100).rounded()))%"
+        }
+        return isBackgroundChecking ? "Checking…" : hero.meta
     }
 
     var body: some View {
@@ -538,7 +545,7 @@ struct GuardHeroView: View {
     /// Breathes only while `breathes` is true. The timeline is paused
     /// otherwise, so a hidden, background or amber/red hero costs no frames.
     private var outerRing: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !breathes)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !breathes)) { context in
             let phase = breathes ? HomeMotion.breathPhase(at: context.date) : 0
             Circle()
                 .strokeBorder(ring.opacity(0.25 + 0.15 * phase), lineWidth: 1)
@@ -629,7 +636,7 @@ struct ProtectionCardView: View {
             Image(systemName: card.icon)
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(tileForeground)
-                .symbolEffect(.bounce, options: .nonRepeating, value: statusBounce)
+                .symbolEffect(.bounce, options: .nonRepeating, value: reduceMotion ? 0 : statusBounce)
                 .frame(width: 38, height: 38)
                 .background(
                     RoundedRectangle(cornerRadius: NickLayout.iconTileCornerRadius, style: .continuous)

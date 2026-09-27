@@ -296,6 +296,7 @@ struct HomeHero: Equatable {
 
     static func lastCheckText(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "No check has run yet" }
+        if now.timeIntervalSince(date) < 60 { return "Checked just now" }
         let relative = RelativeDateTimeFormatter()
         relative.unitsStyle = .full
         return "Last check \(relative.localizedString(for: date, relativeTo: now))"

@@ -49,4 +49,10 @@ final class HomeMotionTests: XCTestCase {
         XCTAssertNil(HomeMotion.animation(HomeMotion.stateChange, reduceMotion: true))
         XCTAssertNotNil(HomeMotion.animation(HomeMotion.stateChange, reduceMotion: false))
     }
+
+    func test_metaSaysCheckedJustNowRightAfterACheck() {
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        XCTAssertEqual(HomeHero.lastCheckText(now.addingTimeInterval(-5), now: now), "Checked just now")
+        XCTAssertTrue(HomeHero.lastCheckText(now.addingTimeInterval(-7_200), now: now).hasPrefix("Last check"))
+    }
 }
