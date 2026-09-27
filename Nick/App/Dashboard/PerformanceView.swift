@@ -49,7 +49,8 @@ struct PerformanceView: View {
                           systemImage: isScanning ? "stop.fill" : "arrow.clockwise")
                 }
                 .disabled(monitor == nil)
-                .keyboardShortcut("r", modifiers: .command)
+                // ⌘R is Scan ▸ Run Full Scan.
+                .keyboardShortcut("r", modifiers: [.command, .shift])
             }
         }
         .sheet(isPresented: $showingCleanupProgress) {
