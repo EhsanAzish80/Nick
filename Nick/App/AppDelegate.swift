@@ -371,11 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // xcodebuild waits forever after the final test has completed.
         if isRunningTests { return .terminateNow }
         if forceQuit { return .terminateNow }
-        // canBecomeMain is unreliable during .accessory→.regular transitions; filter by
-        // class instead. Prefer the titled "Nick" window over any other non-panel window.
-        let mainWindow = NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) && $0.title == "Nick" })
-                      ?? NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) })
-        let windowVisible = mainWindow?.isVisible ?? false
+        let windowVisible = NSApp.nickMainWindow?.isVisible ?? false
         return windowVisible ? .terminateNow : .terminateCancel
     }
 
@@ -485,16 +481,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = nil
     }
 
-    /// Toggles the main window: hides it when it is visible and key, shows it otherwise.
-    /// Checks `isKeyWindow` so clicking the icon while Nick is in the background brings
-    /// the window forward rather than hiding it.
+    /// One click shows Nick in front; the next click hides it again.
+    /// Hides only when the window is on screen and Nick is the active app, so a
+    /// click while Nick is behind other apps brings it forward instead.
     @objc private func toggleMainWindow() {
-        // canBecomeMain is unreliable during .accessory→.regular transitions. Use the
-        // title-priority search used everywhere else, so an open Settings window is never
-        // mistakenly ordered out instead of the main "Nick" window.
-        let mainWindow = NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) && $0.title == "Nick" })
-                      ?? NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) })
-        if let window = mainWindow, window.isVisible && window.isKeyWindow {
+        if let window = NSApp.nickMainWindow,
+           window.isVisible, !window.isMiniaturized, NSApp.isActive {
             window.orderOut(nil)
             NSApp.setActivationPolicy(.accessory)
         } else {
@@ -511,7 +503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureMainWindowDelegate() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self else { return }
-            if let window = NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) }) {
+            if let window = NSApp.nickMainWindow {
                 window.delegate = self.mainWindowDelegate
             }
         }
@@ -524,6 +516,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
 
+        // Show the existing window right away, still inside the click's event.
+        if let window = NSApp.nickMainWindow {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.delegate = mainWindowDelegate
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+        }
+
         // Step 2 — if SwiftUI gave us an openWindow action use it; this handles the
         // rare case where SwiftUI fully released the NSWindow (e.g. after a scene reset).
         openMainWindowAction?()
@@ -533,8 +533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // instead of canBecomeMain to reliably locate the window.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             guard let self else { return }
-            let window = NSApp.windows.first(where: { !$0.isSheet && !($0 is NSPanel) })
-            if let window {
+            if let window = NSApp.nickMainWindow {
                 window.delegate = self.mainWindowDelegate
                 window.makeKeyAndOrderFront(nil) // raise + key focus
                 window.orderFrontRegardless()    // force above any other app's windows
@@ -564,7 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // then force it to the front exactly as openMainWindow does.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             let settingsWindow = NSApp.windows.first(where: {
-                !$0.isSheet && !($0 is NSPanel) && $0.title != "Nick"
+                MainWindowLocator.isSettingsIdentifier($0.identifier?.rawValue)
             })
             settingsWindow?.makeKeyAndOrderFront(nil)
             settingsWindow?.orderFrontRegardless()

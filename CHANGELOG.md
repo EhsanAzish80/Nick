@@ -51,6 +51,10 @@ monotonically increasing macOS bundle build number.
 
 ### Fixed
 
+- Clicking the menu bar icon now shows Nick's window in front in one click,
+  and clicking it again hides it. Before, it could just add Nick to the Dock
+  and need a second click there, because the window lookup relied on the
+  window title, which changes with the current page.
 - Deep Scan no longer sits on "Indexing files…" for minutes: files are scanned
   while locations are still being walked, and progress shows how many files
   were found and checked so far.
