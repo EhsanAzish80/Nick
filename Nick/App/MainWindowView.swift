@@ -232,7 +232,7 @@ struct MainWindowView: View {
     private var simpleDetail: some View {
         switch simpleSelection ?? .home {
         case .home:       SimpleHomeView(selection: $simpleSelection)
-        case .scan:       SimpleScanRouteView()
+        case .scan:       SimpleScanView()
         case .activity:   AlertListView()
         case .protection: SettingsView()
         case .settings:   SettingsView()

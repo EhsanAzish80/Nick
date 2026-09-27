@@ -127,38 +127,3 @@ struct SimpleSidebar: View {
         .frame(minHeight: 30)
     }
 }
-
-// MARK: - SimpleScanRouteView (interim)
-
-/// Simple → Scan until the dedicated Simple Scan page lands (phase 6):
-/// the existing Smart Scan, or the file scanner when a file was requested.
-struct SimpleScanRouteView: View {
-    @Environment(SecurityEngine.self) private var engine
-    @State private var showsFileScanner = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Picker("Scan type", selection: $showsFileScanner) {
-                Text("Quick Check").tag(false)
-                Text("Check a File or Drive").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .padding(.vertical, 10)
-
-            if showsFileScanner {
-                ScannerDetailView()
-            } else {
-                SmartScanContentView()
-            }
-        }
-        .navigationTitle("Scan")
-        .onAppear {
-            if engine.pendingFinderScanURL != nil { showsFileScanner = true }
-        }
-        .onChange(of: engine.pendingFinderScanURL) { _, url in
-            if url != nil { showsFileScanner = true }
-        }
-    }
-}
