@@ -65,7 +65,10 @@ struct NickApp: App {
         )
         .defaultPosition(.center)
         .windowResizability(.contentMinSize)
-        .commands { InterfaceModeCommands() }
+        .commands {
+            InterfaceModeCommands()
+            ScanCommands(engine: appDelegate.engine)
+        }
 
         Settings {
             if isUninstallMaintenanceMode || isRunningTests {
@@ -93,6 +96,21 @@ struct InterfaceModeCommands: Commands {
                 set: { interfaceMode = $0 ? .advanced : .simple }
             ))
             .keyboardShortcut("a", modifiers: [.command, .shift])
+        }
+    }
+}
+
+// MARK: - ScanCommands
+
+/// Scan ▸ Run Full Scan (⌘R), available in Simple and Advanced.
+struct ScanCommands: Commands {
+    let engine: SecurityEngine
+
+    var body: some Commands {
+        CommandMenu("Scan") {
+            Button("Run Full Scan") { engine.runFullScan() }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(engine.isScanning)
         }
     }
 }

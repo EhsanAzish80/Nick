@@ -46,6 +46,8 @@ monotonically increasing macOS bundle build number.
   "Recent activity" card instead of the full-height table, an amber attention
   card with a Review button, and Smart Scan / Scan a File… in the toolbar.
 - Fixed the Overview headline grammar ("1 issue needs attention").
+- New Scan menu with Run Full Scan (⌘R) in both modes; it replaces the
+  toolbar Run Scan button.
 
 ### Fixed
 

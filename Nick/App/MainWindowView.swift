@@ -137,15 +137,6 @@ struct MainWindowView: View {
                 .help("Switch between Simple and Advanced (⇧⌘A)")
                 .accessibilityLabel("Interface mode")
             }
-            if interfaceMode == .simple {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: { engine.runFullScan() }) {
-                        Label("Run Scan", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(engine.isScanning)
-                    .keyboardShortcut("r", modifiers: .command)
-                }
-            }
         }
         .tint(Color.nickAccent)
         .preferredColorScheme(resolvedColorScheme)
