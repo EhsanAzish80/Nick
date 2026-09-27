@@ -78,6 +78,8 @@ extension Color {
     /// Accent (also `AccentColor` in the asset catalog, so `.tint` matches).
     static let nickAccent            = Color.nickDynamic(light: 0x15803D, dark: 0x34D17A)
     static let nickAccentTint        = Color.nickDynamic(light: 0xE6F4EC, dark: 0x16301F)
+    /// Text on a solid `nickAccent` fill (white on the dark green, near-black on the bright one).
+    static let nickOnAccent          = Color.nickDynamic(light: 0xFFFFFF, dark: 0x07120C)
     /// The dark "guard" hero card. Stays dark in both appearances.
     static let nickGuardHero         = Color.nickDynamic(light: 0x0F1412, dark: 0x0B0F0D)
     static let nickWindow            = Color(nsColor: NSColor(name: "NickWindow") { appearance in

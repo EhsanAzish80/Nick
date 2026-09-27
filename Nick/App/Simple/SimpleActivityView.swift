@@ -90,11 +90,11 @@ struct SimpleActivityView: View {
                         if option != .all && count > 0 {
                             Text("\(count)")
                                 .monospacedDigit()
-                                .foregroundStyle(filter == option ? Color.white.opacity(0.85) : Color.nickSecondaryText)
+                                .foregroundStyle(filter == option ? Color.nickOnAccent : Color.nickSecondaryText)
                         }
                     }
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(filter == option ? Color.white : Color.textPrimary)
+                    .foregroundStyle(filter == option ? Color.nickOnAccent : Color.textPrimary)
                     .padding(.horizontal, 12)
                     .frame(height: 28)
                     .background(
