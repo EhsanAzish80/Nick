@@ -986,9 +986,13 @@ struct SettingsView: View {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
     }
 
+    private var appBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String ?? "Unknown"
+    }
+
     private var footer: some View {
         HStack(spacing: 4) {
-            Text("Nick · Version \(appVersion) · ")
+            Text("Nick · Version \(appVersion) · Build \(appBuild) · ")
             Link("Open Source on GitHub",
                  destination: URL(string: "https://github.com/EhsanAzish80/Nick")!)
         }
