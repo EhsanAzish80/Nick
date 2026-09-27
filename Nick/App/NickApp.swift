@@ -25,6 +25,11 @@ struct NickApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    init() {
+        // Must run before any view reads `@AppStorage(InterfaceMode.storageKey)`.
+        InterfaceModeMigration.migrateIfNeeded()
+    }
+
     private var isRunningTests: Bool {
         let environment = ProcessInfo.processInfo.environment
         return environment["XCTestConfigurationFilePath"] != nil
@@ -60,6 +65,7 @@ struct NickApp: App {
         )
         .defaultPosition(.center)
         .windowResizability(.contentMinSize)
+        .commands { InterfaceModeCommands() }
 
         Settings {
             if isUninstallMaintenanceMode || isRunningTests {
@@ -70,6 +76,23 @@ struct NickApp: App {
                     .environment(appDelegate.xpcClient)
                     .environment(appDelegate.networkProtection)
             }
+        }
+    }
+}
+
+// MARK: - InterfaceModeCommands
+
+/// View ▸ Advanced Mode (⇧⌘A).
+struct InterfaceModeCommands: Commands {
+    @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
+
+    var body: some Commands {
+        CommandGroup(after: .sidebar) {
+            Toggle("Advanced Mode", isOn: Binding(
+                get: { interfaceMode == .advanced },
+                set: { interfaceMode = $0 ? .advanced : .simple }
+            ))
+            .keyboardShortcut("a", modifiers: [.command, .shift])
         }
     }
 }

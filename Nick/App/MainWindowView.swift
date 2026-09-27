@@ -33,8 +33,10 @@ struct MainWindowView: View {
     @Environment(SecurityEngine.self) private var engine
     @Environment(\.openWindow) private var openWindow
     @State private var selectedSection: SidebarSection? = .overview
+    @State private var simpleSelection: SimpleSection? = .home
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
+    @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
     @State private var notificationsDenied = false
 
     private var resolvedColorScheme: ColorScheme? {
@@ -99,56 +101,30 @@ struct MainWindowView: View {
     @ViewBuilder
     private var mainContent: some View {
         NavigationSplitView {
-            List(selection: $selectedSection) {
-                SidebarNavItem(section: .overview)
-                    .tag(SidebarSection.overview)
-                SidebarNavItem(section: .smartScan)
-                    .tag(SidebarSection.smartScan)
-
-                Section("SECURITY") {
-                    SidebarNavItem(
-                        section:    .alerts,
-                        badge:      activeAlertCount
-                    )
-                    .tag(SidebarSection.alerts)
-                    SidebarNavItem(section: .scan).tag(SidebarSection.scan)
-                    SidebarNavItem(section: .quarantine).tag(SidebarSection.quarantine)
-                }
-
-                Section("MONITORS") {
-                    SidebarNavItem(section: .systemAudit).tag(SidebarSection.systemAudit)
-                    SidebarNavItem(section: .network).tag(SidebarSection.network)
-                    SidebarNavItem(section: .processes).tag(SidebarSection.processes)
-                    SidebarNavItem(section: .persistence).tag(SidebarSection.persistence)
-                }
-
-                Section("DIAGNOSTICS") {
-                    SidebarNavItem(section: .runtimeCompare).tag(SidebarSection.runtimeCompare)
-                    SidebarNavItem(section: .performance).tag(SidebarSection.performance)
-                }
-
-                SidebarNavItem(section: .settings)
-                    .tag(SidebarSection.settings)
+            if interfaceMode == .simple {
+                SimpleSidebar(selection: $simpleSelection, activityBadge: activeAlertCount)
+            } else {
+                advancedSidebar
             }
-            .navigationSplitViewColumnWidth(min: 210, ideal: 250)
-            .navigationTitle("Nick")
         } detail: {
-            switch selectedSection ?? .overview {
-            case .overview:    OverviewDetailView(selectedSection: $selectedSection)
-            case .smartScan:   SmartScanDetailView()
-            case .alerts:      AlertListView()
-            case .scan:        ScannerDetailView()
-            case .quarantine:  QuarantineView()
-            case .systemAudit: SystemAuditView()
-            case .network:     NetworkConnectionsView()
-            case .processes:   ProcessListView()
-            case .persistence: PersistenceDetailView()
-            case .runtimeCompare: RuntimeCompareView()
-            case .performance: PerformanceView()
-            case .settings:    SettingsView()
+            if interfaceMode == .simple {
+                simpleDetail
+            } else {
+                advancedDetail
             }
         }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Picker("View", selection: $interfaceMode) {
+                    ForEach(InterfaceMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .help("Switch between Simple and Advanced (⇧⌘A)")
+                .accessibilityLabel("Interface mode")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button(action: { engine.runFullScan() }) {
                     Label("Run Scan", systemImage: "arrow.clockwise")
@@ -157,11 +133,13 @@ struct MainWindowView: View {
                 .keyboardShortcut("r", modifiers: .command)
             }
         }
+        .tint(Color.nickAccent)
         .preferredColorScheme(resolvedColorScheme)
         .onAppear {
             NSApp.setActivationPolicy(.regular)
             (NSApp.delegate as? AppDelegate)?.openSettingsAction = {
                 selectedSection = .settings
+                simpleSelection = .settings
             }
             (NSApp.delegate as? AppDelegate)?.openMainWindowAction = { [openWindow] in
                 openWindow(id: "main")
@@ -178,6 +156,86 @@ struct MainWindowView: View {
                 engine.pendingFinderScanURL = url
             }
             selectedSection = .scan
+            simpleSelection = .scan
+        }
+        // Switching modes keeps the user on the equivalent page.
+        .onChange(of: interfaceMode) { _, newMode in
+            switch newMode {
+            case .simple:
+                simpleSelection = InterfaceModeRouting.simpleSection(for: selectedSection)
+            case .advanced:
+                selectedSection = InterfaceModeRouting.advancedSection(for: simpleSelection)
+            }
+        }
+    }
+
+    // MARK: Advanced interface (the full 4.6 UI)
+
+    private var advancedSidebar: some View {
+        List(selection: $selectedSection) {
+            SidebarNavItem(section: .overview, isSelected: selectedSection == .overview)
+                .tag(SidebarSection.overview)
+            SidebarNavItem(section: .smartScan, isSelected: selectedSection == .smartScan)
+                .tag(SidebarSection.smartScan)
+
+            Section("SECURITY") {
+                SidebarNavItem(
+                    section:    .alerts,
+                    badge:      activeAlertCount,
+                    isSelected: selectedSection == .alerts
+                )
+                .tag(SidebarSection.alerts)
+                SidebarNavItem(section: .scan, isSelected: selectedSection == .scan).tag(SidebarSection.scan)
+                SidebarNavItem(section: .quarantine, isSelected: selectedSection == .quarantine).tag(SidebarSection.quarantine)
+            }
+
+            Section("MONITORS") {
+                SidebarNavItem(section: .systemAudit, isSelected: selectedSection == .systemAudit).tag(SidebarSection.systemAudit)
+                SidebarNavItem(section: .network, isSelected: selectedSection == .network).tag(SidebarSection.network)
+                SidebarNavItem(section: .processes, isSelected: selectedSection == .processes).tag(SidebarSection.processes)
+                SidebarNavItem(section: .persistence, isSelected: selectedSection == .persistence).tag(SidebarSection.persistence)
+            }
+
+            Section("DIAGNOSTICS") {
+                SidebarNavItem(section: .runtimeCompare, isSelected: selectedSection == .runtimeCompare).tag(SidebarSection.runtimeCompare)
+                SidebarNavItem(section: .performance, isSelected: selectedSection == .performance).tag(SidebarSection.performance)
+            }
+
+            SidebarNavItem(section: .settings, isSelected: selectedSection == .settings)
+                .tag(SidebarSection.settings)
+        }
+        .navigationSplitViewColumnWidth(min: 210, ideal: 250)
+        .navigationTitle("Nick")
+    }
+
+    @ViewBuilder
+    private var advancedDetail: some View {
+        switch selectedSection ?? .overview {
+        case .overview:    OverviewDetailView(selectedSection: $selectedSection)
+        case .smartScan:   SmartScanDetailView()
+        case .alerts:      AlertListView()
+        case .scan:        ScannerDetailView()
+        case .quarantine:  QuarantineView()
+        case .systemAudit: SystemAuditView()
+        case .network:     NetworkConnectionsView()
+        case .processes:   ProcessListView()
+        case .persistence: PersistenceDetailView()
+        case .runtimeCompare: RuntimeCompareView()
+        case .performance: PerformanceView()
+        case .settings:    SettingsView()
+        }
+    }
+
+    // MARK: Simple interface
+
+    @ViewBuilder
+    private var simpleDetail: some View {
+        switch simpleSelection ?? .home {
+        case .home:       SimpleHomeView(selection: $simpleSelection)
+        case .scan:       SimpleScanRouteView()
+        case .activity:   AlertListView()
+        case .protection: SettingsView()
+        case .settings:   SettingsView()
         }
     }
 }
@@ -249,11 +307,13 @@ private func isFocusModeActive() -> Bool {
 // MARK: - SidebarNavItem
 
 /// A sidebar list row with a plain SF Symbol icon and an optional alert count badge.
+/// The selected row's icon uses the single Nick accent; others stay secondary.
 private struct SidebarNavItem: View {
 
     let section:    SidebarSection
     var badge:      Int  = 0
     var isDisabled: Bool = false
+    var isSelected: Bool = false
 
     var body: some View {
         Label {
@@ -273,7 +333,7 @@ private struct SidebarNavItem: View {
         } icon: {
             Image(systemName: section.icon)
                 .font(.system(size: 14))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isSelected ? Color.nickAccent : Color.secondary)
         }
         .disabled(isDisabled)
     }
@@ -325,55 +385,21 @@ struct OverviewDetailView: View {
     /// pauses Privacy Guard and Email Guard but should not be counted three
     /// times or left unexplained.
     private var attentionItems: [AttentionItem] {
-        var items: [AttentionItem] = []
-
-        if !endpointProtectionActive {
-            items.append(AttentionItem(
-                id: "real_time_protection",
-                title: "Real-Time Protection needs attention",
-                detail: "The security extension is not responding, so Privacy Guard and Email Guard are waiting.",
-                count: 1,
-                section: .smartScan
-            ))
+        AttentionIssue.issues(
+            endpointProtectionActive: endpointProtectionActive,
+            auditIssues: auditIssues,
+            persistenceIssues: persistenceIssues,
+            processIssues: processIssues,
+            networkIssues: networkIssues
+        ).map { issue in
+            AttentionItem(
+                id: issue.id,
+                title: issue.advancedTitle,
+                detail: issue.advancedDetail,
+                count: issue.count,
+                section: issue.advancedSection
+            )
         }
-        if auditIssues > 0 {
-            items.append(AttentionItem(
-                id: "system_audit",
-                title: "System Security needs attention",
-                detail: "\(auditIssues) system setting\(auditIssues == 1 ? "" : "s") did not pass the latest audit.",
-                count: auditIssues,
-                section: .systemAudit
-            ))
-        }
-        if persistenceIssues > 0 {
-            items.append(AttentionItem(
-                id: "persistence",
-                title: "Persistence items need review",
-                detail: "\(persistenceIssues) startup item\(persistenceIssues == 1 ? "" : "s") have suspicious signing evidence.",
-                count: persistenceIssues,
-                section: .persistence
-            ))
-        }
-        if processIssues > 0 {
-            items.append(AttentionItem(
-                id: "processes",
-                title: "Running processes need review",
-                detail: "\(processIssues) process\(processIssues == 1 ? " has" : "es have") unsigned or invalid signing evidence.",
-                count: processIssues,
-                section: .processes
-            ))
-        }
-        if networkIssues > 0 {
-            items.append(AttentionItem(
-                id: "network",
-                title: "Network activity needs review",
-                detail: "\(networkIssues) outbound shell connection\(networkIssues == 1 ? "" : "s") need context.",
-                count: networkIssues,
-                section: .network
-            ))
-        }
-
-        return items
     }
 
     private var totalIssues: Int {

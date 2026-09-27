@@ -41,8 +41,9 @@ struct SettingsView: View {
     @AppStorage("scheduledDeepScanInterval") private var scheduledDeepScanInterval: Int = 0
     @AppStorage("telemetryEnabled") private var telemetryEnabled: Bool = false
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
-    /// Phase 4 — simple vs technical alert presentation
-    @AppStorage("simpleAlertMode") private var simpleAlertMode: Bool = true
+    /// Simple vs Advanced presentation for the whole app.
+    @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
+    private var simpleAlertMode: Bool { interfaceMode == .simple }
 
     // MARK: Private State
 
@@ -145,6 +146,19 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .onChange(of: launchAtLogin) { _, newValue in toggleLaunchAtLogin(newValue) }
             }
+            LabeledTile(
+                icon: "slider.horizontal.3", tint: .gray,
+                title: "Show advanced tools",
+                subtitle: "Processes, network, persistence, rule details and diagnostics. You can also press ⇧⌘A."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { interfaceMode == .advanced },
+                    set: { interfaceMode = $0 ? .advanced : .simple }
+                ))
+                .labelsHidden()
+                .accessibilityLabel("Show advanced tools")
+                .toggleStyle(.switch)
+            }
         }
     }
 
@@ -180,15 +194,6 @@ struct SettingsView: View {
                 }
                 .labelsHidden()
                 .frame(width: 130)
-            }
-            LabeledTile(
-                icon: "person.fill", tint: .purple,
-                title: "Simple alerts",
-                subtitle: "Show plain-English headlines instead of technical details"
-            ) {
-                Toggle("", isOn: $simpleAlertMode)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
             }
         } header: {
             Text("Notifications")

@@ -17,7 +17,8 @@ struct AlertDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     // Phase 4: simple/technical mode
-    @AppStorage("simpleAlertMode") private var simpleAlertMode: Bool = true
+    @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
+    private var simpleAlertMode: Bool { interfaceMode == .simple }
     @State private var showTechnicalDetails: Bool = false
 
     var body: some View {
