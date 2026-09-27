@@ -58,7 +58,8 @@ struct MainWindowView: View {
         } else {
             ProtectionSetupGate {
                 VStack(spacing: 0) {
-                    if notificationsDenied {
+                    // Simple mode shows this as an inset row on Activity and Protection.
+                    if notificationsDenied && interfaceMode == .advanced {
                         HStack(spacing: NickSpacing.sm) {
                             Image(systemName: "bell.slash")
                                 .foregroundStyle(Color.statusYellow)
@@ -233,8 +234,8 @@ struct MainWindowView: View {
         switch simpleSelection ?? .home {
         case .home:       SimpleHomeView(selection: $simpleSelection)
         case .scan:       SimpleScanView()
-        case .activity:   AlertListView()
-        case .protection: SettingsView()
+        case .activity:   SimpleActivityView()
+        case .protection: SimpleProtectionView()
         case .settings:   SettingsView()
         }
     }
