@@ -1,6 +1,28 @@
 # Nick Security Audit Record
 
-## Current release security status
+## Current status: Nick 4.6.2 (October 3, 2026)
+
+This table is the current public capability summary. The detailed sections
+below are a chronological audit record and may describe older release states.
+Open vulnerability details are maintained in a private security tracker and
+are not published before remediation. Report new issues through the private
+channels in [`SECURITY.md`](../SECURITY.md).
+
+| Area | Current public status |
+|---|---|
+| Endpoint Security | Active system-extension path with bounded authorization work, local scanning, and XPC event delivery. Automatic file denial is limited to exact curated hash evidence or an explicit reviewed block. Novel YARA findings are normally reported after authorization. |
+| App-level correlation | Deterministic correlation is active for app-level monitor, Deep Scan, and FSEvents signals. Endpoint Security and Network Extension observations are not all combined into the same correlator. |
+| YARA | Vendored libyara 4.5.5 is active for on-demand and selected real-time paths. Context and rule metadata distinguish concrete signatures from review-only behavior matches. |
+| Network Extension | Observation-only and fail-open. The shipping provider does not return traffic-drop verdicts or inspect payload/page content. |
+| Signed rule delivery | Envelope validation exists. Production signing, publication, staged rollout, rollback, and last-known-good recovery are not active. |
+| Hash intelligence | Local SHA-256 database and blocking path exist. Production seeding and remote updates are not active. |
+| Local AI | Apple Foundation Models generates alert explanation text only. It cannot score, block, quarantine, terminate a process, or change network policy. |
+| Core ML scoring | Feature/scorer infrastructure exists but no trained production model is bundled or connected to live detection. |
+| Privileged helper | Source and build target exist, but current builds do not embed or register the helper and the app has no live helper client. |
+| Process genealogy and self-tamper modules | Source exists but the modules are not instantiated in the current Endpoint Security object graph. |
+| Hosted analysis | None active. Optional user-configured webhooks, Sparkle update checks, and user-initiated exports are explicit outbound boundaries. |
+
+## Historical 4.0.1 release security status
 
 Nick 4.0.1 build 408 includes two restricted, security-sensitive surfaces
 beyond the
