@@ -9,9 +9,8 @@ material, or malware sample.
 
 | Version | Security updates |
 |---|---|
-| 4.x development builds | Supported |
-| 3.x latest published release | Supported |
-| 2.x and earlier | Not supported |
+| 4.6.x latest published release | Supported |
+| Earlier releases and modified builds | Not supported |
 
 Only artifacts published through the
 [official GitHub Releases page](https://github.com/EhsanAzish80/Nick/releases)
@@ -24,6 +23,9 @@ Use one of these private channels:
 
 1. [Open a private GitHub security advisory](https://github.com/EhsanAzish80/Nick/security/advisories/new)
 2. Email [security@3nsofts.com](mailto:security@3nsofts.com)
+
+Do not disclose exploit details in a public issue, discussion, pull request, or
+documentation change before a coordinated fix is available.
 
 Include, when possible:
 
