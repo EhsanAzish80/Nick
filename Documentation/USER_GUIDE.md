@@ -39,6 +39,11 @@ for an actionable file finding. Nick re-scans the file immediately before
 quarantine and refuses the operation if the file changed or no longer matches.
 Hide Alert removes the item from the active list without deleting a file.
 
+Real-Time Protection can deny a known exact-hash finding within a bounded
+pre-launch check. New YARA findings are normally reported after the launch or
+file operation has already been allowed, so a YARA alert is evidence to review,
+not a claim that execution was prevented.
+
 Expected behavior can be accepted for the specific app and behavior so repeated
 benign events do not create alerts. This is a local trust decision, not a global
 malware exclusion.
@@ -62,6 +67,14 @@ If normal browsing stops while the extension is enabled:
 
 Nick's policy is fail-open when configuration is missing, stale, or invalid.
 Build 416 also contains no Network Extension traffic-drop path.
+
+## Local analysis and network access
+
+Nick has no hosted detection service. File scanning, signal correlation,
+Runtime Compare, and Apple Foundation Models alert explanations run locally.
+Nick still uses the network for explicit product functions: Sparkle update
+checks, an optional webhook configured in Settings, and links the user opens.
+Exports remain local until the user chooses where to save or share them.
 
 ## Email Guard
 
