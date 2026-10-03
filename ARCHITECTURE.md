@@ -1,329 +1,247 @@
 # Nick Architecture
 
-This document describes Nick's internal architecture, detection methodology, and security model. It's intended for contributors, security auditors, and anyone who wants to understand how Nick works before trusting it on their Mac.
+This document describes the architecture implemented in Nick 4.6.2. It is for
+contributors and reviewers who want to understand the product's current
+boundaries. Planned and inactive components are identified explicitly.
 
-## Version 4 architecture
+## Product boundary
 
-Nick 4.0 separates user interface, local monitoring, privileged Endpoint
-Security observation, and optional network enforcement:
+Nick is a local macOS security and diagnostic application. The current release
+contains a user-session app and two system extensions:
 
 ```text
 Nick.app
 ├── SecurityEngine and MonitorCoordinator
-├── local process, persistence, connection, capture, and system-audit monitors
-├── Smart Scan, Alerts, Timeline, Quarantine, Reports, and setup
+├── process, persistence, connection, capture, and system-audit monitors
+├── Deep Scan, Runtime Compare, quarantine UI, reports, and setup
 ├── ExtensionXPCClient
 └── NetworkProtectionManager
 
 NickExtension.systemextension
-├── EndpointSecurityClient
-├── FileScanner and vendored libyara 4.5.5
-├── EmailAttachmentMonitor
-├── RansomwareDetector and FileIntegrityMonitor
-├── Behavioral and privacy event handling
+├── EndpointSecurityClient and authorization handlers
+├── FileScanner, SHA-256 cache, and vendored libyara 4.5.5
+├── email attachment and external-volume scanning
+├── ransomware, file-integrity, and privacy monitoring
+├── quarantine
 └── authenticated XPCServer
 
 NickNetFilter.systemextension
-├── FilterDataProvider
-├── deterministic NetworkProtectionPolicy
-├── ScamGuardian
-├── signed NetworkBlocklist envelope validation
-└── bounded privacy-safe health and block-event persistence
+├── NEFilterDataProvider
+├── NetworkProtectionPolicy and ScamGuardian
+├── signed-envelope validation infrastructure
+└── bounded health and observation-event persistence
 ```
 
-The main app never treats an installed bundle or saved preference as proof that
-a protection is working. System-extension and Network Extension rows become
-healthy only after current runtime state is verified.
+Installation is not treated as proof that protection is running. The app uses
+fresh health records and live XPC status before presenting a component as
+active.
 
-## Design Principles
+## Active data flows
 
-1. **Defense in depth through correlation.** Any single signal (an unsigned binary, an outbound connection, a new LaunchAgent) could be benign. Nick's value is in correlating signals across monitors to surface genuinely suspicious behavior while minimizing false positives.
+Nick currently has four related but separate detection paths. They do not all
+feed one central correlator.
 
-2. **Minimal attack surface.** Nick uses zero third-party Swift dependencies. The privileged helper exposes the smallest possible XPC API. The app requests only the permissions it needs.
+### Endpoint Security
 
-3. **Local analysis.** Scanning, correlation, and model inference run locally.
-   Network access is limited to explicit product functions such as Sparkle
-   update checks and future signed rule retrieval.
+`NickExtension` subscribes to Endpoint Security authorization and notification
+events. Authorization handlers perform bounded cache and exact-hash checks,
+respond within the operating-system deadline, and move longer work off the ES
+callback queue. Modified files can be scanned with YARA, evaluated for file
+integrity, email attachment, and ransomware evidence, and reported to the app
+over XPC.
 
-4. **Separation of concerns.** The detection engine (`Nick/Core/`) has no UI
-   dependency. The UI (`Nick/App/`) presents engine state. Endpoint Security
-   and network enforcement live in separate system extensions, and privileged
-   operations are isolated behind narrow authenticated XPC protocols.
+The extension may deny a file operation when an exact curated hash is already
+known or the user has explicitly promoted a reviewed finding to blockable.
+Novel YARA findings are normally produced after the authorization response and
+are presented for review rather than silently blocked.
 
----
+### App monitoring and correlation
 
-## Component Overview
+`SecurityEngine` runs local system-audit, persistence, process, connection, and
+capture-device monitors. `MonitorCoordinator` performs lightweight process
+checks every five seconds and schedules the more expensive full sweep no more
+often than every five minutes.
 
-### Core Detection Engine
+These monitors emit `ThreatSignal` values. `ThreatCorrelator` retains a bounded
+30-second window and applies deterministic `CorrelationRule` instances. Trusted
+processes, suppression rules, stable incident identities, and temporary
+acknowledgements reduce repeated or low-confidence alerts.
 
-The engine consists of independent monitors that each observe a specific attack surface. Each monitor emits `ThreatSignal` events to the `ThreatCorrelator`.
+The main app and `MonitorCoordinator` currently own separate correlator
+instances. Endpoint Security events are displayed through the extension event
+client but are not generally converted into app-level `ThreatSignal` values.
+Nick should therefore be described as correlating app-level signals, not as
+combining every detector in one global scoring engine.
 
-```
-ThreatSignal {
-    source: MonitorType          // .process, .persistence, .network, .filesystem
-    severity: SignalSeverity     // .info, .low, .medium, .high, .critical
-    timestamp: Date
-    processInfo: ProcessInfo?    // PID, path, code signing status, parent
-    networkInfo: NetworkInfo?    // remote IP, port, protocol, domain
-    fileInfo: FileInfo?          // path, hash, entropy, signing status
-    description: String          // Human-readable signal description
-    rawData: [String: Any]       // Full context for correlation
-}
-```
+### YARA and Deep Scan
 
-#### ProcessMonitor
-**What it watches:** Running processes via `sysctl` / `proc_info`.
+`YARAEngine` wraps vendored libyara 4.5.5. Rule files are validated separately,
+compiled into immutable rule sets, and scanned with bounded concurrency and a
+10-second per-file timeout.
 
-**Detection logic:**
-- Flags processes executing from `/tmp`, `/var/tmp`, or hidden directories (path contains `/\.`)
-- Flags unsigned or ad-hoc signed binaries (checks code signing via `SecStaticCode`)
-- Detects shell processes (`bash`, `zsh`, `sh`, `python`, `ruby`, `perl`) with active network connections (cross-references with NetworkAnalyzer)
-- Identifies suspicious parent-child chains (e.g., `Safari` → `bash` → `curl`)
-- Monitors LOLBin usage patterns: `curl` piping to `sh`, `osascript` with encoded payloads, `openssl s_client` connections
+`DeepScanner` streams candidate discovery and scanning concurrently. Match
+classification considers rule class and severity, file format, verified
+development layouts, Homebrew receipts, signed application context, and code
+signing state. Concrete family signatures remain actionable regardless of
+path; broad behavior matches can remain visible without becoming alerts.
 
-**Polling interval:** 5 seconds (configurable).
+An FSEvents watcher provides additional YARA coverage for newly created or
+modified executable content in selected directories.
 
-#### PersistenceWatcher
-**What it watches:** Known macOS persistence locations via FSEvents.
+### Network observation
 
-**Monitored paths:**
-- `/Library/LaunchDaemons/`
-- `/Library/LaunchAgents/`
-- `~/Library/LaunchAgents/`
-- `/System/Library/LaunchDaemons/` (read-only check, SIP-protected)
-- Login Items (via `SMAppService` API)
-- `/etc/crontab` and user crontabs
-- `/etc/periodic/` (daily, weekly, monthly)
-- `/Library/SystemExtensions/`
-- Browser extension directories (Safari, Chrome, Firefox, Arc)
+`NickNetFilter` receives socket-flow metadata from Network Extension. It can
+evaluate hostname or IP, remote port, source application identity, bundled
+lookalike-domain logic, and any locally installed valid signed rule envelope.
+It does not inspect payloads, page contents, URL paths, query strings, or form
+data.
 
-**Detection logic:**
-- Emits a `.high` signal for any new file in a LaunchAgent/Daemon directory
-- Parses plist files to extract the executable path and validates its code signature
-- Compares current persistence state against a baseline snapshot (created on first run)
-- Detects modification of existing persistence plists (not just creation)
+The shipping provider is observation-only and returns an allow verdict for all
+flows. Missing, stale, or invalid configuration also fails open. Network
+observations are stored locally in a bounded app-group record.
 
-#### NetworkAnalyzer
-**What it watches:** Active network connections, listening ports, DNS queries.
+## Alert and response flow
 
-**Data sources:**
-- `NWPathMonitor` for connectivity state
-- `getifaddrs` / `sysctl` for active connections (equivalent to `netstat`)
-- `lsof -i` output parsing for process-to-connection mapping
-- DNS query monitoring via `dns-sd` or `/var/log/` system logs
+```text
+local monitor signals
+        │
+        ▼
+deterministic correlation rules
+        │
+        ▼
+ThreatAlert ──► on-device Apple Foundation Models explanation
+        │                     (text only)
+        ├──► app UI and local notification
+        ├──► optional local file/stdout output
+        └──► optional user-configured webhook
 
-**Detection logic:**
-- Flags unexpected listening ports (ports not associated with known macOS services)
-- Detects reverse shells: shell process (`bash`, `zsh`) with outbound TCP connection
-- Identifies SSH tunnels by inspecting `ssh` process arguments for `-L`, `-R`, `-D` flags
-- Flags connections from shell processes to raw IPs (no DNS resolution = suspicious)
-- Monitors for connections to known malicious domains/IPs (loaded from Rules/indicators/)
-- Detects unexpected DNS-over-HTTPS traffic to non-standard resolvers
-
-#### FileSystemWatcher
-**What it watches:** File creation and modification in critical directories via FSEvents.
-
-**Monitored directories:**
-- `~/Downloads/`
-- `/tmp/` and `/var/tmp/`
-- `/Applications/`
-- All persistence directories (shared with PersistenceWatcher)
-- Browser extension directories
-
-**Detection logic:**
-- New executable files in `/tmp` → `.medium` signal
-- New `.app`, `.pkg`, `.dmg` in Downloads → `.info` signal (triggers YARA scan)
-- Modification of any file in persistence directories → `.high` signal
-- Rapid file creation patterns (many files in short time) → potential dropper behavior
-
-#### YARAEngine
-**What it does:** Pattern-based file scanning using the YARA library.
-
-**Implementation:**
-- `libyara` (C library) wrapped in a Swift interface via C interop
-- Rules compiled at app launch and cached
-- Supports on-demand scanning (user-initiated) and triggered scanning (from FileSystemWatcher events)
-- Ships with curated rule sets organized by threat type
-- Community rules loaded from `Rules/community/` directory
-
-**Scanning modes:**
-- **Quick scan**: Critical directories only (~30 seconds)
-- **Full scan**: All user-accessible directories (varies by disk size)
-- **Targeted scan**: Single file or directory (user-initiated)
-- **Real-time scan**: Triggered by FileSystemWatcher for new files in monitored directories
-
-#### SystemAudit
-**What it checks:** macOS security configuration.
-
-| Check | Method | Expected State |
-|-------|--------|----------------|
-| SIP | `csrutil status` via Process | Enabled |
-| FileVault | `fdesetup status` via Process | On |
-| Gatekeeper | `spctl --status` via Process | Assessments enabled |
-| Firewall | `/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate` | Enabled |
-| Stealth mode | `socketfilterfw --getstealthmode` | Enabled (recommended) |
-| XProtect | Check plist version at `/Library/Apple/System/Library/CoreServices/XProtect.bundle` | Up to date |
-| Automatic updates | `defaults read /Library/Preferences/com.apple.SoftwareUpdate` | Enabled |
-| Remote Login | `systemsetup -getremotelogin` (requires helper) | Off (unless intentional) |
-| Sharing services | Various `launchctl` checks | Minimal |
-
----
-
-### ThreatCorrelator
-
-The correlator is the central intelligence component. It receives `ThreatSignal` events from all monitors and scores them using both rule-based logic and the CoreML behavioral model.
-
-**Correlation windows:** Signals are correlated within a 30-second sliding window by default.
-
-**Correlation rules (examples):**
-```
-IF ProcessMonitor.unsigned_binary_executing
-   AND FileSystemWatcher.new_file_in_tmp (same path, within 10s)
-   AND NetworkAnalyzer.outbound_connection (same PID, within 30s)
-THEN → score: 0.92, label: "Dropper behavior detected"
-
-IF PersistenceWatcher.new_launchagent
-   AND ProcessMonitor.parent_is_installer_or_browser
-   AND YARAEngine.no_match (file is clean by signatures)
-THEN → score: 0.65, label: "Unknown persistence mechanism from web download"
-
-IF NetworkAnalyzer.shell_with_outbound_connection
-   AND ProcessMonitor.parent_not_terminal
-THEN → score: 0.95, label: "Possible reverse shell"
+Endpoint Security findings ──► XPC event/timeline and quarantine state
+Network Extension findings  ──► local network observation store
 ```
 
-**CoreML scoring:**
-The behavioral model takes a feature vector of ~40 signals (binary flags and numeric values) and outputs a threat probability between 0.0 and 1.0. The model is trained on labeled behavioral data from known-good macOS activity and known-bad malware behavior.
+Apple Foundation Models runs only after deterministic code has created an
+alert. Generated text cannot alter severity, scoring, Endpoint Security
+authorization, quarantine, process termination, or network policy. If model
+generation is unavailable, Nick uses a deterministic template.
 
-Feature categories:
-- Process attributes (signing status, location, parent chain depth, age)
-- Network attributes (connection count, destination type, port, protocol)
-- File system attributes (file entropy, location, creation recency)
-- Temporal attributes (time since process start, time between events)
+## Major components
 
-**Alert thresholds:**
-- `< 0.3` → Logged, no notification
-- `0.3 - 0.6` → Low priority notification
-- `0.6 - 0.8` → Medium priority notification with explanation
-- `> 0.8` → High priority notification with recommended action
+| Component | Current responsibility |
+|---|---|
+| `SecurityEngine` | Main-actor application state, full scans, app-level correlation, alerts, explanations, and statistics. |
+| `MonitorCoordinator` | Five-second process checks, scheduled full scans, and ownership of the FSEvents YARA watcher. |
+| `ThreatCorrelator` | Bounded signal window, deterministic rules, suppression, trusted-process adjustment, and incident deduplication. |
+| `DeepScanner` | Candidate enumeration, contextual YARA classification, progress, cancellation, and scan results. |
+| `YARAEngine` | Rule validation, compilation, and bounded libyara scanning. |
+| `NickExtension` | Endpoint Security events, authorization decisions, file scanning, ransomware/FIM/privacy/email/USB monitoring, and quarantine. |
+| `NickNetFilter` | Observation-only socket-flow classification and bounded local event storage. |
+| `RuntimeCompare` | Local before-and-after snapshots, comparison, sanitization, and export. |
+| `AlertExplainer` | Human-readable explanation using Apple Foundation Models; no detection or enforcement authority. |
 
----
+## Apple frameworks and system APIs
 
-### Privileged Helper
+The current source uses SwiftUI, AppKit, Observation, SwiftData, Endpoint
+Security, Network Extension, Network, System Extensions, Service Management,
+Security, CryptoKit, Foundation Models, User Notifications, AVFoundation,
+CoreMediaIO, CoreAudio, IOKit, FSEvents/CoreServices, SQLite, and BSD/Darwin
+process and filesystem APIs. Sparkle supplies signed application updates.
 
-The helper runs as a separate process with elevated privileges, communicating with the main app via XPC.
+Core ML is present in inactive behavioral-scoring infrastructure; it is not used
+by the live correlation path.
 
-**XPC Protocol (minimal surface):**
-```swift
-@objc protocol NickHelperProtocol {
-    func checkFirewallRules(reply: @escaping ([String: Any]) -> Void)
-    func checkRemoteLoginStatus(reply: @escaping (Bool) -> Void)
-    func readProtectedPlist(atPath: String, reply: @escaping (Data?) -> Void)
-    func getSystemIntegrityStatus(reply: @escaping ([String: Any]) -> Void)
-}
-```
+## Privileges and permissions
 
-**Security measures:**
-- Code signing requirement on both ends of the XPC connection
-- The helper validates the calling app's code signature before responding
-- No write operations exposed — the helper is read-only
-- No shell execution — all checks use Foundation APIs or direct syscalls
-- Installed and managed via `SMAppService` (modern replacement for `SMJobBless`)
+- `NickExtension` requires Apple's Endpoint Security client entitlement and
+  user approval for its system extension.
+- `NickNetFilter` requires the content-filter-provider system-extension
+  entitlement and user approval.
+- The parent application requires permission to install system extensions.
+- Full Disk Access is needed for protected system and supported mail data.
+- Notifications require user approval.
+- Nick cannot grant these approvals itself.
 
----
+The main application is not App Sandbox confined. Privileged Endpoint Security
+and quarantine operations remain in `NickExtension`, outside the UI process.
 
-### App Layer (SwiftUI)
+## Trust and process boundaries
 
-The app is a thin presentation layer over the Core engine.
+### Main app to Endpoint Security extension
 
-**Main views:**
-- **Dashboard**: System health score, active monitors status, recent alerts summary
-- **Alerts**: Chronological threat log with severity, description, affected process/file, and recommended action
-- **Scanner**: Drag-and-drop YARA scanning with results display
-- **System Audit**: Security configuration checklist with fix recommendations
-- **Network**: Live connection viewer with process mapping
-- **Settings**: Monitor toggles, scan scheduling, notification preferences
+The app and Endpoint Security extension communicate over `NSXPCConnection`.
+The extension validates the connecting process's Apple signing chain and Nick
+team identifier before accepting it. Requests and events use typed XPC methods
+with JSON-encoded value payloads.
 
-**Menu bar presence:**
-- Status icon: green (all clear), yellow (low-priority alerts), red (high-priority alert)
-- Click to open dashboard or show recent alerts
-- Lightweight — the menu bar extra runs even when the main window is closed
+The extension exposes status, bounded scans, reviewed allow/block actions,
+quarantine operations, FIM baseline rebuilding, canary deployment, and bounded
+event replay. The quarantine vault and extension databases live under
+`/Library/Application Support/com.ehsanazish.nick`.
 
----
+### Network extension
 
-## Data Flow
+The Network Extension receives socket-flow metadata from macOS. It shares only
+bounded configuration, health, and observation records with the parent app. It
+does not receive file contents and does not send flow data to a Nick-hosted
+service.
 
-```
-                    User's Mac
-                        │
-    ┌───────────────────┼───────────────────┐
-    │                   │                   │
-    ▼                   ▼                   ▼
-ProcessMonitor   NetworkAnalyzer   FileSystemWatcher
-    │                   │                   │
-    │                   │                   │
-    └───────┬───────────┴───────────┬───────┘
-            │                       │
-            ▼                       ▼
-    PersistenceWatcher        YARAEngine
-            │                       │
-            └───────────┬───────────┘
-                        │
-                        ▼
-               ThreatCorrelator
-                   │        │
-                   │        ▼
-                   │   BehavioralScorer
-                   │   (CoreML inference)
-                   │        │
-                   ▼        ▼
-              Alert Decision
-                   │
-                   ▼
-            SwiftUI Dashboard
-            + Notification
-```
+### Explicit outbound boundaries
 
-All data stays on-device. The only persistent storage is:
-- Baseline snapshots (for diff detection)
-- Alert history (SQLite via SwiftData)
-- User preferences
-- YARA rule cache
+Detection and analysis are local by default. Network activity in current source
+is limited to explicit product functions:
 
----
+- Sparkle update checks and downloads;
+- an optional webhook configured by the user;
+- links opened by the user;
+- files the user manually exports and chooses to transmit.
 
-## Threat Model
+Nick has no active hosted detection service or automatic security-telemetry
+uploader. Optional training telemetry is disabled by default and stored locally
+until the user exports it.
 
-### What Nick Protects Against
-- Post-exploitation persistence (attacker already has initial access, tries to maintain it)
-- Info-stealer malware (credential theft, keychain access, browser data exfiltration)
-- Living-off-the-land attacks (abuse of built-in macOS tools)
-- Adware and PUAs (browser hijackers, search engine changers)
-- Reverse shells and unauthorized remote access
-- Degradation of security posture (SIP disabled, firewall turned off)
+## Enforcement boundaries
 
-### What Nick Does NOT Protect Against
-- Kernel-level rootkits (would require Endpoint Security entitlement from Apple)
-- Zero-day exploits in macOS itself (no userspace tool can fully prevent these)
-- Physical access attacks
-- Social engineering (Nick can't stop you from entering your password into a phishing site)
-- Attacks that occur before Nick is running
+- Exact curated hash evidence can be used for automatic file denial.
+- Heuristic and ordinary YARA behavior matches are review findings unless the
+  user explicitly blocks the reviewed file.
+- Quarantine requests re-scan the current file before moving it.
+- Ransomware response requires ransomware-specific evidence; entropy or file
+  volume alone does not justify automatic action.
+- Network Extension findings never interrupt traffic in the shipping provider.
+- Language-model output never determines enforcement.
 
-### Nick's Own Security
-- The privileged helper is the highest-risk component. It's intentionally minimal and read-only.
-- XPC connections are validated with code signing requirements on both ends.
-- The app runs with hardened runtime and library validation.
-- YARA rule files are validated before loading (malformed rules can't crash the engine).
-- The CoreML model is a read-only inference artifact — it can't be poisoned at runtime.
+## Built but not active
 
----
+The repository contains code that is not part of the current live product path:
 
-## Future Architecture Considerations
+- `BehavioralScorer`, feature extraction, and Core ML integration: no trained
+  production model is bundled and the correlator does not invoke the scorer.
+- `NickHelper`: the read-only helper target exists, but current builds do not
+  embed its LaunchDaemon definition and the app has no live helper XPC client.
+- `CloudIntelService`: hash lookup and update code exists but is not constructed
+  or scheduled.
+- `ProcessTree` and `TamperProtection`: implementations exist but are not
+  instantiated in the Endpoint Security extension object graph.
+- Production signed-rule delivery: verification structures exist, but no
+  production key/feed, staged rollout, rollback, or last-known-good recovery is
+  published.
 
-- **Endpoint Security framework**: If Apple grants the entitlement, ES provides richer process and file event data than `sysctl`/FSEvents. This would be a major detection improvement but requires Apple approval.
-- **Network Extension**: Would enable true packet-level filtering. Currently, Nick monitors connections but can't block them. A Network Extension would add blocking capability.
-- **Distributed rule updates**: A signed, versioned rule distribution mechanism for YARA updates and threat indicators. Would require the app to make network connections (opt-in only).
+See [the roadmap](Documentation/ROADMAP.md) for planned work. Code presence is
+not treated as an implemented product capability.
 
----
+## Known product limits
 
-This architecture is a living document. Feedback, criticism, and security review are welcome — open an issue or see [CONTRIBUTING.md](CONTRIBUTING.md).
+- Nick cannot guarantee detection of every threat.
+- First execution of a novel file can occur before its background YARA result.
+- The Network Extension observes destinations but does not block traffic.
+- Size, timeout, concurrency, retention, and scan-location limits intentionally
+  bound resource use and therefore bound coverage.
+- Runtime Compare is observational and does not certify compliance or remediate
+  MDM state.
+- Nick does not inspect encrypted traffic or page content.
+- Attacks that occur before Nick and its approved extensions are running are
+  outside its observation window.
+- Kernel compromise, physical access, and macOS vulnerabilities are outside the
+  guarantees of this userspace application.
+
+Security vulnerabilities should not be opened as public issues. Follow
+[SECURITY.md](SECURITY.md) for private reporting.
