@@ -36,15 +36,19 @@ Extension frameworks with YARA malware scanning, behavioral correlation,
 system-hardening checks, email attachment inspection, quarantine, and
 human-readable alerts.
 
-Detection and analysis run locally on the Mac. Nick does not upload browsing
-history, file contents, process activity, or security telemetry to a hosted
-analysis service.
+Detection and analysis run locally on the Mac. Nick has no hosted detection
+service and does not automatically upload browsing history, file contents,
+process activity, or security telemetry. Network access is limited to explicit
+functions: Sparkle update checks, an optional webhook configured by the user,
+links the user opens, and files the user manually exports and chooses to share.
 
-Unlike a simple scanner, Nick continuously connects evidence from processes,
-files, persistence, privacy access, and network activity. A single unusual
-event can be explained without automatically being called malware; stronger,
-correlated evidence can be blocked, quarantined, and presented with a clear
-next action.
+Unlike a simple scanner, Nick correlates app-level signals from process,
+persistence, system, capture-device, filesystem, and connection monitors. The
+Endpoint Security and Network Extension paths maintain their own event flows
+rather than feeding every observation into one global correlator. A single
+unusual event can be explained without automatically being called malware;
+stronger evidence can be reviewed, blocked where enforcement permits,
+quarantined, and presented with a clear next action.
 
 Nick also includes Runtime Compare: a local, read-only workflow for capturing
 the Mac before and after a restart, installation, removal, MDM migration, VPN
@@ -88,9 +92,11 @@ turning every unusual developer or system action into a malware claim.
 ### Endpoint Security
 
 The `NickExtension` system extension uses Apple's Endpoint Security framework
-to observe file and process activity. It performs YARA and behavioral checks,
-reports activity to the main app, and can deny a confirmed malicious file
-before execution.
+to observe file and process activity. It performs YARA and behavioral checks
+and reports activity to the main app. A known exact hash can be checked within
+a bounded pre-launch budget and denied before execution. A novel YARA finding
+is normally produced after the authorization response and is presented for
+review rather than silently blocked.
 
 ### Malware scanning and quarantine
 
@@ -114,8 +120,10 @@ camera or microphone activity.
 ### Scam Guardian
 
 The optional `NickNetFilter` system extension uses Apple's Network Extension
-content-filter APIs to evaluate connection destinations against signed rules
-and lookalike-domain checks. It does not inspect page contents or store full
+content-filter APIs to evaluate connection destinations with bundled
+lookalike-domain checks. Signed-rule envelope validation is implemented, but a
+production signing key and downloaded rule feed are not published. It does not
+inspect page contents or store full
 URLs, query strings, or payloads. Version 4.0.1 operates in observation-only
 mode: suspected destinations are reported for review, but the extension does
 not drop ordinary application traffic. Missing, stale, or invalid
