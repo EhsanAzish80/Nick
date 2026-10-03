@@ -2,6 +2,11 @@
 
 Updated: 2026-07-27
 
+> **Historical handoff:** despite this file's original name, Scam Guardian has
+> been observation-only since Nick 4.0.1. The shipping provider always allows
+> traffic. References below to blocking describe the earlier design or future
+> signed-policy work, not current enforcement.
+
 This file is retained as the engineering handoff for Scam Guardian. The broader
 roadmap is in `Documentation/ROADMAP.md`, and release acceptance is in
 `Documentation/RELEASE_CHECKLIST.md`.

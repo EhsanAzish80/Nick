@@ -60,17 +60,19 @@ Delivered:
 - Actionable Overview attention summaries that identify the root cause and
   route users to the relevant evidence.
 
-## Version 4.5: trusted rule updates
+## Planned: trusted rule and signature updates
 
 - Publish Nick-maintained, signed YARA and network rule bundles.
 - Add staged rollout, expiry, rollback, and last-known-good recovery.
 - Display rule source, version, signing status, and last successful update.
 - Add deterministic false-positive tests before accepting a rule bundle.
 - Keep rules usable offline after verification.
+- Seed the local exact-hash database from a versioned, authenticated source so
+  fresh installations do not depend on an empty database.
 
 No unsigned community rule is eligible for automatic enforcement.
 
-## Version 5.0: behavioral model
+## Planned: behavioral model
 
 - Train and evaluate the CoreML behavioral model on consented, de-identified
   signal data.
@@ -78,6 +80,16 @@ No unsigned community rule is eligible for automatic enforcement.
 - Keep deterministic rules as an explainable fallback.
 - Require model output to be supported by observable security evidence.
 - Provide local reset, export, and opt-out controls.
+
+## Planned: Endpoint Security integration completion
+
+- Connect Endpoint Security findings to the same typed incident pipeline used
+  by app-level monitors.
+- Activate and validate process genealogy before describing it as protection.
+- Activate and validate Nick self-tamper protection before describing rename or
+  unlink authorization as enforced.
+- Keep all heuristic enforcement behind deterministic evidence and explicit
+  false-positive gates.
 
 ## Deferred unless a concrete requirement appears
 
