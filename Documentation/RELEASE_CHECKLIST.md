@@ -4,6 +4,9 @@
 
 - [ ] Marketing version and build number are consistent across all targets.
 - [ ] Release notes describe user-visible changes accurately.
+- [ ] `ARCHITECTURE.md`, `README.md`, `ROADMAP.md`, and the current-status table
+      in `SECURITY_AUDIT.md` have been reviewed against the live code paths for
+      this release; inactive or planned code is not described as shipped.
 - [ ] No active alert classifies Nick's signed app or temporary Xcode build
       artifacts as malware.
 - [ ] Medium-confidence heuristic YARA rules cannot deny execution or expose a
