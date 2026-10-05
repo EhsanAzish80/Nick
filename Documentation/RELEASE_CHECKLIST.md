@@ -70,7 +70,10 @@
 - [ ] Quarantine re-validation, move, listing, and restore work.
 - [ ] Restart, sleep and wake, and network changes preserve correct state.
 - [ ] Idle CPU, memory, and log volume remain acceptable for ten minutes.
-- [ ] Update from the previous public build succeeds through Sparkle.
+- [ ] Update from the previous public build succeeds through Sparkle, for
+      both a manual Check for Updates and a scheduled check.
+- [ ] The live appcast at `https://3nsofts.com/nick/appcast.xml` is fetched
+      after upload and matches `Packaging/Release/<version>/appcast.xml`.
 - [ ] Uninstall restores normal networking and removes both applications,
       system extensions, configuration, and generated files.
 

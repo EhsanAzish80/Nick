@@ -70,8 +70,7 @@ Delivered:
   extension, protected local event storage, a safer quarantine restore, and
   less sensitive process information in diagnostic logs.
 
-Maintenance releases in the 4.6.x line continue for security fixes and for
-making in-app wording match exactly what each protection does.
+4.6.3 is the final planned 4.x release. Development continues on Nick 5.0.
 
 ## Version 5.0: trustworthy by design (in development)
 
@@ -106,6 +105,12 @@ gates pass, not on a fixed date. Planned capabilities:
 - Protection status generated from live component health.
 - A diagnostics view for sensor coverage, dropped events and update status.
 - Nick reports when its own extension, health or settings change unexpectedly.
+
+**Reliable in-app updates**
+- Check for Updates reliably finds and installs new versions, including from
+  the menu bar, with the last check result visible in Settings.
+- Every release is verified by updating the previous public build through
+  Sparkle on a clean Mac.
 
 **Release gates**
 - Endpoint Security authorization latency, event loss, CPU, memory and energy
