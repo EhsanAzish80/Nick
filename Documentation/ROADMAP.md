@@ -60,19 +60,74 @@ Delivered:
 - Actionable Overview attention summaries that identify the root cause and
   route users to the relevant evidence.
 
-## Planned: trusted rule and signature updates
+## Version 4.6: Simple mode and security hardening
 
-- Publish Nick-maintained, signed YARA and network rule bundles.
+Delivered:
+
+- Simple and Advanced modes, with Simple as the default for new installs.
+- Streamed Deep Scan progress.
+- 4.6.3: hardened communication between the app and the Endpoint Security
+  extension, protected local event storage, a safer quarantine restore, and
+  less sensitive process information in diagnostic logs.
+
+Maintenance releases in the 4.6.x line continue for security fixes and for
+making in-app wording match exactly what each protection does.
+
+## Version 5.0: trustworthy by design (in development)
+
+Nick 5.0 is a larger internal redesign. It ships when its measured release
+gates pass, not on a fixed date. Planned capabilities:
+
+**One evidence pipeline**
+- Endpoint Security, Network Extension, Deep Scan, file-system and app-level
+  monitors feed one typed evidence model and one incident store.
+- Every finding that matters appears once in Activity, with one severity,
+  one set of suppressions, and a persisted history.
+- Real-time findings and Scam Guardian observations notify the user.
+
+**Narrower privileges and stable file identity**
+- Per-action authorization between the app and the extension.
+- Quarantine and allow-once bound to file identity, not paths.
+- Security settings stored and changed through the protected extension store.
+- Durable file-integrity evidence that changes only when the user
+  acknowledges it.
+
+**Detection integrity**
+- Trust decisions based on verified signing identity, never process names.
+- Measured Endpoint Security coverage of common download, archive, mail and
+  launch paths.
+- Bounded, observable file-event processing with dropped-event counters.
+- Process genealogy and self-tamper protection either activated and tested,
+  or removed.
+- Bundled, versioned exact-hash intelligence available immediately after
+  installation.
+
+**Honest, visible protection**
+- Protection status generated from live component health.
+- A diagnostics view for sensor coverage, dropped events and update status.
+- Nick reports when its own extension, health or settings change unexpectedly.
+
+**Release gates**
+- Endpoint Security authorization latency, event loss, CPU, memory and energy
+  measured on every release.
+- False-positive testing on a benign corpus and real developer workloads.
+- Adversarial tests for file replacement, symbolic-link redirection, burst
+  writes and settings tampering.
+- An independent security review of the privileged paths before 5.0 is
+  described as complete.
+
+## Version 5.1: trusted rule and signature updates
+
+- Publish Nick-maintained, signed YARA, network-rule and hash bundles.
 - Add staged rollout, expiry, rollback, and last-known-good recovery.
 - Display rule source, version, signing status, and last successful update.
 - Add deterministic false-positive tests before accepting a rule bundle.
 - Keep rules usable offline after verification.
-- Seed the local exact-hash database from a versioned, authenticated source so
-  fresh installations do not depend on an empty database.
+- Optional, opt-in network blocking for high-confidence signed rules.
 
 No unsigned community rule is eligible for automatic enforcement.
 
-## Planned: behavioral model
+## Later: behavioral model
 
 - Train and evaluate the CoreML behavioral model on consented, de-identified
   signal data.
@@ -80,16 +135,6 @@ No unsigned community rule is eligible for automatic enforcement.
 - Keep deterministic rules as an explainable fallback.
 - Require model output to be supported by observable security evidence.
 - Provide local reset, export, and opt-out controls.
-
-## Planned: Endpoint Security integration completion
-
-- Connect Endpoint Security findings to the same typed incident pipeline used
-  by app-level monitors.
-- Activate and validate process genealogy before describing it as protection.
-- Activate and validate Nick self-tamper protection before describing rename or
-  unlink authorization as enforced.
-- Keep all heuristic enforcement behind deterministic evidence and explicit
-  false-positive gates.
 
 ## Deferred unless a concrete requirement appears
 

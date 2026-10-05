@@ -14,7 +14,7 @@
 - [ ] All enabled Smart Scan rows use current health, not persisted assumptions.
 - [ ] Known limitation acknowledged: File Integrity Monitor changes are reported,
       but durable pending evidence and acknowledgement-controlled rebaselining
-      remain tracked for the 4.6.4/4.7 follow-up.
+      remain tracked for Nick 5.0.
 - [ ] The full test suite passes with coverage.
 - [ ] `git diff --check` passes.
 
