@@ -356,13 +356,13 @@ struct ProtectionCard: Identifiable, Equatable {
             websites = ProtectionCard(
                 group: .websitesAndEmail, status: .on,
                 detail: endpointActive
-                    ? "Warns you about scam sites and risky attachments."
-                    : "Scam site warnings are on. Email checks are paused."
+                    ? "Observes destinations and checks accessible attachments."
+                    : "Destination checks are on. Attachment checks are paused."
             )
         case .disabled:
             websites = ProtectionCard(
                 group: .websitesAndEmail, status: .off,
-                detail: "Scam site warnings are off. Turn them on in Protection."
+                detail: "Destination checks are off. Turn them on in Protection."
             )
         case .loading:
             websites = ProtectionCard(group: .websitesAndEmail, status: .paused, detail: "Checking…")
@@ -382,7 +382,7 @@ struct ProtectionCard: Identifiable, Equatable {
             ProtectionCard(
                 group: .appsAndDownloads,
                 status: endpointActive ? .on : .paused,
-                detail: endpointActive ? "Checks every new app and download before it opens." : paused
+                detail: endpointActive ? "Monitors new and changed files for suspicious content." : paused
             ),
             websites,
             ProtectionCard(
@@ -395,7 +395,7 @@ struct ProtectionCard: Identifiable, Equatable {
             ProtectionCard(
                 group: .cameraAndMicrophone,
                 status: endpointActive ? .on : .paused,
-                detail: endpointActive ? "Tells you when an app starts using them." : paused
+                detail: endpointActive ? "Periodically checks whether either device is active." : paused
             ),
         ]
     }

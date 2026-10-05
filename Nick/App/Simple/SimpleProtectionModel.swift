@@ -19,13 +19,13 @@ enum SimpleProtectionCopy {
     static func explanation(for group: ProtectionCard.Group) -> String {
         switch group {
         case .appsAndDownloads:
-            "Nick checks every app and download the moment it arrives and stops anything harmful from opening."
+            "Nick monitors new and changed files. Known blocked files can be stopped; other findings are shown for review."
         case .websitesAndEmail:
-            "Nick warns you before you open a scam website or a risky email attachment."
+            "Nick observes website destinations and scans accessible attachments, then shows suspicious findings for review."
         case .filesAndRansomware:
             "Nick watches your documents and steps in if something starts locking or changing lots of them."
         case .cameraAndMicrophone:
-            "Nick tells you when an app starts using your camera or microphone."
+            "Nick periodically checks camera and microphone activity and records signals when they are available."
         }
     }
 }
