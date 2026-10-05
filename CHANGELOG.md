@@ -8,6 +8,8 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+## [4.6.3] - 2026-10-05
+
 ### Changed
 
 - Hardened internal communication with the Endpoint Security extension and
@@ -357,7 +359,8 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.6.2...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.6.3...HEAD
+[4.6.3]: https://github.com/EhsanAzish80/Nick/compare/v4.6.2...v4.6.3
 [4.6.2]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.6.2
 [4.6.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.6.1
 [4.6]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.6.0

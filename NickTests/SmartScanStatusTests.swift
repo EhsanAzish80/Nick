@@ -146,6 +146,16 @@ final class SmartScanStatusTests: XCTestCase {
         )
     }
 
+    func test_endpointHealth_surfacesMissingXPCListenerConfiguration() {
+        XCTAssertTrue(
+            SmartScanChecker.xpcListenerConfigurationMissing(["xpcListener": "missing"])
+        )
+        XCTAssertFalse(
+            SmartScanChecker.xpcListenerConfigurationMissing(["xpcListener": "configured"])
+        )
+        XCTAssertFalse(SmartScanChecker.xpcListenerConfigurationMissing(nil))
+    }
+
     func test_endpointProtectionHealth_requiresFreshMatchingActiveHeartbeat() {
         let now = Date().timeIntervalSince1970
         let active: [String: Any] = [

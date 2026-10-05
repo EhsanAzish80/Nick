@@ -89,6 +89,12 @@ Quarantined items are moved out of their original location and recorded in the
 Quarantine view. Review the original path and detection before restoring an
 item. Restoring a known malicious file can make it executable again.
 
+Restore puts the file back at its original location with its original owner
+and permissions, except special privilege bits. Nick refuses the restore if a
+file already exists at that location or if a folder on the original path has
+been replaced by a link. Move the existing item or recreate the folder, then
+try again.
+
 ## Performance
 
 The Performance view reports storage opportunities and reviewed cleanup

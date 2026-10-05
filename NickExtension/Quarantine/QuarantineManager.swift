@@ -70,13 +70,14 @@ final class QuarantineManager {
             Self.logger.error("Quarantine refused because the SHA-256 hash is invalid")
             return nil
         }
-        guard fm.fileExists(atPath: filePath) else {
+        guard let canonicalOriginalPath = canonicalOriginalPath(for: filePath),
+              fm.fileExists(atPath: canonicalOriginalPath) else {
             Self.logger.warning("Quarantine skipped — file no longer exists: \(filePath)")
             return nil
         }
 
         var originalStat = stat()
-        guard lstat(filePath, &originalStat) == 0,
+        guard lstat(canonicalOriginalPath, &originalStat) == 0,
               originalStat.st_mode & S_IFMT == S_IFREG else {
             Self.logger.warning("Quarantine refused because the selected item is not a regular file")
             return nil
@@ -89,7 +90,7 @@ final class QuarantineManager {
 
         let record = QuarantineRecord(
             id:               recordID,
-            originalPath:     filePath,
+            originalPath:     canonicalOriginalPath,
             quarantinedPath:  quarantinedPath,
             hash:             normalizedHash,
             threatName:       threatName,
@@ -105,7 +106,7 @@ final class QuarantineManager {
         do {
             // Every record receives a unique vault path, so identical files never
             // overwrite earlier evidence or share a stale database reference.
-            try fm.moveItem(atPath: filePath, toPath: quarantinedPath)
+            try fm.moveItem(atPath: canonicalOriginalPath, toPath: quarantinedPath)
 
             // Strip attributes while the owner can still access the file, then
             // lock the vault copy against reading, writing, and execution.
@@ -125,9 +126,10 @@ final class QuarantineManager {
             Self.logger.error("Quarantine failed for '\(filePath)': \(error.localizedDescription)")
             // Quarantine is fail-safe: if the move succeeded but a later vault step
             // failed, put the original back whenever possible. Never delete it.
-            if fm.fileExists(atPath: quarantinedPath), !fm.fileExists(atPath: filePath) {
+            if fm.fileExists(atPath: quarantinedPath),
+               !fm.fileExists(atPath: canonicalOriginalPath) {
                 try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: quarantinedPath)
-                try? fm.moveItem(atPath: quarantinedPath, toPath: filePath)
+                try? fm.moveItem(atPath: quarantinedPath, toPath: canonicalOriginalPath)
             }
             try? fm.removeItem(atPath: metaPath)
             return nil
@@ -142,7 +144,9 @@ final class QuarantineManager {
         let fm = FileManager.default
         let vaultRoot = URL(fileURLWithPath: vaultPath).standardizedFileURL.path + "/"
         let source = URL(fileURLWithPath: record.quarantinedPath).standardizedFileURL.path
-        let destination = URL(fileURLWithPath: record.originalPath).standardizedFileURL.path
+        let destination = QuarantineRestorePolicy.canonicalPathForLegacyRecord(
+            record.originalPath
+        )
 
         guard source.hasPrefix(vaultRoot),
               URL(fileURLWithPath: source).deletingLastPathComponent().path
@@ -167,8 +171,14 @@ final class QuarantineManager {
         let sourceIsRegular = fstat(sourceFD, &sourceStat) == 0
             && sourceStat.st_mode & S_IFMT == S_IFREG
         close(sourceFD)
+        let ownerID = record.originalOwnerID ?? sourceStat.st_uid
+        let groupID = record.originalGroupID ?? sourceStat.st_gid
         guard sourceIsRegular,
-              let destinationParentFD = openSafeDestinationParent(for: destination) else {
+              let destinationParentFD = openSafeDestinationParent(
+                  for: destination,
+                  ownerID: ownerID,
+                  groupID: groupID
+              ) else {
             Self.logger.error("Restore refused because a path component is not a real directory")
             return false
         }
@@ -197,8 +207,6 @@ final class QuarantineManager {
             // records additionally persist the original IDs so restoration is
             // explicit. Legacy records use the vault file's retained owner/group
             // and a conservative non-executable 0600 mode.
-            let ownerID = record.originalOwnerID ?? sourceStat.st_uid
-            let groupID = record.originalGroupID ?? sourceStat.st_gid
             let restoredFD = openat(
                 destinationParentFD,
                 destinationName,
@@ -209,7 +217,11 @@ final class QuarantineManager {
             guard fchown(restoredFD, ownerID, groupID) == 0 else {
                 throw CocoaError(.fileWriteUnknown)
             }
-            let restoredMode = mode_t(record.originalPermissions ?? 0o600)
+            // Never restore setuid or setgid. Sticky and ordinary permission
+            // bits are retained; legacy records use a non-executable fallback.
+            let restoredMode = mode_t(
+                QuarantineRestorePolicy.restoredPermissions(record.originalPermissions)
+            )
             guard fchmod(restoredFD, restoredMode) == 0 else {
                 throw CocoaError(.fileWriteUnknown)
             }
@@ -302,10 +314,27 @@ final class QuarantineManager {
             .path
     }
 
+    /// Resolves the existing parent while leaving the final file component
+    /// untouched. This stores `/private/tmp`, `/private/var`, and `/private/etc`
+    /// rather than their public symlink aliases on macOS.
+    private func canonicalOriginalPath(for path: String) -> String? {
+        let standardized = URL(fileURLWithPath: path).standardizedFileURL
+        let parent = standardized.deletingLastPathComponent().path
+        guard let resolvedParent = realpath(parent, nil) else { return nil }
+        defer { free(resolvedParent) }
+        return URL(fileURLWithPath: String(cString: resolvedParent))
+            .appendingPathComponent(standardized.lastPathComponent)
+            .path
+    }
+
     /// Creates missing destination folders one component at a time and refuses
     /// any existing symbolic link. This prevents a restore path from being
     /// redirected outside the location recorded when the file was quarantined.
-    private func openSafeDestinationParent(for destination: String) -> Int32? {
+    private func openSafeDestinationParent(
+        for destination: String,
+        ownerID: uid_t,
+        groupID: gid_t
+    ) -> Int32? {
         let parent = URL(fileURLWithPath: destination).deletingLastPathComponent().path
         let components = URL(fileURLWithPath: parent).pathComponents
         var directoryFD = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
@@ -317,7 +346,8 @@ final class QuarantineManager {
                 component,
                 O_RDONLY | O_DIRECTORY | O_NOFOLLOW
             )
-            if childFD < 0, errno == ENOENT {
+            let openError = errno
+            if childFD < 0, openError == ENOENT {
                 guard mkdirat(directoryFD, component, 0o755) == 0 else {
                     close(directoryFD)
                     return nil
@@ -327,6 +357,26 @@ final class QuarantineManager {
                     component,
                     O_RDONLY | O_DIRECTORY | O_NOFOLLOW
                 )
+                var createdDirectoryStat = stat()
+                let ownershipMatches = childFD >= 0
+                    && fstat(childFD, &createdDirectoryStat) == 0
+                    && createdDirectoryStat.st_uid == ownerID
+                    && createdDirectoryStat.st_gid == groupID
+                let requestedOwner = createdDirectoryStat.st_uid == ownerID
+                    ? uid_t.max
+                    : ownerID
+                let requestedGroup = createdDirectoryStat.st_gid == groupID
+                    ? gid_t.max
+                    : groupID
+                let ownershipReady = ownershipMatches
+                    || (childFD >= 0 && fchown(childFD, requestedOwner, requestedGroup) == 0)
+                guard childFD >= 0,
+                      ownershipReady else {
+                    if childFD >= 0 { close(childFD) }
+                    _ = unlinkat(directoryFD, component, AT_REMOVEDIR)
+                    close(directoryFD)
+                    return nil
+                }
             }
             guard childFD >= 0 else {
                 close(directoryFD)

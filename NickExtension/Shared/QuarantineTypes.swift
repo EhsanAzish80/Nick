@@ -53,6 +53,24 @@ public struct QuarantineRecord: Codable, Sendable, Identifiable {
     }
 }
 
+enum QuarantineRestorePolicy {
+    static func canonicalPathForLegacyRecord(_ path: String) -> String {
+        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        for (alias, canonical) in [
+            ("/tmp", "/private/tmp"),
+            ("/var", "/private/var"),
+            ("/etc", "/private/etc")
+        ] where standardized == alias || standardized.hasPrefix(alias + "/") {
+            return canonical + String(standardized.dropFirst(alias.count))
+        }
+        return standardized
+    }
+
+    static func restoredPermissions(_ storedPermissions: UInt16?) -> UInt16 {
+        (storedPermissions ?? 0o600) & 0o1777
+    }
+}
+
 // MARK: - RemediationReport
 
 /// Summary of every action taken in response to a detected threat.

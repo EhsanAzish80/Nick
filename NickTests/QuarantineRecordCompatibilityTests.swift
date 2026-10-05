@@ -59,4 +59,29 @@ final class QuarantineRecordCompatibilityTests: XCTestCase {
         XCTAssertEqual(decoded.originalGroupID, 20)
         XCTAssertEqual(decoded.originalPermissions, 0o750)
     }
+
+    func test_legacyMacOSAliasesResolveBelowPrivate() {
+        XCTAssertEqual(
+            QuarantineRestorePolicy.canonicalPathForLegacyRecord("/tmp/sample"),
+            "/private/tmp/sample"
+        )
+        XCTAssertEqual(
+            QuarantineRestorePolicy.canonicalPathForLegacyRecord("/var/folders/sample"),
+            "/private/var/folders/sample"
+        )
+        XCTAssertEqual(
+            QuarantineRestorePolicy.canonicalPathForLegacyRecord("/etc/hosts"),
+            "/private/etc/hosts"
+        )
+        XCTAssertEqual(
+            QuarantineRestorePolicy.canonicalPathForLegacyRecord("/Users/test/sample"),
+            "/Users/test/sample"
+        )
+    }
+
+    func test_restoreNeverReappliesSetIDBits() {
+        XCTAssertEqual(QuarantineRestorePolicy.restoredPermissions(0o6755), 0o755)
+        XCTAssertEqual(QuarantineRestorePolicy.restoredPermissions(0o1755), 0o1755)
+        XCTAssertEqual(QuarantineRestorePolicy.restoredPermissions(nil), 0o600)
+    }
 }

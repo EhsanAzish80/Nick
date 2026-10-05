@@ -75,6 +75,10 @@ final class ESXPCServer: NSObject {
         Self.logger.info("XPC listener started on \(NickExtensionConstants.machServiceName)")
     }
 
+    var listenerConfigurationStatus: String {
+        listenerIsConfigured ? "configured" : "missing"
+    }
+
     // MARK: - Outbound: Extension → Container App
 
     /// Pushes a JSON-encoded `ESEvent` to the container app.

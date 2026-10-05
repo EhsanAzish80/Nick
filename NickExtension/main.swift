@@ -35,6 +35,7 @@ func writeExtensionHealth() {
     }()
     let health: [String: Any] = [
         "active": true,
+        "xpcListener": xpcServer.listenerConfigurationStatus,
         "updatedAt": Date().timeIntervalSince1970,
         "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
         "emailGuardActive": true,

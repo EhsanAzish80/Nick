@@ -1,6 +1,6 @@
 # Nick Architecture
 
-This document describes the architecture implemented in Nick 4.6.2. It is for
+This document describes the architecture implemented in Nick 4.6.3. It is for
 contributors and reviewers who want to understand the product's current
 boundaries. Planned and inactive components are identified explicitly.
 
@@ -168,14 +168,25 @@ and quarantine operations remain in `NickExtension`, outside the UI process.
 ### Main app to Endpoint Security extension
 
 The app and Endpoint Security extension communicate over `NSXPCConnection`.
-The extension validates the connecting process's Apple signing chain and Nick
-team identifier before accepting it. Requests and events use typed XPC methods
-with JSON-encoded value payloads.
+The extension's listener requires the exact signed identity of the Nick app
+(bundle identifier, Apple-issued certificate chain and team identifier) before
+a connection reaches Nick's code. The expected identity is part of the signed
+extension bundle; if it is missing, the listener does not start and the health
+record reports it. Requests and events use typed XPC methods with JSON-encoded
+value payloads.
 
-The extension exposes status, bounded scans, reviewed allow/block actions,
-quarantine operations, FIM baseline rebuilding, canary deployment, and bounded
-event replay. The quarantine vault and extension databases live under
-`/Library/Application Support/com.ehsanazish.nick`.
+The extension exposes status, reviewed allow/block actions, quarantine
+operations, FIM baseline rebuilding, canary deployment, and bounded event
+replay. It does not offer a general file-scan request: user-selected scans and
+Deep Scan run in the app with the user's permissions.
+
+The quarantine vault and extension databases live under
+`/Library/Application Support/com.ehsanazish.nick`. The extension health
+record there is readable by the app; persisted endpoint events are kept in a
+separate subdirectory readable only by the extension and are delivered to the
+app over XPC. Quarantine restore uses descriptor-based operations, refuses a
+destination path that has been redirected through a symbolic link, and
+restores the recorded ownership and permissions.
 
 ### Network extension
 
