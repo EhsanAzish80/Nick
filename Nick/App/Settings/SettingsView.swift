@@ -38,6 +38,7 @@ struct SettingsView: View {
     @AppStorage("logFormatter") private var logFormatter: String = "kv"
     @AppStorage("fileLoggingEnabled") private var fileLoggingEnabled: Bool = false
     @AppStorage("stdoutLoggingEnabled") private var stdoutLoggingEnabled: Bool = false
+    @AppStorage("allowInsecureLocalWebhook") private var allowInsecureLocalWebhook: Bool = false
     @AppStorage("scheduledDeepScanInterval") private var scheduledDeepScanInterval: Int = 0
     @AppStorage("telemetryEnabled") private var telemetryEnabled: Bool = false
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
@@ -488,7 +489,7 @@ struct SettingsView: View {
                                 .font(.system(size: 14, weight: .regular))
                                 .foregroundStyle(.white)
                         )
-                    Text("HTTP endpoint")
+                    Text("Webhook endpoint")
                         .font(.system(size: 13))
                     Spacer()
                 }
@@ -517,6 +518,12 @@ struct SettingsView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.15), value: webhookURLString)
+                Toggle("Allow HTTP for localhost only", isOn: $allowInsecureLocalWebhook)
+                    .font(.system(size: 11.5))
+                    .onChange(of: allowInsecureLocalWebhook) { _, _ in saveWebhookURL() }
+                Text("Remote webhook endpoints must use HTTPS.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
                 if isValidWebhookURL {
                     HStack(spacing: 8) {
                         Button("Send test alert") {
@@ -1073,19 +1080,20 @@ struct SettingsView: View {
 
     private var isValidWebhookURL: Bool {
         guard !webhookURLString.isEmpty,
-              let url = URL(string: webhookURLString),
-              url.scheme == "https" || url.scheme == "http",
-              url.host != nil else { return false }
-        return true
+              let url = URL(string: webhookURLString) else { return false }
+        return WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook)
     }
 
     private func saveWebhookURL() {
         let trimmed = webhookURLString.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
             UserDefaults.standard.removeObject(forKey: "webhookURL")
-        } else if let url = URL(string: trimmed), url.scheme == "https" || url.scheme == "http" {
+        } else if let url = URL(string: trimmed),
+                  WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook) {
             // Store as String so buildPipeline() can read it with string(forKey:)
             UserDefaults.standard.set(trimmed, forKey: "webhookURL")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "webhookURL")
         }
     }
 
