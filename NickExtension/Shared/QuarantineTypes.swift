@@ -4,6 +4,42 @@
 
 import Foundation
 
+// MARK: - File identity
+
+/// The on-disk identity of file content at a specific point in time.
+/// Paths are intentionally excluded because they can be reused after review.
+struct FileIdentity: Hashable, Sendable {
+    let device: Int64
+    let inode: UInt64
+    let size: Int64
+    let modificationSeconds: Int
+    let modificationNanoseconds: Int
+
+    init(stat info: stat) {
+        device = Int64(info.st_dev)
+        inode = UInt64(info.st_ino)
+        size = Int64(info.st_size)
+        modificationSeconds = Int(info.st_mtimespec.tv_sec)
+        modificationNanoseconds = Int(info.st_mtimespec.tv_nsec)
+    }
+
+    /// `lstat` of `path`; `nil` when the file no longer exists.
+    init?(path: String) {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return nil }
+        self.init(stat: info)
+    }
+}
+
+/// A one-use approval for the exact file that the user reviewed.
+struct OneTimeFileAllowance: Sendable {
+    let identity: FileIdentity
+
+    func permits(_ currentIdentity: FileIdentity) -> Bool {
+        identity == currentIdentity
+    }
+}
+
 // MARK: - QuarantineRecord
 
 /// A file that has been moved to the quarantine vault.

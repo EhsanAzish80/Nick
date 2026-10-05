@@ -301,7 +301,11 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             reply(false)
             return
         }
-        scanner.cache.allowOnce(path: standardPath)
+        guard let identity = FileIdentity(path: standardPath) else {
+            reply(false)
+            return
+        }
+        scanner.cache.allowOnce(path: standardPath, identity: identity)
         Self.logger.notice("User allowed one authorization for \(standardPath, privacy: .private)")
         reply(true)
     }

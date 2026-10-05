@@ -110,7 +110,10 @@ final class ESEventHandler {
             // cache before responding; hashing, behavioural analysis and XPC
             // delivery must never hold up process launch.
             let cached   = fileScanner?.cache.lookup(path: targetPath, identity: targetIdentity)
-            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(path: targetPath) ?? false
+            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
+                path: targetPath,
+                identity: targetIdentity
+            ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
             // First launch of an unknown, non-identity-signed binary: hash it
@@ -157,11 +160,15 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_OPEN:
             let filePath = esString(msg.event.open.file.pointee.path)
+            let fileIdentity = FileIdentity(stat: msg.event.open.file.pointee.stat)
             let cached   = fileScanner?.cache.lookup(
                 path: filePath,
-                identity: FileIdentity(stat: msg.event.open.file.pointee.stat)
+                identity: fileIdentity
             )
-            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(path: filePath) ?? false
+            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
+                path: filePath,
+                identity: fileIdentity
+            ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
             esClient?.respond(to: message, allow: !shouldBlock)
