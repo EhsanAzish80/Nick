@@ -229,7 +229,7 @@ For implementation details and trust boundaries, see
 
 ### Published release
 
-The current stable release is **Nick 4.6.2 (build 429)** for macOS 26 and later.
+The current stable release is **Nick 4.6.3 (build 430)** for macOS 26 and later.
 
 1. Download the notarized Nick disk image from
    [the latest GitHub release](https://github.com/EhsanAzish80/Nick/releases/latest).
@@ -369,7 +369,7 @@ the extension remains installed.
 
 ## Project status
 
-Nick 4.6 is the current production release. Every future release remains gated
+Nick 4.6.3 is the current production release. Every future release remains gated
 on clean-Mac validation of Endpoint Security, Email Guard, Scam Guardian,
 updates, performance, quarantine, and uninstall behavior.
 
