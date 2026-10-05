@@ -18,6 +18,39 @@ public struct QuarantineRecord: Codable, Sendable, Identifiable {
     public let quarantinedAt: Date
     public let processPath: String
     public let pid: Int32
+    /// Ownership and mode captured before Nick moves the file into its vault.
+    /// These are optional so records written by earlier releases remain decodable.
+    public let originalOwnerID: UInt32?
+    public let originalGroupID: UInt32?
+    public let originalPermissions: UInt16?
+
+    public init(
+        id: UUID,
+        originalPath: String,
+        quarantinedPath: String,
+        hash: String,
+        threatName: String,
+        severity: String,
+        quarantinedAt: Date,
+        processPath: String,
+        pid: Int32,
+        originalOwnerID: UInt32? = nil,
+        originalGroupID: UInt32? = nil,
+        originalPermissions: UInt16? = nil
+    ) {
+        self.id = id
+        self.originalPath = originalPath
+        self.quarantinedPath = quarantinedPath
+        self.hash = hash
+        self.threatName = threatName
+        self.severity = severity
+        self.quarantinedAt = quarantinedAt
+        self.processPath = processPath
+        self.pid = pid
+        self.originalOwnerID = originalOwnerID
+        self.originalGroupID = originalGroupID
+        self.originalPermissions = originalPermissions
+    }
 }
 
 // MARK: - RemediationReport

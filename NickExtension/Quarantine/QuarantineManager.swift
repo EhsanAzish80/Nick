@@ -75,6 +75,13 @@ final class QuarantineManager {
             return nil
         }
 
+        var originalStat = stat()
+        guard lstat(filePath, &originalStat) == 0,
+              originalStat.st_mode & S_IFMT == S_IFREG else {
+            Self.logger.warning("Quarantine refused because the selected item is not a regular file")
+            return nil
+        }
+
         let recordID = UUID()
         let vaultName = "\(normalizedHash)-\(recordID.uuidString)"
         let quarantinedPath = (vaultPath as NSString).appendingPathComponent("\(vaultName).quarantine")
@@ -89,7 +96,10 @@ final class QuarantineManager {
             severity:         severity,
             quarantinedAt:    Date(),
             processPath:      processPath,
-            pid:              pid
+            pid:              pid,
+            originalOwnerID:  originalStat.st_uid,
+            originalGroupID:  originalStat.st_gid,
+            originalPermissions: UInt16(originalStat.st_mode & 0o7777)
         )
 
         do {
@@ -135,7 +145,8 @@ final class QuarantineManager {
         let destination = URL(fileURLWithPath: record.originalPath).standardizedFileURL.path
 
         guard source.hasPrefix(vaultRoot),
-              fm.fileExists(atPath: source),
+              URL(fileURLWithPath: source).deletingLastPathComponent().path
+                == URL(fileURLWithPath: vaultPath).standardizedFileURL.path,
               destination.hasPrefix("/"),
               !destination.hasPrefix("/System/"),
               !destination.hasPrefix("/usr/"),
@@ -144,28 +155,79 @@ final class QuarantineManager {
             return false
         }
 
+        let sourceName = URL(fileURLWithPath: source).lastPathComponent
+        let destinationName = URL(fileURLWithPath: destination).lastPathComponent
+        let vaultFD = open(vaultPath, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard vaultFD >= 0 else { return false }
+        defer { close(vaultFD) }
+
+        let sourceFD = openat(vaultFD, sourceName, O_RDONLY | O_NOFOLLOW)
+        guard sourceFD >= 0 else { return false }
+        var sourceStat = stat()
+        let sourceIsRegular = fstat(sourceFD, &sourceStat) == 0
+            && sourceStat.st_mode & S_IFMT == S_IFREG
+        close(sourceFD)
+        guard sourceIsRegular,
+              let destinationParentFD = openSafeDestinationParent(for: destination) else {
+            Self.logger.error("Restore refused because a path component is not a real directory")
+            return false
+        }
+        defer { close(destinationParentFD) }
+
+        var existingDestination = stat()
+        guard fstatat(
+            destinationParentFD,
+            destinationName,
+            &existingDestination,
+            AT_SYMLINK_NOFOLLOW
+        ) != 0,
+              errno == ENOENT else {
+            Self.logger.error("Restore refused because the destination already exists")
+            return false
+        }
+
+        var movedToDestination = false
         do {
-            // Re-enable read/write so the file can be moved
-            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: source)
-            try fm.createDirectory(
-                at: URL(fileURLWithPath: destination).deletingLastPathComponent(),
-                withIntermediateDirectories: true
+            guard renameat(vaultFD, sourceName, destinationParentFD, destinationName) == 0 else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            movedToDestination = true
+
+            // A move preserves ownership, including for legacy records. New
+            // records additionally persist the original IDs so restoration is
+            // explicit. Legacy records use the vault file's retained owner/group
+            // and a conservative non-executable 0600 mode.
+            let ownerID = record.originalOwnerID ?? sourceStat.st_uid
+            let groupID = record.originalGroupID ?? sourceStat.st_gid
+            let restoredFD = openat(
+                destinationParentFD,
+                destinationName,
+                O_RDONLY | O_NOFOLLOW
             )
-            try fm.moveItem(atPath: source, toPath: destination)
+            guard restoredFD >= 0 else { throw CocoaError(.fileReadNoPermission) }
+            defer { close(restoredFD) }
+            guard fchown(restoredFD, ownerID, groupID) == 0 else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            let restoredMode = mode_t(record.originalPermissions ?? 0o600)
+            guard fchmod(restoredFD, restoredMode) == 0 else {
+                throw CocoaError(.fileWriteUnknown)
+            }
 
             // Restored threats remain marked as downloaded/untrusted so
             // Gatekeeper and supporting apps can warn before opening them.
             let quarantineValue = "0081;\(Int(Date().timeIntervalSince1970));Nick;"
-            quarantineValue.withCString { value in
-                _ = setxattr(
-                    destination,
+            let xattrResult = quarantineValue.withCString { value in
+                fsetxattr(
+                    restoredFD,
                     "com.apple.quarantine",
                     value,
                     strlen(value),
                     0,
-                    XATTR_NOFOLLOW
+                    0
                 )
             }
+            guard xattrResult == 0 else { throw CocoaError(.fileWriteUnknown) }
 
             let metaPath = metadataPath(for: record)
             try? fm.removeItem(atPath: metaPath)
@@ -174,8 +236,13 @@ final class QuarantineManager {
             Self.logger.info("Restored '\(record.originalPath)'")
             return true
         } catch {
-            if fm.fileExists(atPath: source) {
-                try? fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: source)
+            if movedToDestination {
+                _ = renameat(destinationParentFD, destinationName, vaultFD, sourceName)
+                let restoredVaultFD = openat(vaultFD, sourceName, O_RDONLY | O_NOFOLLOW)
+                if restoredVaultFD >= 0 {
+                    _ = fchmod(restoredVaultFD, 0o000)
+                    close(restoredVaultFD)
+                }
             }
             Self.logger.error("Restore failed: \(error.localizedDescription)")
             return false
@@ -233,6 +300,42 @@ final class QuarantineManager {
             .deletingPathExtension()
             .appendingPathExtension("meta.json")
             .path
+    }
+
+    /// Creates missing destination folders one component at a time and refuses
+    /// any existing symbolic link. This prevents a restore path from being
+    /// redirected outside the location recorded when the file was quarantined.
+    private func openSafeDestinationParent(for destination: String) -> Int32? {
+        let parent = URL(fileURLWithPath: destination).deletingLastPathComponent().path
+        let components = URL(fileURLWithPath: parent).pathComponents
+        var directoryFD = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard directoryFD >= 0 else { return nil }
+
+        for component in components where component != "/" {
+            var childFD = openat(
+                directoryFD,
+                component,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+            )
+            if childFD < 0, errno == ENOENT {
+                guard mkdirat(directoryFD, component, 0o755) == 0 else {
+                    close(directoryFD)
+                    return nil
+                }
+                childFD = openat(
+                    directoryFD,
+                    component,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+                )
+            }
+            guard childFD >= 0 else {
+                close(directoryFD)
+                return nil
+            }
+            close(directoryFD)
+            directoryFD = childFD
+        }
+        return directoryFD
     }
 
     /// Strips every extended attribute from the file at `path` using BSD `removexattr(2)`.

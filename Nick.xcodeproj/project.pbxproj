@@ -1077,6 +1077,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 4.6.2;
+				NICK_ALLOWED_CLIENT_IDENTIFIER = com.ehsanazish.nick;
 				OTHER_LDFLAGS = (
 					"-lbsm",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
@@ -1131,6 +1132,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 4.6.2;
+				NICK_ALLOWED_CLIENT_IDENTIFIER = com.ehsanazish.nick;
 				OTHER_LDFLAGS = (
 					"-lbsm",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",

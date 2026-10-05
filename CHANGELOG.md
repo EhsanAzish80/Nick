@@ -10,6 +10,13 @@ monotonically increasing macOS bundle build number.
 
 ### Changed
 
+- Hardened internal communication with the Endpoint Security extension and
+  protected locally persisted security events.
+- Hardened quarantine restore while retaining original file ownership and
+  permissions for newly quarantined files.
+- Removed an unused privileged scan interface; manual and Deep Scan continue
+  to run locally in the app.
+- Reduced sensitive process information written to diagnostic logs.
 - Reworked the welcome screen around four user outcomes and clearer Simple and
   Advanced mode language.
 - Refined the README positioning, first-run path, current release details and
