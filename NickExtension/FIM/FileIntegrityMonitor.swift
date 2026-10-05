@@ -29,11 +29,23 @@ final class FileIntegrityMonitor {
         "/Library/LaunchAgents",
         "/Library/LaunchDaemons",
         "/usr/local/bin",
-        "/etc/hosts",
-        "/etc/sudoers",
-        "/private/etc/pam.d",
+        "/private/etc/hosts",
         "/private/etc/sudoers",
+        "/private/etc/pam.d",
+        "/private/etc/sudoers.d",
     ]
+
+    static func defaultMonitoredPaths(userHomeDirectories: [URL]) -> [String] {
+        let userRelativePaths = [
+            "Library/LaunchAgents",
+            ".zshrc",
+            ".zprofile",
+            ".bash_profile",
+        ]
+        return systemMonitoredPaths + userHomeDirectories.flatMap { home in
+            userRelativePaths.map { home.appendingPathComponent($0).path }
+        }
+    }
 
     // MARK: - Private
 
@@ -61,12 +73,8 @@ final class FileIntegrityMonitor {
         userHomeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories()
     ) {
         self.baselinePath   = baselinePath
-        self.monitoredPaths = monitoredPaths ?? (
-            Self.systemMonitoredPaths
-                + userHomeDirectories.map {
-                    $0.appendingPathComponent("Library/LaunchAgents", isDirectory: true).path
-                }
-        )
+        self.monitoredPaths = monitoredPaths
+            ?? Self.defaultMonitoredPaths(userHomeDirectories: userHomeDirectories)
         loadBaselines()
     }
 
