@@ -518,6 +518,11 @@ struct SettingsView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.15), value: webhookURLString)
+                if webhookUsesRejectedHTTP {
+                    Text("HTTP webhooks are disabled. Use HTTPS, or enable HTTP for localhost only.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.orange)
+                }
                 Toggle("Allow HTTP for localhost only", isOn: $allowInsecureLocalWebhook)
                     .font(.system(size: 11.5))
                     .onChange(of: allowInsecureLocalWebhook) { _, _ in saveWebhookURL() }
@@ -1082,6 +1087,12 @@ struct SettingsView: View {
         guard !webhookURLString.isEmpty,
               let url = URL(string: webhookURLString) else { return false }
         return WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook)
+    }
+
+    private var webhookUsesRejectedHTTP: Bool {
+        guard let url = URL(string: webhookURLString),
+              url.scheme?.lowercased() == "http" else { return false }
+        return !WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook)
     }
 
     private func saveWebhookURL() {

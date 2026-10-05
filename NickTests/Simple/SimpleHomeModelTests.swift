@@ -58,6 +58,7 @@ final class SimpleHomeModelTests: XCTestCase {
         XCTAssertEqual(hero.title, "Nick stopped a harmful app")
         XCTAssertEqual(hero.secondaryTitle, "Delete It")
         XCTAssertTrue(hero.body.contains("PDF Converter Pro.app"))
+        XCTAssertFalse(hero.body.contains("before it could do anything"))
     }
 
     func test_incidentsExpireAfterADayAndOnceSeen() {

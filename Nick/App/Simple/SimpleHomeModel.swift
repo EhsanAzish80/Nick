@@ -221,7 +221,7 @@ struct HomeIncident: Identifiable, Equatable, Sendable {
             candidates.append(HomeIncident(
                 source: .quarantine(record.id),
                 title: "Nick stopped a harmful app",
-                body: "“\(name)” looked harmful, so Nick moved it to Quarantine before it could do anything. It can’t run from there.",
+                body: "“\(name)” looked harmful, so Nick moved it to Quarantine. It can’t run from there.",
                 date: record.quarantinedAt
             ))
         }
