@@ -96,10 +96,27 @@ final class ScanCache {
 
     /// Allows the next authorization and clears any stale deny verdict now,
     /// rather than waiting for the normal cache TTL.
-    func allowOnce(path: String, identity: FileIdentity) {
+    @discardableResult
+    func allowOnce(
+        reviewedPath: String,
+        authorizationPath: String,
+        currentIdentity: FileIdentity
+    ) -> Bool {
         lock.withLock {
-            oneTimeAllowances[path] = OneTimeFileAllowance(identity: identity)
-            store.removeValue(forKey: path)
+            guard let entry = store[reviewedPath] ?? store[authorizationPath],
+                  entry.isThreat,
+                  ReviewedFileAllowancePolicy.permits(
+                    reviewed: entry.identity,
+                    current: currentIdentity
+                  ) else {
+                oneTimeAllowances.removeValue(forKey: reviewedPath)
+                oneTimeAllowances.removeValue(forKey: authorizationPath)
+                return false
+            }
+            oneTimeAllowances[authorizationPath] = OneTimeFileAllowance(identity: currentIdentity)
+            store.removeValue(forKey: reviewedPath)
+            store.removeValue(forKey: authorizationPath)
+            return true
         }
     }
 

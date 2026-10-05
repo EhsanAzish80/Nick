@@ -23,10 +23,12 @@ struct FileIdentity: Hashable, Sendable {
         modificationNanoseconds = Int(info.st_mtimespec.tv_nsec)
     }
 
-    /// `lstat` of `path`; `nil` when the file no longer exists.
+    /// Identity of the file content reached by `path`; `nil` when it no longer
+    /// exists. `stat` intentionally follows a final symlink so the identity
+    /// matches the file reported by Endpoint Security authorization events.
     init?(path: String) {
         var info = stat()
-        guard lstat(path, &info) == 0 else { return nil }
+        guard stat(path, &info) == 0 else { return nil }
         self.init(stat: info)
     }
 }
@@ -37,6 +39,28 @@ struct OneTimeFileAllowance: Sendable {
 
     func permits(_ currentIdentity: FileIdentity) -> Bool {
         identity == currentIdentity
+    }
+}
+
+enum ReviewedFileAllowancePolicy {
+    static func permits(reviewed: FileIdentity?, current: FileIdentity) -> Bool {
+        guard let reviewed else { return false }
+        return reviewed == current
+    }
+}
+
+enum FileIntegrityPathPolicy {
+    static func isMonitored(
+        _ path: String,
+        configuredPaths: [String],
+        directoryPaths: Set<String>
+    ) -> Bool {
+        configuredPaths.contains { configuredPath in
+            if directoryPaths.contains(configuredPath) {
+                return path == configuredPath || path.hasPrefix(configuredPath + "/")
+            }
+            return path == configuredPath
+        }
     }
 }
 

@@ -29,6 +29,28 @@ final class FileIdentityAllowanceTests: XCTestCase {
         XCTAssertFalse(allowance.permits(try XCTUnwrap(FileIdentity(path: file.path))))
     }
 
+    func test_reviewRequiresTheIdentityCapturedByTheScan() throws {
+        let file = try temporaryFile(contents: Data("reviewed".utf8))
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+
+        let reviewed = try XCTUnwrap(FileIdentity(path: file.path))
+        try Data("swapped after scan".utf8).write(to: file)
+        let current = try XCTUnwrap(FileIdentity(path: file.path))
+
+        XCTAssertFalse(ReviewedFileAllowancePolicy.permits(reviewed: reviewed, current: current))
+        XCTAssertFalse(ReviewedFileAllowancePolicy.permits(reviewed: nil, current: current))
+    }
+
+    func test_identityFollowsFinalSymlinkLikeEndpointSecurity() throws {
+        let target = try temporaryFile(contents: Data("reviewed".utf8))
+        let directory = target.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let link = directory.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        XCTAssertEqual(FileIdentity(path: link.path), FileIdentity(path: target.path))
+    }
+
     private func temporaryFile(contents: Data) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NickAllowanceTests-(UUID().uuidString)", isDirectory: true)

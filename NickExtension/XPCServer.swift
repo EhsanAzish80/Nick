@@ -301,11 +301,20 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             reply(false)
             return
         }
-        guard let identity = FileIdentity(path: standardPath) else {
+        let resolvedPath = URL(fileURLWithPath: standardPath).resolvingSymlinksInPath().path
+        guard let identity = FileIdentity(path: resolvedPath) else {
             reply(false)
             return
         }
-        scanner.cache.allowOnce(path: standardPath, identity: identity)
+        guard scanner.cache.allowOnce(
+            reviewedPath: standardPath,
+            authorizationPath: resolvedPath,
+            currentIdentity: identity
+        ) else {
+            Self.logger.warning("Allow-once refused because reviewed file identity changed")
+            reply(false)
+            return
+        }
         Self.logger.notice("User allowed one authorization for \(standardPath, privacy: .private)")
         reply(true)
     }
