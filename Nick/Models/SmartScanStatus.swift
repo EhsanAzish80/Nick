@@ -311,6 +311,18 @@ final class SmartScanChecker {
             )
         }
 
+        if Self.xpcListenerConfigurationMissing(endpointExtensionHealth) {
+            return ProtectionCheck(
+                id: "endpoint_security",
+                title: "Real-Time Protection",
+                status: .critical,
+                headline: "Repair Nick's security extension",
+                explanation: "Nick's internal communication identity is missing from the installed security extension. Reinstall this version of Nick to restore status reporting and security actions.",
+                icon: "shield.checkered",
+                resolution: .installExtension(extensionName: "NickExtension")
+            )
+        }
+
         if !isActive, managerState == .needsUserApproval {
             return ProtectionCheck(
                 id: "endpoint_security",
@@ -707,6 +719,10 @@ final class SmartScanChecker {
     ) -> Bool {
         guard let runningVersion, let bundledVersion else { return false }
         return runningVersion != bundledVersion
+    }
+
+    static func xpcListenerConfigurationMissing(_ object: [String: Any]?) -> Bool {
+        object?["xpcListener"] as? String == "missing"
     }
 
     private var endpointExtensionHealth: [String: Any]? {

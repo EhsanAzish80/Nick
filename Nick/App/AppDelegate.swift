@@ -77,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_: Notification) {
-        traceUninstall("Nick launched with arguments: \(CommandLine.arguments.joined(separator: " "))")
+        traceUninstall("Nick launched; maintenance mode: \(CommandLine.arguments.contains("--prepare-uninstall"))")
         if CommandLine.arguments.contains("--prepare-uninstall") {
             traceUninstall("Maintenance mode detected in applicationDidFinishLaunching")
             prepareForUninstall(
@@ -94,13 +94,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if isRunningTests {
             return
         }
-
-        DistributedNotificationCenter.default().addObserver(
-            self,
-            selector: #selector(handleUninstallPreparationRequest(_:)),
-            name: .nickPrepareForUninstall,
-            object: nil
-        )
 
         // Register defaults so first-run behaviour matches configured behaviour.
         // Must run before any code that reads these keys.
@@ -158,11 +151,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `--prepare-uninstall`. These APIs must execute from Nick's own bundle:
     /// NetworkExtension preferences and ServiceManagement registrations are
     /// scoped to the app that created them.
-    @objc private func handleUninstallPreparationRequest(_ notification: Notification) {
-        uninstallLogger.notice("Received uninstall preparation request")
-        prepareForUninstall(markerPath: Self.uninstallResultURL.path)
-    }
-
     private func prepareForUninstall(markerPath requestedMarkerPath: String?) {
         guard !uninstallPreparationInProgress else {
             uninstallLogger.notice("Ignoring duplicate uninstall preparation request")
@@ -736,12 +724,6 @@ private final class SystemExtensionRemovalRequest: NSObject,
         continuation?.resume(throwing: error)
         continuation = nil
     }
-}
-
-private extension Notification.Name {
-    static let nickPrepareForUninstall = Notification.Name(
-        "com.ehsanazish.nick.prepareForUninstall"
-    )
 }
 
 // MARK: - MainWindowDelegate

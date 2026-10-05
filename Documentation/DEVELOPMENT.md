@@ -26,6 +26,20 @@ xcodebuild build \
 This validates compilation without requiring the maintainer's restricted
 entitlements. It does not validate system-extension activation.
 
+## Signing your own build
+
+The Endpoint Security extension accepts XPC connections only from the app
+identity written into its signed `Info.plist` at build time:
+
+- `NICK_ALLOWED_CLIENT_IDENTIFIER` (NickExtension build setting) must equal the
+  main app's `PRODUCT_BUNDLE_IDENTIFIER`.
+- `DEVELOPMENT_TEAM` must be the team that signs the main app.
+
+If you change the app's bundle identifier or signing team, update both. When
+either value is missing, the extension does not start its XPC listener and the
+extension health record reports `xpcListener: missing`; the app then shows the
+extension as unavailable.
+
 ## Tests and coverage
 
 ```sh

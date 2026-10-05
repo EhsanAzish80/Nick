@@ -18,12 +18,6 @@ import Foundation
     /// Returns whether the ES client is initialised and actively subscribed.
     func getStatus(reply: @escaping (Bool) -> Void)
 
-    /// Requests an on-demand scan of the file at `path`.
-    /// - Parameters:
-    ///   - path: Absolute path to the file or directory to scan.
-    ///   - reply: `(success, errorDescription)` — `errorDescription` is `nil` on success.
-    func requestScan(path: String, reply: @escaping (Bool, String?) -> Void)
-
     /// Re-scans and moves a confirmed threat into Nick's protected vault.
     /// The encoded record lets the app update Quarantine immediately.
     func requestQuarantineFile(

@@ -205,7 +205,7 @@ final class MonitorCoordinator {
         for pid in newPIDs {
             guard let info = ProcessScanner.quickInfo(pid: pid) else { continue }
 
-            Self.log.info("quickTick: new PID \(pid) — \(info.name, privacy: .public) at \(info.path, privacy: .public) args: \(info.arguments.joined(separator: " "), privacy: .public)")
+            Self.log.info("quickTick: observed new PID \(pid)")
 
             // Check 1: Executable in a writable temp directory, OR interpreter running
             // a script whose first argument points to a temp-directory path.

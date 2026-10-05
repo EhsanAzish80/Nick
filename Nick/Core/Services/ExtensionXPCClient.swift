@@ -157,15 +157,6 @@ public final class ExtensionXPCClient: NSObject {
         proxy.getStatus(reply: completion)
     }
 
-    /// Requests an on-demand scan of a file (Phase 2+).
-    public func requestScan(path: String, completion: @escaping (Bool, String?) -> Void) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
-            completion(false, "Not connected to extension")
-            return
-        }
-        proxy.requestScan(path: path, reply: completion)
-    }
-
     public func requestQuarantineFile(
         path: String,
         expectedThreatName: String,

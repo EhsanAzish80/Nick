@@ -26,17 +26,39 @@ final class ESXPCServer: NSObject {
 
     private var listener: NSXPCListener
     private var appConnection: NSXPCConnection?
+    private let listenerIsConfigured: Bool
 
     /// Serialises writes to `appConnection`.
     private let connectionLock = NSLock()
     private let eventStore = EndpointEventStore(
-        path: "/Library/Application Support/com.ehsanazish.nick/endpoint-events.json"
+        path: "/Library/Application Support/com.ehsanazish.nick/events/endpoint-events.json",
+        legacyPath: "/Library/Application Support/com.ehsanazish.nick/endpoint-events.json"
     )
 
     // MARK: - Init
 
     override init() {
-        self.listener = NSXPCListener(machServiceName: NickExtensionConstants.machServiceName)
+        let configuredListener = NSXPCListener(
+            machServiceName: NickExtensionConstants.machServiceName
+        )
+        var configured = false
+        if let identifier = Bundle.main.object(
+            forInfoDictionaryKey: "NickAllowedClientIdentifier"
+        ) as? String,
+           let teamID = Bundle.main.object(
+               forInfoDictionaryKey: "NickAllowedClientTeamID"
+           ) as? String,
+           !identifier.isEmpty,
+           !teamID.isEmpty,
+           !identifier.contains("$("),
+           !teamID.contains("$(") {
+            let requirement = "identifier \"\(identifier)\" and anchor apple generic "
+                + "and certificate leaf[subject.OU] = \"\(teamID)\""
+            configuredListener.setConnectionCodeSigningRequirement(requirement)
+            configured = true
+        }
+        self.listener = configuredListener
+        self.listenerIsConfigured = configured
         super.init()
         listener.delegate = self
     }
@@ -45,8 +67,16 @@ final class ESXPCServer: NSObject {
 
     /// Starts the XPC listener. Call once from `main.swift`.
     func start() {
+        guard listenerIsConfigured else {
+            Self.logger.fault("XPC listener not started because its client identity is not configured")
+            return
+        }
         listener.resume()
         Self.logger.info("XPC listener started on \(NickExtensionConstants.machServiceName)")
+    }
+
+    var listenerConfigurationStatus: String {
+        listenerIsConfigured ? "configured" : "missing"
     }
 
     // MARK: - Outbound: Extension → Container App
@@ -123,7 +153,9 @@ extension ESXPCServer: NSXPCListenerDelegate {
         _: NSXPCListener,
         shouldAcceptNewConnection newConnection: NSXPCConnection
     ) -> Bool {
-        // Validate caller team ID before accepting.
+        // Keep the legacy validation for one release as defence in depth. The
+        // listener has already required Nick's exact signed identifier before
+        // this delegate can be reached.
         guard isAuthorised(connection: newConnection) else {
             Self.logger.warning("Rejected XPC connection from unauthorised process (pid \(newConnection.processIdentifier))")
             return false
@@ -174,8 +206,16 @@ extension ESXPCServer: NSXPCListenerDelegate {
             return false
         }
 
-        // Require the caller to be signed by our team.
-        let requirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(NickExtensionConstants.teamID)\""
+        guard let identifier = Bundle.main.object(
+            forInfoDictionaryKey: "NickAllowedClientIdentifier"
+        ) as? String,
+              let teamID = Bundle.main.object(
+                  forInfoDictionaryKey: "NickAllowedClientTeamID"
+              ) as? String else {
+            return false
+        }
+        let requirement = "identifier \"\(identifier)\" and anchor apple generic "
+            + "and certificate leaf[subject.OU] = \"\(teamID)\""
         var reqRef: SecRequirement?
         guard SecRequirementCreateWithString(requirement as CFString, [], &reqRef) == errSecSuccess,
               let reqRef else {
@@ -197,68 +237,6 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
     func getPersistedEvents(reply: @escaping (Data) -> Void) {
         reply(eventStore.snapshot())
-    }
-
-    func requestScan(path: String, reply: @escaping (Bool, String?) -> Void) {
-        guard let scanner = ESXPCServer.fileScannerRef else {
-            reply(false, "The security scanner is not ready.")
-            return
-        }
-
-        let standardPath = URL(fileURLWithPath: path).standardizedFileURL.path
-        guard standardPath.hasPrefix("/"), FileManager.default.fileExists(atPath: standardPath) else {
-            reply(false, "The selected item no longer exists.")
-            return
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            var isDirectory: ObjCBool = false
-            FileManager.default.fileExists(atPath: standardPath, isDirectory: &isDirectory)
-            let paths: [String]
-            if isDirectory.boolValue {
-                guard let enumerator = FileManager.default.enumerator(
-                    at: URL(fileURLWithPath: standardPath),
-                    includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
-                ) else {
-                    reply(false, "Nick could not read the selected folder.")
-                    return
-                }
-                var collected: [String] = []
-                for case let fileURL as URL in enumerator {
-                    guard collected.count < 10_000 else {
-                        reply(false, "The folder contains more than 10,000 files. Choose a smaller folder.")
-                        return
-                    }
-                    let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-                    guard values?.isRegularFile == true,
-                          (values?.fileSize ?? 0) <= 250 * 1_024 * 1_024 else { continue }
-                    collected.append(fileURL.path)
-                }
-                paths = collected
-            } else {
-                let values = try? URL(fileURLWithPath: standardPath)
-                    .resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-                guard values?.isRegularFile == true else {
-                    reply(false, "The selected item is not a regular file.")
-                    return
-                }
-                guard (values?.fileSize ?? 0) <= 250 * 1_024 * 1_024 else {
-                    reply(false, "Files larger than 250 MB require a full scan.")
-                    return
-                }
-                paths = [standardPath]
-            }
-
-            for filePath in paths {
-                let result = scanner.scan(filePath: filePath)
-                if result.isThreat {
-                    reply(false, "Threat detected: \(result.threatName ?? "unknown threat")")
-                    return
-                }
-            }
-            reply(true, nil)
-        }
     }
 
     func requestQuarantineFile(
@@ -419,8 +397,43 @@ private final class EndpointEventStore {
     )
     private let maximumCount = 250
 
-    init(path: String) {
+    init(path: String, legacyPath: String) {
         url = URL(fileURLWithPath: path)
+        let directory = url.deletingLastPathComponent()
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try fileManager.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: directory.path
+            )
+
+            let legacyURL = URL(fileURLWithPath: legacyPath)
+            if !fileManager.fileExists(atPath: url.path),
+               fileManager.fileExists(atPath: legacyURL.path) {
+                try fileManager.moveItem(at: legacyURL, to: url)
+            } else if fileManager.fileExists(atPath: url.path),
+                      fileManager.fileExists(atPath: legacyURL.path) {
+                // A prior interrupted migration may leave both files behind.
+                // The protected file is authoritative; remove the stale public
+                // copy so old path-bearing events do not remain readable.
+                try fileManager.removeItem(at: legacyURL)
+            }
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.setAttributes(
+                    [.posixPermissions: 0o600],
+                    ofItemAtPath: url.path
+                )
+            }
+        } catch {
+            ESXPCServer.logger.error(
+                "Could not prepare protected event storage: \(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 
     func appendIfImportant(_ data: Data) {
@@ -437,12 +450,12 @@ private final class EndpointEventStore {
                 try FileManager.default.createDirectory(
                     at: self.url.deletingLastPathComponent(),
                     withIntermediateDirectories: true,
-                    attributes: [.posixPermissions: 0o755]
+                    attributes: [.posixPermissions: 0o700]
                 )
                 let encoded = try JSONEncoder().encode(events)
                 try encoded.write(to: self.url, options: .atomic)
                 try FileManager.default.setAttributes(
-                    [.posixPermissions: 0o644],
+                    [.posixPermissions: 0o600],
                     ofItemAtPath: self.url.path
                 )
             } catch {

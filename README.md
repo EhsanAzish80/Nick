@@ -58,7 +58,7 @@ exports sanitized Markdown or JSON support bundles.
 
 ## Start simple, go deeper when needed
 
-Nick 4.6.2 opens in **Simple mode**. It focuses on four things:
+Nick opens in **Simple mode**. It focuses on four things:
 
 - **Home** — one clear protection state and recent activity;
 - **Scan** — Quick Check, Full Scan, or a specific file, app, folder, or drive;

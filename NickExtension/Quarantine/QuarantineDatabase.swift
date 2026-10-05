@@ -59,13 +59,41 @@ final class QuarantineDatabase {
                 severity         TEXT NOT NULL,
                 quarantined_at   TEXT NOT NULL,
                 process_path     TEXT NOT NULL,
-                pid              INTEGER NOT NULL
+                pid              INTEGER NOT NULL,
+                original_owner   INTEGER,
+                original_group   INTEGER,
+                original_mode    INTEGER
             );
         """
         sqlite3_exec(db, sql, nil, nil, nil)
+        ensureColumn(named: "original_owner")
+        ensureColumn(named: "original_group")
+        ensureColumn(named: "original_mode")
     }
 
     // MARK: - CRUD
+
+    private func ensureColumn(named name: String) {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(quarantine);", -1, &statement, nil)
+                == SQLITE_OK else { return }
+        defer { sqlite3_finalize(statement) }
+
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let text = sqlite3_column_text(statement, 1), String(cString: text) == name {
+                return
+            }
+        }
+        let allowedColumns = ["original_owner", "original_group", "original_mode"]
+        guard allowedColumns.contains(name) else { return }
+        sqlite3_exec(
+            db,
+            "ALTER TABLE quarantine ADD COLUMN \(name) INTEGER;",
+            nil,
+            nil,
+            nil
+        )
+    }
 
     func insert(record: QuarantineRecord) {
         lock.lock(); defer { lock.unlock() }
@@ -73,8 +101,9 @@ final class QuarantineDatabase {
         let sql = """
             INSERT OR REPLACE INTO quarantine
             (id, original_path, quarantined_path, hash, threat_name,
-             severity, quarantined_at, process_path, pid)
-            VALUES (?,?,?,?,?,?,?,?,?)
+             severity, quarantined_at, process_path, pid,
+             original_owner, original_group, original_mode)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -89,6 +118,9 @@ final class QuarantineDatabase {
         sqlite3_bind_text(stmt, 7, iso.string(from: record.quarantinedAt), -1, sqliteTransient)
         sqlite3_bind_text(stmt, 8, record.processPath,               -1, sqliteTransient)
         sqlite3_bind_int (stmt, 9, record.pid)
+        bindOptionalInteger(record.originalOwnerID.map(Int64.init), to: 10, in: stmt)
+        bindOptionalInteger(record.originalGroupID.map(Int64.init), to: 11, in: stmt)
+        bindOptionalInteger(record.originalPermissions.map(Int64.init), to: 12, in: stmt)
         sqlite3_step(stmt)
     }
 
@@ -149,7 +181,32 @@ final class QuarantineDatabase {
             severity:         String(cString: sqlite3_column_text(s, 5)),
             quarantinedAt:    iso.date(from: String(cString: sqlite3_column_text(s, 6))) ?? Date(),
             processPath:      String(cString: sqlite3_column_text(s, 7)),
-            pid:              sqlite3_column_int(s, 8)
+            pid:              sqlite3_column_int(s, 8),
+            originalOwnerID:  optionalUInt32(column: 9, in: s),
+            originalGroupID:  optionalUInt32(column: 10, in: s),
+            originalPermissions: optionalUInt16(column: 11, in: s)
         )
+    }
+
+    private func bindOptionalInteger(
+        _ value: Int64?,
+        to index: Int32,
+        in statement: OpaquePointer?
+    ) {
+        if let value {
+            sqlite3_bind_int64(statement, index, value)
+        } else {
+            sqlite3_bind_null(statement, index)
+        }
+    }
+
+    private func optionalUInt32(column: Int32, in statement: OpaquePointer) -> UInt32? {
+        guard sqlite3_column_type(statement, column) != SQLITE_NULL else { return nil }
+        return UInt32(exactly: sqlite3_column_int64(statement, column))
+    }
+
+    private func optionalUInt16(column: Int32, in statement: OpaquePointer) -> UInt16? {
+        guard sqlite3_column_type(statement, column) != SQLITE_NULL else { return nil }
+        return UInt16(exactly: sqlite3_column_int64(statement, column))
     }
 }

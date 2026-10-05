@@ -1,6 +1,6 @@
 # Nick Security Audit Record
 
-## Current status: Nick 4.6.2 (October 3, 2026)
+## Current status: Nick 4.6.3 (October 5, 2026)
 
 This table is the current public capability summary. The detailed sections
 below are a chronological audit record and may describe older release states.
@@ -10,6 +10,8 @@ channels in [`SECURITY.md`](../SECURITY.md).
 
 | Area | Current public status |
 |---|---|
+| App-to-extension communication | The Endpoint Security extension accepts connections only from Nick's exact signed app identity, enforced by the XPC listener. Persisted endpoint events are readable only by the extension. |
+| Quarantine restore | Descriptor-based restore refuses redirected destination paths and restores recorded ownership and permissions. |
 | Endpoint Security | Active system-extension path with bounded authorization work, local scanning, and XPC event delivery. Automatic file denial is limited to exact curated hash evidence or an explicit reviewed block. Novel YARA findings are normally reported after authorization. |
 | App-level correlation | Deterministic correlation is active for app-level monitor, Deep Scan, and FSEvents signals. Endpoint Security and Network Extension observations are not all combined into the same correlator. |
 | YARA | Vendored libyara 4.5.5 is active for on-demand and selected real-time paths. Context and rule metadata distinguish concrete signatures from review-only behavior matches. |
