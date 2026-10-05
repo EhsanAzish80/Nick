@@ -100,10 +100,10 @@ final class SimpleHomeModelTests: XCTestCase {
         XCTAssertTrue(cards.allSatisfy { !$0.status.rawValue.isEmpty })
     }
 
-    func test_emailPausedIsCalledOutWhenScamIsOn() {
+    func test_attachmentChecksPausedIsCalledOutWhenDestinationChecksAreOn() {
         let cards = ProtectionCard.cards(endpointActive: false, networkState: .enabled, ransomwareShieldActive: false)
         XCTAssertEqual(cards[1].status, .on)
-        XCTAssertEqual(cards[1].detail, "Scam site warnings are on. Email checks are paused.")
+        XCTAssertEqual(cards[1].detail, "Destination checks are on. Attachment checks are paused.")
     }
 
     // MARK: Mac settings
