@@ -69,6 +69,8 @@ struct SettingsView: View {
     @State private var showResetHistoryConfirmation = false
     @State private var showRemoveHelperConfirmation = false
     @State private var updateCheckStatus: String?
+    @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
+    @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
     /// Simple mode keeps the technical sections behind this disclosure.
     @State private var showsAdvancedSettings = false
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates: Bool = true
@@ -844,6 +846,21 @@ struct SettingsView: View {
                 }
                 .controlSize(.small)
             }
+            if updateLastCheckTime > 0 {
+                Text("Last checked \(Date(timeIntervalSince1970: updateLastCheckTime).formatted(date: .abbreviated, time: .shortened)): \(updateLastCheckResult)")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            Button("Copy Update Diagnostics") {
+                let version = "\(appVersion) (\(appBuild))"
+                let checked = updateLastCheckTime > 0
+                    ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(.iso8601)
+                    : "never"
+                let text = "Nick \(version)\nFeed: https://3nsofts.com/nick/appcast.xml\nLast check: \(checked)\nResult: \(updateLastCheckResult)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            .controlSize(.small)
         } header: {
             Text("Finder Integration")
         } footer: {

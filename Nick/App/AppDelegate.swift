@@ -113,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: self,
-            userDriverDelegate: nil
+            userDriverDelegate: self
         )
         setupStatusItem()
         Task { @MainActor in
@@ -580,7 +580,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func postUpdateCheckStatus(_ status: String) {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "nickUpdateLastCheckTime")
+        UserDefaults.standard.set(status, forKey: "nickUpdateLastCheckResult")
         NotificationCenter.default.post(name: .nickUpdateCheckStatus, object: status)
+    }
+
+    private func setUpdateBadge(visible: Bool) {
+        statusItem?.button?.title = visible ? " •" : ""
+        UserDefaults.standard.set(visible, forKey: "nickUpdateAvailable")
     }
 
     // MARK: - Finder Sync Integration
@@ -660,8 +667,10 @@ extension AppDelegate: SPUUpdaterDelegate {
         error: Error?
     ) {
         if let error {
-            updateLogger.error("Sparkle update cycle failed: \(error.localizedDescription, privacy: .public)")
-            if !receivedUpdateCheckResult {
+            if receivedUpdateCheckResult {
+                updateLogger.info("Sparkle update cycle completed with a handled result: \(error.localizedDescription, privacy: .public)")
+            } else {
+                updateLogger.error("Sparkle update cycle failed: \(error.localizedDescription, privacy: .public)")
                 postUpdateCheckStatus("Update check failed: \(error.localizedDescription)")
             }
         } else {
@@ -671,6 +680,39 @@ extension AppDelegate: SPUUpdaterDelegate {
             }
         }
         receivedUpdateCheckResult = false
+    }
+}
+
+extension AppDelegate: @preconcurrency SPUStandardUserDriverDelegate {
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(
+        _ update: SUAppcastItem,
+        andInImmediateFocus immediateFocus: Bool
+    ) -> Bool {
+        immediateFocus
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool,
+        forUpdate update: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        guard !state.userInitiated, !handleShowingUpdate else { return }
+        setUpdateBadge(visible: true)
+        Task {
+            await NotificationManager.shared.sendUpdateAvailable(
+                version: update.displayVersionString
+            )
+        }
+    }
+
+    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
+        setUpdateBadge(visible: false)
+    }
+
+    func standardUserDriverWillFinishUpdateSession() {
+        setUpdateBadge(visible: false)
     }
 }
 

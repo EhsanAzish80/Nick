@@ -27,6 +27,7 @@
         url="https://3nsofts.com/nick/releases/Nick-4.6.3.pkg"
         length="16640449"
         type="application/octet-stream"
+        sparkle:installationType="package"
         sparkle:edSignature="a/kalwHsRPp395u/27KpifT5iiuI0gHh1Xm8vwyyJjuTm38f32Y7633KsJPy0D4RMjT9PMZ7uGZ0pB1oYXFkBQ=="
       />
     </item>
@@ -51,6 +52,7 @@
         url="https://3nsofts.com/nick/releases/Nick-4.6.2.pkg"
         length="16626763"
         type="application/octet-stream"
+        sparkle:installationType="package"
         sparkle:edSignature="13kxSyRFUF3rc4ORJujC5I7cIToo679ShoF6Ykq3G3RQjFaIX/E3c+0cVDRX+NVcoN1MfCzl9NhdtZrQT9r8Cw=="
       />
     </item>
@@ -74,6 +76,7 @@
         url="https://3nsofts.com/nick/releases/Nick-4.6.1.pkg"
         length="15898225"
         type="application/octet-stream"
+        sparkle:installationType="package"
         sparkle:edSignature="JCaW9523owRuNSoGR73xaRsGqaIHuB73+jHrK/JaD0CheyfwCjAkrUvderyZh8OXVqKy3sTGFgRqHjit7nvKBQ=="
       />
     </item>
@@ -98,6 +101,7 @@
         url="https://3nsofts.com/nick/releases/Nick-4.6.pkg"
         length="15887520"
         type="application/octet-stream"
+        sparkle:installationType="package"
         sparkle:edSignature="jcDJE5Co7NDhSPYzAWlhpc3fZludCQbV2hYtR8jCt4HZhgk15s1cj6DtO7lBtmVB7CSs3w3HVJUkIX72RN8DDA=="
       />
     </item>
@@ -122,6 +126,7 @@
         url="https://3nsofts.com/nick/releases/Nick-4.5.pkg"
         length="15787598"
         type="application/octet-stream"
+        sparkle:installationType="package"
         sparkle:edSignature="7mxpIFcxK4OnZJwOYKVjgzTzmZbPd95BdZEk5Ey5XeDWPtWEkuHAGYFaSA51QstG3NoE5DzUUgt6Ghap5rfODA=="
       />
     </item>
@@ -146,6 +151,7 @@
         url="https://3nsofts.com/nick/releases/Nick-4.4.pkg"
         length="15781454"
         type="application/octet-stream"
+        sparkle:installationType="package"
         sparkle:edSignature="u6mk/qHgxOxXmzOk1vflxrCNKMEQFd6Y1zQEUH4XYtScD6ItXWZirKPb6vVuKMybLpwn1lnxtutyuWDH0DcKAg=="
       />
     </item>
@@ -165,7 +171,7 @@
           <li>Clear update-cycle diagnostics for support and verification</li>
         </ul>
       ]]></description>
-      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.3.pkg" length="15720455" type="application/octet-stream" sparkle:edSignature="UdRD1A+fQVvVIMfXqbZURGGxAQru1iTuj94rWMt/AwlSp0PgJ8CtQbr/bugJ2lQP/HKl9HgdGLTHNVI9wH3oDg==" />
+      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.3.pkg" length="15720455" type="application/octet-stream" sparkle:installationType="package" sparkle:edSignature="UdRD1A+fQVvVIMfXqbZURGGxAQru1iTuj94rWMt/AwlSp0PgJ8CtQbr/bugJ2lQP/HKl9HgdGLTHNVI9wH3oDg==" />
     </item>
 
     <item>
@@ -184,7 +190,7 @@
           <li>Protection-aware green, orange, and red menu bar status</li>
         </ul>
       ]]></description>
-      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.2.pkg" length="15710495" type="application/octet-stream" sparkle:edSignature="FpXpZPTb3FxR//kl2aAHOn+0UDFau402Skml3dwnlNLlWbutilsbJZOt47fSh8eKR3Qm8oCT3IpWiFFeSjntBw==" />
+      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.2.pkg" length="15710495" type="application/octet-stream" sparkle:installationType="package" sparkle:edSignature="FpXpZPTb3FxR//kl2aAHOn+0UDFau402Skml3dwnlNLlWbutilsbJZOt47fSh8eKR3Qm8oCT3IpWiFFeSjntBw==" />
     </item>
 
     <item>
@@ -203,7 +209,7 @@
           <li>Cross-restart process and extension-noise suppression</li>
         </ul>
       ]]></description>
-      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.1.pkg" length="15636565" type="application/octet-stream" sparkle:edSignature="2hbomU3p0cOL0StU4nRBfL0uYF5hSzrucW1jM/lT/z6Uw2pS8nvtfj223mBEMcXbZBZqrpVlcFL0Fmsuj9enAA==" />
+      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.1.pkg" length="15636565" type="application/octet-stream" sparkle:installationType="package" sparkle:edSignature="2hbomU3p0cOL0StU4nRBfL0uYF5hSzrucW1jM/lT/z6Uw2pS8nvtfj223mBEMcXbZBZqrpVlcFL0Fmsuj9enAA==" />
     </item>
 
     <item>
@@ -220,7 +226,7 @@
           <li>Improved protection-state wording and runtime verification</li>
         </ul>
       ]]></description>
-      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.0.1.pkg" length="14787149" type="application/octet-stream" sparkle:edSignature="+oyF5VM6nrP6mojJ/gG8QjysGdp2KWz22Xk7V6Zi0KsUxRJsAjZnvf7H+tzaMPRiI3EUkP36EWzkvSPDLiJ0AA==" />
+      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.0.1.pkg" length="14787149" type="application/octet-stream" sparkle:installationType="package" sparkle:edSignature="+oyF5VM6nrP6mojJ/gG8QjysGdp2KWz22Xk7V6Zi0KsUxRJsAjZnvf7H+tzaMPRiI3EUkP36EWzkvSPDLiJ0AA==" />
     </item>
 
     <item>
@@ -236,7 +242,7 @@
           <li>Scam Guardian, Email Guard, clearer alerts, and native uninstall</li>
         </ul>
       ]]></description>
-      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.0.pkg" length="14668174" type="application/octet-stream" sparkle:edSignature="0keXdknNtb6xdsNDrNLnRej09JJ6JNfFZF8TrmohIimnYHJjEkgJcYE0Mmweo+7Hsrz9yOF1UgqzrnHHAqbFDw==" />
+      <enclosure url="https://3nsofts.com/nick/releases/Nick-4.0.pkg" length="14668174" type="application/octet-stream" sparkle:installationType="package" sparkle:edSignature="0keXdknNtb6xdsNDrNLnRej09JJ6JNfFZF8TrmohIimnYHJjEkgJcYE0Mmweo+7Hsrz9yOF1UgqzrnHHAqbFDw==" />
     </item>
   </channel>
 </rss>
