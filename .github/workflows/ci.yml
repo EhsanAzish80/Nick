@@ -1,13 +1,14 @@
 name: Nick CI
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
       - "release/**"
       - "5.0/**"
   pull_request:
-    branches: [main]
+    branches: [main, "5.0/develop"]
 
 permissions:
   contents: read
@@ -49,13 +50,44 @@ jobs:
       - name: Validate repository
         run: ./Scripts/validate-repository.sh
 
+      - name: Decide whether to run the YARA gate
+        id: yara-gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          run_yara=false
+
+          # Pull requests are phase/release integration gates. Manual runs and
+          # pushes to main are also always complete gates.
+          if [[ "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "workflow_dispatch" || "$REF_NAME" == "main" ]]; then
+            run_yara=true
+          elif [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          else
+            changed_files="$(git diff-tree --no-commit-id --name-only -r "$HEAD_SHA")"
+          fi
+
+          if [[ "$run_yara" != "true" ]] && grep -Eq \
+            '^(Rules/|Nick/Core/(DeepScan|ThreatCorrelator|YARAEngine)/|NickExtension/(Scanner|USB)/|Scripts/rules_gate\.py$|\.github/workflows/ci\.yml$)' \
+            <<< "${changed_files:-}"; then
+            run_yara=true
+          fi
+
+          echo "run=$run_yara" >> "$GITHUB_OUTPUT"
+          echo "YARA gate required: $run_yara"
+
       - name: Lint YARA rules
+        if: steps.yara-gate.outputs.run == 'true'
         run: |
           python3 -m venv .ci-venv
           .ci-venv/bin/python -m pip install --quiet "yara-python==4.5.4"
           .ci-venv/bin/python Scripts/rules_gate.py lint
 
       - name: YARA false-positive gate (benign corpus)
+        if: steps.yara-gate.outputs.run == 'true'
         run: |
           .ci-venv/bin/python Scripts/rules_gate.py fp \
             --root /System/Applications \
@@ -67,7 +99,7 @@ jobs:
             --report
 
       - name: Upload YARA false-positive report
-        if: always()
+        if: always() && steps.yara-gate.outputs.run == 'true'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: yara-fp-report
