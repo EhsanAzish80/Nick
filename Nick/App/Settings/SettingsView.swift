@@ -71,6 +71,8 @@ struct SettingsView: View {
     @State private var updateCheckStatus: String?
     @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
     @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
+    @AppStorage("nickUpdateAvailable") private var updateAvailable = false
+    @AppStorage("nickUpdateAvailableVersion") private var updateAvailableVersion = ""
     /// Simple mode keeps the technical sections behind this disclosure.
     @State private var showsAdvancedSettings = false
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates: Bool = true
@@ -846,21 +848,6 @@ struct SettingsView: View {
                 }
                 .controlSize(.small)
             }
-            if updateLastCheckTime > 0 {
-                Text("Last checked \(Date(timeIntervalSince1970: updateLastCheckTime).formatted(date: .abbreviated, time: .shortened)): \(updateLastCheckResult)")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-            }
-            Button("Copy Update Diagnostics") {
-                let version = "\(appVersion) (\(appBuild))"
-                let checked = updateLastCheckTime > 0
-                    ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(.iso8601)
-                    : "never"
-                let text = "Nick \(version)\nFeed: https://3nsofts.com/nick/appcast.xml\nLast check: \(checked)\nResult: \(updateLastCheckResult)"
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-            }
-            .controlSize(.small)
         } header: {
             Text("Finder Integration")
         } footer: {
@@ -941,6 +928,20 @@ struct SettingsView: View {
 
     private var updatesSection: some View {
         Section {
+            if updateAvailable {
+                LabeledTile(
+                    icon: "arrow.down.circle.fill", tint: .blue,
+                    title: updateAvailableVersion.isEmpty
+                        ? "A Nick update is available"
+                        : "Nick \(updateAvailableVersion) is available",
+                    subtitle: "Open the updater to review and install it."
+                ) {
+                    Button("View Update") {
+                        _ = (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                    }
+                    .controlSize(.small)
+                }
+            }
             LabeledTile(
                 icon: "arrow.down.circle.fill", tint: .blue,
                 title: "Automatically check for updates",
@@ -963,10 +964,25 @@ struct SettingsView: View {
                 }
                 .controlSize(.small)
             }
+            if updateLastCheckTime > 0 {
+                Text("Last checked \(Date(timeIntervalSince1970: updateLastCheckTime).formatted(date: .abbreviated, time: .shortened)): \(updateLastCheckResult)")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            Button("Copy Update Diagnostics") {
+                let version = "\(appVersion) (\(appBuild))"
+                let checked = updateLastCheckTime > 0
+                    ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(.iso8601)
+                    : "never"
+                let text = "Nick \(version)\nFeed: \(updateFeedURL)\nLast check: \(checked)\nResult: \(updateLastCheckResult)\nUpdate available: \(updateAvailable)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            .controlSize(.small)
         } header: {
             Text("Updates")
         } footer: {
-            Text("Update feed: https://3nsofts.com/nick/appcast.xml")
+            Text("Update feed: \(updateFeedURL)")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
             if let updateCheckStatus {
@@ -1032,6 +1048,16 @@ struct SettingsView: View {
 
     private var appBuild: String {
         Bundle.main.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String ?? "Unknown"
+    }
+
+    private var updateFeedURL: String {
+#if DEBUG
+        if let value = Bundle.main.object(forInfoDictionaryKey: "NickDebugUpdateFeedURL") as? String,
+           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return value
+        }
+#endif
+        return Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? "Unknown"
     }
 
     private var footer: some View {

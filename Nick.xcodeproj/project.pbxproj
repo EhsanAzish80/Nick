@@ -873,6 +873,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 4.6.3;
+				NICK_DEBUG_UPDATE_FEED_URL = "";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
@@ -1030,6 +1031,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 4.6.3;
+				NICK_DEBUG_UPDATE_FEED_URL = "";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
