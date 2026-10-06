@@ -97,12 +97,7 @@ struct TrustedProcessList {
     static let builtInIdentities: Set<SigningIdentity> = [
         SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal"),
         SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.finder"),
-        SigningIdentity(teamID: "59GAB85EFG", signingID: "com.apple.dt.Xcode"),
-        SigningIdentity(teamID: "H7V7XYVQ7D", signingID: "com.googlecode.iterm2"),
-        SigningIdentity(teamID: "EQHXZ8M8AV", signingID: "com.microsoft.VSCode"),
-        SigningIdentity(teamID: "EQHXZ8M8AV", signingID: "com.microsoft.VSCode.helper"),
-        SigningIdentity(teamID: "EQHXZ8M8AV", signingID: "com.microsoft.VSCode.helper.Plugin"),
-        SigningIdentity(teamID: "EQHXZ8M8AV", signingID: "com.microsoft.VSCode.helper.Renderer")
+        SigningIdentity(teamID: "59GAB85EFG", signingID: "com.apple.dt.Xcode")
     ]
 
     /// Interpreters and general-purpose tools execute caller-controlled input.
@@ -110,13 +105,18 @@ struct TrustedProcessList {
     private static let forbiddenSigningIDs: Set<String> = [
         "com.apple.bash", "com.apple.zsh", "com.apple.sh",
         "com.apple.osascript", "com.apple.curl", "com.apple.ssh",
+        "com.apple.python3", "com.apple.ruby", "com.apple.tclsh",
         "com.apple.dt.xcode_select.tool-shim-public",
         "org.nodejs.node", "org.python.python"
     ]
 
+    private static let forbiddenSigningIDPrefixes = ["com.apple.perl"]
+
     private static let forbiddenExecutableNames: Set<String> = [
         "bash", "zsh", "sh", "dash", "fish", "python", "python3",
-        "ruby", "perl", "osascript", "curl", "node", "deno", "bun"
+        "ruby", "perl", "osascript", "curl", "node", "deno", "bun",
+        "env", "swift", "tclsh", "awk", "xargs", "find", "open",
+        "launchctl", "php", "lua", "pwsh", "java"
     ]
 
     // MARK: - Private State
@@ -193,6 +193,7 @@ struct TrustedProcessList {
         }
         let executableName = URL(fileURLWithPath: process.path).lastPathComponent.lowercased()
         if forbiddenSigningIDs.contains(identity.signingID)
+            || forbiddenSigningIDPrefixes.contains(where: { identity.signingID.hasPrefix($0) })
             || forbiddenExecutableNames.contains(executableName)
             || forbiddenExecutableNames.contains(process.name.lowercased()) {
             return "Interpreters and command-line tools cannot be trusted because they can run untrusted scripts or commands."

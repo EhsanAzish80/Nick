@@ -64,6 +64,32 @@ final class SignatureValidatorPolicyTests: XCTestCase {
         )
     }
 
+    func test_verifiedBuiltInIdentitiesMatchInstalledAppleBinaries() {
+        let verified: [(String, SigningIdentity)] = [
+            (
+                "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+                SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal")
+            ),
+            (
+                "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+                SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.finder")
+            ),
+            (
+                "/Applications/Xcode.app/Contents/MacOS/Xcode",
+                SigningIdentity(teamID: "59GAB85EFG", signingID: "com.apple.dt.Xcode")
+            )
+        ]
+
+        XCTAssertEqual(TrustedProcessList.builtInIdentities, Set(verified.map(\.1)))
+        for (path, expectedIdentity) in verified {
+            XCTAssertEqual(
+                SigningIdentity(status: SignatureValidator.shared.evaluate(binaryPath: path)),
+                expectedIdentity,
+                "Unexpected installed signature for \(path)"
+            )
+        }
+    }
+
     func test_writableAndThirdPartyLocationsStillRequireValidation() {
         XCTAssertFalse(SignatureValidator.isSealedSystemBinaryPath(
             "/Applications/Example.app/Contents/MacOS/Example"

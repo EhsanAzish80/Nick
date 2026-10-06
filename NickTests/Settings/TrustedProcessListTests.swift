@@ -216,4 +216,43 @@ final class TrustedProcessListTests: XCTestCase {
         var sut = TrustedProcessList()
         XCTAssertFalse(sut.addUserTrusted(renamedShell))
     }
+
+    func test_versionedPerlSigningIdentifierIsForbidden() {
+        let perl = NickProcessInfo(
+            pid: 24, path: "/usr/bin/perl5.34", name: "Renamed Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.perl5.34")
+        )
+        var sut = TrustedProcessList()
+        XCTAssertFalse(sut.addUserTrusted(perl))
+    }
+
+    func test_interpreterSigningIdentifiersAreForbiddenAfterRename() {
+        let signingIDs = ["com.apple.python3", "com.apple.ruby", "com.apple.tclsh"]
+        for (index, signingID) in signingIDs.enumerated() {
+            let process = NickProcessInfo(
+                pid: Int32(50 + index), path: "/tmp/renamed-\(index)", name: "Build Tool",
+                parentPID: 1, parentName: "launchd",
+                signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: signingID)
+            )
+            var sut = TrustedProcessList()
+            XCTAssertFalse(sut.addUserTrusted(process), "\(signingID) must not be trustable")
+        }
+    }
+
+    func test_generalPurposeLaunchersCannotBeTrustedByName() {
+        let names = [
+            "env", "swift", "tclsh", "awk", "xargs", "find", "open",
+            "launchctl", "php", "lua", "pwsh", "java"
+        ]
+        for (index, name) in names.enumerated() {
+            let process = NickProcessInfo(
+                pid: Int32(100 + index), path: "/usr/bin/\(name)", name: name,
+                parentPID: 1, parentName: "launchd",
+                signingStatus: .signed(teamID: "TEAM", signingID: "example.\(name)")
+            )
+            var sut = TrustedProcessList()
+            XCTAssertFalse(sut.addUserTrusted(process), "\(name) must not be trustable")
+        }
+    }
 }
