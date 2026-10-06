@@ -8,6 +8,7 @@ import XCTest
 // MARK: - ThreatCorrelatorTests
 
 /// Unit tests for `ThreatCorrelator`, `CorrelationRule`, and `ThreatAlert`.
+@MainActor
 final class ThreatCorrelatorTests: XCTestCase {
 
     func test_legacySignedSuppressionMigratesFromPathToIdentity() {
@@ -202,19 +203,19 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertTrue(multipleAlerts.isEmpty)
     }
 
-    func test_correlateNew_emitsRuleOnlyOnce_untilReset() async {
+    func test_incidentStoreDeduplicatesRepeatedCorrelation() async {
         await correlator.ingest([
             makeSignal(source: .network, severity: .high, metadata: ["reason": "reverse_shell"])
         ])
 
-        let first = await correlator.correlateNew()
-        let second = await correlator.correlateNew()
-        await correlator.resetEmittedRules()
-        let afterReset = await correlator.correlateNew()
+        let defaults = isolatedDefaults()
+        let store = IncidentStore(defaults: defaults)
+        let first = store.ingest(await correlator.correlateNew())
+        let second = store.ingest(await correlator.correlateNew())
 
-        XCTAssertFalse(first.isEmpty)
-        XCTAssertTrue(second.isEmpty)
-        XCTAssertEqual(afterReset.map(\.title), first.map(\.title))
+        XCTAssertFalse(first.newlyActionable.isEmpty)
+        XCTAssertTrue(second.newlyActionable.isEmpty)
+        XCTAssertEqual(second.visibleAlerts.count, first.visibleAlerts.count)
     }
 
     func test_simultaneousFullAndQuickIngest_emitOneAlert() async {
@@ -242,50 +243,51 @@ final class ThreatCorrelatorTests: XCTestCase {
             return result
         }
 
-        let emitted = batches.flatMap { $0 }
-        XCTAssertEqual(emitted.count, 1)
-        XCTAssertEqual(Set(emitted.map(\.deduplicationKey)).count, 1)
+        let defaults = isolatedDefaults()
+        let store = IncidentStore(defaults: defaults)
+        let results = batches.map(store.ingest)
+        XCTAssertEqual(results.flatMap(\.newlyActionable).count, 1)
+        XCTAssertEqual(store.visibleAlerts.count, 1)
     }
 
     func test_correlateNew_alertsAgainForADifferentSubject() async {
         await correlator.ingest([
             makeSignal(source: .yara, severity: .high, metadata: ["path": "/private/tmp/first", "rule": "fam"])
         ])
-        let first = await correlator.correlateNew()
-        let repeated = await correlator.correlateNew()
+        let defaults = isolatedDefaults()
+        let store = IncidentStore(defaults: defaults)
+        let first = store.ingest(await correlator.correlateNew())
+        let repeated = store.ingest(await correlator.correlateNew())
 
         await correlator.ingest([
             makeSignal(source: .yara, severity: .high, metadata: ["path": "/private/tmp/second", "rule": "fam"])
         ])
-        let second = await correlator.correlateNew()
+        let second = store.ingest(await correlator.correlateNew())
 
-        XCTAssertFalse(first.isEmpty)
-        XCTAssertTrue(repeated.isEmpty)
-        XCTAssertFalse(second.isEmpty, "A second file matching the same rule must still alert")
+        XCTAssertFalse(first.newlyActionable.isEmpty)
+        XCTAssertTrue(repeated.newlyActionable.isEmpty)
+        XCTAssertFalse(second.newlyActionable.isEmpty, "A second file matching the same rule must still alert")
     }
 
     func test_pathApprovalIsPrefixOnly() async {
         let rule = passthroughRule()
-        let localCorrelator = ThreatCorrelator(rules: [rule])
         let signal = makeSignal(
             source: .yara,
             severity: .medium,
             metadata: ["path": "/private/tmp/x/Users/me/Projects/payload", "rule": "macos_keychain_access", "suppressible": "true"]
         )
-        await localCorrelator.updateSuppressionRules([
+        let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
             SuppressionRule(type: .path, value: "/Users/me/Projects", expiresAt: Date().addingTimeInterval(3_600))
         ])
-        await localCorrelator.ingest([signal])
-        let alerts = await localCorrelator.correlateNew()
-        XCTAssertFalse(alerts.isEmpty)
+        let result = store.ingest([rule.evaluate([signal])!])
+        XCTAssertFalse(result.visibleAlerts.isEmpty)
     }
 
     func test_learnedApproval_suppressesOnlySameSignedBehavior() async {
         let rule = passthroughRule()
-        let localCorrelator = ThreatCorrelator(rules: [rule])
         let approved = makeSignedSignal(reason: "expected_action")
         let approvedAlert = rule.evaluate([approved])!
-        await localCorrelator.updateSuppressionRules([
+        let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
             SuppressionRule(
                 type: .signedProcess,
                 value: "TEAM123|com.example.editor",
@@ -294,27 +296,20 @@ final class ThreatCorrelatorTests: XCTestCase {
             )
         ])
 
-        await localCorrelator.ingest([approved])
-        let approvedResult = await localCorrelator.correlateNew()
-        XCTAssertTrue(approvedResult.isEmpty)
-
-        await localCorrelator.flush()
-        await localCorrelator.resetEmittedRules()
-        await localCorrelator.ingest([makeSignedSignal(reason: "new_unusual_action")])
-        let changedResult = await localCorrelator.correlateNew()
-        XCTAssertFalse(changedResult.isEmpty)
+        XCTAssertTrue(store.ingest([approvedAlert]).visibleAlerts.isEmpty)
+        let changed = rule.evaluate([makeSignedSignal(reason: "new_unusual_action")])!
+        XCTAssertFalse(store.ingest([changed]).visibleAlerts.isEmpty)
     }
 
     func test_learnedApproval_neverSuppressesPersistence() async {
         let rule = passthroughRule()
-        let localCorrelator = ThreatCorrelator(rules: [rule])
         let persistence = makeSignedSignal(
             source: .persistence,
             severity: .high,
             reason: "launch_agent_added"
         )
         let alert = rule.evaluate([persistence])!
-        await localCorrelator.updateSuppressionRules([
+        let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
             SuppressionRule(
                 type: .signedProcess,
                 value: "TEAM123|com.example.editor",
@@ -323,45 +318,81 @@ final class ThreatCorrelatorTests: XCTestCase {
             )
         ])
 
-        await localCorrelator.ingest([persistence])
-        let result = await localCorrelator.correlateNew()
-        XCTAssertFalse(result.isEmpty)
+        XCTAssertFalse(store.ingest([alert]).visibleAlerts.isEmpty)
     }
 
-    func test_pathApprovalSuppressesOnlyMarkedBehavioralYARA() async {
+    func test_pathApprovalCannotSuppressAnyYARAMatch() async {
         let rule = passthroughRule()
-        let localCorrelator = ThreatCorrelator(rules: [rule])
         let path = "/private/tmp/known-wrapper"
         let signal = makeSignal(
             source: .yara,
             severity: .medium,
             metadata: ["path": path, "rule": "macos_keychain_access", "suppressible": "true"]
         )
-        await localCorrelator.updateSuppressionRules([
+        let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
             SuppressionRule(type: .path, value: path, expiresAt: Date().addingTimeInterval(3_600))
         ])
 
-        await localCorrelator.ingest([signal])
-        let suppressedAlerts = await localCorrelator.correlateNew()
-        XCTAssertTrue(suppressedAlerts.isEmpty)
+        XCTAssertFalse(store.ingest([rule.evaluate([signal])!]).visibleAlerts.isEmpty)
     }
 
     func test_pathApprovalCannotSuppressConcreteYARA() async {
         let rule = passthroughRule()
-        let localCorrelator = ThreatCorrelator(rules: [rule])
         let path = "/private/tmp/known-wrapper"
         let signal = makeSignal(
             source: .yara,
             severity: .high,
             metadata: ["path": path, "rule": "osx_known_malware_family", "suppressible": "false"]
         )
-        await localCorrelator.updateSuppressionRules([
+        let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
             SuppressionRule(type: .path, value: path, expiresAt: Date().addingTimeInterval(3_600))
         ])
 
-        await localCorrelator.ingest([signal])
-        let protectedAlerts = await localCorrelator.correlateNew()
-        XCTAssertFalse(protectedAlerts.isEmpty)
+        XCTAssertFalse(store.ingest([rule.evaluate([signal])!]).visibleAlerts.isEmpty)
+    }
+
+    func test_incidentStoreDeduplicatesSameEvidenceRegardlessOfSource() {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let processSignal = makeSignal(
+            source: .process,
+            title: "Shared evidence",
+            metadata: ["reason": "shared_rule", "path": "/Users/test/shared"]
+        )
+        let filesystemSignal = makeSignal(
+            source: .filesystem,
+            title: "Shared evidence",
+            metadata: ["reason": "shared_rule", "path": "/Users/test/shared"]
+        )
+
+        _ = store.ingest([makeAlert(signal: processSignal)])
+        _ = store.ingest([makeAlert(signal: filesystemSignal)])
+
+        XCTAssertEqual(store.visibleAlerts.count, 1)
+        XCTAssertEqual(store.visibleAlerts.first?.occurrenceCount, 2)
+    }
+
+    func test_incidentLifecycleAndL0EvidenceSurviveRestart() throws {
+        let suite = "IncidentRestartTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        var alert = makeAlert(signal: makeSignedSignal(reason: "expected_action"))
+        alert.explanation = "Stored explanation"
+
+        let firstStore = IncidentStore(defaults: defaults)
+        _ = firstStore.ingest([alert])
+        firstStore.perform(.resolved, alertID: try XCTUnwrap(firstStore.visibleAlerts.first?.id))
+
+        let restored = IncidentStore(defaults: defaults)
+        let incident = try XCTUnwrap(restored.incidents.first)
+        XCTAssertEqual(incident.state, .resolved)
+        XCTAssertEqual(incident.actions.last?.action, .resolved)
+        XCTAssertEqual(incident.actions.last?.actor, .user)
+        XCTAssertEqual(incident.alert.explanation, "Stored explanation")
+        XCTAssertEqual(incident.evidence.first?.schemaVersion, Evidence.currentSchemaVersion)
+        XCTAssertEqual(incident.evidence.first?.ruleID, "expected_action")
+        XCTAssertEqual(incident.evidence.first?.parentChainIsComplete, false)
+        XCTAssertNotNil(incident.evidence.first?.signingIdentity)
+        XCTAssertNotNil(incident.evidence.first?.lifecycle)
     }
 
     // MARK: - ThreatAlert
@@ -537,6 +568,13 @@ final class ThreatCorrelatorTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func isolatedDefaults() -> UserDefaults {
+        let suite = "ThreatCorrelatorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
+    }
 
     private func makeSignal(
         source: MonitorType = .process,

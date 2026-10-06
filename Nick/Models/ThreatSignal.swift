@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import Darwin
 
 // MARK: - FileInfo
 
@@ -153,7 +154,7 @@ struct ThreatSignalContext: Sendable {
 /// legacy `ThreatSignal` conversion remains available while existing monitors
 /// migrate one at a time.
 struct Evidence: Identifiable, Sendable, Codable, Equatable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     let schemaVersion: Int
     let id: UUID
@@ -166,6 +167,9 @@ struct Evidence: Identifiable, Sendable, Codable, Equatable {
     let ruleID: String?
     let ruleTier: EvidenceRuleTier?
     let parentChain: [EvidenceAncestorIdentity]?
+    /// False while evidence is derived from the legacy single-parent metadata.
+    /// ML must not treat an incomplete chain as a stable learning key.
+    let parentChainIsComplete: Bool?
     let pathClass: EvidencePathClass?
     let destinationClass: EvidenceDestinationClass?
     let lifecycle: EvidenceLifecycle?
@@ -188,6 +192,7 @@ struct Evidence: Identifiable, Sendable, Codable, Equatable {
         ruleID: String? = nil,
         ruleTier: EvidenceRuleTier? = nil,
         parentChain: [EvidenceAncestorIdentity]? = nil,
+        parentChainIsComplete: Bool? = nil,
         pathClass: EvidencePathClass? = nil,
         destinationClass: EvidenceDestinationClass? = nil,
         lifecycle: EvidenceLifecycle? = nil,
@@ -209,6 +214,7 @@ struct Evidence: Identifiable, Sendable, Codable, Equatable {
         self.ruleID = ruleID
         self.ruleTier = ruleTier
         self.parentChain = parentChain.map { Array($0.prefix(8)) }
+        self.parentChainIsComplete = parentChainIsComplete
         self.pathClass = pathClass
         self.destinationClass = destinationClass
         self.lifecycle = lifecycle
@@ -232,10 +238,11 @@ struct Evidence: Identifiable, Sendable, Codable, Equatable {
             },
             severity: signal.severity,
             ruleClass: ruleClass,
-            ruleID: signal.metadata["rule"] ?? signal.metadata["reason"] ?? "\(signal.source.rawValue):unknown",
-            ruleTier: ruleClass == .signature ? .protectedDetection : .review,
+            ruleID: EvidenceRulePolicy.ruleID(for: signal),
+            ruleTier: EvidenceRulePolicy.tier(for: signal, ruleClass: ruleClass),
             parentChain: EvidenceAncestorIdentity.parentChain(signal: signal),
-            pathClass: EvidencePathClass(signal: signal),
+            parentChainIsComplete: false,
+            pathClass: EvidencePathClass(signal: signal, userHomePath: Self.consoleUserHomePath()),
             destinationClass: EvidenceDestinationClass(signal: signal),
             lifecycle: EvidenceLifecycle(
                 verdict: .unreviewed,
@@ -253,6 +260,14 @@ struct Evidence: Identifiable, Sendable, Codable, Equatable {
             networkInfo: signal.networkInfo,
             metadata: signal.metadata
         )
+    }
+
+    private static func consoleUserHomePath() -> String? {
+        var consoleStat = stat()
+        guard stat("/dev/console", &consoleStat) == 0,
+              let passwordEntry = getpwuid(consoleStat.st_uid),
+              let directory = passwordEntry.pointee.pw_dir else { return nil }
+        return String(cString: directory)
     }
 
     var threatSignal: ThreatSignal {
@@ -317,6 +332,38 @@ enum EvidenceRuleTier: String, Sendable, Codable {
     case protectedDetection
 }
 
+/// Fail-closed policy for future learning. Only explicitly named low-risk
+/// rules may become reviewable; unknown and security-sensitive evidence stays
+/// protected even when metadata is incomplete.
+enum EvidenceRulePolicy {
+    private static let reviewRuleIDs: Set<String> = [
+        "system_hardening",
+    ]
+
+    static func ruleID(for signal: ThreatSignal) -> String {
+        if let rule = signal.metadata["rule"], !rule.isEmpty { return rule }
+        if let reason = signal.metadata["reason"], !reason.isEmpty { return reason }
+        let normalizedTitle = signal.title.lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return "\(signal.source.rawValue):unclassified:\(normalizedTitle.isEmpty ? signal.id.uuidString : normalizedTitle)"
+    }
+
+    static func tier(for signal: ThreatSignal, ruleClass: EvidenceRuleClass) -> EvidenceRuleTier {
+        let ruleID = ruleID(for: signal)
+        let pathClass = EvidencePathClass(signal: signal, userHomePath: nil)
+        let hasHash = !(signal.fileInfo?.sha256Hash ?? signal.metadata["sha256"] ?? "").isEmpty
+        let protectedSource = signal.source == .yara || signal.source == .persistence
+        let protectedClass = ruleClass == .signature || ruleClass == .persistence || ruleClass == .integrity
+        let highRiskPath = pathClass == .temporary || pathClass == .system
+        guard !hasHash, !protectedSource, !protectedClass, !highRiskPath,
+              reviewRuleIDs.contains(ruleID) else {
+            return .protectedDetection
+        }
+        return .review
+    }
+}
+
 struct EvidenceAncestorIdentity: Sendable, Codable, Equatable {
     let executablePath: String?
     let teamID: String?
@@ -345,12 +392,13 @@ enum EvidencePathClass: String, Sendable, Codable {
     case other
     case unknown
 
-    init(signal: ThreatSignal) {
+    init(signal: ThreatSignal, userHomePath: String? = nil) {
         let path = signal.fileInfo?.path ?? signal.processInfo?.path ?? signal.metadata["path"]
         guard let path else { self = .unknown; return }
         if path.hasPrefix("/private/tmp/") || path.hasPrefix("/tmp/") || path.hasPrefix("/private/var/folders/") {
             self = .temporary
-        } else if path.hasPrefix(NSHomeDirectory() + "/") {
+        } else if let userHomePath,
+                  path == userHomePath || path.hasPrefix(userHomePath + "/") {
             self = .user
         } else if path.hasPrefix("/Applications/") {
             self = .application
@@ -377,10 +425,18 @@ enum EvidenceDestinationClass: String, Sendable, Codable {
         }
         if address == "localhost" || address.hasPrefix("127.") || address == "::1" {
             self = .local
-        } else if address.contains(":") || address.split(separator: ".").count == 4 {
+        } else if Self.isIPAddress(address) {
             self = .ipAddress
         } else {
             self = .domain
+        }
+    }
+
+    private static func isIPAddress(_ value: String) -> Bool {
+        var ipv4 = in_addr()
+        var ipv6 = in6_addr()
+        return value.withCString { pointer in
+            inet_pton(AF_INET, pointer, &ipv4) == 1 || inet_pton(AF_INET6, pointer, &ipv6) == 1
         }
     }
 }

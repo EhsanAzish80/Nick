@@ -178,11 +178,6 @@ final class SecurityEngine {
         UserDefaults.standard.removeObject(forKey: "suppressionRuleMigrationNotices")
     }
 
-    /// Short-lived acknowledgements for one exact, non-critical behavior.
-    /// These never apply to persistence, malware-rule, or critical detections.
-    private var expectedAlertCooldowns: [String: TimeInterval] =
-        UserDefaults.standard.dictionary(forKey: "nickExpectedAlertCooldowns") as? [String: TimeInterval] ?? [:]
-
     // MARK: - Overall Health Score (0–100)
 
     /// Computed security health score: 100 = all clear, 0 = critical issues.
@@ -220,6 +215,7 @@ final class SecurityEngine {
     private let netMon     = NetworkAnalyzer()
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
+    private(set) var incidentStore = IncidentStore()
 
     /// Phase 7 — Performance / disk-cleanup engine.
     private(set) var performanceMonitor: PerformanceMonitor?
@@ -248,6 +244,10 @@ final class SecurityEngine {
     // MARK: - Init
 
     init() {
+        incidentStore.configure(
+            trustedProcessList: trustedProcessList,
+            suppressionRules: suppressionRules
+        )
         deepScanner.engine = self
         procMon.processDidUpdate = { [weak self] updated in
             self?.applyResolvedProcess(updated)
@@ -262,40 +262,28 @@ final class SecurityEngine {
         totalThreatsDetected  = ud.integer(forKey: "nickTotalThreatsDetected")
         lastDeepScanDate      = ud.object(forKey: "nickLastDeepScanDate") as? Date
         lastDeepScanFileCount = ud.integer(forKey: "nickLastDeepScanFileCount")
-        let storedKeys        = ud.stringArray(forKey: "nickDismissedAlertKeys") ?? []
-        dismissedAlertKeys    = Set(storedKeys)
-
-        // Restore alerts saved from the previous session.
-        if let data = ud.data(forKey: "nickPersistedAlerts"),
-           let decoded = try? JSONDecoder().decode([ThreatAlert].self, from: data) {
-            // Drop any that were later dismissed.
-            alerts = Self.boundedPersistedAlerts(
-                decoded.filter { !dismissedAlertKeys.contains($0.deduplicationKey) }
-            )
-            logger.info("Restored \(self.alerts.count) persisted alert(s)")
-            if let encoded = try? JSONEncoder().encode(alerts) {
-                ud.set(encoded, forKey: "nickPersistedAlerts")
-            }
-        }
+        alerts = incidentStore.visibleAlerts
+        dismissedAlertKeys = Set(incidentStore.incidents.filter(\.permanentlyDismissed).map { $0.alert.deduplicationKey })
+        logger.info("Restored \(self.alerts.count) persisted incident(s)")
 
         // One-time purge: remove false-positive raw-IP alerts produced before the
         // private-network / bogus-address filters were added (v2 filter set).
         // The flag is set permanently so this runs exactly once per install.
         if !ud.bool(forKey: "nickRawIPFalsePositivePurgedV2") {
             let before = alerts.count
-            alerts.removeAll { $0.title == "Outbound connection to raw IP address" }
+            incidentStore.removeIncidents {
+                $0.alert.title == "Outbound connection to raw IP address"
+            }
+            alerts = incidentStore.visibleAlerts
             if alerts.count != before {
                 logger.info("Purged \(before - self.alerts.count) stale raw-IP false-positive alert(s)")
-                // Persist the cleaned list immediately.
-                if let encoded = try? JSONEncoder().encode(alerts) {
-                    ud.set(encoded, forKey: "nickPersistedAlerts")
-                }
             }
             ud.set(true, forKey: "nickRawIPFalsePositivePurgedV2")
         }
 
         // Phase 7: initialise performance monitor
         performanceMonitor = PerformanceMonitor()
+        rebuildUserFacingAlerts()
     }
 
     /// Mirrors asynchronous signing updates from `ProcessMonitor` into the
@@ -315,11 +303,11 @@ final class SecurityEngine {
         alerts = []
         totalThreatsDetected = 0
         dismissedAlertKeys = []
-        expectedAlertCooldowns = [:]
         UserDefaults.standard.set(0, forKey: "nickTotalThreatsDetected")
         UserDefaults.standard.removeObject(forKey: "nickDismissedAlertKeys")
         UserDefaults.standard.removeObject(forKey: "nickExpectedAlertCooldowns")
         UserDefaults.standard.removeObject(forKey: "nickPersistedAlerts")
+        incidentStore.clear()
     }
 
     /// Launches a full security scan as an independent, stored task.
@@ -342,13 +330,16 @@ final class SecurityEngine {
         lastError = nil
         logger.info("Full scan started")
 
-        // Propagate the current trusted process configuration to monitors.
+        // Propagate the current trusted process configuration to monitors and
+        // the one post-correlation policy boundary.
         procMon.trustedProcessList = trustedProcessList
-        await correlator.updateTrustedProcessList(trustedProcessList)
-        await correlator.updateSuppressionRules(suppressionRules)
+        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+
+        var genuinelyNew: [ThreatAlert] = []
 
         await startAuditor()
         guard isScanning else { return }
+        genuinelyNew += await ingestSignals(await auditor.latestSignals())
         activityLog.log(
             icon: "checkmark.shield", color: "green",
             title: "System audit complete",
@@ -357,6 +348,7 @@ final class SecurityEngine {
 
         await startPersistence()
         guard isScanning else { return }
+        genuinelyNew += await ingestSignals(await persistence.latestSignals())
         activityLog.log(
             icon: "checkmark.circle", color: "green",
             title: "Persistence check passed",
@@ -365,9 +357,11 @@ final class SecurityEngine {
 
         await startProcMon()
         guard isScanning else { return }
+        genuinelyNew += await ingestSignals(await procMon.latestSignals())
 
         await startNetMon()
         guard isScanning else { return }
+        genuinelyNew += await ingestSignals(await netMon.latestSignals())
         activityLog.log(
             icon: "network", color: "green",
             title: "Network baseline updated",
@@ -376,56 +370,15 @@ final class SecurityEngine {
 
         await startAVCapture()
         guard isScanning else { return }
-
-        // Collect signals and batch-update published state on @MainActor.
-        var allSignals: [ThreatSignal] = []
-        allSignals += await auditor.latestSignals()
-        allSignals += await persistence.latestSignals()
-        allSignals += await procMon.latestSignals()
-        allSignals += await netMon.latestSignals()
-        allSignals += await avCapture.latestSignals()
+        genuinelyNew += await ingestSignals(await avCapture.latestSignals())
 
         auditResults     = auditor.results
         persistenceItems = persistence.items
         processes        = procMon.processes
         connections      = netMon.connections
 
-        var newAlerts = await correlator.ingestAndCorrelateNew(allSignals)
-        // A repeat observation updates the existing incident. It is not another
-        // notification unless its severity has increased.
-        newAlerts.removeAll(where: shouldTemporarilySuppress)
-        let existingSeverity = Dictionary(
-            alerts.map { ($0.deduplicationKey, $0.severity) },
-            uniquingKeysWith: { max($0, $1) }
-        )
-        var genuinelyNew = newAlerts.filter { alert in
-            guard alert.severity != .info else { return false }
-            guard let priorSeverity = existingSeverity[alert.deduplicationKey] else { return true }
-            return alert.severity > priorSeverity
-        }
-        // Enrich new alerts with a plain-English explanation before surfacing them.
-        if !genuinelyNew.isEmpty {
-            for i in genuinelyNew.indices {
-                let topFeatures: [(name: String, contribution: Double)] = genuinelyNew[i]
-                    .contributingSignals.prefix(5).map {
-                        ($0.title, Double($0.severity.rawValue) / 4.0)
-                    }
-                genuinelyNew[i].explanation = await explainer.explain(
-                    alert: genuinelyNew[i],
-                    topFeatures: topFeatures
-                )
-            }
-            let explanations = Dictionary(
-                genuinelyNew.compactMap { alert in
-                    alert.explanation.map { (alert.deduplicationKey, $0) }
-                },
-                uniquingKeysWith: { _, newest in newest }
-            )
-            for i in newAlerts.indices {
-                newAlerts[i].explanation = explanations[newAlerts[i].deduplicationKey]
-            }
-        }
-        mergeAlerts(newAlerts)
+        genuinelyNew = Array(Dictionary(grouping: genuinelyNew, by: IncidentStore.incidentKey(for:))
+            .compactMap { $0.value.max(by: { $0.severity < $1.severity }) })
         for alert in genuinelyNew {
             await NotificationManager.shared.send(for: alert)
             let (fmt, outs) = buildPipeline()
@@ -467,7 +420,7 @@ final class SecurityEngine {
             )
         }
 
-        logger.info("Full scan complete — \(newAlerts.count) alerts, health: \(self.healthScore)")
+        logger.info("Full scan complete — \(genuinelyNew.count) new incidents, health: \(self.healthScore)")
     }
 
     // MARK: - Private monitor starters (for async let decomposition)
@@ -514,50 +467,57 @@ final class SecurityEngine {
         await correlator.flush()
     }
 
+    /// Shared ingestion boundary used by full scans, quick ticks, Deep Scan and
+    /// FSEvents. Correlation stays deterministic; the incident store then applies
+    /// trust, suppression and dedup exactly once and persists the explanation.
+    @discardableResult
+    func ingestSignals(_ signals: [ThreatSignal]) async -> [ThreatAlert] {
+        guard !signals.isEmpty else { return [] }
+        var candidates = await correlator.ingestAndCorrelateNew(signals.map(Evidence.init(signal:)))
+        for index in candidates.indices {
+            let topFeatures: [(name: String, contribution: Double)] = candidates[index]
+                .contributingSignals.prefix(5).map {
+                    ($0.title, Double($0.severity.rawValue) / 4.0)
+                }
+            candidates[index].explanation = await explainer.explain(
+                alert: candidates[index],
+                topFeatures: topFeatures
+            )
+        }
+        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        let result = incidentStore.ingest(candidates)
+        alerts = result.visibleAlerts
+        rebuildUserFacingAlerts()
+        return result.newlyActionable
+    }
+
     /// Adds a single alert from the real-time pipeline. Repeat evidence updates
     /// the existing incident rather than creating another card.
     @MainActor
     func addAlert(_ alert: ThreatAlert) {
-        guard !dismissedAlertKeys.contains(alert.deduplicationKey) else { return }
-        guard !shouldTemporarilySuppress(alert) else { return }
-        mergeAlerts([alert])
+        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        let result = incidentStore.ingest([alert])
+        alerts = result.visibleAlerts
+        rebuildUserFacingAlerts()
     }
 
     /// Merges new alerts from the real-time pipeline by stable incident identity.
     /// Alerts whose `deduplicationKey` has been previously dismissed are silently dropped.
     func mergeAlerts(_ newAlerts: [ThreatAlert]) {
-        // Consolidate alerts restored from older builds before adding new
-        // evidence. Their UUIDs differed even when they described one incident.
-        var consolidated: [String: ThreatAlert] = [:]
-        for existing in alerts {
-            if let prior = consolidated[existing.deduplicationKey] {
-                consolidated[existing.deduplicationKey] = prior.mergingOccurrence(existing)
-            } else {
-                consolidated[existing.deduplicationKey] = existing
-            }
-        }
-        alerts = Array(consolidated.values)
-
-        let filtered = newAlerts.filter {
-            !dismissedAlertKeys.contains($0.deduplicationKey) && !shouldTemporarilySuppress($0)
-        }
-        for candidate in filtered {
-            if let index = alerts.firstIndex(where: {
-                $0.deduplicationKey == candidate.deduplicationKey
-            }) {
-                alerts[index] = alerts[index].mergingOccurrence(candidate)
-            } else {
-                alerts.append(candidate)
-            }
-        }
-        alerts.sort { $0.score > $1.score }
-        saveAlerts()
+        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        alerts = incidentStore.ingest(newAlerts).visibleAlerts
         rebuildUserFacingAlerts()
     }
 
     private func rebuildUserFacingAlerts() {
         let builder = UserFacingAlertBuilder.shared
         userFacingAlerts = alerts.map { builder.build(from: $0) }
+    }
+
+    private func syncAlertsFromStore() {
+        alerts = incidentStore.visibleAlerts
+        dismissedAlertKeys = Set(incidentStore.incidents.filter(\.permanentlyDismissed).map { $0.alert.deduplicationKey })
+        rebuildUserFacingAlerts()
     }
 
     /// Removes a single alert by ID and persists its `deduplicationKey` so it
@@ -569,19 +529,15 @@ final class SecurityEngine {
         }
         // Record as false positive for optional local training data.
         SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-        dismissedAlertKeys.insert(alert.deduplicationKey)
-        alerts.removeAll { $0.id == id }
-        UserDefaults.standard.set(Array(dismissedAlertKeys), forKey: "nickDismissedAlertKeys")
-        saveAlerts()
-        rebuildUserFacingAlerts()
+        incidentStore.perform(.dismissed, alertID: id)
+        syncAlertsFromStore()
     }
 
     /// Hides the current alert without classifying it as a false positive or
     /// suppressing future detections of the same pattern.
     func hideAlert(_ id: UUID) {
-        alerts.removeAll { $0.id == id }
-        saveAlerts()
-        rebuildUserFacingAlerts()
+        incidentStore.perform(.hidden, alertID: id)
+        syncAlertsFromStore()
     }
 
     /// Acknowledges this exact, non-critical behavior for 24 hours. Exact malware
@@ -590,42 +546,8 @@ final class SecurityEngine {
     func allowAlertOnce(_ id: UUID) {
         guard let alert = alerts.first(where: { $0.id == id }) else { return }
         SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-        if isEligibleForExpectedCooldown(alert) {
-            expectedAlertCooldowns[alert.deduplicationKey] = Date().addingTimeInterval(86_400).timeIntervalSince1970
-            persistExpectedAlertCooldowns()
-        }
-        hideAlert(id)
-    }
-
-    private func isEligibleForExpectedCooldown(_ alert: ThreatAlert) -> Bool {
-        guard alert.severity < .critical,
-              !alert.contributingSignals.contains(where: { $0.source == .yara }) else {
-            return false
-        }
-
-        let reviewablePersistenceReasons: Set<String> = [
-            "shell_profile_modified",
-            "ssh_keys_modified",
-        ]
-        return alert.contributingSignals
-            .filter { $0.source == .persistence }
-            .allSatisfy { signal in
-                reviewablePersistenceReasons.contains(signal.metadata["reason"] ?? "")
-            }
-    }
-
-    private func shouldTemporarilySuppress(_ alert: ThreatAlert) -> Bool {
-        let now = Date().timeIntervalSince1970
-        if expectedAlertCooldowns.values.contains(where: { $0 <= now }) {
-            expectedAlertCooldowns = expectedAlertCooldowns.filter { $0.value > now }
-            persistExpectedAlertCooldowns()
-        }
-        guard isEligibleForExpectedCooldown(alert) else { return false }
-        return (expectedAlertCooldowns[alert.deduplicationKey] ?? 0) > now
-    }
-
-    private func persistExpectedAlertCooldowns() {
-        UserDefaults.standard.set(expectedAlertCooldowns, forKey: "nickExpectedAlertCooldowns")
+        incidentStore.perform(.allowedOnce, alertID: id)
+        syncAlertsFromStore()
     }
 
     /// Trusts a user-confirmed application/process for future behavioural
@@ -655,20 +577,11 @@ final class SecurityEngine {
             expiresAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
         ))
         SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-        let acceptedContext = SuppressionRule.contextFingerprint(for: alert)
         // Remove only repeats of this same behavior. Different activity from
         // the same app remains visible and reviewable.
-        alerts.removeAll { candidate in
-            SuppressionRule.contextFingerprint(for: candidate) == acceptedContext &&
-            candidate.contributingSignals.contains {
-                $0.processInfo?.name.caseInsensitiveCompare(name) == .orderedSame
-            }
-        }
-        saveAlerts()
-        rebuildUserFacingAlerts()
-        Task {
-            await correlator.updateSuppressionRules(suppressionRules)
-        }
+        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        incidentStore.perform(.alwaysAllowed, alertID: alertID)
+        syncAlertsFromStore()
     }
 
     /// Removes a resolved alert (threat was killed / deleted) without adding its
@@ -679,9 +592,8 @@ final class SecurityEngine {
             // Record as true positive for optional local training data.
             SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .truePositive)
         }
-        alerts.removeAll { $0.id == id }
-        saveAlerts()
-        rebuildUserFacingAlerts()
+        incidentStore.perform(.resolved, alertID: id)
+        syncAlertsFromStore()
     }
 
     /// Cancels an in-progress scan, clearing all progress state immediately.
@@ -697,28 +609,6 @@ final class SecurityEngine {
     }
 
     // MARK: - Private Helpers
-
-    /// Encodes the current alerts array to JSON and writes it to UserDefaults
-    /// so they survive app restarts.
-    private func saveAlerts() {
-        let bounded = Self.boundedPersistedAlerts(alerts)
-        guard let data = try? JSONEncoder().encode(bounded) else { return }
-        UserDefaults.standard.set(data, forKey: "nickPersistedAlerts")
-    }
-
-    /// UserDefaults rejects values around 4 MB. Keep only the newest alert
-    /// summaries that fit comfortably below that boundary.
-    private static func boundedPersistedAlerts(_ source: [ThreatAlert]) -> [ThreatAlert] {
-        var bounded = Array(source.sorted { $0.timestamp > $1.timestamp }.prefix(100))
-        let encoder = JSONEncoder()
-        let byteLimit = 3_000_000
-        while bounded.count > 1,
-              let data = try? encoder.encode(bounded),
-              data.count > byteLimit {
-            bounded.removeLast()
-        }
-        return bounded
-    }
 
     /// Records the completion of a YARA deep scan and persists the stats.
     func recordDeepScan(fileCount: Int) {

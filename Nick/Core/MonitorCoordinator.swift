@@ -115,12 +115,11 @@ final class MonitorCoordinator {
             let watcher = FileSystemWatcher(yaraEngine: yaraEngine) { [weak self] signal in
                 Task { [weak self] in
                     guard let self else { return }
-                    let alerts = await self.correlator.ingestAndCorrelateNew([signal])
+                    let alerts = await self.engine.ingestSignals([signal])
                     guard !alerts.isEmpty else { return }
                     for alert in alerts {
                         await NotificationManager.shared.send(for: alert)
                     }
-                    await self.addFileSystemWatcherAlerts(alerts)
                 }
             }
             watcher.startWatching()
@@ -156,11 +155,6 @@ final class MonitorCoordinator {
     }
 
     // MARK: - Private Pipeline Tick
-
-    @MainActor
-    private func addFileSystemWatcherAlerts(_ alerts: [ThreatAlert]) {
-        for alert in alerts { engine.addAlert(alert) }
-    }
 
     private func tick() async {
         // Two-tier cadence: expensive OS sweeps only every deepScanInterval.
@@ -277,7 +271,7 @@ final class MonitorCoordinator {
         guard !newSignals.isEmpty else { return }
 
         Self.log.info("Quick tick: \(newSignals.count) signal(s) from \(newPIDs.count) new PID(s)")
-        let newAlerts = await correlator.ingestAndCorrelateNew(newSignals)
+        let newAlerts = await engine.ingestSignals(newSignals)
         guard !newAlerts.isEmpty else { return }
 
         for var alert in newAlerts {
@@ -291,9 +285,6 @@ final class MonitorCoordinator {
         }
 
         await MainActor.run { [engine, newAlerts] in
-            for alert in newAlerts {
-                engine.addAlert(alert)
-            }
             engine.currentThreatScore = newAlerts.map { $0.score }.max() ?? engine.currentThreatScore
             engine.lastScanDate = Date()
         }

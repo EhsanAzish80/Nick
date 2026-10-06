@@ -44,26 +44,27 @@ enum BehavioralScorerError: LocalizedError {
 /// This infrastructure is inactive unless a production model accepting the full
 /// feature schema is present in the signed application bundle. Missing, malformed,
 /// or development/stub models cannot produce a score.
-final class BehavioralScorer: Sendable {
+final class BehavioralScorer: @unchecked Sendable {
 
     // MARK: - Private State
 
-    private let modelURL: URL?
+    private let model: MLModel?
     private static let logger = Logger(subsystem: "com.ehsanazish.nick", category: "BehavioralScorer")
 
     // MARK: - Init
 
     /// Creates a scorer that loads the model from the default bundle location.
     init() {
-        modelURL = Bundle.main.url(forResource: "ThreatScorer", withExtension: "mlmodelc")
+        let modelURL = Bundle.main.url(forResource: "ThreatScorer", withExtension: "mlmodelc")
             ?? Bundle.main.url(forResource: "ThreatScorer", withExtension: "mlmodel")
+        model = Self.loadProductionModel(at: modelURL)
     }
 
     #if DEBUG
     /// Creates a scorer from an explicit URL for tests only. Release builds can
     /// load a model only from the signed application bundle.
     init(modelURL: URL?) {
-        self.modelURL = modelURL
+        model = Self.loadProductionModel(at: modelURL)
     }
     #endif
 
@@ -77,10 +78,7 @@ final class BehavioralScorer: Sendable {
     /// A production model accepts every named `FeatureVector` input. Merely
     /// finding a file at the expected URL is not enough to activate scoring.
     var isProductionModel: Bool {
-        guard let url = modelURL,
-              let model = try? MLModel(contentsOf: url) else { return false }
-        let inputs = Set(model.modelDescription.inputDescriptionsByName.keys)
-        return Set(FeatureVector.featureNames).isSubset(of: inputs)
+        model != nil
     }
 
     /// Scores a feature vector and returns a threat probability in [0, 1].
@@ -139,17 +137,8 @@ final class BehavioralScorer: Sendable {
     /// - Note: Loads the model lazily on each call (model is cached internally by CoreML).
     ///         Separate `load()` call not required.
     private func predict(features: FeatureVector) throws -> ScoringResult {
-        guard let url = modelURL else {
+        guard let model else {
             throw BehavioralScorerError.modelNotFound
-        }
-
-        let model: MLModel
-        do {
-            let config = MLModelConfiguration()
-            config.computeUnits = .cpuOnly  // Deterministic, low latency for inference
-            model = try MLModel(contentsOf: url, configuration: config)
-        } catch {
-            throw BehavioralScorerError.modelLoadFailed(underlying: error)
         }
 
         // Build the input feature provider from the flat Double array
@@ -174,6 +163,21 @@ final class BehavioralScorer: Sendable {
         }
 
         return extractResult(from: outputProvider)
+    }
+
+    private static func loadProductionModel(at url: URL?) -> MLModel? {
+        guard let url else { return nil }
+        do {
+            let config = MLModelConfiguration()
+            config.computeUnits = .cpuOnly
+            let candidate = try MLModel(contentsOf: url, configuration: config)
+            let inputs = Set(candidate.modelDescription.inputDescriptionsByName.keys)
+            guard Set(FeatureVector.featureNames).isSubset(of: inputs) else { return nil }
+            return candidate
+        } catch {
+            logger.error("BehavioralScorer model unavailable: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     /// Extracts the threat probability from the CoreML output feature provider.
