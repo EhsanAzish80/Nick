@@ -127,6 +127,7 @@ final class ThreatSignalTests: XCTestCase {
                 ),
                 metadata: [
                     "class": "signature",
+                    "rule": "known_family_rule",
                     "device_id": "17",
                     "inode": "99",
                     "modification_time": "1234.5"
@@ -143,6 +144,15 @@ final class ThreatSignalTests: XCTestCase {
         XCTAssertEqual(decoded.schemaVersion, Evidence.currentSchemaVersion)
         XCTAssertEqual(decoded.source, .yara)
         XCTAssertEqual(decoded.ruleClass, .signature)
+        XCTAssertEqual(decoded.ruleID, "known_family_rule")
+        XCTAssertEqual(decoded.ruleTier, .protectedDetection)
+        XCTAssertEqual(decoded.signingIdentity?.kind, .unsigned)
+        XCTAssertEqual(decoded.parentChain, [])
+        XCTAssertEqual(decoded.pathClass, .temporary)
+        XCTAssertEqual(decoded.destinationClass, .unknown)
+        XCTAssertEqual(decoded.lifecycle?.verdict, .unreviewed)
+        XCTAssertEqual(decoded.lifecycle?.actor, .automatic)
+        XCTAssertEqual(decoded.lifecycle?.timestamp, observedAt)
         XCTAssertEqual(decoded.subject.kind, .file)
         XCTAssertEqual(decoded.fileIdentity?.deviceID, 17)
         XCTAssertEqual(decoded.fileIdentity?.inode, 99)

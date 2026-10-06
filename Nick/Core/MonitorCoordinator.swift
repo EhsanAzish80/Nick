@@ -7,7 +7,8 @@ import os
 
 // MARK: - MonitorCoordinator
 
-/// Owns the real-time signal pipeline that connects all monitors to the ML threat engine.
+/// Owns the real-time signal pipeline that connects app-level monitors to the
+/// deterministic correlation engine.
 ///
 /// `MonitorCoordinator` starts each monitor, merges their `ThreatSignal` outputs,
 /// feeds signals into `ThreatCorrelator`, logs alerts via `ThreatLogger`, and notifies
@@ -18,7 +19,7 @@ import os
 /// Monitors (ProcessMonitor, NetworkAnalyzer, PersistenceWatcher, SystemAuditor)
 ///       │
 ///       ▼ ThreatSignal
-/// ThreatCorrelator (CorrelationWindow → FeatureExtractor → BehavioralScorer)
+/// ThreatCorrelator (bounded evidence window → deterministic rules)
 ///       │
 ///       ▼ ThreatAlert
 /// AlertExplainer → ThreatLogger → NotificationManager → SecurityEngine (UI)

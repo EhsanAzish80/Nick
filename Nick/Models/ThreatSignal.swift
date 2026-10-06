@@ -153,15 +153,22 @@ struct ThreatSignalContext: Sendable {
 /// legacy `ThreatSignal` conversion remains available while existing monitors
 /// migrate one at a time.
 struct Evidence: Identifiable, Sendable, Codable, Equatable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     let schemaVersion: Int
     let id: UUID
     let source: MonitorType
     let subject: EvidenceSubjectIdentity
+    let signingIdentity: EvidenceSigningIdentity?
     let fileIdentity: EvidenceFileIdentity?
     let severity: SignalSeverity
     let ruleClass: EvidenceRuleClass
+    let ruleID: String?
+    let ruleTier: EvidenceRuleTier?
+    let parentChain: [EvidenceAncestorIdentity]?
+    let pathClass: EvidencePathClass?
+    let destinationClass: EvidenceDestinationClass?
+    let lifecycle: EvidenceLifecycle?
     let timestamps: EvidenceTimestamps
     let title: String
     let summary: String
@@ -174,9 +181,16 @@ struct Evidence: Identifiable, Sendable, Codable, Equatable {
         id: UUID = UUID(),
         source: MonitorType,
         subject: EvidenceSubjectIdentity,
+        signingIdentity: EvidenceSigningIdentity? = nil,
         fileIdentity: EvidenceFileIdentity? = nil,
         severity: SignalSeverity,
         ruleClass: EvidenceRuleClass,
+        ruleID: String? = nil,
+        ruleTier: EvidenceRuleTier? = nil,
+        parentChain: [EvidenceAncestorIdentity]? = nil,
+        pathClass: EvidencePathClass? = nil,
+        destinationClass: EvidenceDestinationClass? = nil,
+        lifecycle: EvidenceLifecycle? = nil,
         timestamps: EvidenceTimestamps = EvidenceTimestamps(),
         title: String,
         summary: String,
@@ -188,9 +202,16 @@ struct Evidence: Identifiable, Sendable, Codable, Equatable {
         self.id = id
         self.source = source
         self.subject = subject
+        self.signingIdentity = signingIdentity
         self.fileIdentity = fileIdentity
         self.severity = severity
         self.ruleClass = ruleClass
+        self.ruleID = ruleID
+        self.ruleTier = ruleTier
+        self.parentChain = parentChain.map { Array($0.prefix(8)) }
+        self.pathClass = pathClass
+        self.destinationClass = destinationClass
+        self.lifecycle = lifecycle
         self.timestamps = timestamps
         self.title = title
         self.summary = summary
@@ -200,15 +221,27 @@ struct Evidence: Identifiable, Sendable, Codable, Equatable {
     }
 
     init(signal: ThreatSignal) {
+        let ruleClass = EvidenceRuleClass(signal: signal)
         self.init(
             id: signal.id,
             source: signal.source,
             subject: EvidenceSubjectIdentity(signal: signal),
+            signingIdentity: EvidenceSigningIdentity(signal: signal),
             fileIdentity: signal.fileInfo.map {
                 EvidenceFileIdentity(fileInfo: $0, metadata: signal.metadata)
             },
             severity: signal.severity,
-            ruleClass: EvidenceRuleClass(signal: signal),
+            ruleClass: ruleClass,
+            ruleID: signal.metadata["rule"] ?? signal.metadata["reason"] ?? "\(signal.source.rawValue):unknown",
+            ruleTier: ruleClass == .signature ? .protectedDetection : .review,
+            parentChain: EvidenceAncestorIdentity.parentChain(signal: signal),
+            pathClass: EvidencePathClass(signal: signal),
+            destinationClass: EvidenceDestinationClass(signal: signal),
+            lifecycle: EvidenceLifecycle(
+                verdict: .unreviewed,
+                actor: .automatic,
+                timestamp: signal.timestamp
+            ),
             timestamps: EvidenceTimestamps(
                 observedAt: signal.timestamp,
                 firstSeen: signal.timestamp,
@@ -238,6 +271,137 @@ struct Evidence: Identifiable, Sendable, Codable, Equatable {
             )
         )
     }
+}
+
+enum EvidenceSigningKind: String, Sendable, Codable {
+    case signed
+    case adHoc
+    case unsigned
+    case invalid
+    case unknown
+    case pending
+}
+
+/// Explicit signing state used by future learning gates. Unsigned and ad-hoc
+/// subjects are values, not an ambiguous absence of identity.
+struct EvidenceSigningIdentity: Sendable, Codable, Equatable {
+    let kind: EvidenceSigningKind
+    let teamID: String?
+    let signingIdentifier: String?
+
+    init(kind: EvidenceSigningKind, teamID: String? = nil, signingIdentifier: String? = nil) {
+        self.kind = kind
+        self.teamID = teamID
+        self.signingIdentifier = signingIdentifier
+    }
+
+    init(signal: ThreatSignal) {
+        guard let status = signal.processInfo?.signingStatus ?? signal.fileInfo?.signingStatus else {
+            self.init(kind: .unknown)
+            return
+        }
+        switch status {
+        case .signed(let teamID, let signingID):
+            self.init(kind: .signed, teamID: teamID, signingIdentifier: signingID)
+        case .adHoc: self.init(kind: .adHoc)
+        case .unsigned: self.init(kind: .unsigned)
+        case .invalid: self.init(kind: .invalid)
+        case .unknown: self.init(kind: .unknown)
+        case .pending: self.init(kind: .pending)
+        }
+    }
+}
+
+enum EvidenceRuleTier: String, Sendable, Codable {
+    case review
+    case protectedDetection
+}
+
+struct EvidenceAncestorIdentity: Sendable, Codable, Equatable {
+    let executablePath: String?
+    let teamID: String?
+    let signingIdentifier: String?
+
+    static func parentChain(signal: ThreatSignal) -> [EvidenceAncestorIdentity] {
+        guard signal.processInfo != nil else { return [] }
+        let ancestor = EvidenceAncestorIdentity(
+            executablePath: signal.metadata["parent_path"],
+            teamID: signal.metadata["parent_team_id"],
+            signingIdentifier: signal.metadata["parent_signing_id"]
+        )
+        guard ancestor.executablePath != nil || ancestor.teamID != nil || ancestor.signingIdentifier != nil else {
+            return []
+        }
+        return [ancestor]
+    }
+}
+
+enum EvidencePathClass: String, Sendable, Codable {
+    case temporary
+    case user
+    case application
+    case system
+    case volume
+    case other
+    case unknown
+
+    init(signal: ThreatSignal) {
+        let path = signal.fileInfo?.path ?? signal.processInfo?.path ?? signal.metadata["path"]
+        guard let path else { self = .unknown; return }
+        if path.hasPrefix("/private/tmp/") || path.hasPrefix("/tmp/") || path.hasPrefix("/private/var/folders/") {
+            self = .temporary
+        } else if path.hasPrefix(NSHomeDirectory() + "/") {
+            self = .user
+        } else if path.hasPrefix("/Applications/") {
+            self = .application
+        } else if path.hasPrefix("/System/") || path.hasPrefix("/usr/") || path.hasPrefix("/private/etc/") {
+            self = .system
+        } else if path.hasPrefix("/Volumes/") {
+            self = .volume
+        } else {
+            self = .other
+        }
+    }
+}
+
+enum EvidenceDestinationClass: String, Sendable, Codable {
+    case local
+    case domain
+    case ipAddress
+    case unknown
+
+    init(signal: ThreatSignal) {
+        guard let address = signal.networkInfo?.remoteAddress, !address.isEmpty else {
+            self = .unknown
+            return
+        }
+        if address == "localhost" || address.hasPrefix("127.") || address == "::1" {
+            self = .local
+        } else if address.contains(":") || address.split(separator: ".").count == 4 {
+            self = .ipAddress
+        } else {
+            self = .domain
+        }
+    }
+}
+
+enum EvidenceVerdict: String, Sendable, Codable {
+    case unreviewed
+    case allowed
+    case dismissed
+    case quarantined
+}
+
+enum EvidenceVerdictActor: String, Sendable, Codable {
+    case user
+    case automatic
+    case migration
+}
+
+struct EvidenceLifecycle: Sendable, Codable, Equatable {
+    let verdict: EvidenceVerdict
+    let actor: EvidenceVerdictActor
+    let timestamp: Date
 }
 
 enum EvidenceSubjectKind: String, Sendable, Codable {

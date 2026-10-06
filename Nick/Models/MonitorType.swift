@@ -33,7 +33,7 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
     /// Signals from `SystemAuditor` — SIP, FileVault, Gatekeeper, firewall state.
     case systemAudit = "systemAudit"
 
-    /// Signals from the CoreML `BehavioralScorer` — correlated anomaly patterns.
+    /// Rule-based behavioral signals. The inactive Core ML scorer does not emit these.
     case behavioral = "behavioral"
 
     /// Signals from `AVCaptureMonitor` — camera and microphone activation by unexpected processes.
