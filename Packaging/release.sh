@@ -9,14 +9,14 @@ PROJECT_DIR=${SCRIPT_DIR:h}
 # Use /private/tmp explicitly. The per-user TMPDIR lives under a managed
 # filesystem on current macOS builds and can synthesize AppleDouble sidecars
 # while pkgbuild walks signed bundles.
-BUILD_DIR=${BUILD_DIR:-"/private/tmp/NickReleaseBuild"}
+BUILD_DIR=${BUILD_DIR:-$(mktemp -d /private/tmp/NickReleaseBuild.XXXXXX)}
 ARCHIVE_PATH=${ARCHIVE_PATH:-"${BUILD_DIR}/Nick.xcarchive"}
 DERIVED_DATA_PATH=${DERIVED_DATA_PATH:-"${BUILD_DIR}/DerivedData"}
 EXPECTED_VERSION=${EXPECTED_VERSION:-4.6.3}
 EXPECTED_BUILD=${EXPECTED_BUILD:-430}
 OUTPUT_PATH=${OUTPUT_PATH:-"${BUILD_DIR}/Nick-${EXPECTED_VERSION}-build-${EXPECTED_BUILD}.pkg"}
 LOCAL_PACKAGE_PATH=${LOCAL_PACKAGE_PATH:-"${BUILD_DIR}/Nick-${EXPECTED_VERSION}-build-${EXPECTED_BUILD}.pkg"}
-STAGING_DIR=${STAGING_DIR:-"/private/tmp/NickReleaseStaging"}
+STAGING_DIR=${STAGING_DIR:-"${BUILD_DIR}/Staging"}
 APP_SIGNING_IDENTITY=${APP_SIGNING_IDENTITY:-"Developer ID Application: ehsan azish (UXGW5V3BY6)"}
 INSTALLER_SIGNING_IDENTITY=${INSTALLER_SIGNING_IDENTITY:-"Developer ID Installer: ehsan azish (UXGW5V3BY6)"}
 NOTARY_PROFILE=${NOTARY_PROFILE:-NickNotary}
@@ -152,3 +152,9 @@ print "Sparkle enclosure attributes:"
 "${SPARKLE_BIN}/sign_update" --account "${SPARKLE_ACCOUNT}" "${OUTPUT_PATH}"
 print
 shasum -a 256 "${OUTPUT_PATH}"
+
+if [[ "${VALIDATE_LIVE_APPCAST:-0}" == "1" ]]; then
+  "${SCRIPT_DIR}/validate-live-appcast.sh" \
+    "${LIVE_APPCAST_URL:-https://3nsofts.com/nick/appcast.xml}" \
+    "${EXPECTED_BUILD}"
+fi
