@@ -136,7 +136,8 @@ generation is unavailable, Nick uses a deterministic template.
 | `NickExtension` | Endpoint Security events, authorization decisions, file scanning, ransomware/FIM/privacy/email/USB monitoring, and quarantine. |
 | `NickNetFilter` | Observation-only socket-flow classification and bounded local event storage. |
 | `RuntimeCompare` | Local before-and-after snapshots, comparison, sanitization, and export. |
-| `AlertExplainer` | Human-readable explanation using Apple Foundation Models; no detection or enforcement authority. |
+| `AlertExplainer` | Human-readable explanation using Apple Foundation Models; untrusted context is bounded and delimited, and generated text has no detection or enforcement authority. |
+| `SignalTelemetry` | Optional, size-capped local JSONL export. It is off by default, user-writable, and never read as detection or learning input. |
 
 ## Apple frameworks and system APIs
 
@@ -146,8 +147,10 @@ Security, CryptoKit, Foundation Models, User Notifications, AVFoundation,
 CoreMediaIO, CoreAudio, IOKit, FSEvents/CoreServices, SQLite, and BSD/Darwin
 process and filesystem APIs. Sparkle supplies signed application updates.
 
-Core ML is present in inactive behavioral-scoring infrastructure; it is not used
-by the live correlation path.
+Core ML is present in inactive behavioral-scoring infrastructure. No production
+model is bundled, Release builds can load only from the signed app bundle, and
+missing or non-production models cannot return a score. The live correlation
+path does not construct or invoke the scorer.
 
 ## Privileges and permissions
 
@@ -225,7 +228,8 @@ until the user exports it.
 The repository contains code that is not part of the current live product path:
 
 - `BehavioralScorer`, feature extraction, and Core ML integration: no trained
-  production model is bundled and the correlator does not invoke the scorer.
+  production model is bundled; non-production models fail closed; and the
+  correlator does not invoke the scorer.
 - `NickHelper`: the read-only helper target exists, but current builds do not
   embed its LaunchDaemon definition and the app has no live helper XPC client.
 - `CloudIntelService`: hash lookup and update code exists but is not constructed
