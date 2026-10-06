@@ -14,9 +14,9 @@ import os
 /// `docs/FALSE_POSITIVE_MATRIX.md`. It combines a hardcoded built-in set with a
 /// user-configurable set that persists via `AppSettings`.
 ///
-/// Only `UserEntry.identity` participates in security decisions. Legacy and
-/// built-in names remain available for migration and display, but never grant
-/// a severity downgrade by themselves.
+/// Only exact signing identities participate in security decisions. Legacy
+/// names remain available for migration and display, but never grant a
+/// severity downgrade by themselves.
 ///
 /// - Note: Trusting a process suppresses Nick's behavioural alerts for that process.
 ///   Users should only add processes they have personally verified. Legitimate software
@@ -92,6 +92,33 @@ struct TrustedProcessList {
         "Finder",
     ]
 
+    /// Conservative identities whose normal behavior otherwise creates noisy
+    /// developer-workflow alerts. Names are deliberately not consulted.
+    static let builtInIdentities: Set<SigningIdentity> = [
+        SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal"),
+        SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.finder"),
+        SigningIdentity(teamID: "59GAB85EFG", signingID: "com.apple.dt.Xcode"),
+        SigningIdentity(teamID: "H7V7XYVQ7D", signingID: "com.googlecode.iterm2"),
+        SigningIdentity(teamID: "EQHXZ8M8AV", signingID: "com.microsoft.VSCode"),
+        SigningIdentity(teamID: "EQHXZ8M8AV", signingID: "com.microsoft.VSCode.helper"),
+        SigningIdentity(teamID: "EQHXZ8M8AV", signingID: "com.microsoft.VSCode.helper.Plugin"),
+        SigningIdentity(teamID: "EQHXZ8M8AV", signingID: "com.microsoft.VSCode.helper.Renderer")
+    ]
+
+    /// Interpreters and general-purpose tools execute caller-controlled input.
+    /// Trusting their signature would implicitly trust every script they run.
+    private static let forbiddenSigningIDs: Set<String> = [
+        "com.apple.bash", "com.apple.zsh", "com.apple.sh",
+        "com.apple.osascript", "com.apple.curl", "com.apple.ssh",
+        "com.apple.dt.xcode_select.tool-shim-public",
+        "org.nodejs.node", "org.python.python"
+    ]
+
+    private static let forbiddenExecutableNames: Set<String> = [
+        "bash", "zsh", "sh", "dash", "fish", "python", "python3",
+        "ruby", "perl", "osascript", "curl", "node", "deno", "bun"
+    ]
+
     // MARK: - Private State
 
     /// User-added process names, loaded from `AppSettings`.
@@ -147,14 +174,30 @@ struct TrustedProcessList {
     /// display labels only and never grant a severity downgrade.
     func isTrusted(_ process: NickProcessInfo) -> Bool {
         guard let identity = SigningIdentity(status: process.signingStatus) else { return false }
-        return userEntries.contains { $0.identity == identity }
+        guard Self.trustRejectionReason(for: process) == nil else { return false }
+        return Self.builtInIdentities.contains(identity)
+            || userEntries.contains { $0.identity == identity }
     }
 
     mutating func addUserTrusted(_ process: NickProcessInfo) -> Bool {
         guard let identity = SigningIdentity(status: process.signingStatus) else { return false }
+        guard Self.trustRejectionReason(for: process) == nil else { return false }
         userEntries.insert(UserEntry(displayName: process.name, identity: identity))
         userTrusted.remove(process.name)
         return true
+    }
+
+    static func trustRejectionReason(for process: NickProcessInfo) -> String? {
+        guard let identity = SigningIdentity(status: process.signingStatus) else {
+            return "Nick could not verify this process's signing identity."
+        }
+        let executableName = URL(fileURLWithPath: process.path).lastPathComponent.lowercased()
+        if forbiddenSigningIDs.contains(identity.signingID)
+            || forbiddenExecutableNames.contains(executableName)
+            || forbiddenExecutableNames.contains(process.name.lowercased()) {
+            return "Interpreters and command-line tools cannot be trusted because they can run untrusted scripts or commands."
+        }
+        return nil
     }
 
     mutating func removeUserEntry(_ entry: UserEntry) {

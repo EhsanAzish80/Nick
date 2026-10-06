@@ -57,6 +57,13 @@ final class SignatureValidatorPolicyTests: XCTestCase {
         XCTAssertTrue(SignatureValidator.isSealedSystemBinaryPath("/sbin/mount"))
     }
 
+    func test_sealedSystemBinaryPreservesSigningIdentifier() {
+        XCTAssertEqual(
+            SignatureValidator.shared.evaluate(binaryPath: "/bin/zsh"),
+            .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+    }
+
     func test_writableAndThirdPartyLocationsStillRequireValidation() {
         XCTAssertFalse(SignatureValidator.isSealedSystemBinaryPath(
             "/Applications/Example.app/Contents/MacOS/Example"

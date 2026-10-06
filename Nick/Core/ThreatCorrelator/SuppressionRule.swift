@@ -11,7 +11,7 @@ enum SuppressionType: String, Codable, CaseIterable {
     /// Suppress all alerts whose contributing signals originate from this process name.
     case processName
     /// Suppress behavioral alerts from one signed executable identity.
-    /// The stored value is `teamID|standardizedExecutablePath`.
+    /// The stored value is `teamID|signingIdentifier`.
     case signedProcess
     /// Suppress all alerts whose contributing signals reference this file path prefix.
     case path
@@ -78,5 +78,56 @@ struct SuppressionRule: Codable, Identifiable, Equatable {
             return "\(signal.source.rawValue):\(reason.lowercased())"
         }.sorted()
         return ([alert.title.lowercased()] + signalContexts).joined(separator: "|")
+    }
+}
+
+extension SuppressionRule {
+    struct MigrationResult {
+        let rules: [SuppressionRule]
+        let notices: [String]
+        let changed: Bool
+    }
+
+    /// Converts the pre-5.0 `teamID|executablePath` representation to the
+    /// stable `teamID|signingIdentifier` representation. An unresolved legacy
+    /// suppression is dropped fail-closed and surfaced for review.
+    static func migrateLegacySignedProcessRules(
+        _ rules: [SuppressionRule],
+        signingStatus: (String) -> SigningStatus
+    ) -> MigrationResult {
+        var migrated: [SuppressionRule] = []
+        var notices: [String] = []
+        var changed = false
+
+        for var rule in rules {
+            guard rule.type == .signedProcess else {
+                migrated.append(rule)
+                continue
+            }
+            let components = rule.value.split(
+                separator: "|", maxSplits: 1, omittingEmptySubsequences: false
+            )
+            guard components.count == 2 else {
+                migrated.append(rule)
+                continue
+            }
+            let teamID = String(components[0]).trimmingCharacters(in: .whitespaces)
+            let legacyPath = String(components[1]).trimmingCharacters(in: .whitespaces)
+            guard legacyPath.hasPrefix("/") else {
+                migrated.append(rule)
+                continue
+            }
+
+            guard let identity = SigningIdentity(status: signingStatus(legacyPath)),
+                  identity.teamID.caseInsensitiveCompare(teamID) == .orderedSame else {
+                notices.append("Removed the old signed-app suppression for \(legacyPath) because its signing identity could not be verified.")
+                changed = true
+                continue
+            }
+            rule.value = "\(identity.teamID)|\(identity.signingID)"
+            migrated.append(rule)
+            changed = true
+        }
+        return MigrationResult(rules: migrated, notices: notices, changed: changed)
     }
 }

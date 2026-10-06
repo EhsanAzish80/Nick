@@ -71,7 +71,7 @@ final class SignatureValidator: @unchecked Sendable {
         // validation for every Apple daemon during each process snapshot.
         // Writable and third-party locations still receive the full check.
         let result: SigningStatus = Self.isSealedSystemBinaryPath(binaryPath)
-            ? .signed(teamID: "APPLE_PLATFORM")
+            ? sealedSystemSigningStatus(path: binaryPath)
             : performStaticCheck(path: binaryPath)
 
         lock.lock()
@@ -161,6 +161,26 @@ final class SignatureValidator: @unchecked Sendable {
     }
 
     // MARK: - Private Helpers
+
+    /// The sealed system volume already supplies the integrity boundary, but
+    /// trust decisions still need the stable signing identifier. Reading the
+    /// identifier does not perform the expensive certificate/resource check.
+    private func sealedSystemSigningStatus(path: String) -> SigningStatus {
+        let url = URL(fileURLWithPath: path) as CFURL
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url, [], &staticCode) == errSecSuccess,
+              let staticCode else { return .unknown }
+
+        var info: CFDictionary?
+        let flags = SecCSFlags(rawValue: kSecCSSigningInformation)
+        guard SecCodeCopySigningInformation(staticCode, flags, &info) == errSecSuccess,
+              let dictionary = info as? [String: Any],
+              let signingID = dictionary[kSecCodeInfoIdentifier as String] as? String,
+              !signingID.isEmpty else {
+            return .signed(teamID: "APPLE_PLATFORM")
+        }
+        return .signed(teamID: "APPLE_PLATFORM", signingID: signingID)
+    }
 
     private func performStaticCheck(path: String) -> SigningStatus {
         let url = URL(fileURLWithPath: path) as CFURL

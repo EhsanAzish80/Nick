@@ -178,4 +178,42 @@ final class TrustedProcessListTests: XCTestCase {
         XCTAssertTrue(sut.isTrusted("Tool"))
         XCTAssertFalse(sut.isTrusted(process))
     }
+
+    func test_builtinTrustRequiresExactIdentity() {
+        let terminal = NickProcessInfo(
+            pid: 20, path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+            name: "Terminal", parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal")
+        )
+        let impersonator = NickProcessInfo(
+            pid: 21, path: "/tmp/Terminal", name: "Terminal",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "OTHER", signingID: "com.apple.Terminal")
+        )
+        let sut = TrustedProcessList()
+        XCTAssertTrue(sut.isTrusted(terminal))
+        XCTAssertFalse(sut.isTrusted(impersonator))
+    }
+
+    func test_interpreterCannotBeUserTrusted() {
+        let shell = NickProcessInfo(
+            pid: 22, path: "/bin/zsh", name: "zsh",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+        var sut = TrustedProcessList()
+        XCTAssertFalse(sut.addUserTrusted(shell))
+        XCTAssertFalse(sut.isTrusted(shell))
+        XCTAssertNotNil(TrustedProcessList.trustRejectionReason(for: shell))
+    }
+
+    func test_forbiddenIdentityCannotUseBenignDisplayName() {
+        let renamedShell = NickProcessInfo(
+            pid: 23, path: "/bin/zsh", name: "Build Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+        var sut = TrustedProcessList()
+        XCTAssertFalse(sut.addUserTrusted(renamedShell))
+    }
 }

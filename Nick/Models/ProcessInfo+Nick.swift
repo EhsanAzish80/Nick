@@ -117,6 +117,11 @@ struct SigningIdentity: Codable, Hashable, Sendable {
     let teamID: String
     let signingID: String
 
+    init(teamID: String, signingID: String) {
+        self.teamID = teamID
+        self.signingID = signingID
+    }
+
     init?(status: SigningStatus) {
         guard case .signed(let teamID, let signingID?) = status,
               !teamID.isEmpty, !signingID.isEmpty else { return nil }

@@ -633,6 +633,8 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            legacyTrustedProcessContent
+
             userListContent
             .confirmationDialog(
                 "Remove \"\(nameToRemove ?? "")\" from trusted processes?",
@@ -653,6 +655,30 @@ struct SettingsView: View {
             Text("Add a currently running, signed process. Trust is bound to its exact Team ID and signing identifier; its name alone is never trusted.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var legacyTrustedProcessContent: some View {
+        let names = engine.trustedProcessList.userTrustedNames()
+        if !names.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Previous name-only trust entries need approval", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.orange)
+                Text("Names alone are no longer trusted. Run each app, then approve its verified signing identity.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                ForEach(names, id: \.self) { name in
+                    HStack {
+                        Text(name).font(.system(size: 12.5))
+                        Spacer()
+                        Button("Re-approve") { reapproveLegacyProcess(name) }
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
         }
     }
 
@@ -694,6 +720,11 @@ struct SettingsView: View {
 
     private var suppressionRulesSection: some View {
         Section {
+            ForEach(engine.suppressionRuleMigrationNotices, id: \.self) { notice in
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.orange)
+            }
             if !engine.suppressionRules.isEmpty {
                 ForEach(engine.suppressionRules) { rule in
                     HStack(spacing: 10) {
@@ -769,7 +800,7 @@ struct SettingsView: View {
         case .processName: return "e.g. xcodebuild"
         case .path:        return "e.g. /usr/local/bin/tool"
         case .ruleName:    return "e.g. raw_ip_outbound"
-        case .signedProcess: return "Team ID | executable path"
+        case .signedProcess: return "Team ID | signing identifier"
         }
     }
 
@@ -1031,10 +1062,22 @@ struct SettingsView: View {
                 : "More than one signing identity uses that name. Enter a more specific running process name."
             return
         }
+        if let reason = TrustedProcessList.trustRejectionReason(for: process) {
+            trustedProcessStatus = reason
+            return
+        }
         @Bindable var bindableEngine = engine
-        guard bindableEngine.trustedProcessList.addUserTrusted(process) else { return }
+        guard bindableEngine.trustedProcessList.addUserTrusted(process) else {
+            trustedProcessStatus = "Nick could not approve this process."
+            return
+        }
         trustedProcessStatus = "Trusted \(process.name) by its verified signing identity."
         newProcessName = ""
+    }
+
+    private func reapproveLegacyProcess(_ name: String) {
+        newProcessName = name
+        addProcess()
     }
 
     private func addAllowedDomain() {

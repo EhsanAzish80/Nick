@@ -153,13 +153,29 @@ final class SecurityEngine {
     var suppressionRules: [SuppressionRule] = {
         guard let data = UserDefaults.standard.data(forKey: "suppressionRulesData"),
               let rules = try? JSONDecoder().decode([SuppressionRule].self, from: data) else { return [] }
-        return rules
+        let result = SuppressionRule.migrateLegacySignedProcessRules(rules) {
+            SignatureValidator.shared.evaluate(binaryPath: $0)
+        }
+        if result.changed,
+           let migratedData = try? JSONEncoder().encode(result.rules) {
+            UserDefaults.standard.set(migratedData, forKey: "suppressionRulesData")
+        }
+        UserDefaults.standard.set(result.notices, forKey: "suppressionRuleMigrationNotices")
+        return result.rules
     }() {
         didSet {
             if let data = try? JSONEncoder().encode(suppressionRules) {
                 UserDefaults.standard.set(data, forKey: "suppressionRulesData")
             }
         }
+    }
+
+    var suppressionRuleMigrationNotices: [String] {
+        UserDefaults.standard.stringArray(forKey: "suppressionRuleMigrationNotices") ?? []
+    }
+
+    func dismissSuppressionMigrationNotices() {
+        UserDefaults.standard.removeObject(forKey: "suppressionRuleMigrationNotices")
     }
 
     /// Short-lived acknowledgements for one exact, non-critical behavior.

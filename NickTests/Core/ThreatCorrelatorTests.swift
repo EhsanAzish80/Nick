@@ -10,6 +10,30 @@ import XCTest
 /// Unit tests for `ThreatCorrelator`, `CorrelationRule`, and `ThreatAlert`.
 final class ThreatCorrelatorTests: XCTestCase {
 
+    func test_legacySignedSuppressionMigratesFromPathToIdentity() {
+        let original = SuppressionRule(
+            type: .signedProcess,
+            value: "TEAM123|/Applications/Tool.app/Contents/MacOS/Tool"
+        )
+        let result = SuppressionRule.migrateLegacySignedProcessRules([original]) { _ in
+            .signed(teamID: "TEAM123", signingID: "com.example.tool")
+        }
+
+        XCTAssertTrue(result.changed)
+        XCTAssertEqual(result.rules.first?.value, "TEAM123|com.example.tool")
+        XCTAssertTrue(result.notices.isEmpty)
+    }
+
+    func test_unresolvedLegacySignedSuppressionIsDroppedAndReported() {
+        let value = "TEAM123|/Applications/Missing.app/Contents/MacOS/Missing"
+        let original = SuppressionRule(type: .signedProcess, value: value)
+        let result = SuppressionRule.migrateLegacySignedProcessRules([original]) { _ in .unknown }
+
+        XCTAssertTrue(result.changed)
+        XCTAssertTrue(result.rules.isEmpty)
+        XCTAssertEqual(result.notices.count, 1)
+    }
+
     private var correlator: ThreatCorrelator!
 
     override func setUp() async throws {
