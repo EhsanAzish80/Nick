@@ -263,7 +263,7 @@ final class SecurityEngine {
         lastDeepScanDate      = ud.object(forKey: "nickLastDeepScanDate") as? Date
         lastDeepScanFileCount = ud.integer(forKey: "nickLastDeepScanFileCount")
         alerts = incidentStore.visibleAlerts
-        dismissedAlertKeys = Set(incidentStore.incidents.filter(\.permanentlyDismissed).map { $0.alert.deduplicationKey })
+        dismissedAlertKeys = incidentStore.dismissedAlertDeduplicationKeys
         logger.info("Restored \(self.alerts.count) persisted incident(s)")
 
         // One-time purge: remove false-positive raw-IP alerts produced before the
@@ -516,7 +516,7 @@ final class SecurityEngine {
 
     private func syncAlertsFromStore() {
         alerts = incidentStore.visibleAlerts
-        dismissedAlertKeys = Set(incidentStore.incidents.filter(\.permanentlyDismissed).map { $0.alert.deduplicationKey })
+        dismissedAlertKeys = incidentStore.dismissedAlertDeduplicationKeys
         rebuildUserFacingAlerts()
     }
 

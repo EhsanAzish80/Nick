@@ -285,7 +285,7 @@ final class ThreatCorrelatorTests: XCTestCase {
 
     func test_learnedApproval_suppressesOnlySameSignedBehavior() async {
         let rule = passthroughRule()
-        let approved = makeSignedSignal(reason: "expected_action")
+        let approved = makeSignedSignal(reason: "system_hardening")
         let approvedAlert = rule.evaluate([approved])!
         let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
             SuppressionRule(
@@ -349,6 +349,148 @@ final class ThreatCorrelatorTests: XCTestCase {
         ])
 
         XCTAssertFalse(store.ingest([rule.evaluate([signal])!]).visibleAlerts.isEmpty)
+    }
+
+    func test_trustedProcessCannotDowngradeProtectedHashEvidence() throws {
+        let process = NickProcessInfo(
+            pid: 42,
+            path: "/Applications/Safari.app/Contents/MacOS/Safari",
+            name: "Safari",
+            parentPID: 1,
+            parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.Safari")
+        )
+        let signal = ThreatSignal(
+            source: .filesystem,
+            severity: .high,
+            title: "Known malicious hash",
+            description: "Test protected hash evidence",
+            context: ThreatSignalContext(
+                processInfo: process,
+                fileInfo: FileInfo(
+                    path: "/Users/test/Downloads/payload",
+                    sha256Hash: String(repeating: "a", count: 64),
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: 128
+                ),
+                metadata: ["reason": "hash_match"]
+            )
+        )
+        let trusted = TrustedProcessList(userEntries: [
+            .init(
+                displayName: "Safari",
+                identity: SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.Safari")
+            )
+        ])
+        let store = IncidentStore(defaults: isolatedDefaults(), trustedProcessList: trusted)
+
+        let result = store.ingest([makeAlert(signal: signal, severity: .high)])
+
+        XCTAssertEqual(try XCTUnwrap(result.visibleAlerts.first).severity, .high)
+        XCTAssertEqual(result.newlyActionable.count, 1)
+    }
+
+    func test_pathRuleCannotSuppressProtectedIntegrityEvidence() {
+        let path = "/Users/test/Library/LaunchAgents/com.example.payload.plist"
+        let signal = makeSignal(
+            source: .filesystem,
+            severity: .medium,
+            metadata: ["reason": "integrity_change", "class": "integrity", "path": path]
+        )
+        let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
+            SuppressionRule(type: .path, value: path, expiresAt: Date().addingTimeInterval(3_600))
+        ])
+
+        XCTAssertEqual(store.ingest([makeAlert(signal: signal)]).visibleAlerts.count, 1)
+    }
+
+    func test_retentionKeepsUnresolvedCriticalIncidentAcrossNoiseAndRestart() throws {
+        let suite = "IncidentPriorityRetentionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        let store = IncidentStore(defaults: defaults)
+        let critical = makeAlert(
+            signal: makeSignal(
+                severity: .critical,
+                title: "Critical evidence",
+                metadata: ["reason": "critical_evidence", "path": "/private/tmp/critical"]
+            ),
+            severity: .critical
+        )
+        _ = store.ingest([critical])
+
+        for index in 0..<150 {
+            let noise = makeSignal(
+                severity: .info,
+                title: "Noise \(index)",
+                metadata: ["reason": "noise_\(index)", "path": "/private/tmp/noise-\(index)"]
+            )
+            _ = store.ingest([makeAlert(signal: noise, severity: .info)])
+        }
+
+        let restored = IncidentStore(defaults: defaults)
+        XCTAssertEqual(restored.incidents.count, IncidentStore.maximumPersistedIncidents)
+        XCTAssertTrue(restored.incidents.contains { $0.alert.severity == .critical })
+    }
+
+    func test_dismissalTombstoneSurvivesIncidentRetentionNoise() throws {
+        let suite = "IncidentDismissalRetentionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        let dismissedAlert = makeAlert(signal: makeSignal(
+            metadata: ["reason": "dismissed_behavior", "path": "/Users/test/dismissed"]
+        ))
+        let store = IncidentStore(defaults: defaults)
+        _ = store.ingest([dismissedAlert])
+        store.perform(.dismissed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
+
+        for index in 0..<150 {
+            let noise = makeSignal(
+                severity: .info,
+                title: "Noise \(index)",
+                metadata: ["reason": "noise_\(index)", "path": "/private/tmp/noise-\(index)"]
+            )
+            _ = store.ingest([makeAlert(signal: noise, severity: .info)])
+        }
+
+        let restored = IncidentStore(defaults: defaults)
+        let result = restored.ingest([dismissedAlert])
+        XCTAssertTrue(result.visibleAlerts.allSatisfy { $0.deduplicationKey != dismissedAlert.deduplicationKey })
+        XCTAssertTrue(restored.dismissedAlertDeduplicationKeys.contains(dismissedAlert.deduplicationKey))
+    }
+
+    func test_repeatSameSubjectPreservesReviewUntilSeverityEscalates() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let first = makeAlert(signal: makeSignal(
+            metadata: ["reason": "repeat_behavior", "path": "/Users/test/repeated"]
+        ))
+        _ = store.ingest([first])
+        store.perform(.reviewed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
+
+        let repeated = makeAlert(signal: makeSignal(
+            metadata: ["reason": "repeat_behavior", "path": "/Users/test/repeated"]
+        ))
+        _ = store.ingest([repeated])
+
+        var incident = try XCTUnwrap(store.incidents.first)
+        XCTAssertEqual(incident.state, .reviewed)
+        XCTAssertEqual(incident.alert.occurrenceCount, 2)
+        XCTAssertEqual(incident.actions.first(where: { $0.action == .detected })?.count, 1)
+
+        let escalated = makeAlert(
+            signal: makeSignal(
+                severity: .high,
+                metadata: ["reason": "repeat_behavior", "path": "/Users/test/repeated"]
+            ),
+            severity: .high
+        )
+        let result = store.ingest([escalated])
+
+        incident = try XCTUnwrap(store.incidents.first)
+        XCTAssertEqual(incident.state, .new)
+        XCTAssertEqual(incident.actions.first(where: { $0.action == .detected })?.count, 2)
+        XCTAssertEqual(result.newlyActionable.count, 1)
     }
 
     func test_incidentStoreDeduplicatesSameEvidenceRegardlessOfSource() {
