@@ -94,12 +94,18 @@ final class FileIntegrityMonitor {
         self.baselinePath = baselinePath
         let configuredPaths = monitoredPaths
             ?? Self.defaultMonitoredPaths(userHomeDirectories: userHomeDirectories)
-        self.monitoredPaths = configuredPaths.map {
+        let standardizedPaths = configuredPaths.map {
             URL(fileURLWithPath: $0).standardizedFileURL.path
         }
         let defaultDirectories = Self.defaultDirectoryPaths(userHomeDirectories: userHomeDirectories)
-        self.monitoredDirectoryPaths = Set(self.monitoredPaths.filter { path in
+        let directoryFlags = standardizedPaths.map { path in
             defaultDirectories.contains(path) || Self.pathIsDirectory(path)
+        }
+        self.monitoredPaths = standardizedPaths.map {
+            EndpointSecurityPath.canonical($0) ?? $0
+        }
+        self.monitoredDirectoryPaths = Set(zip(self.monitoredPaths, directoryFlags).compactMap {
+            $0.1 ? $0.0 : nil
         })
         loadBaselines()
     }
@@ -269,10 +275,11 @@ final class FileIntegrityMonitor {
 
         if let store = try? JSONDecoder().decode(BaselineStore.self, from: data),
            store.version == BaselineStore.currentVersion {
-            let retained = store.entries.filter { isMonitored($0.key) }
-            lock.withLock { baselines = retained }
-            if retained.count != store.entries.count { saveBaselines() }
-            Self.logger.info("FIM baselines loaded — \(retained.count) file(s)")
+            var loaded = store.entries.filter { isMonitored($0.key) }
+            seedMissingConfiguredPaths(into: &loaded)
+            lock.withLock { baselines = loaded }
+            if loaded != store.entries { saveBaselines() }
+            Self.logger.info("FIM baselines loaded — \(loaded.count) file(s)")
             return
         }
 
@@ -289,26 +296,30 @@ final class FileIntegrityMonitor {
         }
         migrated = migrated.filter { isMonitored($0.key) }
 
-        // A legacy baseline predates some configured roots. Seed only those
-        // newly introduced roots during migration so an upgrade does not call
-        // the user's existing files newly created.
-        for configuredPath in monitoredPaths {
-            if monitoredDirectoryPaths.contains(configuredPath) {
-                let hasCoverage = migrated.keys.contains {
-                    $0 == configuredPath || $0.hasPrefix(configuredPath + "/")
-                }
-                if !hasCoverage {
-                    migrated.merge(baselineEntries(in: configuredPath)) { existing, _ in existing }
-                }
-            } else if migrated[configuredPath] == nil,
-                      let hash = hashFile(configuredPath) {
-                migrated[configuredPath] = hash
-            }
-        }
+        seedMissingConfiguredPaths(into: &migrated)
 
         lock.withLock { baselines = migrated }
         saveBaselines()
         Self.logger.info("FIM baseline migrated — \(migrated.count) file(s)")
+    }
+
+    /// Quietly seeds newly configured paths on every load. This keeps a future
+    /// monitored-path addition from being reported as a newly created file on
+    /// the first edit after an update.
+    private func seedMissingConfiguredPaths(into entries: inout [String: String]) {
+        for configuredPath in monitoredPaths {
+            if monitoredDirectoryPaths.contains(configuredPath) {
+                let hasCoverage = entries.keys.contains {
+                    $0 == configuredPath || $0.hasPrefix(configuredPath + "/")
+                }
+                if !hasCoverage {
+                    entries.merge(baselineEntries(in: configuredPath)) { existing, _ in existing }
+                }
+            } else if entries[configuredPath] == nil,
+                      let hash = hashFile(configuredPath) {
+                entries[configuredPath] = hash
+            }
+        }
     }
 
     private func baselineEntries(in directory: String) -> [String: String] {

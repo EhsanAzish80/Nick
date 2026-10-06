@@ -64,6 +64,19 @@ final class FileIdentityAllowanceTests: XCTestCase {
         XCTAssertEqual(FileIdentity(path: canonical), FileIdentity(path: file.path))
     }
 
+    func test_endpointSecurityCanonicalPathResolvesSymlinkedDotfileTarget() throws {
+        let target = try temporaryFile(contents: Data("export SAFE=1".utf8))
+        let directory = target.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let dotfile = directory.appendingPathComponent(".zshrc")
+        try FileManager.default.createSymbolicLink(at: dotfile, withDestinationURL: target)
+
+        XCTAssertEqual(
+            EndpointSecurityPath.canonical(dotfile.path),
+            EndpointSecurityPath.canonical(target.path)
+        )
+    }
+
     private func temporaryFile(contents: Data) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NickAllowanceTests-(UUID().uuidString)", isDirectory: true)
