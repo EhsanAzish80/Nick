@@ -70,16 +70,21 @@ final class MonitorCoordinator {
 
     // MARK: - Init
 
-    /// Creates a `MonitorCoordinator` backed by the given engine and correlator.
+    /// Creates a `MonitorCoordinator` backed by the engine's shared correlator.
     ///
     /// - Parameters:
     ///   - engine: The `@MainActor`-isolated engine that owns the UI state.
-    ///   - correlator: The `ThreatCorrelator` instance to feed signals into.
     ///   - threatLogger: The persistent log to record alerts. Pass `nil` to skip logging.
-    init(engine: SecurityEngine, correlator: ThreatCorrelator, threatLogger: ThreatLogger? = nil) {
+    init(engine: SecurityEngine, threatLogger: ThreatLogger? = nil) {
         self.engine = engine
-        self.correlator = correlator
+        self.correlator = engine.correlator
         self.logger = threatLogger
+    }
+
+    /// Testable runtime invariant: full scans and real-time monitoring feed the
+    /// same correlator owned by `SecurityEngine`.
+    var usesEngineCorrelator: Bool {
+        correlator === engine.correlator
     }
 
     // MARK: - Public API

@@ -27,11 +27,16 @@ final class PerformanceSafetyTests: XCTestCase {
 
         defaults.set(30, forKey: key)
         let engine = SecurityEngine()
-        let coordinator = MonitorCoordinator(
-            engine: engine,
-            correlator: ThreatCorrelator()
-        )
+        let coordinator = MonitorCoordinator(engine: engine)
 
         XCTAssertEqual(coordinator.deepScanInterval, 300)
+    }
+
+    @MainActor
+    func testMonitorCoordinatorUsesSecurityEngineCorrelator() {
+        let engine = SecurityEngine()
+        let coordinator = MonitorCoordinator(engine: engine)
+
+        XCTAssertTrue(coordinator.usesEngineCorrelator)
     }
 }

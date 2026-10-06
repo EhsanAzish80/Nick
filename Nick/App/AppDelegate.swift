@@ -131,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()
             await networkProtection.refresh()
             xpcClient.connect()
-            let coord = MonitorCoordinator(engine: engine, correlator: ThreatCorrelator())
+            let coord = MonitorCoordinator(engine: engine)
             coordinator = coord
             // The coordinator's first tick performs the initial full scan.
             // Starting another scan here duplicates process signature validation
