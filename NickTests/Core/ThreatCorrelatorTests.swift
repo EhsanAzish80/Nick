@@ -234,7 +234,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         await localCorrelator.updateSuppressionRules([
             SuppressionRule(
                 type: .signedProcess,
-                value: "TEAM123|/Applications/Editor.app/Contents/MacOS/Editor",
+                value: "TEAM123|com.example.editor",
                 behaviorContext: SuppressionRule.contextFingerprint(for: approvedAlert),
                 expiresAt: Date().addingTimeInterval(3_600)
             )
@@ -263,7 +263,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         await localCorrelator.updateSuppressionRules([
             SuppressionRule(
                 type: .signedProcess,
-                value: "TEAM123|/Applications/Editor.app/Contents/MacOS/Editor",
+                value: "TEAM123|com.example.editor",
                 behaviorContext: SuppressionRule.contextFingerprint(for: alert),
                 expiresAt: Date().addingTimeInterval(3_600)
             )
@@ -512,7 +512,7 @@ final class ThreatCorrelatorTests: XCTestCase {
             name: "Editor",
             parentPID: 1,
             parentName: "launchd",
-            signingStatus: .signed(teamID: "TEAM123")
+            signingStatus: .signed(teamID: "TEAM123", signingID: "com.example.editor")
         )
         return ThreatSignal(
             source: source,

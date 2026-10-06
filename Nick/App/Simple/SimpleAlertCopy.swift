@@ -104,7 +104,7 @@ struct SimpleAlertCopy: Equatable {
         let confidence = "\(Int((alert.score * 100).rounded()))%"
         let signer: String
         switch alert.contributingSignals.lazy.compactMap(\.processInfo).first?.signingStatus {
-        case .signed(let teamID)?: signer = teamID == "APPLE_PLATFORM" ? "Apple" : "Team \(teamID)"
+        case .signed(let teamID, _)?: signer = teamID == "APPLE_PLATFORM" ? "Apple" : "Team \(teamID)"
         case .adHoc?:              signer = "ad-hoc"
         case .unsigned?:           signer = "unsigned"
         case .invalid?:            signer = "invalid signature"

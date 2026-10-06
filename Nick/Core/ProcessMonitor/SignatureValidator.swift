@@ -208,9 +208,11 @@ final class SignatureValidator: @unchecked Sendable {
               let dict = info as? [String: Any] else { return .unknown }
 
         let teamID = dict[kSecCodeInfoTeamIdentifier as String] as? String
+        let signingID = dict[kSecCodeInfoIdentifier as String] as? String
         let hasTeamID = !(teamID ?? "").isEmpty
         return Self.statusForValidSignature(
             teamID: teamID,
+            signingID: signingID,
             isAppleAnchored: !hasTeamID && satisfies("anchor apple", code: code, validationFlags: validationFlags),
             isAppleIssued: hasTeamID && satisfies("anchor apple generic", code: code, validationFlags: validationFlags)
         )
@@ -227,13 +229,16 @@ final class SignatureValidator: @unchecked Sendable {
     ///   enough because a self-signed binary may also carry certificates.
     static func statusForValidSignature(
         teamID: String?,
+        signingID: String? = nil,
         isAppleAnchored: Bool,
         isAppleIssued: Bool
     ) -> SigningStatus {
         if let teamID, !teamID.isEmpty {
-            return isAppleIssued ? .signed(teamID: teamID) : .adHoc
+            return isAppleIssued ? .signed(teamID: teamID, signingID: signingID) : .adHoc
         }
-        if isAppleAnchored { return .signed(teamID: "APPLE_PLATFORM") }
+        if isAppleAnchored {
+            return .signed(teamID: "APPLE_PLATFORM", signingID: signingID)
+        }
         return .adHoc
     }
 

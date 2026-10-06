@@ -130,12 +130,22 @@ final class SecurityEngine {
     /// The user-trusted subset is automatically persisted to `UserDefaults`.
     var trustedProcessList: TrustedProcessList = {
         let saved = UserDefaults.standard.stringArray(forKey: "userTrustedProcesses") ?? []
-        return TrustedProcessList(userTrusted: Set(saved))
+        let entries: Set<TrustedProcessList.UserEntry>
+        if let data = UserDefaults.standard.data(forKey: "userTrustedProcessIdentities"),
+           let decoded = try? JSONDecoder().decode(Set<TrustedProcessList.UserEntry>.self, from: data) {
+            entries = decoded
+        } else {
+            entries = []
+        }
+        return TrustedProcessList(userTrusted: Set(saved), userEntries: entries)
     }() {
         didSet {
             // Persist user-configured entries whenever the list changes.
             let names = Array(trustedProcessList.userTrusted)
             UserDefaults.standard.set(names, forKey: "userTrustedProcesses")
+            if let data = try? JSONEncoder().encode(trustedProcessList.userEntries) {
+                UserDefaults.standard.set(data, forKey: "userTrustedProcessIdentities")
+            }
         }
     }
 
@@ -613,11 +623,10 @@ final class SecurityEngine {
                 .first(where: { !$0.isEmpty }) else { return }
         let signedIdentity = alert.contributingSignals.compactMap { signal -> String? in
             guard let process = signal.processInfo,
-                  case .signed(let teamID) = process.signingStatus,
+                  case .signed(let teamID, let signingID?) = process.signingStatus,
                   !teamID.isEmpty,
-                  !process.path.isEmpty else { return nil }
-            let path = URL(fileURLWithPath: process.path).standardizedFileURL.path
-            return "\(teamID)|\(path)"
+                  !signingID.isEmpty else { return nil }
+            return "\(teamID)|\(signingID)"
         }.first
         guard let signedIdentity else {
             // Unsigned/name-only identities are trivial to impersonate. They

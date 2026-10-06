@@ -60,6 +60,7 @@ struct SettingsView: View {
             ?? ["/Users", "/Applications", "/Library", "/private/tmp"]
     }()
     @State private var newProcessName: String = ""
+    @State private var trustedProcessStatus: String?
     @State private var newAllowedDomain: String = ""
     @State private var newAllowedApp: String = ""
     @State private var showRemoveProcessConfirmation = false
@@ -626,34 +627,13 @@ struct SettingsView: View {
                     .controlSize(.small)
             }
 
-            userListContent
-
-            DisclosureGroup {
-                LazyVGrid(
-                    columns: [GridItem(.flexible()), GridItem(.flexible())],
-                    alignment: .leading, spacing: 4
-                ) {
-                    ForEach(TrustedProcessList.builtIn.sorted(), id: \.self) { name in
-                        HStack(spacing: 6) {
-                            Image(systemName: "lock.fill")
-                                .foregroundStyle(.tertiary)
-                                .imageScale(.small)
-                            Text(name)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(.top, 6)
-            } label: {
-                HStack(spacing: 4) {
-                    Text("Built-in Trusted Processes")
-                        .font(.system(size: 12.5))
-                    Text("(\(TrustedProcessList.builtIn.count))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
+            if let trustedProcessStatus {
+                Text(trustedProcessStatus)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
             }
+
+            userListContent
             .confirmationDialog(
                 "Remove \"\(nameToRemove ?? "")\" from trusted processes?",
                 isPresented: $showRemoveProcessConfirmation,
@@ -670,7 +650,7 @@ struct SettingsView: View {
         } header: {
             Text("Trusted Processes")
         } footer: {
-            Text("Alerts where all contributing processes are trusted are downgraded to Info severity and suppressed from notifications.")
+            Text("Add a currently running, signed process. Trust is bound to its exact Team ID and signing identifier; its name alone is never trusted.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
         }
@@ -678,23 +658,27 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var userListContent: some View {
-        let userNames = engine.trustedProcessList.userTrustedNames()
-        if userNames.isEmpty {
+        let entries = engine.trustedProcessList.userTrustedEntries()
+        if entries.isEmpty {
             Text("No user-added entries yet.")
                 .font(.system(size: 12))
                 .italic()
                 .foregroundStyle(.secondary)
         } else {
-            ForEach(userNames, id: \.self) { name in
+            ForEach(entries, id: \.self) { entry in
                 HStack(spacing: 10) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .imageScale(.small)
-                    Text(name)
-                        .font(.system(size: 12.5))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(entry.displayName).font(.system(size: 12.5))
+                        Text("\(entry.identity.teamID) · \(entry.identity.signingID)")
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Button {
-                        nameToRemove = name
+                        nameToRemove = entry.displayName
                         showRemoveProcessConfirmation = true
                     } label: {
                         Image(systemName: "trash")
@@ -1036,8 +1020,20 @@ struct SettingsView: View {
     private func addProcess() {
         let trimmed = newProcessName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        let matches = engine.processes.filter {
+            $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+                && SigningIdentity(status: $0.signingStatus) != nil
+        }
+        let identities = Set(matches.compactMap { SigningIdentity(status: $0.signingStatus) })
+        guard identities.count == 1, let process = matches.first else {
+            trustedProcessStatus = identities.isEmpty
+                ? "Run the signed app first and wait for its signature check to finish."
+                : "More than one signing identity uses that name. Enter a more specific running process name."
+            return
+        }
         @Bindable var bindableEngine = engine
-        bindableEngine.trustedProcessList.addUserTrusted(trimmed)
+        guard bindableEngine.trustedProcessList.addUserTrusted(process) else { return }
+        trustedProcessStatus = "Trusted \(process.name) by its verified signing identity."
         newProcessName = ""
     }
 

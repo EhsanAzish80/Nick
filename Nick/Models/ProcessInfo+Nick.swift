@@ -17,7 +17,7 @@ enum SigningStatus: Sendable, Equatable {
     // MARK: - Cases
 
     /// Validly signed by an Apple Developer account with the given team identifier.
-    case signed(teamID: String)
+    case signed(teamID: String, signingID: String? = nil)
 
     /// Signed but without a team identifier — common for local development builds.
     case adHoc
@@ -40,7 +40,8 @@ enum SigningStatus: Sendable, Equatable {
     /// Human-readable label for UI presentation.
     var displayName: String {
         switch self {
-        case .signed(let id): return "Signed (\(id))"
+        case .signed(let teamID, let signingID):
+            return signingID.map { "Signed (\(teamID) · \($0))" } ?? "Signed (\(teamID))"
         case .adHoc:          return "Ad-Hoc Signed"
         case .unsigned:       return "Unsigned"
         case .invalid:        return "Invalid Signature"
@@ -67,15 +68,16 @@ enum SigningStatus: Sendable, Equatable {
 extension SigningStatus: Codable {
 
     private enum CodingKeys: String, CodingKey {
-        case type, teamID
+        case type, teamID, signingID
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .signed(let teamID):
+        case .signed(let teamID, let signingID):
             try container.encode("signed", forKey: .type)
             try container.encode(teamID, forKey: .teamID)
+            try container.encodeIfPresent(signingID, forKey: .signingID)
         case .adHoc:
             try container.encode("adHoc", forKey: .type)
         case .unsigned:
@@ -95,7 +97,8 @@ extension SigningStatus: Codable {
         switch type {
         case "signed":
             let teamID = try container.decodeIfPresent(String.self, forKey: .teamID) ?? ""
-            self = .signed(teamID: teamID)
+            let signingID = try container.decodeIfPresent(String.self, forKey: .signingID)
+            self = .signed(teamID: teamID, signingID: signingID)
         case "adHoc":
             self = .adHoc
         case "unsigned":
@@ -107,6 +110,18 @@ extension SigningStatus: Codable {
         default:
             self = .unknown
         }
+    }
+}
+
+struct SigningIdentity: Codable, Hashable, Sendable {
+    let teamID: String
+    let signingID: String
+
+    init?(status: SigningStatus) {
+        guard case .signed(let teamID, let signingID?) = status,
+              !teamID.isEmpty, !signingID.isEmpty else { return nil }
+        self.teamID = teamID
+        self.signingID = signingID
     }
 }
 

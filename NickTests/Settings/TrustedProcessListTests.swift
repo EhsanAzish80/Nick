@@ -142,4 +142,40 @@ final class TrustedProcessListTests: XCTestCase {
         let sut = TrustedProcessList(userTrusted: ["CustomApp"])
         XCTAssertTrue(sut.isTrusted("Terminal"),   "Built-in entries must still be trusted when userTrusted is set")
     }
+
+    func test_securityTrustRequiresExactSigningIdentity() {
+        let trusted = NickProcessInfo(
+            pid: 10, path: "/Applications/Tool.app/Contents/MacOS/Tool", name: "Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "TEAM", signingID: "com.example.tool")
+        )
+        var sut = TrustedProcessList()
+        XCTAssertTrue(sut.addUserTrusted(trusted))
+        XCTAssertTrue(sut.isTrusted(trusted))
+
+        let impersonator = NickProcessInfo(
+            pid: 11, path: "/tmp/Tool", name: "Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "OTHER", signingID: "com.example.tool")
+        )
+        XCTAssertFalse(sut.isTrusted(impersonator))
+
+        let sameTeamDifferentProduct = NickProcessInfo(
+            pid: 12, path: "/Applications/Other.app/Contents/MacOS/Other", name: "Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "TEAM", signingID: "com.example.other")
+        )
+        XCTAssertFalse(sut.isTrusted(sameTeamDifferentProduct))
+    }
+
+    func test_nameOnlyLegacyEntryDoesNotGrantSecurityTrust() {
+        let process = NickProcessInfo(
+            pid: 10, path: "/Applications/Tool.app/Contents/MacOS/Tool", name: "Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "TEAM", signingID: "com.example.tool")
+        )
+        let sut = TrustedProcessList(userTrusted: ["Tool"])
+        XCTAssertTrue(sut.isTrusted("Tool"))
+        XCTAssertFalse(sut.isTrusted(process))
+    }
 }

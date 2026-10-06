@@ -318,7 +318,7 @@ final class UserFacingAlertBuilder: Sendable {
             || path.hasPrefix("/System/")
         let signingStatus = signal.fileInfo?.signingStatus ?? signal.processInfo?.signingStatus
         guard installedPath, let signingStatus else { return false }
-        if case .signed(let teamID) = signingStatus { return !teamID.isEmpty }
+        if case .signed(let teamID, _) = signingStatus { return !teamID.isEmpty }
         return false
     }
 

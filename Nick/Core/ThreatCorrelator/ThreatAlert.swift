@@ -175,7 +175,7 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         ]
         if let process = signal.processInfo {
             let signer: String
-            if case .signed(let teamID) = process.signingStatus {
+            if case .signed(let teamID, _) = process.signingStatus {
                 signer = teamID.lowercased()
             } else {
                 signer = String(describing: process.signingStatus).lowercased()
