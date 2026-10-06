@@ -51,6 +51,19 @@ final class FileIdentityAllowanceTests: XCTestCase {
         XCTAssertEqual(FileIdentity(path: link.path), FileIdentity(path: target.path))
     }
 
+    func test_endpointSecurityCanonicalPathKeepsPrivateTmpPrefix() throws {
+        let directory = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+            .appendingPathComponent("NickAllowanceTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("sample")
+        try Data("reviewed".utf8).write(to: file)
+
+        let canonical = try XCTUnwrap(EndpointSecurityPath.canonical(file.path))
+        XCTAssertTrue(canonical.hasPrefix("/private/tmp/"), canonical)
+        XCTAssertEqual(FileIdentity(path: canonical), FileIdentity(path: file.path))
+    }
+
     private func temporaryFile(contents: Data) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("NickAllowanceTests-(UUID().uuidString)", isDirectory: true)

@@ -49,6 +49,17 @@ enum ReviewedFileAllowancePolicy {
     }
 }
 
+enum EndpointSecurityPath {
+    /// Resolves the path exactly as the kernel does without collapsing the
+    /// canonical `/private/tmp` and `/private/var` spellings used by Endpoint
+    /// Security into their user-facing aliases.
+    static func canonical(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+}
+
 enum FileIntegrityPathPolicy {
     static func isMonitored(
         _ path: String,

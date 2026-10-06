@@ -301,8 +301,8 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             reply(false)
             return
         }
-        let resolvedPath = URL(fileURLWithPath: standardPath).resolvingSymlinksInPath().path
-        guard let identity = FileIdentity(path: resolvedPath) else {
+        guard let resolvedPath = EndpointSecurityPath.canonical(standardPath),
+              let identity = FileIdentity(path: resolvedPath) else {
             reply(false)
             return
         }
