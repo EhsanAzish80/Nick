@@ -44,6 +44,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         category: "Updates"
     )
     private var receivedUpdateCheckResult = false
+    /// Sparkle must be allowed to terminate Nick after the user accepts an
+    /// update, even when Nick's main window is hidden. Otherwise the installer
+    /// waits forever for the menu-bar app to exit.
+    private var sparkleInstallationInProgress = false
     private var uninstallPreparationInProgress = false
     private let uninstallLogger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -358,9 +362,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // XCTest owns the lifecycle of its host process. Never apply Nick's
         // menu-bar "stay alive while hidden" policy to a test host, otherwise
         // xcodebuild waits forever after the final test has completed.
-        if isRunningTests { return .terminateNow }
-        if forceQuit { return .terminateNow }
         let windowVisible = NSApp.nickMainWindow?.isVisible ?? false
+        return Self.terminationReply(
+            isRunningTests: isRunningTests,
+            forceQuit: forceQuit,
+            sparkleInstallationInProgress: sparkleInstallationInProgress,
+            windowVisible: windowVisible
+        )
+    }
+
+    static func terminationReply(
+        isRunningTests: Bool,
+        forceQuit: Bool,
+        sparkleInstallationInProgress: Bool,
+        windowVisible: Bool
+    ) -> NSApplication.TerminateReply {
+        if isRunningTests || forceQuit || sparkleInstallationInProgress {
+            return .terminateNow
+        }
         return windowVisible ? .terminateNow : .terminateCancel
     }
 
@@ -661,6 +680,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Sparkle diagnostics
 
 extension AppDelegate: SPUUpdaterDelegate {
+    func updater(_: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        sparkleInstallationInProgress = true
+        updateLogger.info("Sparkle will install update build=\(item.versionString, privacy: .public); allowing application termination")
+    }
+
     func feedURLString(for updater: SPUUpdater) -> String? {
 #if DEBUG
         let value = Bundle.main.object(forInfoDictionaryKey: "NickDebugUpdateFeedURL") as? String
@@ -694,6 +718,7 @@ extension AppDelegate: SPUUpdaterDelegate {
         didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
         error: Error?
     ) {
+        sparkleInstallationInProgress = false
         if let error {
             if receivedUpdateCheckResult {
                 updateLogger.info("Sparkle update cycle completed with a handled result: \(error.localizedDescription, privacy: .public)")
