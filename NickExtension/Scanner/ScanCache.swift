@@ -35,6 +35,12 @@ final class ScanCache {
         let expiry: Date
     }
 
+    enum AllowOnceResult {
+        case allowed
+        case findingExpired
+        case fileChanged
+    }
+
     // MARK: - Configuration
 
     /// Default TTL for cache entries (5 minutes).
@@ -96,27 +102,33 @@ final class ScanCache {
 
     /// Allows the next authorization and clears any stale deny verdict now,
     /// rather than waiting for the normal cache TTL.
-    @discardableResult
     func allowOnce(
         reviewedPath: String,
         authorizationPath: String,
         currentIdentity: FileIdentity
-    ) -> Bool {
+    ) -> AllowOnceResult {
         lock.withLock {
             guard let entry = store[reviewedPath] ?? store[authorizationPath],
-                  entry.isThreat,
-                  ReviewedFileAllowancePolicy.permits(
-                    reviewed: entry.identity,
-                    current: currentIdentity
-                  ) else {
+                  entry.expiry > Date(),
+                  entry.isThreat else {
                 oneTimeAllowances.removeValue(forKey: reviewedPath)
                 oneTimeAllowances.removeValue(forKey: authorizationPath)
-                return false
+                store.removeValue(forKey: reviewedPath)
+                store.removeValue(forKey: authorizationPath)
+                return .findingExpired
+            }
+            guard ReviewedFileAllowancePolicy.permits(
+                reviewed: entry.identity,
+                current: currentIdentity
+            ) else {
+                oneTimeAllowances.removeValue(forKey: reviewedPath)
+                oneTimeAllowances.removeValue(forKey: authorizationPath)
+                return .fileChanged
             }
             oneTimeAllowances[authorizationPath] = OneTimeFileAllowance(identity: currentIdentity)
             store.removeValue(forKey: reviewedPath)
             store.removeValue(forKey: authorizationPath)
-            return true
+            return .allowed
         }
     }
 

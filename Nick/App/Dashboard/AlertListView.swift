@@ -342,7 +342,7 @@ private struct AlertRow: View {
                             if success {
                                 engine.allowAlertOnce(alert.id)
                             } else {
-                                approvalError = "Real-Time Protection did not accept the approval. The file remains blocked."
+                                approvalError = "The reviewed finding expired or the file changed. Scan the file again before allowing it."
                             }
                         }
                     }
