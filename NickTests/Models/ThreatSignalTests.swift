@@ -110,7 +110,7 @@ final class ThreatSignalTests: XCTestCase {
     // MARK: - SigningStatus Codable
 
     func test_signingStatus_codable_roundTrip_signedWithTeamID() throws {
-        let status = SigningStatus.signed(teamID: "TEAM123")
+        let status = SigningStatus.signed(teamID: "TEAM123", signingID: "com.example.app")
         let data = try JSONEncoder().encode(status)
         let decoded = try JSONDecoder().decode(SigningStatus.self, from: data)
         XCTAssertEqual(decoded, status)

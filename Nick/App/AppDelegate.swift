@@ -38,11 +38,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: MonitorCoordinator?
     private var endpointExtensionManager: ExtensionManager?
     private var updaterController: SPUStandardUpdaterController?
+    private var updateBadgeVisible = false
     private let updateLogger = Logger(
         subsystem: "com.ehsanazish.nick",
         category: "Updates"
     )
     private var receivedUpdateCheckResult = false
+    /// Sparkle must be allowed to terminate Nick after the user accepts an
+    /// update, even when Nick's main window is hidden. Otherwise the installer
+    /// waits forever for the menu-bar app to exit.
+    private var sparkleInstallationInProgress = false
     private var uninstallPreparationInProgress = false
     private let uninstallLogger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -113,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: self,
-            userDriverDelegate: nil
+            userDriverDelegate: self
         )
         setupStatusItem()
         Task { @MainActor in
@@ -357,9 +362,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // XCTest owns the lifecycle of its host process. Never apply Nick's
         // menu-bar "stay alive while hidden" policy to a test host, otherwise
         // xcodebuild waits forever after the final test has completed.
-        if isRunningTests { return .terminateNow }
-        if forceQuit { return .terminateNow }
         let windowVisible = NSApp.nickMainWindow?.isVisible ?? false
+        return Self.terminationReply(
+            isRunningTests: isRunningTests,
+            forceQuit: forceQuit,
+            sparkleInstallationInProgress: sparkleInstallationInProgress,
+            windowVisible: windowVisible
+        )
+    }
+
+    static func terminationReply(
+        isRunningTests: Bool,
+        forceQuit: Bool,
+        sparkleInstallationInProgress: Bool,
+        windowVisible: Bool
+    ) -> NSApplication.TerminateReply {
+        if isRunningTests || forceQuit || sparkleInstallationInProgress {
+            return .terminateNow
+        }
         return windowVisible ? .terminateNow : .terminateCancel
     }
 
@@ -399,18 +419,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch state {
         case .protected:
-            button.image = statusImage(color: .systemGreen, description: "Nick is protected")
-            button.toolTip = "Nick: Protected"
+            button.image = statusImage(color: .systemGreen, description: "Nick is protected", showsUpdateBadge: updateBadgeVisible)
+            button.toolTip = updateBadgeVisible ? "Nick: Update available" : "Nick: Protected"
         case .review:
-            button.image = statusImage(color: .systemOrange, description: "Nick needs your review")
-            button.toolTip = "Nick: Review needed"
+            button.image = statusImage(color: .systemOrange, description: "Nick needs your review", showsUpdateBadge: updateBadgeVisible)
+            button.toolTip = updateBadgeVisible ? "Nick: Review needed · Update available" : "Nick: Review needed"
         case .urgent:
-            button.image = statusImage(color: .systemRed, description: "Nick needs immediate attention")
-            button.toolTip = "Nick: Immediate attention needed"
+            button.image = statusImage(color: .systemRed, description: "Nick needs immediate attention", showsUpdateBadge: updateBadgeVisible)
+            button.toolTip = updateBadgeVisible ? "Nick: Immediate attention needed · Update available" : "Nick: Immediate attention needed"
         }
     }
 
-    private func statusImage(color: NSColor, description: String) -> NSImage? {
+    private func statusImage(
+        color: NSColor,
+        description: String,
+        showsUpdateBadge: Bool = false
+    ) -> NSImage? {
         let configuration = NSImage.SymbolConfiguration(paletteColors: [color])
         guard let symbol = NSImage(
             systemSymbolName: "shield.fill",
@@ -423,6 +447,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in
             symbol.draw(in: rect)
+            if showsUpdateBadge {
+                let badgeRect = NSRect(x: 12, y: 11, width: 6, height: 6)
+                NSColor.controlBackgroundColor.setFill()
+                NSBezierPath(ovalIn: badgeRect.insetBy(dx: -1, dy: -1)).fill()
+                NSColor.systemBlue.setFill()
+                NSBezierPath(ovalIn: badgeRect).fill()
+            }
             return true
         }
         image.isTemplate = false
@@ -580,7 +611,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func postUpdateCheckStatus(_ status: String) {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "nickUpdateLastCheckTime")
+        UserDefaults.standard.set(status, forKey: "nickUpdateLastCheckResult")
         NotificationCenter.default.post(name: .nickUpdateCheckStatus, object: status)
+    }
+
+    private func setUpdateBadge(visible: Bool) {
+        updateBadgeVisible = visible
+        updateStatusItemAppearance()
     }
 
     // MARK: - Finder Sync Integration
@@ -642,14 +680,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Sparkle diagnostics
 
 extension AppDelegate: SPUUpdaterDelegate {
+    func updater(_: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        sparkleInstallationInProgress = true
+        updateLogger.info("Sparkle will install update build=\(item.versionString, privacy: .public); allowing application termination")
+    }
+
+    func feedURLString(for updater: SPUUpdater) -> String? {
+#if DEBUG
+        let value = Bundle.main.object(forInfoDictionaryKey: "NickDebugUpdateFeedURL") as? String
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let url = URL(string: trimmed), url.scheme == "https" {
+            return trimmed
+        }
+#endif
+        return nil
+    }
+
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         receivedUpdateCheckResult = true
+        UserDefaults.standard.set(true, forKey: "nickUpdateAvailable")
+        UserDefaults.standard.set(item.displayVersionString, forKey: "nickUpdateAvailableVersion")
         updateLogger.info("Sparkle found update version=\(item.displayVersionString, privacy: .public) build=\(item.versionString, privacy: .public)")
         postUpdateCheckStatus("Nick \(item.displayVersionString) is available.")
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
         receivedUpdateCheckResult = true
+        UserDefaults.standard.set(false, forKey: "nickUpdateAvailable")
+        UserDefaults.standard.removeObject(forKey: "nickUpdateAvailableVersion")
+        setUpdateBadge(visible: false)
         updateLogger.info("Sparkle found no update: \(error.localizedDescription, privacy: .public)")
         postUpdateCheckStatus("Nick is up to date.")
     }
@@ -659,9 +718,12 @@ extension AppDelegate: SPUUpdaterDelegate {
         didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
         error: Error?
     ) {
+        sparkleInstallationInProgress = false
         if let error {
-            updateLogger.error("Sparkle update cycle failed: \(error.localizedDescription, privacy: .public)")
-            if !receivedUpdateCheckResult {
+            if receivedUpdateCheckResult {
+                updateLogger.info("Sparkle update cycle completed with a handled result: \(error.localizedDescription, privacy: .public)")
+            } else {
+                updateLogger.error("Sparkle update cycle failed: \(error.localizedDescription, privacy: .public)")
                 postUpdateCheckStatus("Update check failed: \(error.localizedDescription)")
             }
         } else {
@@ -671,6 +733,39 @@ extension AppDelegate: SPUUpdaterDelegate {
             }
         }
         receivedUpdateCheckResult = false
+    }
+}
+
+extension AppDelegate: @preconcurrency SPUStandardUserDriverDelegate {
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(
+        _ update: SUAppcastItem,
+        andInImmediateFocus immediateFocus: Bool
+    ) -> Bool {
+        immediateFocus
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool,
+        forUpdate update: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        guard !state.userInitiated, !handleShowingUpdate else { return }
+        setUpdateBadge(visible: true)
+        Task {
+            await NotificationManager.shared.sendUpdateAvailable(
+                version: update.displayVersionString
+            )
+        }
+    }
+
+    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
+        setUpdateBadge(visible: false)
+    }
+
+    func standardUserDriverWillFinishUpdateSession() {
+        setUpdateBadge(visible: false)
     }
 }
 

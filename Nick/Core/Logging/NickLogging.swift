@@ -13,6 +13,18 @@ typealias AlertFormatter = @Sendable (ThreatAlert) -> String
 /// Sends a pre-formatted alert string to a destination (file, network, stdout).
 typealias AlertOutput = @Sendable (String) async -> Void
 
+// MARK: - Webhook URL Policy
+
+enum WebhookURLPolicy {
+    static func permits(_ url: URL, allowInsecureLocalhost: Bool) -> Bool {
+        guard url.host != nil else { return false }
+        if url.scheme?.lowercased() == "https" { return true }
+        guard url.scheme?.lowercased() == "http", allowInsecureLocalhost else { return false }
+        let host = url.host?.lowercased()
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+}
+
 // MARK: - AlertFormatters
 
 /// Built-in formatter implementations.
@@ -106,6 +118,7 @@ func emitAlert(_ alert: ThreatAlert, formatter: AlertFormatter, outputs: [AlertO
 /// - `logFormatter`          String  "kv" | "json" | "cef"   (default "kv")
 /// - `fileLoggingEnabled`    Bool    (default false)
 /// - `webhookURL`            String  optional URL
+/// - `allowInsecureLocalWebhook` Bool HTTP opt-in restricted to loopback
 /// - `stdoutLoggingEnabled`  Bool    (default false)
 func buildPipeline() -> (AlertFormatter, [AlertOutput]) {
     let formatter: AlertFormatter
@@ -122,9 +135,10 @@ func buildPipeline() -> (AlertFormatter, [AlertOutput]) {
         outputs.append(AlertOutputs.file(url: url))
     }
 
+    let allowInsecureLocalhost = UserDefaults.standard.bool(forKey: "allowInsecureLocalWebhook")
     if let webhookString = UserDefaults.standard.string(forKey: "webhookURL"),
        let url = URL(string: webhookString),
-       url.scheme == "https" || url.scheme == "http" {
+       WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalhost) {
         outputs.append(AlertOutputs.http(url: url))
     }
 

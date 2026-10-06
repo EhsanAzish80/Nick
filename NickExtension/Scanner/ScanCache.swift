@@ -4,38 +4,6 @@
 
 import Foundation
 
-// MARK: - FileIdentity
-
-/// The on-disk identity of a file's content at the time it was scanned.
-///
-/// A path alone is not an identity: a file scanned clean can be overwritten in
-/// place or replaced by a rename, and a path-keyed cache would keep returning
-/// the stale verdict until the TTL expires. Endpoint Security supplies the
-/// `stat` for every file in an event, so comparing identities is free on the
-/// AUTH path.
-struct FileIdentity: Hashable, Sendable {
-    let device: Int64
-    let inode: UInt64
-    let size: Int64
-    let modificationSeconds: Int
-    let modificationNanoseconds: Int
-
-    init(stat info: stat) {
-        device = Int64(info.st_dev)
-        inode = UInt64(info.st_ino)
-        size = Int64(info.st_size)
-        modificationSeconds = Int(info.st_mtimespec.tv_sec)
-        modificationNanoseconds = Int(info.st_mtimespec.tv_nsec)
-    }
-
-    /// `lstat` of `path`; `nil` when the file no longer exists.
-    init?(path: String) {
-        var info = stat()
-        guard lstat(path, &info) == 0 else { return nil }
-        self.init(stat: info)
-    }
-}
-
 // MARK: - ScanCache
 
 /// Thread-safe, TTL-based in-memory cache for file scan results.
@@ -67,6 +35,12 @@ final class ScanCache {
         let expiry: Date
     }
 
+    enum AllowOnceResult {
+        case allowed
+        case findingExpired
+        case fileChanged
+    }
+
     // MARK: - Configuration
 
     /// Default TTL for cache entries (5 minutes).
@@ -85,7 +59,10 @@ final class ScanCache {
     private var insertionLog: [(path: String, sequence: UInt64)] = []
     private var insertionHead = 0
     private var nextSequence: UInt64 = 0
-    private var oneTimeAllowances: Set<String> = []
+    /// Explicit approvals are bound to the file that was reviewed, not merely
+    /// to a reusable pathname. Replacing or modifying the file invalidates the
+    /// approval on the next authorization attempt.
+    private var oneTimeAllowances: [String: OneTimeFileAllowance] = [:]
     private let lock = NSLock()
 
     // MARK: - Public API
@@ -114,18 +91,44 @@ final class ScanCache {
 
     /// Consumes an explicit user approval for the next authorization involving
     /// this path. Consuming it prevents an accidental permanent bypass.
-    func consumeOneTimeAllowance(path: String) -> Bool {
+    func consumeOneTimeAllowance(path: String, identity: FileIdentity) -> Bool {
         lock.withLock {
-            oneTimeAllowances.remove(path) != nil
+            guard let allowance = oneTimeAllowances.removeValue(forKey: path) else {
+                return false
+            }
+            return allowance.permits(identity)
         }
     }
 
     /// Allows the next authorization and clears any stale deny verdict now,
     /// rather than waiting for the normal cache TTL.
-    func allowOnce(path: String) {
+    func allowOnce(
+        reviewedPath: String,
+        authorizationPath: String,
+        currentIdentity: FileIdentity
+    ) -> AllowOnceResult {
         lock.withLock {
-            oneTimeAllowances.insert(path)
-            store.removeValue(forKey: path)
+            guard let entry = store[reviewedPath] ?? store[authorizationPath],
+                  entry.expiry > Date(),
+                  entry.isThreat else {
+                oneTimeAllowances.removeValue(forKey: reviewedPath)
+                oneTimeAllowances.removeValue(forKey: authorizationPath)
+                store.removeValue(forKey: reviewedPath)
+                store.removeValue(forKey: authorizationPath)
+                return .findingExpired
+            }
+            guard ReviewedFileAllowancePolicy.permits(
+                reviewed: entry.identity,
+                current: currentIdentity
+            ) else {
+                oneTimeAllowances.removeValue(forKey: reviewedPath)
+                oneTimeAllowances.removeValue(forKey: authorizationPath)
+                return .fileChanged
+            }
+            oneTimeAllowances[authorizationPath] = OneTimeFileAllowance(identity: currentIdentity)
+            store.removeValue(forKey: reviewedPath)
+            store.removeValue(forKey: authorizationPath)
+            return .allowed
         }
     }
 
@@ -144,7 +147,7 @@ final class ScanCache {
                 threatFamily: entry.threatFamily,
                 expiry: entry.expiry
             )
-            oneTimeAllowances.remove(path)
+            oneTimeAllowances.removeValue(forKey: path)
             return true
         }
     }

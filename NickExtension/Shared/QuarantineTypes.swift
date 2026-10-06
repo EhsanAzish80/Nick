@@ -4,6 +4,77 @@
 
 import Foundation
 
+// MARK: - File identity
+
+/// The on-disk identity of file content at a specific point in time.
+/// Paths are intentionally excluded because they can be reused after review.
+struct FileIdentity: Hashable, Sendable {
+    let device: Int64
+    let inode: UInt64
+    let size: Int64
+    let modificationSeconds: Int
+    let modificationNanoseconds: Int
+
+    init(stat info: stat) {
+        device = Int64(info.st_dev)
+        inode = UInt64(info.st_ino)
+        size = Int64(info.st_size)
+        modificationSeconds = Int(info.st_mtimespec.tv_sec)
+        modificationNanoseconds = Int(info.st_mtimespec.tv_nsec)
+    }
+
+    /// Identity of the file content reached by `path`; `nil` when it no longer
+    /// exists. `stat` intentionally follows a final symlink so the identity
+    /// matches the file reported by Endpoint Security authorization events.
+    init?(path: String) {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        self.init(stat: info)
+    }
+}
+
+/// A one-use approval for the exact file that the user reviewed.
+struct OneTimeFileAllowance: Sendable {
+    let identity: FileIdentity
+
+    func permits(_ currentIdentity: FileIdentity) -> Bool {
+        identity == currentIdentity
+    }
+}
+
+enum ReviewedFileAllowancePolicy {
+    static func permits(reviewed: FileIdentity?, current: FileIdentity) -> Bool {
+        guard let reviewed else { return false }
+        return reviewed == current
+    }
+}
+
+enum EndpointSecurityPath {
+    /// Resolves the path exactly as the kernel does without collapsing the
+    /// canonical `/private/tmp` and `/private/var` spellings used by Endpoint
+    /// Security into their user-facing aliases.
+    static func canonical(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+}
+
+enum FileIntegrityPathPolicy {
+    static func isMonitored(
+        _ path: String,
+        configuredPaths: [String],
+        directoryPaths: Set<String>
+    ) -> Bool {
+        configuredPaths.contains { configuredPath in
+            if directoryPaths.contains(configuredPath) {
+                return path == configuredPath || path.hasPrefix(configuredPath + "/")
+            }
+            return path == configuredPath
+        }
+    }
+}
+
 // MARK: - QuarantineRecord
 
 /// A file that has been moved to the quarantine vault.

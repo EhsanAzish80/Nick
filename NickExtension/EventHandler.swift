@@ -110,7 +110,10 @@ final class ESEventHandler {
             // cache before responding; hashing, behavioural analysis and XPC
             // delivery must never hold up process launch.
             let cached   = fileScanner?.cache.lookup(path: targetPath, identity: targetIdentity)
-            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(path: targetPath) ?? false
+            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
+                path: targetPath,
+                identity: targetIdentity
+            ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
             // First launch of an unknown, non-identity-signed binary: hash it
@@ -157,11 +160,15 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_OPEN:
             let filePath = esString(msg.event.open.file.pointee.path)
+            let fileIdentity = FileIdentity(stat: msg.event.open.file.pointee.stat)
             let cached   = fileScanner?.cache.lookup(
                 path: filePath,
-                identity: FileIdentity(stat: msg.event.open.file.pointee.stat)
+                identity: fileIdentity
             )
-            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(path: filePath) ?? false
+            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
+                path: filePath,
+                identity: fileIdentity
+            ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
             esClient?.respond(to: message, allow: !shouldBlock)
@@ -315,10 +322,7 @@ final class ESEventHandler {
                 }
 
                 // --- File Integrity Monitoring ---
-                if let violation = self.fileIntegrityMonitor?.check(path: filePath),
-                   let data = try? JSONEncoder().encode(violation) {
-                    self.xpcServer?.sendIntegrityViolationToApp(data)
-                }
+                self.reportIntegrityViolation(at: filePath)
 
                 // Ransomware heuristics run once at close and read at most a
                 // small prefix. Canary names and known extensions do not need
@@ -448,6 +452,8 @@ final class ESEventHandler {
             let renameActorTrusted = actorHasTrustedSigner(process)
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
+                self.reportIntegrityViolation(at: notifySrcPath)
+                self.reportIntegrityViolation(at: notifyDestPath)
                 self.behaviorTracker?.recordRename(
                     pid: pid, processPath: processPath,
                     source: notifySrcPath, destination: notifyDestPath
@@ -489,6 +495,9 @@ final class ESEventHandler {
         case ES_EVENT_TYPE_NOTIFY_UNLINK:
             let filePath = esString(msg.event.unlink.target.pointee.path)
             fileScanner?.cache.invalidate(path: filePath)
+            dispatchQueue.async { [weak self] in
+                self?.reportIntegrityViolation(at: filePath)
+            }
             // Encrypt-to-new-file ransomware deletes the originals, including
             // a canary it never modified in place.
             if ransomwareDetector?.canaryManager.isCanary(path: filePath) == true,
@@ -708,6 +717,12 @@ final class ESEventHandler {
     }
 
     // MARK: - Private Helpers
+
+    private func reportIntegrityViolation(at path: String) {
+        guard let violation = fileIntegrityMonitor?.check(path: path),
+              let data = try? encoder.encode(violation) else { return }
+        xpcServer?.sendIntegrityViolationToApp(data)
+    }
 
     /// Reports a ransomware alert and, when the evidence allows it, stops the
     /// writer. Must run on `dispatchQueue`.

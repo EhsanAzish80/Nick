@@ -22,6 +22,12 @@ import os
 /// All public methods are thread-safe — mutations are serialised via `NSLock`.
 final class FileIntegrityMonitor {
 
+    private struct BaselineStore: Codable {
+        static let currentVersion = 2
+        let version: Int
+        let entries: [String: String]
+    }
+
     // MARK: - Monitored Paths
 
     /// Default set of security-sensitive paths to track.
@@ -29,11 +35,35 @@ final class FileIntegrityMonitor {
         "/Library/LaunchAgents",
         "/Library/LaunchDaemons",
         "/usr/local/bin",
-        "/etc/hosts",
-        "/etc/sudoers",
-        "/private/etc/pam.d",
+        "/private/etc/hosts",
         "/private/etc/sudoers",
+        "/private/etc/pam.d",
+        "/private/etc/sudoers.d",
     ]
+
+    static func defaultMonitoredPaths(userHomeDirectories: [URL]) -> [String] {
+        let userRelativePaths = [
+            "Library/LaunchAgents",
+            ".zshrc",
+            ".zprofile",
+            ".bash_profile",
+        ]
+        return systemMonitoredPaths + userHomeDirectories.flatMap { home in
+            userRelativePaths.map { home.appendingPathComponent($0).path }
+        }
+    }
+
+    static func defaultDirectoryPaths(userHomeDirectories: [URL]) -> Set<String> {
+        Set([
+            "/Library/LaunchAgents",
+            "/Library/LaunchDaemons",
+            "/usr/local/bin",
+            "/private/etc/pam.d",
+            "/private/etc/sudoers.d",
+        ] + userHomeDirectories.map {
+            $0.appendingPathComponent("Library/LaunchAgents", isDirectory: true).path
+        })
+    }
 
     // MARK: - Private
 
@@ -47,6 +77,7 @@ final class FileIntegrityMonitor {
 
     private let baselinePath:   String
     private let monitoredPaths: [String]
+    private let monitoredDirectoryPaths: Set<String>
     private let lock = NSLock()
 
     var baselineCount: Int {
@@ -60,13 +91,22 @@ final class FileIntegrityMonitor {
         monitoredPaths: [String]? = nil,
         userHomeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories()
     ) {
-        self.baselinePath   = baselinePath
-        self.monitoredPaths = monitoredPaths ?? (
-            Self.systemMonitoredPaths
-                + userHomeDirectories.map {
-                    $0.appendingPathComponent("Library/LaunchAgents", isDirectory: true).path
-                }
-        )
+        self.baselinePath = baselinePath
+        let configuredPaths = monitoredPaths
+            ?? Self.defaultMonitoredPaths(userHomeDirectories: userHomeDirectories)
+        let standardizedPaths = configuredPaths.map {
+            URL(fileURLWithPath: $0).standardizedFileURL.path
+        }
+        let defaultDirectories = Self.defaultDirectoryPaths(userHomeDirectories: userHomeDirectories)
+        let directoryFlags = standardizedPaths.map { path in
+            defaultDirectories.contains(path) || Self.pathIsDirectory(path)
+        }
+        self.monitoredPaths = standardizedPaths.map {
+            EndpointSecurityPath.canonical($0) ?? $0
+        }
+        self.monitoredDirectoryPaths = Set(zip(self.monitoredPaths, directoryFlags).compactMap {
+            $0.1 ? $0.0 : nil
+        })
         loadBaselines()
     }
 
@@ -186,7 +226,11 @@ final class FileIntegrityMonitor {
     // MARK: - Private Helpers
 
     private func isMonitored(_ path: String) -> Bool {
-        monitoredPaths.contains { path.hasPrefix(expand($0)) }
+        FileIntegrityPathPolicy.isMonitored(
+            path,
+            configuredPaths: monitoredPaths.map(expand),
+            directoryPaths: Set(monitoredDirectoryPaths.map(expand))
+        )
     }
 
     private func baselineDirectory(_ dirPath: String) {
@@ -205,6 +249,10 @@ final class FileIntegrityMonitor {
     }
 
     private func isDirectory(_ path: String) -> Bool {
+        Self.pathIsDirectory(path)
+    }
+
+    private static func pathIsDirectory(_ path: String) -> Bool {
         var isDir: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
     }
@@ -217,15 +265,70 @@ final class FileIntegrityMonitor {
         lock.lock()
         let copy = baselines
         lock.unlock()
-        guard let data = try? JSONEncoder().encode(copy) else { return }
+        let store = BaselineStore(version: BaselineStore.currentVersion, entries: copy)
+        guard let data = try? JSONEncoder().encode(store) else { return }
         try? data.write(to: URL(fileURLWithPath: baselinePath), options: .atomic)
     }
 
     private func loadBaselines() {
-        guard let data   = try? Data(contentsOf: URL(fileURLWithPath: baselinePath)),
-              let loaded = try? JSONDecoder().decode([String: String].self, from: data)
-        else { return }
-        lock.lock(); baselines = loaded; lock.unlock()
-        Self.logger.info("FIM baselines loaded — \(loaded.count) file(s)")
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: baselinePath)) else { return }
+
+        if let store = try? JSONDecoder().decode(BaselineStore.self, from: data),
+           store.version == BaselineStore.currentVersion {
+            var loaded = store.entries.filter { isMonitored($0.key) }
+            seedMissingConfiguredPaths(into: &loaded)
+            lock.withLock { baselines = loaded }
+            if loaded != store.entries { saveBaselines() }
+            Self.logger.info("FIM baselines loaded — \(loaded.count) file(s)")
+            return
+        }
+
+        guard let legacy = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        var migrated = legacy
+        let aliases = [
+            "/etc/hosts": "/private/etc/hosts",
+            "/etc/sudoers": "/private/etc/sudoers",
+        ]
+        for (oldPath, canonicalPath) in aliases {
+            if migrated[canonicalPath] == nil, let oldHash = migrated[oldPath] {
+                migrated[canonicalPath] = oldHash
+            }
+        }
+        migrated = migrated.filter { isMonitored($0.key) }
+
+        seedMissingConfiguredPaths(into: &migrated)
+
+        lock.withLock { baselines = migrated }
+        saveBaselines()
+        Self.logger.info("FIM baseline migrated — \(migrated.count) file(s)")
+    }
+
+    /// Quietly seeds newly configured paths on every load. This keeps a future
+    /// monitored-path addition from being reported as a newly created file on
+    /// the first edit after an update.
+    private func seedMissingConfiguredPaths(into entries: inout [String: String]) {
+        for configuredPath in monitoredPaths {
+            if monitoredDirectoryPaths.contains(configuredPath) {
+                let hasCoverage = entries.keys.contains {
+                    $0 == configuredPath || $0.hasPrefix(configuredPath + "/")
+                }
+                if !hasCoverage {
+                    entries.merge(baselineEntries(in: configuredPath)) { existing, _ in existing }
+                }
+            } else if entries[configuredPath] == nil,
+                      let hash = hashFile(configuredPath) {
+                entries[configuredPath] = hash
+            }
+        }
+    }
+
+    private func baselineEntries(in directory: String) -> [String: String] {
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: directory) else {
+            return [:]
+        }
+        return files.reduce(into: [:]) { result, file in
+            let fullPath = (directory as NSString).appendingPathComponent(file)
+            if let hash = hashFile(fullPath) { result[fullPath] = hash }
+        }
     }
 }

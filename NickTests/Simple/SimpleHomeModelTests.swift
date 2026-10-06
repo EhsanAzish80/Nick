@@ -58,6 +58,7 @@ final class SimpleHomeModelTests: XCTestCase {
         XCTAssertEqual(hero.title, "Nick stopped a harmful app")
         XCTAssertEqual(hero.secondaryTitle, "Delete It")
         XCTAssertTrue(hero.body.contains("PDF Converter Pro.app"))
+        XCTAssertFalse(hero.body.contains("before it could do anything"))
     }
 
     func test_incidentsExpireAfterADayAndOnceSeen() {
@@ -100,10 +101,10 @@ final class SimpleHomeModelTests: XCTestCase {
         XCTAssertTrue(cards.allSatisfy { !$0.status.rawValue.isEmpty })
     }
 
-    func test_emailPausedIsCalledOutWhenScamIsOn() {
+    func test_attachmentChecksPausedIsCalledOutWhenDestinationChecksAreOn() {
         let cards = ProtectionCard.cards(endpointActive: false, networkState: .enabled, ransomwareShieldActive: false)
         XCTAssertEqual(cards[1].status, .on)
-        XCTAssertEqual(cards[1].detail, "Scam site warnings are on. Email checks are paused.")
+        XCTAssertEqual(cards[1].detail, "Destination checks are on. Attachment checks are paused.")
     }
 
     // MARK: Mac settings

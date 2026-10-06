@@ -123,6 +123,20 @@ final class SimpleProtectionModelTests: XCTestCase {
         XCTAssertEqual(SimpleProtectionCopy.subtitle(for: mixed), "1 of 4 needs attention")
     }
 
+    func test_explanationsDescribeImplementedBoundaries() {
+        let apps = SimpleProtectionCopy.explanation(for: .appsAndDownloads)
+        XCTAssertTrue(apps.contains("Known blocked files"))
+        XCTAssertTrue(apps.contains("shown for review"))
+
+        let web = SimpleProtectionCopy.explanation(for: .websitesAndEmail)
+        XCTAssertTrue(web.contains("observes"))
+        XCTAssertTrue(web.contains("for review"))
+
+        let media = SimpleProtectionCopy.explanation(for: .cameraAndMicrophone)
+        XCTAssertTrue(media.contains("periodically"))
+        XCTAssertFalse(media.contains("when an app starts"))
+    }
+
     func test_fixRows() {
         XCTAssertNil(ProtectionFix.fix(for: card(.appsAndDownloads, .on), networkState: .enabled))
         XCTAssertEqual(ProtectionFix.fix(for: card(.appsAndDownloads, .paused), networkState: .enabled)?.action,

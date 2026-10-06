@@ -7,22 +7,26 @@ import os
 
 // MARK: - TrustedProcessList
 
-/// A two-tier list of processes that are pre-approved as safe and should not trigger alerts.
+/// Stores display-name catalogs and exact signing identities approved by the user.
 ///
 /// `TrustedProcessList` solves the false positive problem for known-good software on the
 /// developer, creative, enterprise, and power-user configurations documented in
 /// `docs/FALSE_POSITIVE_MATRIX.md`. It combines a hardcoded built-in set with a
 /// user-configurable set that persists via `AppSettings`.
 ///
-/// Processes in this list are excluded from:
-/// - Shell-spawn alerts (LOLBin detector, parent-chain analyzer)
-/// - Reverse-shell detection when the parent is a known terminal
-/// - High-severity signal emission (downgraded to `.info` for correlation only)
+/// Only exact signing identities participate in security decisions. Legacy
+/// names remain available for migration and display, but never grant a
+/// severity downgrade by themselves.
 ///
 /// - Note: Trusting a process suppresses Nick's behavioural alerts for that process.
 ///   Users should only add processes they have personally verified. Legitimate software
 ///   does not typically need to be added — the built-in list covers common cases.
 struct TrustedProcessList {
+
+    struct UserEntry: Codable, Hashable, Sendable {
+        let displayName: String
+        let identity: SigningIdentity
+    }
 
     // MARK: - Built-in List
 
@@ -88,10 +92,38 @@ struct TrustedProcessList {
         "Finder",
     ]
 
+    /// Conservative identities whose normal behavior otherwise creates noisy
+    /// developer-workflow alerts. Names are deliberately not consulted.
+    static let builtInIdentities: Set<SigningIdentity> = [
+        SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal"),
+        SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.finder"),
+        SigningIdentity(teamID: "59GAB85EFG", signingID: "com.apple.dt.Xcode")
+    ]
+
+    /// Interpreters and general-purpose tools execute caller-controlled input.
+    /// Trusting their signature would implicitly trust every script they run.
+    private static let forbiddenSigningIDs: Set<String> = [
+        "com.apple.bash", "com.apple.zsh", "com.apple.sh",
+        "com.apple.osascript", "com.apple.curl", "com.apple.ssh",
+        "com.apple.python3", "com.apple.ruby", "com.apple.tclsh",
+        "com.apple.dt.xcode_select.tool-shim-public",
+        "org.nodejs.node", "org.python.python"
+    ]
+
+    private static let forbiddenSigningIDPrefixes = ["com.apple.perl"]
+
+    private static let forbiddenExecutableNames: Set<String> = [
+        "bash", "zsh", "sh", "dash", "fish", "python", "python3",
+        "ruby", "perl", "osascript", "curl", "node", "deno", "bun",
+        "env", "swift", "tclsh", "awk", "xargs", "find", "open",
+        "launchctl", "php", "lua", "pwsh", "java"
+    ]
+
     // MARK: - Private State
 
     /// User-added process names, loaded from `AppSettings`.
     var userTrusted: Set<String>
+    var userEntries: Set<UserEntry>
 
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -105,8 +137,9 @@ struct TrustedProcessList {
     /// In production, pass the value from `AppSettings.shared.userTrustedProcesses`.
     ///
     /// - Parameter userTrusted: User-supplied process names to add to the built-in list.
-    init(userTrusted: Set<String> = []) {
+    init(userTrusted: Set<String> = [], userEntries: Set<UserEntry> = []) {
         self.userTrusted = userTrusted
+        self.userEntries = userEntries
     }
 
     // MARK: - Public API
@@ -137,42 +170,46 @@ struct TrustedProcessList {
             || userTrusted.contains { $0.lowercased().hasPrefix(nameLower) }
     }
 
-    /// Returns `true` only when `processName` is in the trusted list **and** the running
-    /// process at `pid` carries a valid code signature.
-    ///
-    /// This overload prevents impersonation attacks where a malicious binary uses the name
-    /// of a trusted process (e.g. "Code Helper") to bypass behavioural detection.
-    /// If the process has already exited and its path cannot be resolved, this returns
-    /// `false` — callers that need a softer fallback should use `isTrusted(_:)`.
-    ///
-    /// - Parameters:
-    ///   - processName: Process name to check (e.g. `"bash"`, `"Xcode"`).
-    ///   - pid:         PID of the running process to verify.
-    /// - Returns: `true` if the name is trusted **and** the binary is signed.
-    func isTrusted(_ processName: String, pid: pid_t) -> Bool {
-        // PID 1 is exclusively launchd on macOS. SecCodeCopyGuestWithAttributes cannot
-        // validate PID 1, so skip the signature check and fall back to name-only trust.
-        // We do NOT grant blanket trust to every process whose parentPID happens to be 1 —
-        // only names that are in the trusted list are accepted.
-        if pid == 1 { return isTrusted(processName) }
-        // Name must be in the trusted list first.
-        guard isTrusted(processName) else { return false }
-        // Resolve the on-disk path of the running process.
-        let maxSize = 4096
-        var buffer = [CChar](repeating: 0, count: maxSize)
-        let ret = proc_pidpath(pid, &buffer, UInt32(maxSize))
-        guard ret > 0 else { return false }
-        let path = buffer.withUnsafeBufferPointer { bp in
-            String(decoding: UnsafeRawBufferPointer(bp).prefix(while: { $0 != 0 }), as: UTF8.self)
+    /// Security-sensitive trust requires both stable signing fields. Names are
+    /// display labels only and never grant a severity downgrade.
+    func isTrusted(_ process: NickProcessInfo) -> Bool {
+        guard let identity = SigningIdentity(status: process.signingStatus) else { return false }
+        guard Self.trustRejectionReason(for: process) == nil else { return false }
+        return Self.builtInIdentities.contains(identity)
+            || userEntries.contains { $0.identity == identity }
+    }
+
+    mutating func addUserTrusted(_ process: NickProcessInfo) -> Bool {
+        guard let identity = SigningIdentity(status: process.signingStatus) else { return false }
+        guard Self.trustRejectionReason(for: process) == nil else { return false }
+        userEntries.insert(UserEntry(displayName: process.name, identity: identity))
+        userTrusted.remove(process.name)
+        return true
+    }
+
+    static func trustRejectionReason(for process: NickProcessInfo) -> String? {
+        guard let identity = SigningIdentity(status: process.signingStatus) else {
+            return "Nick could not verify this process's signing identity."
         }
-        guard !path.isEmpty else { return false }
-        // Verify the binary is actually signed — reject unsigned impersonators.
-        let status = SignatureValidator.shared.evaluate(binaryPath: path)
-        if case .signed = status { return true }
-        Self.logger.warning(
-            "Trusted-name process '\(processName, privacy: .public)' (PID \(pid)) failed signature check — treating as untrusted"
-        )
-        return false
+        let executableName = URL(fileURLWithPath: process.path).lastPathComponent.lowercased()
+        if forbiddenSigningIDs.contains(identity.signingID)
+            || forbiddenSigningIDPrefixes.contains(where: { identity.signingID.hasPrefix($0) })
+            || forbiddenExecutableNames.contains(executableName)
+            || forbiddenExecutableNames.contains(process.name.lowercased()) {
+            return "Interpreters and command-line tools cannot be trusted because they can run untrusted scripts or commands."
+        }
+        return nil
+    }
+
+    mutating func removeUserEntry(_ entry: UserEntry) {
+        userEntries.remove(entry)
+    }
+
+    func userTrustedEntries() -> [UserEntry] {
+        userEntries.sorted {
+            if $0.displayName == $1.displayName { return $0.identity.signingID < $1.identity.signingID }
+            return $0.displayName < $1.displayName
+        }
     }
 
     /// Adds `processName` to the user-trusted set.
@@ -194,6 +231,7 @@ struct TrustedProcessList {
     /// - Parameter processName: The process name to remove from user trust.
     mutating func removeUserTrusted(_ processName: String) {
         userTrusted.remove(processName)
+        userEntries = userEntries.filter { $0.displayName != processName }
         Self.logger.info("User removed trusted process: \(processName, privacy: .public)")
     }
 

@@ -49,8 +49,8 @@ struct SimpleAlertSheet: View {
     private var hasStableSignedIdentity: Bool {
         alert.contributingSignals.contains { signal in
             guard let process = signal.processInfo,
-                  case .signed(let teamID) = process.signingStatus else { return false }
-            return !teamID.isEmpty && !process.path.isEmpty
+                  case .signed(let teamID, let signingID?) = process.signingStatus else { return false }
+            return !teamID.isEmpty && !signingID.isEmpty
         }
     }
 

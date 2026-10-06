@@ -301,7 +301,28 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             reply(false)
             return
         }
-        scanner.cache.allowOnce(path: standardPath)
+        guard let resolvedPath = EndpointSecurityPath.canonical(standardPath),
+              let identity = FileIdentity(path: resolvedPath) else {
+            reply(false)
+            return
+        }
+        let result = scanner.cache.allowOnce(
+            reviewedPath: standardPath,
+            authorizationPath: resolvedPath,
+            currentIdentity: identity
+        )
+        switch result {
+        case .findingExpired:
+            Self.logger.warning("Allow-once refused because the reviewed finding expired")
+            reply(false)
+            return
+        case .fileChanged:
+            Self.logger.warning("Allow-once refused because reviewed file identity changed")
+            reply(false)
+            return
+        case .allowed:
+            break
+        }
         Self.logger.notice("User allowed one authorization for \(standardPath, privacy: .private)")
         reply(true)
     }

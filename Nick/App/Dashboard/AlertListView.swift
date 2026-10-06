@@ -191,10 +191,10 @@ private struct AlertRow: View {
     private var hasStableSignedIdentity: Bool {
         alert.contributingSignals.contains { signal in
             guard let process = signal.processInfo,
-                  case .signed(let teamID) = process.signingStatus else {
+                  case .signed(let teamID, let signingID?) = process.signingStatus else {
                 return false
             }
-            return !teamID.isEmpty && !process.path.isEmpty
+            return !teamID.isEmpty && !signingID.isEmpty
         }
     }
 
@@ -342,7 +342,7 @@ private struct AlertRow: View {
                             if success {
                                 engine.allowAlertOnce(alert.id)
                             } else {
-                                approvalError = "Real-Time Protection did not accept the approval. The file remains blocked."
+                                approvalError = "The reviewed finding expired or the file changed. Scan the file again before allowing it."
                             }
                         }
                     }

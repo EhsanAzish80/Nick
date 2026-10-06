@@ -114,8 +114,8 @@ actor ThreatCorrelator {
         pruneOldSignals()
         enforceBufferCap()
         let trustedCount = signals.filter { signal in
-            guard let name = signal.processInfo?.name else { return false }
-            return trustedProcessList.isTrusted(name)
+            guard let process = signal.processInfo else { return false }
+            return trustedProcessList.isTrusted(process)
         }.count
         Self.logger.debug("Ingested \(signals.count) signals (\(trustedCount) from trusted processes) — buffer: \(self.signalBuffer.count)")
     }
@@ -272,17 +272,8 @@ actor ThreatCorrelator {
         let trustedCount = signals.filter { signal in
             // Check the signal's own process (leaf) — use PID-aware check when available
             // to prevent impersonation attacks where a malicious process uses a trusted name.
-            if let proc = signal.processInfo,
-               trustedProcessList.isTrusted(proc.name, pid: proc.pid) { return true }
-            // Check parent process from metadata (stored by ProcessScanner for LOLBin signals)
-            if let parent = signal.metadata["parent"], !parent.isEmpty,
-               trustedProcessList.isTrusted(parent) { return true }
-            // Check full chain from metadata (stored by ParentChainAnalyzer)
-            if let chain = signal.metadata["chain"] {
-                let names = chain.components(separatedBy: " → ")
-                if names.contains(where: { trustedProcessList.isTrusted($0) }) { return true }
-            }
-            return false
+            guard let proc = signal.processInfo else { return false }
+            return trustedProcessList.isTrusted(proc)
         }.count
 
         let fraction = Double(trustedCount) / Double(signals.count)
@@ -335,12 +326,10 @@ actor ThreatCorrelator {
             case .signedProcess:
                 let identities = alert.contributingSignals.compactMap { signal -> String? in
                     guard let process = signal.processInfo,
-                          case .signed(let teamID) = process.signingStatus,
+                          case .signed(let teamID, let signingID?) = process.signingStatus,
                           !teamID.isEmpty,
-                          !process.path.isEmpty else { return nil }
-                    let path = URL(fileURLWithPath: process.path)
-                        .standardizedFileURL.path.lowercased()
-                    return "\(teamID.lowercased())|\(path)"
+                          !signingID.isEmpty else { return nil }
+                    return "\(teamID.lowercased())|\(signingID.lowercased())"
                 }
                 if identities.contains(needle) { return true }
             case .path:

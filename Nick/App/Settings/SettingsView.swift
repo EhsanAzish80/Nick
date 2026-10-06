@@ -38,6 +38,7 @@ struct SettingsView: View {
     @AppStorage("logFormatter") private var logFormatter: String = "kv"
     @AppStorage("fileLoggingEnabled") private var fileLoggingEnabled: Bool = false
     @AppStorage("stdoutLoggingEnabled") private var stdoutLoggingEnabled: Bool = false
+    @AppStorage("allowInsecureLocalWebhook") private var allowInsecureLocalWebhook: Bool = false
     @AppStorage("scheduledDeepScanInterval") private var scheduledDeepScanInterval: Int = 0
     @AppStorage("telemetryEnabled") private var telemetryEnabled: Bool = false
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
@@ -59,6 +60,7 @@ struct SettingsView: View {
             ?? ["/Users", "/Applications", "/Library", "/private/tmp"]
     }()
     @State private var newProcessName: String = ""
+    @State private var trustedProcessStatus: String?
     @State private var newAllowedDomain: String = ""
     @State private var newAllowedApp: String = ""
     @State private var showRemoveProcessConfirmation = false
@@ -67,6 +69,10 @@ struct SettingsView: View {
     @State private var showResetHistoryConfirmation = false
     @State private var showRemoveHelperConfirmation = false
     @State private var updateCheckStatus: String?
+    @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
+    @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
+    @AppStorage("nickUpdateAvailable") private var updateAvailable = false
+    @AppStorage("nickUpdateAvailableVersion") private var updateAvailableVersion = ""
     /// Simple mode keeps the technical sections behind this disclosure.
     @State private var showsAdvancedSettings = false
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates: Bool = true
@@ -488,7 +494,7 @@ struct SettingsView: View {
                                 .font(.system(size: 14, weight: .regular))
                                 .foregroundStyle(.white)
                         )
-                    Text("HTTP endpoint")
+                    Text("Webhook endpoint")
                         .font(.system(size: 13))
                     Spacer()
                 }
@@ -517,6 +523,17 @@ struct SettingsView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.15), value: webhookURLString)
+                if webhookUsesRejectedHTTP {
+                    Text("HTTP webhooks are disabled. Use HTTPS, or enable HTTP for localhost only.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.orange)
+                }
+                Toggle("Allow HTTP for localhost only", isOn: $allowInsecureLocalWebhook)
+                    .font(.system(size: 11.5))
+                    .onChange(of: allowInsecureLocalWebhook) { _, _ in saveWebhookURL() }
+                Text("Remote webhook endpoints must use HTTPS.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
                 if isValidWebhookURL {
                     HStack(spacing: 8) {
                         Button("Send test alert") {
@@ -614,34 +631,15 @@ struct SettingsView: View {
                     .controlSize(.small)
             }
 
-            userListContent
-
-            DisclosureGroup {
-                LazyVGrid(
-                    columns: [GridItem(.flexible()), GridItem(.flexible())],
-                    alignment: .leading, spacing: 4
-                ) {
-                    ForEach(TrustedProcessList.builtIn.sorted(), id: \.self) { name in
-                        HStack(spacing: 6) {
-                            Image(systemName: "lock.fill")
-                                .foregroundStyle(.tertiary)
-                                .imageScale(.small)
-                            Text(name)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(.top, 6)
-            } label: {
-                HStack(spacing: 4) {
-                    Text("Built-in Trusted Processes")
-                        .font(.system(size: 12.5))
-                    Text("(\(TrustedProcessList.builtIn.count))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
+            if let trustedProcessStatus {
+                Text(trustedProcessStatus)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
             }
+
+            legacyTrustedProcessContent
+
+            userListContent
             .confirmationDialog(
                 "Remove \"\(nameToRemove ?? "")\" from trusted processes?",
                 isPresented: $showRemoveProcessConfirmation,
@@ -658,31 +656,59 @@ struct SettingsView: View {
         } header: {
             Text("Trusted Processes")
         } footer: {
-            Text("Alerts where all contributing processes are trusted are downgraded to Info severity and suppressed from notifications.")
+            Text("Add a currently running, signed process. Trust is bound to its exact Team ID and signing identifier; its name alone is never trusted.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder
+    private var legacyTrustedProcessContent: some View {
+        let names = engine.trustedProcessList.userTrustedNames()
+        if !names.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Previous name-only trust entries need approval", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.orange)
+                Text("Names alone are no longer trusted. Run each app, then approve its verified signing identity.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                ForEach(names, id: \.self) { name in
+                    HStack {
+                        Text(name).font(.system(size: 12.5))
+                        Spacer()
+                        Button("Re-approve") { reapproveLegacyProcess(name) }
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
     private var userListContent: some View {
-        let userNames = engine.trustedProcessList.userTrustedNames()
-        if userNames.isEmpty {
+        let entries = engine.trustedProcessList.userTrustedEntries()
+        if entries.isEmpty {
             Text("No user-added entries yet.")
                 .font(.system(size: 12))
                 .italic()
                 .foregroundStyle(.secondary)
         } else {
-            ForEach(userNames, id: \.self) { name in
+            ForEach(entries, id: \.self) { entry in
                 HStack(spacing: 10) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .imageScale(.small)
-                    Text(name)
-                        .font(.system(size: 12.5))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(entry.displayName).font(.system(size: 12.5))
+                        Text("\(entry.identity.teamID) · \(entry.identity.signingID)")
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Button {
-                        nameToRemove = name
+                        nameToRemove = entry.displayName
                         showRemoveProcessConfirmation = true
                     } label: {
                         Image(systemName: "trash")
@@ -698,6 +724,11 @@ struct SettingsView: View {
 
     private var suppressionRulesSection: some View {
         Section {
+            ForEach(engine.suppressionRuleMigrationNotices, id: \.self) { notice in
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.orange)
+            }
             if !engine.suppressionRules.isEmpty {
                 ForEach(engine.suppressionRules) { rule in
                     HStack(spacing: 10) {
@@ -773,7 +804,7 @@ struct SettingsView: View {
         case .processName: return "e.g. xcodebuild"
         case .path:        return "e.g. /usr/local/bin/tool"
         case .ruleName:    return "e.g. raw_ip_outbound"
-        case .signedProcess: return "Team ID | executable path"
+        case .signedProcess: return "Team ID | signing identifier"
         }
     }
 
@@ -897,6 +928,20 @@ struct SettingsView: View {
 
     private var updatesSection: some View {
         Section {
+            if updateAvailable {
+                LabeledTile(
+                    icon: "arrow.down.circle.fill", tint: .blue,
+                    title: updateAvailableVersion.isEmpty
+                        ? "A Nick update is available"
+                        : "Nick \(updateAvailableVersion) is available",
+                    subtitle: "Open the updater to review and install it."
+                ) {
+                    Button("View Update") {
+                        _ = (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                    }
+                    .controlSize(.small)
+                }
+            }
             LabeledTile(
                 icon: "arrow.down.circle.fill", tint: .blue,
                 title: "Automatically check for updates",
@@ -919,10 +964,25 @@ struct SettingsView: View {
                 }
                 .controlSize(.small)
             }
+            if updateLastCheckTime > 0 {
+                Text("Last checked \(Date(timeIntervalSince1970: updateLastCheckTime).formatted(date: .abbreviated, time: .shortened)): \(updateLastCheckResult)")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            Button("Copy Update Diagnostics") {
+                let version = "\(appVersion) (\(appBuild))"
+                let checked = updateLastCheckTime > 0
+                    ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(.iso8601)
+                    : "never"
+                let text = "Nick \(version)\nFeed: \(updateFeedURL)\nLast check: \(checked)\nResult: \(updateLastCheckResult)\nUpdate available: \(updateAvailable)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            .controlSize(.small)
         } header: {
             Text("Updates")
         } footer: {
-            Text("Update feed: https://3nsofts.com/nick/appcast.xml")
+            Text("Update feed: \(updateFeedURL)")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
             if let updateCheckStatus {
@@ -990,6 +1050,16 @@ struct SettingsView: View {
         Bundle.main.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String ?? "Unknown"
     }
 
+    private var updateFeedURL: String {
+#if DEBUG
+        if let value = Bundle.main.object(forInfoDictionaryKey: "NickDebugUpdateFeedURL") as? String,
+           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return value
+        }
+#endif
+        return Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? "Unknown"
+    }
+
     private var footer: some View {
         HStack(spacing: 4) {
             Text("Nick · Version \(appVersion) · Build \(appBuild) · ")
@@ -1024,9 +1094,33 @@ struct SettingsView: View {
     private func addProcess() {
         let trimmed = newProcessName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        let matches = engine.processes.filter {
+            $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+                && SigningIdentity(status: $0.signingStatus) != nil
+        }
+        let identities = Set(matches.compactMap { SigningIdentity(status: $0.signingStatus) })
+        guard identities.count == 1, let process = matches.first else {
+            trustedProcessStatus = identities.isEmpty
+                ? "Run the signed app first and wait for its signature check to finish."
+                : "More than one signing identity uses that name. Enter a more specific running process name."
+            return
+        }
+        if let reason = TrustedProcessList.trustRejectionReason(for: process) {
+            trustedProcessStatus = reason
+            return
+        }
         @Bindable var bindableEngine = engine
-        bindableEngine.trustedProcessList.addUserTrusted(trimmed)
+        guard bindableEngine.trustedProcessList.addUserTrusted(process) else {
+            trustedProcessStatus = "Nick could not approve this process."
+            return
+        }
+        trustedProcessStatus = "Trusted \(process.name) by its verified signing identity."
         newProcessName = ""
+    }
+
+    private func reapproveLegacyProcess(_ name: String) {
+        newProcessName = name
+        addProcess()
     }
 
     private func addAllowedDomain() {
@@ -1073,19 +1167,26 @@ struct SettingsView: View {
 
     private var isValidWebhookURL: Bool {
         guard !webhookURLString.isEmpty,
-              let url = URL(string: webhookURLString),
-              url.scheme == "https" || url.scheme == "http",
-              url.host != nil else { return false }
-        return true
+              let url = URL(string: webhookURLString) else { return false }
+        return WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook)
+    }
+
+    private var webhookUsesRejectedHTTP: Bool {
+        guard let url = URL(string: webhookURLString),
+              url.scheme?.lowercased() == "http" else { return false }
+        return !WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook)
     }
 
     private func saveWebhookURL() {
         let trimmed = webhookURLString.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
             UserDefaults.standard.removeObject(forKey: "webhookURL")
-        } else if let url = URL(string: trimmed), url.scheme == "https" || url.scheme == "http" {
+        } else if let url = URL(string: trimmed),
+                  WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook) {
             // Store as String so buildPipeline() can read it with string(forKey:)
             UserDefaults.standard.set(trimmed, forKey: "webhookURL")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "webhookURL")
         }
     }
 

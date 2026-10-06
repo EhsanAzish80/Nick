@@ -60,8 +60,19 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             intentIdentifiers: [],
             options: []
         )
+        let updateAction = UNNotificationAction(
+            identifier: "VIEW_UPDATE",
+            title: "View Update",
+            options: [.foreground]
+        )
+        let updateCategory = UNNotificationCategory(
+            identifier: "UPDATE_AVAILABLE",
+            actions: [updateAction],
+            intentIdentifiers: [],
+            options: []
+        )
         let center = UNUserNotificationCenter.current()
-        center.setNotificationCategories([alertCategory])
+        center.setNotificationCategories([alertCategory, updateCategory])
         center.delegate = self
         // requestPermission() is NOT called here — no window is open at launch and
         // macOS will silently discard the dialog for a .accessory-policy app with no
@@ -158,6 +169,28 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    func sendUpdateAvailable(version: String) async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard settings.authorizationStatus == .authorized ||
+              settings.authorizationStatus == .provisional else {
+            Self.log.info("Update reminder skipped because notifications are not authorized")
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "Nick \(version) is available"
+        content.body = "Click to review and install the update."
+        content.categoryIdentifier = "UPDATE_AVAILABLE"
+        content.userInfo = ["updateVersion": version]
+        let request = UNNotificationRequest(
+            identifier: "nick-update-\(version)", content: content, trigger: nil
+        )
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+        } catch {
+            Self.log.error("Failed to deliver update reminder: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - UNUserNotificationCenterDelegate
 
     nonisolated func userNotificationCenter(
@@ -168,6 +201,16 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let userInfo = response.notification.request.content.userInfo
         let alertIDString = userInfo["alertID"] as? String
         let alertID = alertIDString.flatMap { UUID(uuidString: $0) }
+
+        if response.notification.request.content.categoryIdentifier == "UPDATE_AVAILABLE" {
+            Task { @MainActor in
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate()
+                _ = (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+            }
+            completionHandler()
+            return
+        }
 
         if response.actionIdentifier == "VIEW_ALERT" ||
            response.actionIdentifier == UNNotificationDefaultActionIdentifier {
