@@ -40,7 +40,7 @@ actor ThreatCorrelator {
 
     // MARK: - Private State
 
-    private var signalBuffer: [ThreatSignal] = []
+    private var evidenceBuffer: [Evidence] = []
     private var rules: [CorrelationRule]
     private var trustedProcessList: TrustedProcessList = TrustedProcessList()
     private var suppressionRules: [SuppressionRule] = []
@@ -110,14 +110,33 @@ actor ThreatCorrelator {
     ///
     /// - Parameter signals: Signals from any monitor.
     func ingest(_ signals: [ThreatSignal]) {
-        signalBuffer.append(contentsOf: signals)
+        ingestEvidence(signals.map(Evidence.init(signal:)))
+    }
+
+    /// Adds already-normalised evidence to the correlation window.
+    func ingestEvidence(_ evidence: [Evidence]) {
+        evidenceBuffer.append(contentsOf: evidence)
         pruneOldSignals()
         enforceBufferCap()
-        let trustedCount = signals.filter { signal in
-            guard let process = signal.processInfo else { return false }
+        let trustedCount = evidence.filter { item in
+            guard let process = item.processInfo else { return false }
             return trustedProcessList.isTrusted(process)
         }.count
-        Self.logger.debug("Ingested \(signals.count) signals (\(trustedCount) from trusted processes) — buffer: \(self.signalBuffer.count)")
+        Self.logger.debug("Ingested \(evidence.count) evidence items (\(trustedCount) from trusted processes) — buffer: \(self.evidenceBuffer.count)")
+    }
+
+    /// Atomically ingests and correlates evidence on this actor. Keeping both
+    /// operations inside one actor turn prevents a full scan and a quick tick
+    /// from interleaving between ingestion and deduplication.
+    func ingestAndCorrelateNew(_ signals: [ThreatSignal]) -> [ThreatAlert] {
+        ingest(signals)
+        return correlateNew()
+    }
+
+    /// Typed-evidence form of `ingestAndCorrelateNew`.
+    func ingestAndCorrelateNew(_ evidence: [Evidence]) -> [ThreatAlert] {
+        ingestEvidence(evidence)
+        return correlateNew()
     }
 
     /// Evaluates all rules against the current signal window and returns alerts.
@@ -137,9 +156,9 @@ actor ThreatCorrelator {
     /// - Returns: All alerts produced by the current rule set and signal window.
     func correlate() -> [ThreatAlert] {
         pruneOldSignals()
-        guard !signalBuffer.isEmpty else { return [] }
+        guard !evidenceBuffer.isEmpty else { return [] }
 
-        let window = signalBuffer
+        let window = evidenceBuffer.map(\.threatSignal)
         var alerts: [ThreatAlert] = []
 
         // Evaluate rules in descending confidence order
@@ -166,9 +185,9 @@ actor ThreatCorrelator {
     /// - Returns: Alerts for newly-triggered rules only.
     func correlateNew() -> [ThreatAlert] {
         pruneOldSignals()
-        guard !signalBuffer.isEmpty else { return [] }
+        guard !evidenceBuffer.isEmpty else { return [] }
 
-        let window = signalBuffer
+        let window = evidenceBuffer.map(\.threatSignal)
         var alerts: [ThreatAlert] = []
 
         let sortedRules = rules.sorted { $0.score > $1.score }
@@ -202,11 +221,12 @@ actor ThreatCorrelator {
 
     /// Removes all signals from the internal buffer.
     func flush() {
-        signalBuffer.removeAll()
+        evidenceBuffer.removeAll()
+        emittedSubjects.removeAll()
     }
 
     /// Returns the number of signals currently in the correlation window.
-    var bufferedSignalCount: Int { signalBuffer.count }
+    var bufferedSignalCount: Int { evidenceBuffer.count }
 
     // MARK: - Private Helpers
 
@@ -226,23 +246,25 @@ actor ThreatCorrelator {
 
     private func pruneOldSignals() {
         let cutoff = Date(timeIntervalSinceNow: -windowDuration)
-        signalBuffer.removeAll { $0.timestamp < cutoff }
+        evidenceBuffer.removeAll { $0.timestamps.lastSeen < cutoff }
     }
 
     /// Enforces `maxBufferSize` by evicting the lowest-severity, oldest signals.
     ///
     /// SECURITY: Prevents unbounded memory growth under a sustained signal flood.
     private func enforceBufferCap() {
-        guard signalBuffer.count > Self.maxBufferSize else { return }
+        guard evidenceBuffer.count > Self.maxBufferSize else { return }
 
         // Sort ascending by severity then timestamp so the weakest/oldest are first.
-        signalBuffer.sort {
-            if $0.severity == $1.severity { return $0.timestamp < $1.timestamp }
+        evidenceBuffer.sort {
+            if $0.severity == $1.severity {
+                return $0.timestamps.observedAt < $1.timestamps.observedAt
+            }
             return $0.severity.rawValue < $1.severity.rawValue
         }
 
-        let excess = signalBuffer.count - Self.maxBufferSize
-        signalBuffer.removeFirst(excess)
+        let excess = evidenceBuffer.count - Self.maxBufferSize
+        evidenceBuffer.removeFirst(excess)
         Self.logger.notice("Signal buffer cap enforced — evicted \(excess) low-severity signals")
     }
 

@@ -337,8 +337,7 @@ final class DeepScanner {
                 )
             )
         }
-        await eng.correlator.ingest(signals)
-        let alerts = await eng.correlator.correlateNew()
+        let alerts = await eng.correlator.ingestAndCorrelateNew(signals)
         for alert in alerts {
             eng.addAlert(alert)
             await NotificationManager.shared.send(for: alert)

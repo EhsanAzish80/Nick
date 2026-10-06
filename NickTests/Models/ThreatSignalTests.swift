@@ -107,6 +107,50 @@ final class ThreatSignalTests: XCTestCase {
         XCTAssertEqual(decoded.processInfo?.signingStatus, .unsigned)
     }
 
+    // MARK: - Evidence
+
+    func test_evidence_fromSignal_capturesVersionedTypedIdentity() throws {
+        let observedAt = Date(timeIntervalSince1970: 1_234_567)
+        let signal = ThreatSignal(
+            source: .yara,
+            severity: .high,
+            timestamp: observedAt,
+            title: "Known family",
+            description: "Signature matched a file.",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: "/private/tmp/sample",
+                    sha256Hash: "ABCDEF",
+                    entropy: 7.4,
+                    signingStatus: .unsigned,
+                    sizeBytes: 42
+                ),
+                metadata: [
+                    "class": "signature",
+                    "device_id": "17",
+                    "inode": "99",
+                    "modification_time": "1234.5"
+                ]
+            )
+        )
+
+        let evidence = Evidence(signal: signal)
+        let decoded = try JSONDecoder().decode(
+            Evidence.self,
+            from: JSONEncoder().encode(evidence)
+        )
+
+        XCTAssertEqual(decoded.schemaVersion, Evidence.currentSchemaVersion)
+        XCTAssertEqual(decoded.source, .yara)
+        XCTAssertEqual(decoded.ruleClass, .signature)
+        XCTAssertEqual(decoded.subject.kind, .file)
+        XCTAssertEqual(decoded.fileIdentity?.deviceID, 17)
+        XCTAssertEqual(decoded.fileIdentity?.inode, 99)
+        XCTAssertEqual(decoded.fileIdentity?.modificationTime, 1234.5)
+        XCTAssertEqual(decoded.timestamps.observedAt, observedAt)
+        XCTAssertEqual(decoded.threatSignal, signal)
+    }
+
     // MARK: - SigningStatus Codable
 
     func test_signingStatus_codable_roundTrip_signedWithTeamID() throws {

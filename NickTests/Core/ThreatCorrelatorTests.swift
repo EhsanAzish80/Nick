@@ -217,6 +217,36 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(afterReset.map(\.title), first.map(\.title))
     }
 
+    func test_simultaneousFullAndQuickIngest_emitOneAlert() async {
+        let sharedSignal = makeSignal(
+            source: .network,
+            severity: .high,
+            title: "Concurrent reverse shell evidence",
+            metadata: ["reason": "reverse_shell"]
+        )
+
+        let batches = await withTaskGroup(
+            of: [ThreatAlert].self,
+            returning: [[ThreatAlert]].self
+        ) { group in
+            // Models the full-scan and quick-tick paths arriving together.
+            group.addTask { [correlator] in
+                await correlator!.ingestAndCorrelateNew([sharedSignal])
+            }
+            group.addTask { [correlator] in
+                await correlator!.ingestAndCorrelateNew([sharedSignal])
+            }
+
+            var result: [[ThreatAlert]] = []
+            for await alerts in group { result.append(alerts) }
+            return result
+        }
+
+        let emitted = batches.flatMap { $0 }
+        XCTAssertEqual(emitted.count, 1)
+        XCTAssertEqual(Set(emitted.map(\.deduplicationKey)).count, 1)
+    }
+
     func test_correlateNew_alertsAgainForADifferentSubject() async {
         await correlator.ingest([
             makeSignal(source: .yara, severity: .high, metadata: ["path": "/private/tmp/first", "rule": "fam"])

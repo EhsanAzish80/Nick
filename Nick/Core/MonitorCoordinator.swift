@@ -114,8 +114,7 @@ final class MonitorCoordinator {
             let watcher = FileSystemWatcher(yaraEngine: yaraEngine) { [weak self] signal in
                 Task { [weak self] in
                     guard let self else { return }
-                    await self.correlator.ingest([signal])
-                    let alerts = await self.correlator.correlateNew()
+                    let alerts = await self.correlator.ingestAndCorrelateNew([signal])
                     guard !alerts.isEmpty else { return }
                     for alert in alerts {
                         await NotificationManager.shared.send(for: alert)
@@ -277,9 +276,7 @@ final class MonitorCoordinator {
         guard !newSignals.isEmpty else { return }
 
         Self.log.info("Quick tick: \(newSignals.count) signal(s) from \(newPIDs.count) new PID(s)")
-        await correlator.ingest(newSignals)
-
-        let newAlerts = await correlator.correlateNew()
+        let newAlerts = await correlator.ingestAndCorrelateNew(newSignals)
         guard !newAlerts.isEmpty else { return }
 
         for var alert in newAlerts {

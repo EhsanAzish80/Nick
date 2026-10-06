@@ -390,9 +390,7 @@ final class SecurityEngine {
         processes        = procMon.processes
         connections      = netMon.connections
 
-        await correlator.resetEmittedRules()
-        await correlator.ingest(allSignals)
-        var newAlerts = await correlator.correlate()
+        var newAlerts = await correlator.ingestAndCorrelateNew(allSignals)
         // A repeat observation updates the existing incident. It is not another
         // notification unless its severity has increased.
         newAlerts.removeAll(where: shouldTemporarilySuppress)
