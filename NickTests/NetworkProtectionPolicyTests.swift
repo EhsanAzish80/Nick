@@ -446,6 +446,31 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertEqual(decoded.payload, payload)
     }
 
+    func test_persistedEndpointReplayRestoresUIStateWithoutRedeliveringAlert() async throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/open",
+            pid: 42,
+            parentPid: 1,
+            filePath: "/private/tmp/replayed",
+            decision: .deny,
+            threat: .init(threatName: "Replayed threat", threatFamily: "test")
+        )
+        let envelope = PersistedExtensionFinding(
+            kind: .threat,
+            timestamp: Date(timeIntervalSince1970: 123),
+            payload: try JSONEncoder().encode(event)
+        )
+        let client = ExtensionXPCClient()
+        var deliveredCount = 0
+        client.findingHandler = { _ in deliveredCount += 1 }
+
+        await client.receivePersisted(envelope)
+
+        XCTAssertEqual(client.events.map(\.id), [event.id])
+        XCTAssertEqual(deliveredCount, 0)
+    }
+
     func test_remediationReplayKeepsStableEvidenceID() {
         let report = RemediationReport(
             timestamp: Date(timeIntervalSince1970: 456),
@@ -482,6 +507,60 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertTrue(tamperSource.contains(
             "func shouldBlock(targetPath _: String, actorPath _: String, actorPid _: Int32) -> Bool {\n        false"
         ))
+    }
+
+    func test_tamperProtectionDoesNotWatchItsMutableEventStore() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "NickExtension/TamperProtection/TamperProtection.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("\"/Applications/Nick.app\""))
+        XCTAssertFalse(source.contains(
+            "\"/Library/Application Support/com.ehsanazish.nick\""
+        ))
+    }
+
+    func test_networkFilterActivationDoesNotGateIncidentStoreBootstrap() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Nick/App/AppDelegate.swift"),
+            encoding: .utf8
+        )
+        let connectRange = try XCTUnwrap(
+            source.range(of: "xpcClient.connect(legacyIncidentPayload:")
+        )
+        let networkActivationRange = try XCTUnwrap(
+            source.range(of: "await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()")
+        )
+
+        XCTAssertLessThan(connectRange.lowerBound, networkActivationRange.lowerBound)
+        XCTAssertTrue(source.contains(
+            "Task { @MainActor [weak self] in\n                guard let self else { return }\n                await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()"
+        ))
+    }
+
+    func test_viewsDoNotRaceAppDelegateIncidentBootstrap() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        for path in [
+            "Nick/App/Onboarding/ProtectionSetupView.swift",
+            "Nick/App/Dashboard/SmartScanSheetView.swift",
+        ] {
+            let source = try String(
+                contentsOf: root.appendingPathComponent(path),
+                encoding: .utf8
+            )
+            XCTAssertFalse(source.contains("xpcClient.connect()"), path)
+        }
     }
 }
 

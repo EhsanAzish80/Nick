@@ -109,7 +109,6 @@ struct SmartScanContentView: View {
             checker.securityEngine = engine
             checker.xpcClient = xpcClient
             checker.extensionManager = extensionManager
-            xpcClient.connect()
             if status == nil {
                 await checker.refreshLiveProtectionState()
                 status = checker.runScan()

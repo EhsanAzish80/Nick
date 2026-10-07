@@ -43,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         subsystem: "com.ehsanazish.nick",
         category: "Updates"
     )
+    private let incidentStoreLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "IncidentStore"
+    )
     private var receivedUpdateCheckResult = false
     /// Sparkle must be allowed to terminate Nick after the user accepts an
     /// update, even when Nick's main window is hidden. Otherwise the installer
@@ -125,11 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let endpointManager = ExtensionManager()
             endpointExtensionManager = endpointManager
-            endpointManager.ensureBundledVersionIsActive()
-            // A healthy older Network Filter is not sufficient after an app
-            // update. Submit a replacement request once per bundled build so
-            // macOS runs the provider shipped with this version of Nick.
-            await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()
+            await endpointManager.ensureBundledVersionIsActive()
             xpcClient.findingHandler = { [weak self] finding in
                 guard let self else { return }
                 _ = await self.engine.ingestLiveFinding(
@@ -146,20 +146,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     recommendedAction: finding.recommendedAction
                 )
             }
-            await networkProtection.refresh()
-            xpcClient.connect()
-            let coord = MonitorCoordinator(engine: engine)
-            coordinator = coord
-            // The coordinator's first tick performs the initial full scan.
-            // Starting another scan here duplicates process signature validation
-            // and can saturate a CPU core during launch.
-            coord.startRealTimePipeline()
-            NotificationManager.shared.setup()
-            NSApp.servicesProvider = NickServicesProvider()
-            NSUpdateDynamicServices()
-            configureMainWindowDelegate()
-            checkPendingFinderScan()
-            checkScheduledDeepScan()
+            let legacyPayload = engine.prepareLegacyIncidentMigration()
+            xpcClient.connect(legacyIncidentPayload: legacyPayload) { [weak self] record, _ in
+                guard let self else { return }
+                if let record {
+                    do {
+                        try self.engine.installPrivilegedIncidentStore(
+                            payload: record.payload,
+                            persistence: { [weak self] payload in
+                                self?.xpcClient.persistIncidentStore(payload)
+                            },
+                            authorizer: { [weak self] id, action in
+                                guard let self else { return false }
+                                return await self.xpcClient.authoriseIncidentVerdict(id: id, action: action)
+                            },
+                            removeLegacyState: true
+                        )
+                    } catch {
+                        self.incidentStoreLogger.error(
+                            "Could not load root-owned incident store: \(error.localizedDescription)"
+                        )
+                    }
+                }
+                self.startMonitoringAfterIncidentStoreBootstrap()
+            }
+
+            // Network Filter replacement/configuration is independent of the
+            // Endpoint Security XPC bootstrap. A system-extension request can
+            // remain pending while macOS waits for approval or provider health;
+            // it must never delay loading or migrating the incident store.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()
+                await self.networkProtection.refresh()
+            }
         }
         NotificationCenter.default.addObserver(
             self,
@@ -167,6 +187,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.willBecomeActiveNotification,
             object: nil
         )
+    }
+
+    @MainActor
+    private func startMonitoringAfterIncidentStoreBootstrap() {
+        guard coordinator == nil else { return }
+        let coord = MonitorCoordinator(engine: engine)
+        coordinator = coord
+        // The coordinator's first tick performs the initial full scan.
+        // Starting another scan here duplicates process signature validation
+        // and can saturate a CPU core during launch.
+        coord.startRealTimePipeline()
+        NotificationManager.shared.setup()
+        NSApp.servicesProvider = NickServicesProvider()
+        NSUpdateDynamicServices()
+        configureMainWindowDelegate()
+        checkPendingFinderScan()
+        checkScheduledDeepScan()
     }
 
     /// Runs only when the bundled uninstaller launches Nick with

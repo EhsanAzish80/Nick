@@ -72,10 +72,31 @@ struct IncidentActionRecord: Codable, Sendable, Equatable {
     }
 }
 
-private struct IncidentDismissalTombstone: Codable, Sendable, Equatable {
+struct IncidentDismissalTombstone: Codable, Sendable, Equatable {
     let incidentKey: String
     let alertDeduplicationKey: String
     let dismissedAt: Date
+}
+
+struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    var incidents: [SecurityIncident]
+    var dismissalTombstones: [IncidentDismissalTombstone]
+    var expectedCooldowns: [String: TimeInterval]
+
+    init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        incidents: [SecurityIncident],
+        dismissalTombstones: [IncidentDismissalTombstone],
+        expectedCooldowns: [String: TimeInterval]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.incidents = incidents
+        self.dismissalTombstones = dismissalTombstones
+        self.expectedCooldowns = expectedCooldowns
+    }
 }
 
 /// Persisted security incident. Evidence and its L0 classification live beside
@@ -131,28 +152,31 @@ final class IncidentStore {
     static let maximumPersistedIncidents = 100
     static let maximumDismissalTombstones = 500
 
-    private let defaults: UserDefaults
+    private let legacyTestDefaults: UserDefaults?
     private(set) var incidents: [SecurityIncident]
     private var trustedProcessList: TrustedProcessList
     private var suppressionRules: [SuppressionRule]
     private var expectedCooldowns: [String: TimeInterval]
     private var dismissalTombstones: [IncidentDismissalTombstone]
+    private var privilegedPersistence: ((Data) -> Void)?
+    private var lastPrivilegedPayload: Data?
 
     init(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults? = nil,
         trustedProcessList: TrustedProcessList = TrustedProcessList(),
-        suppressionRules: [SuppressionRule] = []
+        suppressionRules: [SuppressionRule] = [],
+        persistOnInit: Bool = true
     ) {
-        self.defaults = defaults
+        self.legacyTestDefaults = defaults
         self.trustedProcessList = trustedProcessList
         self.suppressionRules = suppressionRules
-        self.expectedCooldowns = defaults.dictionary(forKey: "nickExpectedAlertCooldowns") as? [String: TimeInterval] ?? [:]
-        self.dismissalTombstones = defaults.data(forKey: Self.dismissalPersistenceKey)
+        self.expectedCooldowns = defaults?.dictionary(forKey: "nickExpectedAlertCooldowns") as? [String: TimeInterval] ?? [:]
+        self.dismissalTombstones = defaults?.data(forKey: Self.dismissalPersistenceKey)
             .flatMap { try? JSONDecoder().decode([IncidentDismissalTombstone].self, from: $0) } ?? []
-        if let data = defaults.data(forKey: Self.persistenceKey),
+        if let data = defaults?.data(forKey: Self.persistenceKey),
            let restored = try? JSONDecoder().decode([SecurityIncident].self, from: data) {
             incidents = restored
-        } else if let data = defaults.data(forKey: "nickPersistedAlerts"),
+        } else if let data = defaults?.data(forKey: "nickPersistedAlerts"),
                   let alerts = try? JSONDecoder().decode([ThreatAlert].self, from: data) {
             incidents = alerts.map(Self.migratedIncident)
         } else {
@@ -160,7 +184,7 @@ final class IncidentStore {
         }
         migrateLegacyDismissals()
         boundInMemory()
-        persist()
+        if persistOnInit { persist() }
     }
 
     var visibleAlerts: [ThreatAlert] {
@@ -169,6 +193,37 @@ final class IncidentStore {
 
     var dismissedAlertDeduplicationKeys: Set<String> {
         Set(dismissalTombstones.map(\.alertDeduplicationKey))
+    }
+
+    func installPrivilegedSnapshot(
+        _ payload: Data,
+        persistence: @escaping (Data) -> Void
+    ) throws {
+        let snapshot = try Self.decodeSnapshot(payload)
+        incidents = snapshot.incidents
+        dismissalTombstones = snapshot.dismissalTombstones
+        expectedCooldowns = snapshot.expectedCooldowns
+        migrateLegacyDismissals()
+        boundInMemory()
+        privilegedPersistence = persistence
+        lastPrivilegedPayload = try encodedSnapshot()
+    }
+
+    func prepareLegacyMigration(defaults: UserDefaults = .standard) throws -> Data {
+        let legacy = IncidentStore(
+            defaults: defaults,
+            trustedProcessList: trustedProcessList,
+            suppressionRules: suppressionRules,
+            persistOnInit: false
+        )
+        return try legacy.encodedSnapshot()
+    }
+
+    func removeLegacyPersistence(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: Self.persistenceKey)
+        defaults.removeObject(forKey: Self.dismissalPersistenceKey)
+        defaults.removeObject(forKey: "nickPersistedAlerts")
+        defaults.removeObject(forKey: "nickExpectedAlertCooldowns")
     }
 
     func configure(trustedProcessList: TrustedProcessList, suppressionRules: [SuppressionRule]) {
@@ -213,7 +268,7 @@ final class IncidentStore {
         return IncidentIngestResult(visibleAlerts: visibleAlerts, newlyActionable: newlyActionable)
     }
 
-    func perform(_ kind: IncidentActionKind, alertID: UUID) {
+    func performAuthenticatedUserAction(_ kind: IncidentActionKind, alertID: UUID) {
         guard let index = incidents.firstIndex(where: { $0.alert.id == alertID }) else { return }
         recordAction(kind, actor: .user, at: index)
         switch kind {
@@ -249,10 +304,11 @@ final class IncidentStore {
         incidents.removeAll()
         dismissalTombstones.removeAll()
         expectedCooldowns.removeAll()
-        defaults.removeObject(forKey: Self.persistenceKey)
-        defaults.removeObject(forKey: Self.dismissalPersistenceKey)
-        defaults.removeObject(forKey: "nickPersistedAlerts")
-        defaults.removeObject(forKey: "nickExpectedAlertCooldowns")
+        legacyTestDefaults?.removeObject(forKey: Self.persistenceKey)
+        legacyTestDefaults?.removeObject(forKey: Self.dismissalPersistenceKey)
+        legacyTestDefaults?.removeObject(forKey: "nickPersistedAlerts")
+        legacyTestDefaults?.removeObject(forKey: "nickExpectedAlertCooldowns")
+        persist()
     }
 
     func removeIncidents(where shouldRemove: (SecurityIncident) -> Bool) {
@@ -262,17 +318,45 @@ final class IncidentStore {
 
     private func persist() {
         boundInMemory()
-        if let data = try? JSONEncoder().encode(incidents) {
-            defaults.set(data, forKey: Self.persistenceKey)
+        if let defaults = legacyTestDefaults {
+            if let data = try? JSONEncoder().encode(incidents) {
+                defaults.set(data, forKey: Self.persistenceKey)
+            }
+            if let data = try? JSONEncoder().encode(dismissalTombstones) {
+                defaults.set(data, forKey: Self.dismissalPersistenceKey)
+            }
+            defaults.set(expectedCooldowns, forKey: "nickExpectedAlertCooldowns")
+            if let data = try? JSONEncoder().encode(visibleAlerts) {
+                defaults.set(data, forKey: "nickPersistedAlerts")
+            }
         }
-        if let data = try? JSONEncoder().encode(dismissalTombstones) {
-            defaults.set(data, forKey: Self.dismissalPersistenceKey)
+        guard let privilegedPersistence,
+              let payload = try? encodedSnapshot(),
+              payload != lastPrivilegedPayload else { return }
+        lastPrivilegedPayload = payload
+        privilegedPersistence(payload)
+    }
+
+    private func encodedSnapshot() throws -> Data {
+        let snapshot = IncidentStoreSnapshot(
+            incidents: incidents,
+            dismissalTombstones: dismissalTombstones,
+            expectedCooldowns: expectedCooldowns
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(snapshot)
+    }
+
+    private static func decodeSnapshot(_ payload: Data) throws -> IncidentStoreSnapshot {
+        let snapshot = try JSONDecoder().decode(IncidentStoreSnapshot.self, from: payload)
+        guard snapshot.schemaVersion == IncidentStoreSnapshot.currentSchemaVersion else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "Unsupported incident-store schema"
+            ))
         }
-        defaults.set(expectedCooldowns, forKey: "nickExpectedAlertCooldowns")
-        // Compatibility while the UI and older 4.x builds still know this key.
-        if let data = try? JSONEncoder().encode(visibleAlerts) {
-            defaults.set(data, forKey: "nickPersistedAlerts")
-        }
+        return snapshot
     }
 
     private static func migratedIncident(_ alert: ThreatAlert) -> SecurityIncident {

@@ -66,14 +66,51 @@ public final class ExtensionXPCClient: NSObject {
 
     private var connection: NSXPCConnection?
     private let decoder = JSONDecoder()
+    private var incidentRevision: UInt64?
+    private var pendingIncidentPayload: Data?
+    private var incidentWriteInFlight = false
+    private var incidentBootstrapCompleted = false
+    private var bootstrapLegacyPayload: Data?
+    private var bootstrapCompletion: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)?
+    private var bootstrapReconnectTask: Task<Void, Never>?
+    private var bootstrapReconnectAttempt = 0
 
     // MARK: - Public API
 
     /// Opens the XPC connection to the System Extension.
     ///
     /// Safe to call multiple times — an existing connection is reused.
-    public func connect() {
-        guard connection == nil else { return }
+    public func connect(
+        legacyIncidentPayload: Data? = nil,
+        incidentStoreReady: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)? = nil
+    ) {
+        if connection != nil {
+            // A view may have opened the shared connection before AppDelegate
+            // supplies the migration payload and completion handler. Attach the
+            // privileged-store bootstrap to that live connection instead of
+            // silently discarding the security-critical request.
+            guard legacyIncidentPayload != nil || incidentStoreReady != nil else { return }
+            incidentBootstrapCompleted = false
+            bootstrapLegacyPayload = legacyIncidentPayload
+            bootstrapCompletion = incidentStoreReady
+            bootstrapReconnectAttempt = 0
+            if isConnected {
+                bootstrapIncidentStore(
+                    legacyPayload: legacyIncidentPayload,
+                    completion: incidentStoreReady
+                )
+            }
+            return
+        }
+        incidentBootstrapCompleted = false
+        bootstrapLegacyPayload = legacyIncidentPayload
+        bootstrapCompletion = incidentStoreReady
+        bootstrapReconnectAttempt = 0
+        openConnection()
+    }
+
+    private func openConnection() {
+        guard connection == nil, !incidentBootstrapCompleted else { return }
 
         let conn = NSXPCConnection(machServiceName: NickExtensionConstants.machServiceName)
 
@@ -86,15 +123,23 @@ public final class ExtensionXPCClient: NSObject {
 
         conn.invalidationHandler = { [weak self] in
             Task { @MainActor [weak self] in
+                guard let self else { return }
                 Self.logger.warning("XPC connection to extension invalidated")
-                self?.isConnected = false
-                self?.connection  = nil
+                self.isConnected = false
+                self.connection = nil
+                if !self.incidentBootstrapCompleted {
+                    self.scheduleBootstrapReconnect()
+                }
             }
         }
         conn.interruptionHandler = { [weak self] in
             Task { @MainActor [weak self] in
+                guard let self else { return }
                 Self.logger.warning("XPC connection to extension interrupted — extension may have crashed")
-                self?.isConnected = false
+                self.isConnected = false
+                if !self.incidentBootstrapCompleted {
+                    self.scheduleBootstrapReconnect()
+                }
             }
         }
 
@@ -106,11 +151,16 @@ public final class ExtensionXPCClient: NSObject {
         // Opening an NSXPCConnection does not prove the service exists or that
         // its Endpoint Security client started successfully. Only promote the
         // connection after the extension answers its status request.
-        let errorHandler: @Sendable (Error) -> Void = { error in
+        let errorHandler: @Sendable (Error) -> Void = { [weak self] error in
             Self.logger.warning("Extension status verification failed: \(error.localizedDescription)")
+            Task { @MainActor [weak self] in
+                guard let self, !self.incidentBootstrapCompleted else { return }
+                self.scheduleBootstrapReconnect()
+            }
         }
         guard let proxy = conn.remoteObjectProxyWithErrorHandler(errorHandler)
             as? NickExtensionXPCProtocol else {
+            scheduleBootstrapReconnect()
             return
         }
         let statusReply: @Sendable (Bool) -> Void = { [weak self] active in
@@ -119,17 +169,155 @@ public final class ExtensionXPCClient: NSObject {
                 Self.logger.info("Verified extension status: isActive=\(active)")
                 if active {
                     self?.loadPersistedEvents()
+                    self?.bootstrapIncidentStore(
+                        legacyPayload: self?.bootstrapLegacyPayload,
+                        completion: self?.bootstrapCompletion
+                    )
+                } else {
+                    self?.scheduleBootstrapReconnect()
                 }
             }
         }
         proxy.getStatus(reply: statusReply)
     }
 
+    private func scheduleBootstrapReconnect() {
+        guard !incidentBootstrapCompleted, bootstrapReconnectTask == nil else { return }
+        guard bootstrapReconnectAttempt < 12 else {
+            Self.logger.error("Incident-store bootstrap failed after repeated XPC reconnects")
+            finishIncidentBootstrap(record: nil, migrated: false)
+            return
+        }
+
+        bootstrapReconnectAttempt += 1
+        let delayNanoseconds = UInt64(min(bootstrapReconnectAttempt, 4)) * 500_000_000
+        connection?.invalidationHandler = nil
+        connection?.interruptionHandler = nil
+        connection?.invalidate()
+        connection = nil
+
+        bootstrapReconnectTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard let self, !Task.isCancelled, !self.incidentBootstrapCompleted else { return }
+            self.bootstrapReconnectTask = nil
+            Self.logger.notice(
+                "Retrying incident-store bootstrap after extension replacement (attempt \(self.bootstrapReconnectAttempt))"
+            )
+            self.openConnection()
+        }
+    }
+
+    private func finishIncidentBootstrap(
+        record: PrivilegedIncidentStoreRecord?,
+        migrated: Bool
+    ) {
+        guard !incidentBootstrapCompleted else { return }
+        incidentBootstrapCompleted = true
+        bootstrapReconnectTask?.cancel()
+        bootstrapReconnectTask = nil
+        let completion = bootstrapCompletion
+        bootstrapCompletion = nil
+        bootstrapLegacyPayload = nil
+        completion?(record, migrated)
+    }
+
+    private func bootstrapIncidentStore(
+        legacyPayload: Data?,
+        completion: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)?
+    ) {
+        let errorHandler: @Sendable (Error) -> Void = { [weak self] error in
+            Self.logger.warning("Incident-store bootstrap failed: \(error.localizedDescription)")
+            Task { @MainActor [weak self] in
+                self?.scheduleBootstrapReconnect()
+            }
+        }
+        guard let proxy = connection?.remoteObjectProxyWithErrorHandler(errorHandler)
+            as? NickExtensionXPCProtocol else {
+            scheduleBootstrapReconnect()
+            return
+        }
+        proxy.getIncidentStore { [weak self] data in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: data) {
+                    self.incidentRevision = record.revision
+                    self.finishIncidentBootstrap(record: record, migrated: false)
+                    return
+                }
+                guard let legacyPayload else {
+                    self.finishIncidentBootstrap(record: nil, migrated: false)
+                    return
+                }
+                proxy.migrateIncidentStore(legacyPayload) { [weak self] accepted, recordData in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let record = try? JSONDecoder().decode(
+                            PrivilegedIncidentStoreRecord.self,
+                            from: recordData
+                        )
+                        self.incidentRevision = record?.revision
+                        self.finishIncidentBootstrap(
+                            record: record,
+                            migrated: accepted && record != nil
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    func persistIncidentStore(_ payload: Data) {
+        pendingIncidentPayload = payload
+        drainIncidentStoreWrites()
+    }
+
+    private func drainIncidentStoreWrites() {
+        guard !incidentWriteInFlight,
+              let payload = pendingIncidentPayload,
+              let revision = incidentRevision,
+              let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        pendingIncidentPayload = nil
+        incidentWriteInFlight = true
+        proxy.replaceIncidentStore(payload, expectedRevision: revision) { [weak self] accepted, recordData in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.incidentWriteInFlight = false
+                if let record = try? JSONDecoder().decode(
+                    PrivilegedIncidentStoreRecord.self,
+                    from: recordData
+                ) {
+                    self.incidentRevision = record.revision
+                }
+                if !accepted {
+                    self.pendingIncidentPayload = self.pendingIncidentPayload ?? payload
+                }
+                self.drainIncidentStoreWrites()
+            }
+        }
+    }
+
+    func authoriseIncidentVerdict(id: UUID, action: IncidentActionKind) async -> Bool {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return false }
+        return await withCheckedContinuation { continuation in
+            proxy.authoriseIncidentVerdict(
+                incidentID: id.uuidString,
+                action: action.rawValue,
+                reply: { continuation.resume(returning: $0) }
+            )
+        }
+    }
+
     /// Closes the XPC connection.
     public func disconnect() {
+        bootstrapReconnectTask?.cancel()
+        bootstrapReconnectTask = nil
         connection?.invalidate()
         connection  = nil
         isConnected = false
+        incidentBootstrapCompleted = false
+        bootstrapLegacyPayload = nil
+        bootstrapCompletion = nil
+        bootstrapReconnectAttempt = 0
     }
 
     private func loadPersistedEvents() {
@@ -147,58 +335,58 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    private func receivePersisted(_ finding: PersistedExtensionFinding) async {
+    func receivePersisted(_ finding: PersistedExtensionFinding) async {
         switch finding.kind {
         case .endpointEvent, .threat:
             guard let event = try? decoder.decode(ESEvent.self, from: finding.payload) else { return }
-            receive(event)
+            receive(event, deliverToEngine: false)
         case .remediation:
             guard let report = try? decoder.decode(RemediationReport.self, from: finding.payload) else { return }
-            receive(report)
+            receive(report, deliverToEngine: false)
         case .integrityViolation:
             guard let violation = try? decoder.decode(IntegrityViolation.self, from: finding.payload) else { return }
-            receive(violation)
+            receive(violation, deliverToEngine: false)
         case .privacyAlert:
             guard let alert = try? decoder.decode(PrivacyAlert.self, from: finding.payload) else { return }
-            receive(alert)
+            receive(alert, deliverToEngine: false)
         case .usbThreat:
             guard let threat = try? decoder.decode(USBThreat.self, from: finding.payload) else { return }
-            receive(threat)
+            receive(threat, deliverToEngine: false)
         }
     }
 
-    private func receive(_ event: ESEvent) {
+    private func receive(_ event: ESEvent, deliverToEngine: Bool = true) {
         if !events.contains(where: { $0.id == event.id }) { events.insert(event, at: 0) }
         trim(&events)
-        if let finding = ExtensionFinding(event: event) { deliver(finding) }
+        if deliverToEngine, let finding = ExtensionFinding(event: event) { deliver(finding) }
     }
 
-    private func receive(_ report: RemediationReport) {
+    private func receive(_ report: RemediationReport, deliverToEngine: Bool = true) {
         if let record = report.quarantineRecord {
             quarantineRecords.removeAll { $0.id == record.id }
             quarantineRecords.insert(record, at: 0)
         }
-        deliver(ExtensionFinding(report: report))
+        if deliverToEngine { deliver(ExtensionFinding(report: report)) }
     }
 
-    private func receive(_ violation: IntegrityViolation) {
+    private func receive(_ violation: IntegrityViolation, deliverToEngine: Bool = true) {
         if !integrityViolations.contains(where: { $0.id == violation.id }) {
             integrityViolations.insert(violation, at: 0)
         }
         trim(&integrityViolations)
-        deliver(ExtensionFinding(violation: violation))
+        if deliverToEngine { deliver(ExtensionFinding(violation: violation)) }
     }
 
-    private func receive(_ alert: PrivacyAlert) {
+    private func receive(_ alert: PrivacyAlert, deliverToEngine: Bool = true) {
         if !privacyAlerts.contains(where: { $0.id == alert.id }) { privacyAlerts.insert(alert, at: 0) }
         trim(&privacyAlerts)
-        deliver(ExtensionFinding(privacyAlert: alert))
+        if deliverToEngine { deliver(ExtensionFinding(privacyAlert: alert)) }
     }
 
-    private func receive(_ threat: USBThreat) {
+    private func receive(_ threat: USBThreat, deliverToEngine: Bool = true) {
         if !usbThreats.contains(where: { $0.id == threat.id }) { usbThreats.insert(threat, at: 0) }
         trim(&usbThreats)
-        deliver(ExtensionFinding(usbThreat: threat))
+        if deliverToEngine { deliver(ExtensionFinding(usbThreat: threat)) }
     }
 
     private func trim<T>(_ values: inout [T]) {

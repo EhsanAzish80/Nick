@@ -53,8 +53,14 @@ final class TamperProtection: @unchecked Sendable {
             // /Library/SystemExtensions prefix because it also contains
             // extensions owned by unrelated applications.
             "/Applications/Nick.app",
-            "/Library/Application Support/com.ehsanazish.nick",
         ]
+
+        // Do not protect Nick's mutable Application Support directory here.
+        // Health, event, database and incident-store updates use atomic
+        // renames. Treating those expected writes as tampering makes the
+        // persisted tamper event trigger itself recursively. Root ownership
+        // and per-file permissions protect that state until identity-aware
+        // self-protection is implemented.
 
         // Also protect the running extension bundle itself (resolves symlinks)
         let bundlePath = Bundle.main.bundlePath

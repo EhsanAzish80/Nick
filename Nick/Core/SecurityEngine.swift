@@ -65,7 +65,7 @@ final class SecurityEngine {
     private(set) var alerts: [ThreatAlert] = []
 
     /// Stable deduplication keys for alerts the user has explicitly dismissed.
-    /// Persisted to `UserDefaults` so dismissed alerts do not reappear after a rescan.
+    /// Persisted by the root-owned incident store so dismissals survive restart.
     private(set) var dismissedAlertKeys: Set<String> = []
 
     /// The most recent set of system audit results.
@@ -216,6 +216,7 @@ final class SecurityEngine {
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
     private(set) var incidentStore = IncidentStore()
+    private var incidentActionAuthorizer: ((UUID, IncidentActionKind) async -> Bool)?
 
     /// Phase 7 — Performance / disk-cleanup engine.
     private(set) var performanceMonitor: PerformanceMonitor?
@@ -270,9 +271,7 @@ final class SecurityEngine {
         totalThreatsDetected  = ud.integer(forKey: "nickTotalThreatsDetected")
         lastDeepScanDate      = ud.object(forKey: "nickLastDeepScanDate") as? Date
         lastDeepScanFileCount = ud.integer(forKey: "nickLastDeepScanFileCount")
-        alerts = incidentStore.visibleAlerts
-        dismissedAlertKeys = incidentStore.dismissedAlertDeduplicationKeys
-        logger.info("Restored \(self.alerts.count) persisted incident(s)")
+        syncAlertsFromStore()
 
         // One-time purge: remove false-positive raw-IP alerts produced before the
         // private-network / bogus-address filters were added (v2 filter set).
@@ -302,6 +301,25 @@ final class SecurityEngine {
     }
 
     // MARK: - Public API
+
+    func prepareLegacyIncidentMigration() -> Data? {
+        try? incidentStore.prepareLegacyMigration()
+    }
+
+    func installPrivilegedIncidentStore(
+        payload: Data,
+        persistence: @escaping (Data) -> Void,
+        authorizer: @escaping (UUID, IncidentActionKind) async -> Bool,
+        removeLegacyState: Bool
+    ) throws {
+        try incidentStore.installPrivilegedSnapshot(payload, persistence: persistence)
+        incidentActionAuthorizer = authorizer
+        if removeLegacyState {
+            incidentStore.removeLegacyPersistence()
+        }
+        syncAlertsFromStore()
+        logger.info("Restored \(self.alerts.count) root-owned incident(s)")
+    }
 
     /// Clears all stored threat alerts, resets threat counters, and removes all
     /// dismissed-alert suppression so every alert type can fire again.
@@ -568,77 +586,88 @@ final class SecurityEngine {
     /// Removes a single alert by ID and persists its `deduplicationKey` so it
     /// is suppressed on all future scans until `clearAlertHistory()` is called.
     func dismissAlert(_ id: UUID) {
-        guard let alert = alerts.first(where: { $0.id == id }) else {
-            alerts.removeAll { $0.id == id }
-            return
+        performAuthenticatedIncidentAction(.dismissed, alertID: id) { [weak self] alert in
+            SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
+            self?.incidentStore.performAuthenticatedUserAction(.dismissed, alertID: id)
         }
-        // Record as false positive for optional local training data.
-        SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-        incidentStore.perform(.dismissed, alertID: id)
-        syncAlertsFromStore()
     }
 
     /// Hides the current alert without classifying it as a false positive or
     /// suppressing future detections of the same pattern.
     func hideAlert(_ id: UUID) {
-        incidentStore.perform(.hidden, alertID: id)
-        syncAlertsFromStore()
+        performAuthenticatedIncidentAction(.hidden, alertID: id) { [weak self] _ in
+            self?.incidentStore.performAuthenticatedUserAction(.hidden, alertID: id)
+        }
     }
 
     /// Acknowledges this exact, non-critical behavior for 24 hours. Exact malware
     /// detections cannot be muted; reviewable shell-profile and SSH-key changes
     /// may be acknowledged so normal developer workflows do not alert repeatedly.
     func allowAlertOnce(_ id: UUID) {
-        guard let alert = alerts.first(where: { $0.id == id }) else { return }
-        SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-        incidentStore.perform(.allowedOnce, alertID: id)
-        syncAlertsFromStore()
+        performAuthenticatedIncidentAction(.allowedOnce, alertID: id) { [weak self] alert in
+            SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
+            self?.incidentStore.performAuthenticatedUserAction(.allowedOnce, alertID: id)
+        }
     }
 
     /// Trusts a user-confirmed application/process for future behavioural
     /// correlation. Exact malware hash detections are intentionally excluded
     /// from this preference.
     func alwaysAllowBehavior(from alertID: UUID) {
-        guard let alert = alerts.first(where: { $0.id == alertID }),
-              let name = alert.contributingSignals.compactMap(\.processInfo?.name)
-                .first(where: { !$0.isEmpty }) else { return }
-        let signedIdentity = alert.contributingSignals.compactMap { signal -> String? in
-            guard let process = signal.processInfo,
-                  case .signed(let teamID, let signingID?) = process.signingStatus,
-                  !teamID.isEmpty,
-                  !signingID.isEmpty else { return nil }
-            return "\(teamID)|\(signingID)"
-        }.first
-        guard let signedIdentity else {
-            // Unsigned/name-only identities are trivial to impersonate. They
-            // may be accepted once, but never receive persistent trust.
-            return
+        performAuthenticatedIncidentAction(.alwaysAllowed, alertID: alertID) { [weak self] alert in
+            guard let self,
+                  let name = alert.contributingSignals.compactMap(\.processInfo?.name)
+                    .first(where: { !$0.isEmpty }) else { return }
+            let signedIdentity = alert.contributingSignals.compactMap { signal -> String? in
+                guard let process = signal.processInfo,
+                      case .signed(let teamID, let signingID?) = process.signingStatus,
+                      !teamID.isEmpty,
+                      !signingID.isEmpty else { return nil }
+                return "\(teamID)|\(signingID)"
+            }.first
+            guard let signedIdentity else {
+                // Unsigned/name-only identities are trivial to impersonate. They
+                // may be accepted once, but never receive persistent trust.
+                return
+            }
+            suppressionRules.append(SuppressionRule(
+                type: .signedProcess,
+                value: signedIdentity,
+                note: "Accepted \(name) for this behavior",
+                behaviorContext: SuppressionRule.contextFingerprint(for: alert),
+                expiresAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
+            ))
+            SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
+            // Remove only repeats of this same behavior. Different activity from
+            // the same app remains visible and reviewable.
+            incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+            incidentStore.performAuthenticatedUserAction(.alwaysAllowed, alertID: alertID)
+            syncAlertsFromStore()
         }
-        suppressionRules.append(SuppressionRule(
-            type: .signedProcess,
-            value: signedIdentity,
-            note: "Accepted \(name) for this behavior",
-            behaviorContext: SuppressionRule.contextFingerprint(for: alert),
-            expiresAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
-        ))
-        SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-        // Remove only repeats of this same behavior. Different activity from
-        // the same app remains visible and reviewable.
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
-        incidentStore.perform(.alwaysAllowed, alertID: alertID)
-        syncAlertsFromStore()
     }
 
     /// Removes a resolved alert (threat was killed / deleted) without adding its
     /// `deduplicationKey` to `dismissedAlertKeys`.  The same threat pattern will
     /// reappear in the alert list if the binary is re-run.
     func resolveAlert(_ id: UUID) {
-        if let alert = alerts.first(where: { $0.id == id }) {
-            // Record as true positive for optional local training data.
+        performAuthenticatedIncidentAction(.resolved, alertID: id) { [weak self] alert in
             SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .truePositive)
+            self?.incidentStore.performAuthenticatedUserAction(.resolved, alertID: id)
         }
-        incidentStore.perform(.resolved, alertID: id)
-        syncAlertsFromStore()
+    }
+
+    private func performAuthenticatedIncidentAction(
+        _ action: IncidentActionKind,
+        alertID: UUID,
+        mutation: @escaping (ThreatAlert) -> Void
+    ) {
+        guard let alert = alerts.first(where: { $0.id == alertID }),
+              let incidentActionAuthorizer else { return }
+        Task { @MainActor [weak self] in
+            guard await incidentActionAuthorizer(alertID, action), let self else { return }
+            mutation(alert)
+            self.syncAlertsFromStore()
+        }
     }
 
     /// Cancels an in-progress scan, clearing all progress state immediately.

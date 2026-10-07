@@ -34,6 +34,7 @@ final class ESXPCServer: NSObject {
         path: "/Library/Application Support/com.ehsanazish.nick/events/endpoint-events.json",
         legacyPath: "/Library/Application Support/com.ehsanazish.nick/endpoint-events.json"
     )
+    private let incidentStore = PrivilegedIncidentFileStore()
 
     // MARK: - Init
 
@@ -242,6 +243,35 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
     func getPersistedEvents(reply: @escaping (Data) -> Void) {
         reply(eventStore.snapshot())
+    }
+
+    func getIncidentStore(reply: @escaping (Data) -> Void) {
+        reply(incidentStore.load())
+    }
+
+    func migrateIncidentStore(_ payload: Data, reply: @escaping (Bool, Data) -> Void) {
+        let result = incidentStore.migrate(payload: payload)
+        reply(result.accepted, result.record)
+    }
+
+    func replaceIncidentStore(
+        _ payload: Data,
+        expectedRevision: UInt64,
+        reply: @escaping (Bool, Data) -> Void
+    ) {
+        let result = incidentStore.replace(payload: payload, expectedRevision: expectedRevision)
+        reply(result.accepted, result.record)
+    }
+
+    func authoriseIncidentVerdict(
+        incidentID: String,
+        action: String,
+        reply: @escaping (Bool) -> Void
+    ) {
+        let allowedActions: Set<String> = [
+            "reviewed", "hidden", "dismissed", "resolved", "allowedOnce", "alwaysAllowed"
+        ]
+        reply(UUID(uuidString: incidentID) != nil && allowedActions.contains(action))
     }
 
     func requestQuarantineFile(

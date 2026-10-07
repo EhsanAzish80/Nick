@@ -5,6 +5,19 @@
 import AppKit
 import SwiftUI
 
+enum ProtectionSetupPolicy {
+    static func needsGuidance(_ check: ProtectionCheck) -> Bool {
+        guard check.status != .protected else { return false }
+        switch check.resolution {
+        case .autoEnable, .requiresPermission, .installExtension,
+             .revealAppForInstallation, .restartApplication:
+            return true
+        case .pendingApproval, .none:
+            return false
+        }
+    }
+}
+
 /// Runs a lightweight protection audit whenever Nick opens. Healthy installs
 /// pass through without showing UI; incomplete installs get one guided step at
 /// a time instead of leaving the user to discover Smart Scan on their own.
@@ -51,7 +64,6 @@ struct ProtectionSetupGate<Content: View>: View {
             checker.securityEngine = engine
             checker.xpcClient = xpcClient
             checker.extensionManager = extensionManager
-            xpcClient.connect()
 
             // Allow extension health/XPC state to settle so an update does not
             // briefly show setup for protections that are already active.
@@ -104,14 +116,7 @@ struct ProtectionSetupGate<Content: View>: View {
     }
 
     private func needsGuidance(_ check: ProtectionCheck) -> Bool {
-        guard check.status != .protected else { return false }
-        switch check.resolution {
-        case .autoEnable, .requiresPermission, .installExtension,
-             .revealAppForInstallation, .restartApplication, .none:
-            return true
-        case .pendingApproval:
-            return false
-        }
+        ProtectionSetupPolicy.needsGuidance(check)
     }
 }
 
@@ -126,16 +131,7 @@ private struct ProtectionSetupView: View {
     @State private var isWorking = false
 
     private var guidedChecks: [ProtectionCheck] {
-        status.checks.filter { check in
-            guard check.status != .protected else { return false }
-            switch check.resolution {
-            case .autoEnable, .requiresPermission, .installExtension,
-                 .revealAppForInstallation, .restartApplication, .none:
-                return true
-            case .pendingApproval:
-                return false
-            }
-        }
+        status.checks.filter(ProtectionSetupPolicy.needsGuidance)
     }
 
     private var currentCheck: ProtectionCheck? { guidedChecks.first }

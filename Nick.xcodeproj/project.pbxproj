@@ -11,6 +11,7 @@
 		8805B7AC2FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA11223344556677AABB0011 /* ESEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0001 /* ESEvent.swift */; };
 		AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */; };
+		F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */; };
 		AA11223344556677AABB0013 /* NickExtensionConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0003 /* NickExtensionConstants.swift */; };
 		AA11223344556677AABB0014 /* QuarantineTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0004 /* QuarantineTypes.swift */; };
 		AA11223344556677AABB0015 /* YARAEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0005 /* YARAEngine.swift */; };
@@ -113,6 +114,7 @@
 		8B8901B2276260484B8A6A0C /* Nick.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nick.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA11223344556677AABB0001 /* ESEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ESEvent.swift; path = NickExtension/Shared/ESEvent.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionXPCProtocol.swift; path = NickExtension/Shared/NickExtensionXPCProtocol.swift; sourceTree = SOURCE_ROOT; };
+		F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PrivilegedIncidentFileStore.swift; path = Nick/Core/ThreatCorrelator/PrivilegedIncidentFileStore.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0003 /* NickExtensionConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionConstants.swift; path = NickExtension/Shared/NickExtensionConstants.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0004 /* QuarantineTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineTypes.swift; path = NickExtension/Shared/QuarantineTypes.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0005 /* YARAEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAEngine.swift; path = Nick/Core/YARAEngine/YARAEngine.swift; sourceTree = SOURCE_ROOT; };
@@ -675,6 +677,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */,
 				E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */,
 				E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */,
 				E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */,
