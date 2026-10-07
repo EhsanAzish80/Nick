@@ -332,24 +332,43 @@ struct ExtensionFinding: Sendable {
     init?(event: ESEvent) {
         guard event.decision == .deny || event.threatName != nil else { return nil }
         let filePath = event.filePath ?? event.processPath
-        let severity: SignalSeverity = event.decision == .deny ? .critical : .high
+        let isTamper = event.threatFamily == "tamper"
+        let isManagementObservation = event.threatFamily == "endpoint-management"
+        let severity: SignalSeverity
+        if event.decision == .deny {
+            severity = .critical
+        } else if isManagementObservation {
+            severity = .info
+        } else {
+            severity = .high
+        }
+        let signingStatus: SigningStatus
+        if let teamID = event.teamID, !teamID.isEmpty {
+            signingStatus = .signed(teamID: teamID, signingID: event.signingID)
+        } else {
+            signingStatus = .unknown
+        }
         let process = NickProcessInfo(
             pid: event.pid,
             path: event.processPath,
             name: URL(fileURLWithPath: event.processPath).lastPathComponent,
             parentPID: event.parentPid,
             parentName: nil,
-            signingStatus: event.isCodeSigned == true ? .signed(teamID: "unknown") : .unknown
+            signingStatus: signingStatus
         )
+        let ruleClass = isTamper ? "integrity" : (isManagementObservation ? "audit" : "signature")
+        let ruleTier = isManagementObservation ? "review" : "protected"
         signal = ThreatSignal(
             id: event.id,
-            source: .yara,
+            source: .endpointSecurity,
             severity: severity,
             timestamp: event.timestamp,
             title: event.threatName ?? "Endpoint Security blocked a file",
-            description: event.decision == .deny
-                ? "Nick blocked access to a file previously identified as suspicious."
-                : "Nick's system extension found detector-confirmed suspicious file content.",
+            description: Self.description(
+                for: event,
+                isTamper: isTamper,
+                isManagementObservation: isManagementObservation
+            ),
             context: ThreatSignalContext(
                 processInfo: process,
                 fileInfo: FileInfo(
@@ -360,15 +379,36 @@ struct ExtensionFinding: Sendable {
                     sizeBytes: nil
                 ),
                 metadata: [
-                    "reason": event.decision == .deny ? "endpoint_blocked_threat" : "endpoint_threat",
+                    "reason": isTamper
+                        ? "endpoint_tamper_observed"
+                        : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat"),
                     "rule": event.threatName ?? "endpoint_known_threat",
-                    "ruleTier": "protected",
+                    "class": ruleClass,
+                    "ruleTier": ruleTier,
                     "threatFamily": event.threatFamily ?? "unknown"
                 ]
             )
         )
-        score = event.decision == .deny ? 0.98 : 0.9
-        recommendedAction = "Review the file and quarantine it if you do not recognise it."
+        score = event.decision == .deny ? 0.98 : (isManagementObservation ? 0.1 : 0.9)
+        recommendedAction = isManagementObservation
+            ? "No action is needed if you ran this command."
+            : "Review the event and investigate it if you do not recognise the activity."
+    }
+
+    private static func description(
+        for event: ESEvent,
+        isTamper: Bool,
+        isManagementObservation: Bool
+    ) -> String {
+        if isManagementObservation {
+            return "Nick observed routine use of Apple's system-extension management tool."
+        }
+        if isTamper {
+            return "Nick observed an attempt to change a protected Nick path. The operation was allowed."
+        }
+        return event.decision == .deny
+            ? "Nick blocked access to a file previously identified as suspicious."
+            : "Nick's system extension found detector-confirmed suspicious file content."
     }
 
     init(report: RemediationReport) {

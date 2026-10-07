@@ -351,13 +351,82 @@ final class UnifiedSourceFindingTests: XCTestCase {
             parentPid: 1,
             filePath: "/private/tmp/eicar.com",
             decision: .deny,
-            threat: .init(sha256: "abc", threatName: "EICAR", threatFamily: "test")
+            threat: .init(
+                sha256: "abc",
+                threatName: "EICAR",
+                threatFamily: "test",
+                isCodeSigned: true
+            )
         )
         let finding = try XCTUnwrap(ExtensionFinding(event: event))
         XCTAssertEqual(finding.signal.id, event.id)
+        XCTAssertEqual(finding.signal.source, .endpointSecurity)
         XCTAssertEqual(finding.signal.severity, .critical)
         XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
         XCTAssertEqual(finding.signal.fileInfo?.path, "/private/tmp/eicar.com")
+        XCTAssertEqual(finding.signal.processInfo?.signingStatus, .unknown)
+    }
+
+    func test_endpointFindingUsesOnlyConcreteSigningIdentity() throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/Applications/Example.app/Contents/MacOS/Example",
+            pid: 43,
+            parentPid: 1,
+            decision: .allow,
+            threat: .init(
+                threatName: "Example detection",
+                threatFamily: "test",
+                isCodeSigned: true,
+                teamID: "ABCDE12345",
+                signingID: "com.example.app"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(
+            finding.signal.processInfo?.signingStatus,
+            .signed(teamID: "ABCDE12345", signingID: "com.example.app")
+        )
+    }
+
+    func test_systemExtensionListIsInformationalEndpointEvidence() throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/systemextensionsctl",
+            pid: 44,
+            parentPid: 1,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: "System extension management observed",
+                threatFamily: "endpoint-management"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.source, .endpointSecurity)
+        XCTAssertEqual(finding.signal.severity, .info)
+        XCTAssertEqual(finding.signal.metadata["class"], "audit")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "review")
+    }
+
+    func test_tamperObservationIsAllowedProtectedEndpointEvidence() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/usr/bin/rm",
+            pid: 45,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app",
+            decision: .allow,
+            threat: .init(
+                threatName: "Nick protected path deletion observed",
+                threatFamily: "tamper"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.source, .endpointSecurity)
+        XCTAssertEqual(finding.signal.severity, .high)
+        XCTAssertEqual(finding.signal.metadata["class"], "integrity")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
+        XCTAssertTrue(finding.signal.description.contains("operation was allowed"))
     }
 
     func test_persistedFindingEnvelopeRoundTrips() throws {
@@ -403,6 +472,16 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertTrue(source.contains("eventHandler.tamperProtection        = tamperProtection"))
         XCTAssertTrue(source.contains("tamperProtection.onTamperAttempt"))
         XCTAssertTrue(source.contains("processTree.pruneExited()"))
+
+        let tamperSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "NickExtension/TamperProtection/TamperProtection.swift"
+            ),
+            encoding: .utf8
+        )
+        XCTAssertTrue(tamperSource.contains(
+            "func shouldBlock(targetPath _: String, actorPath _: String, actorPid _: Int32) -> Bool {\n        false"
+        ))
     }
 }
 

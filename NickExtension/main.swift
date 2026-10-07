@@ -175,8 +175,8 @@ tamperProtection.onTamperAttempt = { attempt in
             pid: pid,
             parentPid: 0,
             filePath: path,
-            decision: .deny,
-            threat: .init(threatName: "Nick self-protection blocked deletion", threatFamily: "tamper")
+            decision: .allow,
+            threat: .init(threatName: "Nick protected path deletion observed", threatFamily: "tamper")
         )
     case .renameProtectedPath(let path, let pid, let actorPath):
         event = ESEvent(
@@ -185,17 +185,22 @@ tamperProtection.onTamperAttempt = { attempt in
             pid: pid,
             parentPid: 0,
             filePath: path,
-            decision: .deny,
-            threat: .init(threatName: "Nick self-protection blocked replacement", threatFamily: "tamper")
+            decision: .allow,
+            threat: .init(threatName: "Nick protected path replacement observed", threatFamily: "tamper")
         )
-    case .systemExtensionsCtlExec(let pid, _):
+    case .systemExtensionsCtlExec(let pid, let isSensitive):
         event = ESEvent(
             eventType: .authExec,
             processPath: "/usr/bin/systemextensionsctl",
             pid: pid,
             parentPid: 0,
             decision: .notApplicable,
-            threat: .init(threatName: "System extension management observed", threatFamily: "tamper")
+            threat: .init(
+                threatName: isSensitive
+                    ? "System extension removal command observed"
+                    : "System extension management observed",
+                threatFamily: isSensitive ? "tamper" : "endpoint-management"
+            )
         )
     }
     if let data = try? JSONEncoder().encode(event) {

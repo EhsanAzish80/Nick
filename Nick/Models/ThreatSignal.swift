@@ -623,6 +623,7 @@ enum EvidenceRuleClass: String, Sendable, Codable, CaseIterable {
                 ruleName: signal.metadata["rule"] ?? signal.title,
                 metadata: signal.metadata
             ) == .signature ? .signature : .behavior
+        case .endpointSecurity: self = .integrity
         case .process, .behavioral: self = .behavior
         case .persistence: self = .persistence
         case .network: self = .network
