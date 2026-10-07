@@ -74,8 +74,10 @@ final class FileIntegrityMonitor {
 
     /// path → SHA-256 hex digest
     private var baselines: [String: String] = [:]
+    private var pendingViolations: [String: IntegrityViolation] = [:]
 
     private let baselinePath:   String
+    private let pendingViolationsPath: String
     private let monitoredPaths: [String]
     private let monitoredDirectoryPaths: Set<String>
     private let lock = NSLock()
@@ -88,10 +90,12 @@ final class FileIntegrityMonitor {
 
     init(
         baselinePath: String,
+        pendingViolationsPath: String? = nil,
         monitoredPaths: [String]? = nil,
         userHomeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories()
     ) {
         self.baselinePath = baselinePath
+        self.pendingViolationsPath = pendingViolationsPath ?? baselinePath + ".pending"
         let configuredPaths = monitoredPaths
             ?? Self.defaultMonitoredPaths(userHomeDirectories: userHomeDirectories)
         let standardizedPaths = configuredPaths.map {
@@ -108,13 +112,19 @@ final class FileIntegrityMonitor {
             $0.1 ? $0.0 : nil
         })
         loadBaselines()
+        loadPendingViolations()
     }
 
     // MARK: - Public API
 
     /// Hashes every file in every monitored path and persists the baselines.
     /// Call once on first launch; do not call on every restart (use saved data instead).
-    func buildBaseline() {
+    @discardableResult
+    func buildBaseline() -> Bool {
+        guard lock.withLock({ pendingViolations.isEmpty }) else {
+            Self.logger.warning("FIM baseline rebuild refused while violations await acknowledgement")
+            return false
+        }
         lock.lock()
         baselines.removeAll()
         lock.unlock()
@@ -132,6 +142,7 @@ final class FileIntegrityMonitor {
 
         saveBaselines()
         Self.logger.info("FIM baseline built — \(self.baselines.count) file(s) tracked")
+        return true
     }
 
     /// Checks a single path against the stored baseline.
@@ -145,6 +156,8 @@ final class FileIntegrityMonitor {
         let expanded = expand(path)
         guard isMonitored(expanded) else { return nil }
 
+        if lock.withLock({ pendingViolations[expanded] != nil }) { return nil }
+
         lock.lock()
         let expected = baselines[expanded]
         lock.unlock()
@@ -154,27 +167,21 @@ final class FileIntegrityMonitor {
         if let expected {
             if actual == nil {
                 // File deleted
-                return IntegrityViolation(
+                return recordPending(IntegrityViolation(
                     path: expanded, violationType: .deleted,
                     expectedHash: expected, actualHash: nil, timestamp: Date()
-                )
+                ))
             } else if actual != expected {
-                // File modified — update baseline so we don't re-report
-                lock.lock(); baselines[expanded] = actual; lock.unlock()
-                saveBaselines()
-                return IntegrityViolation(
+                return recordPending(IntegrityViolation(
                     path: expanded, violationType: .modified,
                     expectedHash: expected, actualHash: actual, timestamp: Date()
-                )
+                ))
             }
         } else if let actual {
-            // New file in a monitored directory — add to baseline
-            lock.lock(); baselines[expanded] = actual; lock.unlock()
-            saveBaselines()
-            return IntegrityViolation(
+            return recordPending(IntegrityViolation(
                 path: expanded, violationType: .created,
                 expectedHash: nil, actualHash: actual, timestamp: Date()
-            )
+            ))
         }
 
         return nil
@@ -209,18 +216,50 @@ final class FileIntegrityMonitor {
                 lock.unlock()
 
                 guard !known, let hash = hashFile(fullPath) else { continue }
-                lock.lock(); baselines[fullPath] = hash; lock.unlock()
-                violations.append(IntegrityViolation(
+                if let violation = recordPending(IntegrityViolation(
                     path: fullPath, violationType: .created,
                     expectedHash: nil, actualHash: hash, timestamp: Date()
-                ))
+                )) { violations.append(violation) }
             }
         }
 
-        if !violations.isEmpty { saveBaselines() }
-
         Self.logger.info("FIM full scan complete — \(violations.count) violation(s)")
         return violations
+    }
+
+    var pendingViolationCount: Int {
+        lock.withLock { pendingViolations.count }
+    }
+
+    func pendingViolationSnapshot() -> [IntegrityViolation] {
+        lock.withLock { Array(pendingViolations.values) }
+    }
+
+    /// Accepts the current state only after the authenticated app explicitly
+    /// acknowledges the exact pending violation.
+    func acknowledgeViolation(id: UUID) -> Bool {
+        let pending = lock.withLock {
+            pendingViolations.first(where: { $0.value.id == id })
+        }
+        guard let (path, violation) = pending else { return false }
+        let currentHash = hashFile(path)
+        guard FIMAcknowledgementPolicy.canAcknowledge(violation, currentHash: currentHash) else {
+            return false
+        }
+        lock.withLock {
+            switch violation.violationType {
+            case .deleted:
+                baselines.removeValue(forKey: path)
+            case .created, .modified:
+                if let currentHash {
+                    baselines[path] = currentHash
+                }
+            }
+            pendingViolations.removeValue(forKey: path)
+        }
+        saveBaselines()
+        savePendingViolations()
+        return true
     }
 
     // MARK: - Private Helpers
@@ -268,6 +307,38 @@ final class FileIntegrityMonitor {
         let store = BaselineStore(version: BaselineStore.currentVersion, entries: copy)
         guard let data = try? JSONEncoder().encode(store) else { return }
         try? data.write(to: URL(fileURLWithPath: baselinePath), options: .atomic)
+    }
+
+    private func recordPending(_ violation: IntegrityViolation) -> IntegrityViolation? {
+        let inserted = lock.withLock { () -> Bool in
+            guard pendingViolations[violation.path] == nil else { return false }
+            pendingViolations[violation.path] = violation
+            return true
+        }
+        if inserted { savePendingViolations() }
+        return inserted ? violation : nil
+    }
+
+    private func savePendingViolations() {
+        let copy = lock.withLock { Array(pendingViolations.values) }
+        guard let data = try? JSONEncoder().encode(copy) else { return }
+        do {
+            try data.write(to: URL(fileURLWithPath: pendingViolationsPath), options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: pendingViolationsPath
+            )
+        } catch {
+            Self.logger.error("Could not persist pending FIM evidence: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func loadPendingViolations() {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: pendingViolationsPath)),
+              let loaded = try? JSONDecoder().decode([IntegrityViolation].self, from: data) else { return }
+        lock.withLock {
+            pendingViolations = Dictionary(uniqueKeysWithValues: loaded.map { ($0.path, $0) })
+        }
     }
 
     private func loadBaselines() {

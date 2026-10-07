@@ -47,6 +47,9 @@ public final class ExtensionXPCClient: NSObject {
     /// Threats found on external/removable volumes (Phase 5+).
     public private(set) var usbThreats: [USBThreat] = []
 
+    /// Authenticated health snapshot returned by the system extension.
+    public private(set) var extensionHealth: [String: Any]?
+
     // MARK: - Configuration
 
     /// Maximum number of events kept in `events`. Older events are discarded.
@@ -74,6 +77,7 @@ public final class ExtensionXPCClient: NSObject {
     private var bootstrapCompletion: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)?
     private var bootstrapReconnectTask: Task<Void, Never>?
     private var bootstrapReconnectAttempt = 0
+    private var healthRefreshTask: Task<Void, Never>?
 
     // MARK: - Public API
 
@@ -168,6 +172,7 @@ public final class ExtensionXPCClient: NSObject {
                 self?.isConnected = active
                 Self.logger.info("Verified extension status: isActive=\(active)")
                 if active {
+                    self?.startHealthRefresh()
                     self?.loadPersistedEvents()
                     self?.bootstrapIncidentStore(
                         legacyPayload: self?.bootstrapLegacyPayload,
@@ -179,6 +184,29 @@ public final class ExtensionXPCClient: NSObject {
             }
         }
         proxy.getStatus(reply: statusReply)
+    }
+
+    private func startHealthRefresh() {
+        healthRefreshTask?.cancel()
+        healthRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshExtensionHealth()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    public func refreshExtensionHealth() async {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            extensionHealth = nil
+            return
+        }
+        let data: Data = await withCheckedContinuation { continuation in
+            proxy.getExtensionHealth { continuation.resume(returning: $0) }
+        }
+        extensionHealth = data.isEmpty
+            ? nil
+            : (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     private func scheduleBootstrapReconnect() {
@@ -462,6 +490,24 @@ public final class ExtensionXPCClient: NSObject {
             return
         }
         proxy.requestRebuildFIMBaseline(reply: completion)
+    }
+
+    public func acknowledgeFIMViolation(
+        id: UUID,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.acknowledgeFIMViolation(id: id.uuidString) { [weak self] accepted in
+            Task { @MainActor [weak self] in
+                if accepted {
+                    self?.integrityViolations.removeAll { $0.id == id }
+                }
+                completion(accepted)
+            }
+        }
     }
 
     /// Instructs the extension to deploy ransomware canary files into common user directories.

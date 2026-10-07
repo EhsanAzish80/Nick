@@ -411,7 +411,8 @@ struct SimpleHomeView: View {
 
     private func refreshHealth() async {
         while !Task.isCancelled {
-            endpointHealth = await EndpointHealth.load()
+            await xpcClient.refreshExtensionHealth()
+            endpointHealth = xpcClient.extensionHealth
             healthLoaded = true
             try? await Task.sleep(for: .seconds(5))
         }

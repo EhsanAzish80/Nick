@@ -6,6 +6,28 @@ import XCTest
 @testable import Nick
 
 final class FileIdentityAllowanceTests: XCTestCase {
+    func test_fimAcknowledgementRequiresReviewedContentToRemainCurrent() {
+        let modified = IntegrityViolation(
+            path: "/tmp/watched",
+            violationType: .modified,
+            expectedHash: "before",
+            actualHash: "reviewed",
+            timestamp: Date()
+        )
+        XCTAssertTrue(FIMAcknowledgementPolicy.canAcknowledge(modified, currentHash: "reviewed"))
+        XCTAssertFalse(FIMAcknowledgementPolicy.canAcknowledge(modified, currentHash: "changed-again"))
+
+        let deleted = IntegrityViolation(
+            path: "/tmp/deleted",
+            violationType: .deleted,
+            expectedHash: "before",
+            actualHash: nil,
+            timestamp: Date()
+        )
+        XCTAssertTrue(FIMAcknowledgementPolicy.canAcknowledge(deleted, currentHash: nil))
+        XCTAssertFalse(FIMAcknowledgementPolicy.canAcknowledge(deleted, currentHash: "recreated"))
+    }
+
 
     func test_allowanceMatchesUnchangedFile() throws {
         let file = try temporaryFile(contents: Data("reviewed".utf8))

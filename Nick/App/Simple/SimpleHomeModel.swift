@@ -11,17 +11,6 @@ import Foundation
 
 @MainActor
 enum EndpointHealth {
-    static let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
-
-    /// Reads the extension heartbeat off the main thread.
-    static func load() async -> [String: Any]? {
-        let path = Self.path
-        let data = await Task.detached(priority: .utility) {
-            FileManager.default.contents(atPath: path)
-        }.value
-        return data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-    }
-
     static func isProtectionActive(_ health: [String: Any]?, now: Date = Date()) -> Bool {
         SmartScanChecker.isEndpointSecurityActive(
             health,

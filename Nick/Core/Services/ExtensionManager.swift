@@ -93,17 +93,6 @@ public final class ExtensionManager: NSObject {
             .appendingPathComponent("com.ehsanazish.nick.NickExtension.systemextension", isDirectory: true)
     }
 
-    private static var runningExtensionVersion: String? {
-        let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
-        guard
-            let data = FileManager.default.contents(atPath: path),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
-        }
-        return object["version"] as? String
-    }
-
     static func needsBundledVersionActivation(
         bundledVersion: String?,
         runningVersion: String?
@@ -141,7 +130,7 @@ public final class ExtensionManager: NSObject {
         let recordedVersion = UserDefaults.standard.string(forKey: Self.activatedVersionKey)
         guard Self.needsBundledVersionActivation(
             bundledVersion: Self.bundledExtensionVersion,
-            runningVersion: Self.runningExtensionVersion ?? recordedVersion
+            runningVersion: recordedVersion
         ) else {
             extensionState = .installed
             return

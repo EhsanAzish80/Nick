@@ -23,7 +23,9 @@ struct IntegrityView: View {
                 )
             } else {
                 List(xpcClient.integrityViolations) { violation in
-                    IntegrityRowView(violation: violation)
+                    IntegrityRowView(violation: violation) {
+                        xpcClient.acknowledgeFIMViolation(id: violation.id) { _ in }
+                    }
                 }
             }
         }
@@ -44,6 +46,7 @@ struct IntegrityView: View {
 private struct IntegrityRowView: View {
 
     let violation: IntegrityViolation
+    let acknowledge: () -> Void
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -87,6 +90,9 @@ private struct IntegrityRowView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 }
+
+                Button("Acknowledge Change", action: acknowledge)
+                    .buttonStyle(.link)
             }
         }
         .padding(.vertical, 3)

@@ -458,18 +458,10 @@ struct OverviewDetailView: View {
     /// times during every view evaluation.
     @State private var endpointExtensionHealth: [String: Any]?
 
-    private static let endpointHealthPath =
-        "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
-
     private func refreshEndpointHealth() async {
-        let path = Self.endpointHealthPath
         while !Task.isCancelled {
-            let data = await Task.detached(priority: .utility) {
-                FileManager.default.contents(atPath: path)
-            }.value
-            endpointExtensionHealth = data.flatMap {
-                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-            }
+            await xpcClient.refreshExtensionHealth()
+            endpointExtensionHealth = xpcClient.extensionHealth
             try? await Task.sleep(for: .seconds(5))
         }
     }

@@ -68,6 +68,17 @@ enum QuarantineMovePolicy {
     }
 }
 
+enum FIMAcknowledgementPolicy {
+    static func canAcknowledge(_ violation: IntegrityViolation, currentHash: String?) -> Bool {
+        switch violation.violationType {
+        case .deleted:
+            return currentHash == nil
+        case .created, .modified:
+            return currentHash != nil && currentHash == violation.actualHash
+        }
+    }
+}
+
 enum EndpointSecurityPath {
     /// Resolves the path exactly as the kernel does without collapsing the
     /// canonical `/private/tmp` and `/private/var` spellings used by Endpoint

@@ -10,8 +10,9 @@ import os
 /// XPC listener running inside the System Extension.
 ///
 /// Listens on the Mach service name `NickExtensionConstants.machServiceName`.
-/// Accepts one connection at a time from the container app; stale connections
-/// are invalidated and replaced when a new connection arrives.
+/// Keeps each independently authenticated app connection until that connection
+/// invalidates. A second connection can never replace the first connection's
+/// event channel or inherit its lifecycle.
 ///
 /// Exposes `NickExtensionXPCProtocol` to the container app (inbound calls).
 /// Calls `NickAppXPCProtocol` on the container app (outbound event push).
@@ -25,10 +26,10 @@ final class ESXPCServer: NSObject {
     )
 
     private var listener: NSXPCListener
-    private var appConnection: NSXPCConnection?
+    private var appConnections: [ObjectIdentifier: NSXPCConnection] = [:]
     private let listenerIsConfigured: Bool
 
-    /// Serialises writes to `appConnection`.
+    /// Serialises the independently authenticated connection set.
     private let connectionLock = NSLock()
     private let eventStore = EndpointEventStore(
         path: "/Library/Application Support/com.ehsanazish.nick/events/endpoint-events.json",
@@ -140,14 +141,13 @@ final class ESXPCServer: NSObject {
     // MARK: - Private Helpers
 
     private func withAppProxy(_ block: (NickAppXPCProtocol) -> Void) {
-        connectionLock.lock()
-        let conn = appConnection
-        connectionLock.unlock()
-
-        guard let proxy = conn?.remoteObjectProxy as? NickAppXPCProtocol else {
-            return
+        let connections = connectionLock.withLock { Array(appConnections.values) }
+        for connection in connections {
+            guard let proxy = connection.remoteObjectProxy as? NickAppXPCProtocol else {
+                continue
+            }
+            block(proxy)
         }
-        block(proxy)
     }
 }
 
@@ -174,10 +174,11 @@ extension ESXPCServer: NSXPCListenerDelegate {
         // The app exposes NickAppXPCProtocol for outbound event push.
         newConnection.remoteObjectInterface = NSXPCInterface(with: NickAppXPCProtocol.self)
 
+        let connectionID = ObjectIdentifier(newConnection)
         newConnection.invalidationHandler = { [weak self] in
             Self.logger.info("XPC connection invalidated")
             self?.connectionLock.withLock {
-                self?.appConnection = nil
+                self?.appConnections.removeValue(forKey: connectionID)
             }
         }
         newConnection.interruptionHandler = {
@@ -187,7 +188,7 @@ extension ESXPCServer: NSXPCListenerDelegate {
         newConnection.resume()
 
         connectionLock.withLock {
-            appConnection = newConnection
+            appConnections[connectionID] = newConnection
         }
 
         Self.logger.info("Accepted XPC connection from pid \(newConnection.processIdentifier)")
@@ -239,6 +240,11 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     func getStatus(reply: @escaping (Bool) -> Void) {
         // Phase 1: always report active while the extension is running.
         reply(true)
+    }
+
+    func getExtensionHealth(reply: @escaping (Data) -> Void) {
+        let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
+        reply(FileManager.default.contents(atPath: path) ?? Data())
     }
 
     func getPersistedEvents(reply: @escaping (Data) -> Void) {
@@ -386,8 +392,22 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             return
         }
         DispatchQueue.global(qos: .utility).async {
-            monitor.buildBaseline()
-            reply(true)
+            guard monitor.pendingViolationCount == 0 else {
+                reply(false)
+                return
+            }
+            reply(monitor.buildBaseline())
+        }
+    }
+
+    func acknowledgeFIMViolation(id: String, reply: @escaping (Bool) -> Void) {
+        guard let id = UUID(uuidString: id),
+              let monitor = ESXPCServer.fimMonitorRef else {
+            reply(false)
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            reply(monitor.acknowledgeViolation(id: id))
         }
     }
 

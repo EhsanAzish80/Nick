@@ -31,6 +31,7 @@ final class SignatureValidator: @unchecked Sendable {
 
     private struct CacheEntry {
         let status: SigningStatus
+        let identity: FileIdentity
         let cachedAt: Date
     }
 
@@ -59,8 +60,11 @@ final class SignatureValidator: @unchecked Sendable {
     /// - Parameter binaryPath: Absolute path to the Mach-O binary.
     /// - Returns: A `SigningStatus` value describing the binary's signing state.
     func evaluate(binaryPath: String) -> SigningStatus {
+        guard let currentIdentity = FileIdentity(path: binaryPath) else { return .unknown }
         lock.lock()
-        if let entry = cache[binaryPath], Date().timeIntervalSince(entry.cachedAt) < cacheTTL {
+        if let entry = cache[binaryPath],
+           entry.identity == currentIdentity,
+           Date().timeIntervalSince(entry.cachedAt) < cacheTTL {
             lock.unlock()
             return entry.status
         }
@@ -75,7 +79,11 @@ final class SignatureValidator: @unchecked Sendable {
             : performStaticCheck(path: binaryPath)
 
         lock.lock()
-        cache[binaryPath] = CacheEntry(status: result, cachedAt: Date())
+        cache[binaryPath] = CacheEntry(
+            status: result,
+            identity: currentIdentity,
+            cachedAt: Date()
+        )
         lock.unlock()
 
         return result
