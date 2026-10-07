@@ -30,6 +30,9 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
     /// Signals from `YARAEngine` — pattern-based file matches.
     case yara = "yara"
 
+    /// Findings reported by the Endpoint Security system extension.
+    case endpointSecurity = "endpointSecurity"
+
     /// Signals from `SystemAuditor` — SIP, FileVault, Gatekeeper, firewall state.
     case systemAudit = "systemAudit"
 
@@ -52,6 +55,7 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
         case .network:     return "Network Watchdog"
         case .filesystem:  return "Filesystem Watcher"
         case .yara:        return "YARA Scanner"
+        case .endpointSecurity: return "Endpoint Security"
         case .systemAudit: return "System Audit"
         case .behavioral:  return "AI Behavioral Scorer"
         case .avCapture:   return "Camera & Microphone"
@@ -67,6 +71,7 @@ enum MonitorType: String, Codable, Sendable, CaseIterable {
         case .network:     return "network"
         case .filesystem:  return "folder.badge.questionmark"
         case .yara:        return "magnifyingglass.circle"
+        case .endpointSecurity: return "shield.lefthalf.filled"
         case .systemAudit: return "checkmark.shield"
         case .behavioral:  return "brain"
         case .avCapture:   return "camera"

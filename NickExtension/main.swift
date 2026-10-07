@@ -136,6 +136,11 @@ ransomwareDetector.canaryManager.deployCanaries()
 let privacyGuard = PrivacyGuard()
 let usbScanner   = USBScanner(fileScanner: fileScanner)
 
+// MARK: Phase 6 — genealogy and self-protection
+
+let processTree = ProcessTree()
+let tamperProtection = TamperProtection()
+
 // MARK: Phase 6 — Email attachment monitoring
 
 let emailAttachmentMonitor = EmailAttachmentMonitor()
@@ -156,7 +161,52 @@ eventHandler.behaviorTracker         = behaviorTracker
 eventHandler.ransomwareDetector      = ransomwareDetector
 eventHandler.privacyGuard            = privacyGuard
 eventHandler.usbScanner              = usbScanner
+eventHandler.processTree             = processTree
 eventHandler.emailAttachmentMonitor  = emailAttachmentMonitor
+eventHandler.tamperProtection        = tamperProtection
+
+tamperProtection.onTamperAttempt = { attempt in
+    let event: ESEvent
+    switch attempt {
+    case .deleteProtectedPath(let path, let pid, let actorPath):
+        event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: actorPath,
+            pid: pid,
+            parentPid: 0,
+            filePath: path,
+            decision: .allow,
+            threat: .init(threatName: "Nick protected path deletion observed", threatFamily: "tamper")
+        )
+    case .renameProtectedPath(let path, let pid, let actorPath):
+        event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: actorPath,
+            pid: pid,
+            parentPid: 0,
+            filePath: path,
+            decision: .allow,
+            threat: .init(threatName: "Nick protected path replacement observed", threatFamily: "tamper")
+        )
+    case .systemExtensionsCtlExec(let pid, let isSensitive):
+        event = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/systemextensionsctl",
+            pid: pid,
+            parentPid: 0,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: isSensitive
+                    ? "System extension removal command observed"
+                    : "System extension management observed",
+                threatFamily: isSensitive ? "tamper" : "endpoint-management"
+            )
+        )
+    }
+    if let data = try? JSONEncoder().encode(event) {
+        xpcServer.sendThreatToApp(data)
+    }
+}
 
 // Wire USB threat callback through XPC
 usbScanner.onThreatFound = { threat in
@@ -224,6 +274,11 @@ let healthTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
 healthTimer.schedule(deadline: .now() + 10, repeating: 10)
 healthTimer.setEventHandler(handler: writeExtensionHealth)
 healthTimer.resume()
+
+let processTreeTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+processTreeTimer.schedule(deadline: .now() + 3600, repeating: 3600)
+processTreeTimer.setEventHandler { processTree.pruneExited() }
+processTreeTimer.resume()
 
 logger.info("NickExtension Phase 5 running — privacy monitoring, USB scanning, network filter active")
 xpcServer.sendStatusChange(isActive: true)

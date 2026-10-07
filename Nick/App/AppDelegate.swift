@@ -121,7 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             userDriverDelegate: self
         )
         setupStatusItem()
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             let endpointManager = ExtensionManager()
             endpointExtensionManager = endpointManager
             endpointManager.ensureBundledVersionIsActive()
@@ -129,6 +130,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // update. Submit a replacement request once per bundled build so
             // macOS runs the provider shipped with this version of Nick.
             await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()
+            xpcClient.findingHandler = { [weak self] finding in
+                guard let self else { return }
+                _ = await self.engine.ingestLiveFinding(
+                    finding.signal,
+                    score: finding.score,
+                    recommendedAction: finding.recommendedAction
+                )
+            }
+            networkProtection.findingHandler = { [weak self] finding in
+                guard let self else { return }
+                _ = await self.engine.ingestLiveFinding(
+                    finding.signal,
+                    score: finding.score,
+                    recommendedAction: finding.recommendedAction
+                )
+            }
             await networkProtection.refresh()
             xpcClient.connect()
             let coord = MonitorCoordinator(engine: engine)

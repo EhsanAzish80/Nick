@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import NetworkExtension
 import Observation
@@ -6,6 +7,7 @@ import Observation
 @MainActor
 @Observable
 final class NetworkProtectionManager {
+    static let observationNotification = Notification.Name("com.ehsanazish.nick.network-observation")
     enum State: Equatable {
         case loading
         case disabled
@@ -20,6 +22,20 @@ final class NetworkProtectionManager {
     private(set) var temporaryAllowedDomains: [String: Date] = [:]
     private(set) var temporaryAllowedAppIdentifiers: [String: Date] = [:]
     private(set) var blockEvents: [NetworkBlockEvent] = []
+    var findingHandler: ((NetworkFinding) async -> Void)?
+    private var observationToken: NSObjectProtocol?
+    private var eventDirectorySource: DispatchSourceFileSystemObject?
+    private var deliveredEventIDs: Set<UUID> = []
+
+    init() {
+        observationToken = DistributedNotificationCenter.default().addObserver(
+            forName: Self.observationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.loadEvents() }
+        }
+    }
 
     var isEnabled: Bool { state == .enabled }
 
@@ -50,9 +66,11 @@ final class NetworkProtectionManager {
                 )
             }
             loadEvents()
+            startEventDirectoryWatcher()
         } catch {
             state = .failed(error.localizedDescription)
             loadEvents()
+            startEventDirectoryWatcher()
         }
     }
 
@@ -202,7 +220,14 @@ final class NetworkProtectionManager {
             blockEvents = []
             return
         }
-        blockEvents = decoded.sorted { $0.timestamp > $1.timestamp }
+        let sorted = decoded.sorted { $0.timestamp > $1.timestamp }
+        let newEvents = sorted.filter { deliveredEventIDs.insert($0.id).inserted }
+        blockEvents = sorted
+        for event in newEvents {
+            guard let findingHandler else { continue }
+            let finding = NetworkFinding(event: event)
+            Task { await findingHandler(finding) }
+        }
     }
 
     func openNetworkExtensionSettings() {
@@ -210,6 +235,25 @@ final class NetworkProtectionManager {
             string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
         ) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func startEventDirectoryWatcher() {
+        guard eventDirectorySource == nil,
+              let directory = NetworkProtectionSharedStore.eventsURL()?.deletingLastPathComponent()
+        else { return }
+        let descriptor = open(directory.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .extend, .rename, .delete],
+            queue: .global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in self?.loadEvents() }
+        }
+        source.setCancelHandler { close(descriptor) }
+        source.resume()
+        eventDirectorySource = source
     }
 
     private func saveAllowlist(
@@ -225,7 +269,6 @@ final class NetworkProtectionManager {
                 ?? NEFilterProviderConfiguration()
             let configuration = NetworkProtectionConfiguration(
                 protectionEnabled: true,
-                blockingEnabled: false,
                 allowedDomains: domains,
                 allowedAppIdentifiers: apps,
                 temporaryAllowedDomains: temporaryDomains,
@@ -263,5 +306,48 @@ final class NetworkProtectionManager {
 
     private static func timestamps(_ values: [String: Date]) -> [String: TimeInterval] {
         values.mapValues(\.timeIntervalSince1970)
+    }
+}
+
+struct NetworkFinding: Sendable {
+    let signal: ThreatSignal
+    let score: Double
+    let recommendedAction: String
+
+    init(event: NetworkBlockEvent) {
+        let reason = NetworkObservationReason(rawValue: event.reason)
+        let severity: SignalSeverity
+        let score: Double
+        switch reason {
+        case .knownThreat:
+            severity = .high
+            score = 0.9
+        case .scamGuardian:
+            severity = .medium
+            score = 0.7
+        case .connectionRate, .unusualPort, .none:
+            severity = .medium
+            score = 0.5
+        }
+        self.score = score
+        signal = ThreatSignal(
+            id: event.id,
+            source: .network,
+            severity: severity,
+            timestamp: event.timestamp,
+            title: event.reasonTitle,
+            description: "\(event.appIdentifier ?? "An application") connected to \(event.host). Nick observed the connection and did not block it.",
+            context: ThreatSignalContext(metadata: [
+                "reason": "network_extension_\(event.reason)",
+                "rule": "network_\(event.reason)",
+                "destination": event.host,
+                "destinationClass": reason == .knownThreat || reason == .scamGuardian ? "suspicious" : "external",
+                "appIdentifier": event.appIdentifier ?? "unknown",
+                "port": event.port.map(String.init) ?? "unknown"
+            ])
+        )
+        recommendedAction = reason == .scamGuardian
+            ? "Close the page if you did not intend to visit it and verify the address before entering information."
+            : "Review the destination and the application that opened the connection."
     }
 }

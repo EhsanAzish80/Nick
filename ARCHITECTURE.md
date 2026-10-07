@@ -67,11 +67,12 @@ These monitors emit `ThreatSignal` values. `ThreatCorrelator` retains a bounded
 processes, suppression rules, stable incident identities, and temporary
 acknowledgements reduce repeated or low-confidence alerts.
 
-The main app and `MonitorCoordinator` currently own separate correlator
-instances. Endpoint Security events are displayed through the extension event
-client but are not generally converted into app-level `ThreatSignal` values.
-Nick should therefore be described as correlating app-level signals, not as
-combining every detector in one global scoring engine.
+`SecurityEngine` owns one correlator and one incident store. App monitors,
+Deep Scan, FSEvents, detector-confirmed Endpoint Security findings, privacy and
+integrity findings, USB findings, and Network Extension observations enter that
+incident boundary. The source detector still decides what its raw observation
+means; the incident store applies suppression, deduplication, lifecycle, local
+explanation and notification policy once.
 
 ### YARA and Deep Scan
 
@@ -98,12 +99,14 @@ data.
 
 The shipping provider is observation-only and returns an allow verdict for all
 flows. Missing, stale, or invalid configuration also fails open. Network
-observations are stored locally in a bounded app-group record.
+observations are stored locally in a bounded app-group record. The app watches
+that record for changes and feeds new observation IDs into the shared incident
+store; replay uses the same IDs and does not create a second incident.
 
 ## Alert and response flow
 
 ```text
-local monitor signals
+local monitor and extension findings
         │
         ▼
 deterministic correlation rules
@@ -115,8 +118,9 @@ ThreatAlert ──► on-device Apple Foundation Models explanation
         ├──► optional local file/stdout output
         └──► optional user-configured webhook
 
-Endpoint Security findings ──► XPC event/timeline and quarantine state
-Network Extension findings  ──► local network observation store
+Endpoint Security findings ──► protected journal ──► authenticated XPC ──► incident store
+Network Extension findings  ──► local observation store ──► incident store
+Camera/microphone transitions ──► CoreMediaIO/CoreAudio callbacks ──► incident store
 ```
 
 Apple Foundation Models runs only after deterministic code has created an
@@ -234,8 +238,6 @@ The repository contains code that is not part of the current live product path:
   embed its LaunchDaemon definition and the app has no live helper XPC client.
 - `CloudIntelService`: hash lookup and update code exists but is not constructed
   or scheduled.
-- `ProcessTree` and `TamperProtection`: implementations exist but are not
-  instantiated in the Endpoint Security extension object graph.
 - Production signed-rule delivery: verification structures exist, but no
   production key/feed, staged rollout, rollback, or last-known-good recovery is
   published.

@@ -133,8 +133,9 @@ final class SimpleProtectionModelTests: XCTestCase {
         XCTAssertTrue(web.contains("for review"))
 
         let media = SimpleProtectionCopy.explanation(for: .cameraAndMicrophone)
-        XCTAssertTrue(media.contains("periodically"))
-        XCTAssertFalse(media.contains("when an app starts"))
+        XCTAssertTrue(media.contains("activity changes"))
+        XCTAssertTrue(media.contains("when macOS exposes them"))
+        XCTAssertFalse(media.contains("continuously"))
     }
 
     func test_fixRows() {

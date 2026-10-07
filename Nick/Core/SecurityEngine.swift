@@ -252,6 +252,14 @@ final class SecurityEngine {
         procMon.processDidUpdate = { [weak self] updated in
             self?.applyResolvedProcess(updated)
         }
+        avCapture.signalHandler = { [weak self] signal in
+            guard let self else { return }
+            _ = await self.ingestLiveFinding(
+                signal,
+                score: 0.55,
+                recommendedAction: "Confirm that camera or microphone use matches what you are doing."
+            )
+        }
         let ud = UserDefaults.standard
         if let stored = ud.object(forKey: "nickMonitoringSince") as? Date {
             monitoringSince = stored
@@ -488,6 +496,43 @@ final class SecurityEngine {
         let result = incidentStore.ingest(candidates)
         alerts = result.visibleAlerts
         rebuildUserFacingAlerts()
+        return result.newlyActionable
+    }
+
+    /// Sends an already-classified source finding through the same incident,
+    /// suppression, deduplication, explanation and notification boundary as
+    /// correlated monitor output. Sources such as Endpoint Security and the
+    /// Network Extension have already applied their detector-specific rule.
+    @discardableResult
+    func ingestLiveFinding(
+        _ signal: ThreatSignal,
+        score: Double,
+        recommendedAction: String
+    ) async -> [ThreatAlert] {
+        var alert = ThreatAlert(
+            score: score,
+            content: AlertContent(
+                title: signal.title,
+                description: signal.description,
+                severity: signal.severity,
+                recommendedAction: recommendedAction
+            ),
+            contributingSignals: [signal],
+            timestamp: signal.timestamp
+        )
+        alert.explanation = await explainer.explain(
+            alert: alert,
+            topFeatures: [(signal.title, Double(signal.severity.rawValue) / 4.0)]
+        )
+        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        let result = incidentStore.ingest([alert])
+        alerts = result.visibleAlerts
+        rebuildUserFacingAlerts()
+        for newAlert in result.newlyActionable {
+            await NotificationManager.shared.send(for: newAlert)
+            let (formatter, outputs) = buildPipeline()
+            await emitAlert(newAlert, formatter: formatter, outputs: outputs)
+        }
         return result.newlyActionable
     }
 

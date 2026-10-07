@@ -7,12 +7,12 @@ import os
 
 // MARK: - TamperProtection
 
-/// Phase 6.4 — Protects Nick's own files from deletion or replacement.
+/// Observes attempts to delete or replace Nick's own files.
 ///
-/// `EventHandler` calls `shouldBlock(targetPath:actorPath:actorPid:)` from
-/// `AUTH_UNLINK` and `AUTH_RENAME` handlers. If the target is one of Nick's
-/// protected paths and the actor is **not** a trusted system process or Nick
-/// itself, the method returns `true` and the event is denied.
+/// Phase 3 is deliberately observe-only: AUTH handlers always allow the
+/// operation and this component emits evidence. Identity-based enforcement,
+/// identity-based enforcement and verified update/uninstall flows remain
+/// Phase 6 work.
 ///
 /// Additionally `handleExecEvent(execPath:pid:)` watches for attempts to run
 /// `systemextensionsctl` (the command-line tool used to uninstall system
@@ -27,27 +27,16 @@ final class TamperProtection: @unchecked Sendable {
         /// Attempt to rename/replace a protected file/directory.
         case renameProtectedPath(path: String, actorPID: Int32, actorPath: String)
         /// `systemextensionsctl` was executed.
-        case systemExtensionsCtlExec(pid: Int32, args: String)
+        case systemExtensionsCtlExec(pid: Int32, isSensitive: Bool)
     }
 
     // MARK: - Configuration
 
-    /// Paths that Nick will block deletions / renames on.
+    /// Paths whose deletion or replacement Nick observes.
     ///
     /// Populated at init from the running process's own bundle path and a set of
     /// well-known installation locations.
     private let protectedPaths: [String]
-
-    /// Actor paths allowed via exact match (Apple system update tooling).
-    private let trustedActorExact: Set<String> = [
-        "/usr/sbin/installer",
-        "/System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/XPCServices/package_script_service.xpc/Contents/MacOS/package_script_service",
-        "/System/Library/CoreServices/Software Update.app/Contents/MacOS/Software Update",
-    ]
-
-    /// Actor path *prefixes* allowed — Nick's own processes use this so that
-    /// in-app updates and the helper can touch Nick's files without being blocked.
-    private let trustedActorPrefixes: [String]
 
     var onTamperAttempt: ((TamperAttempt) -> Void)?
 
@@ -76,60 +65,53 @@ final class TamperProtection: @unchecked Sendable {
         paths.append(contentsOf: additionalPaths)
         self.protectedPaths = paths
 
-        // Build trusted-actor prefixes: any executable *inside* Nick.app is
-        // allowed to modify protected paths (in-app updater, helper, etc.).
-        // We include both the canonical install location and the running bundle
-        // so development builds work correctly too.
-        var prefixes: [String] = ["/Applications/Nick.app/"]
-        if !bundlePath.isEmpty {
-            // Resolve symlinks so staging/sandbox paths are also covered.
-            let resolved = (bundlePath as NSString)
-                .standardizingPath
-                .appending("/")
-            if !prefixes.contains(resolved) {
-                prefixes.append(resolved)
-            }
-        }
-        self.trustedActorPrefixes = prefixes
     }
 
     // MARK: - Public API
 
-    /// Returns `true` when the AUTH_UNLINK / AUTH_RENAME event should be **denied**.
+    /// Phase 3 never denies an AUTH_UNLINK / AUTH_RENAME event.
     ///
     /// - Parameters:
     ///   - targetPath: The file or directory being deleted/renamed.
     ///   - actorPath:  Executable path of the process making the request.
     ///   - actorPid:   PID of the actor process.
-    func shouldBlock(targetPath: String, actorPath: String, actorPid: Int32) -> Bool {
-        guard isProtected(path: targetPath) else { return false }
-        guard !isTrusted(actorPath: actorPath) else { return false }
-
-        Self.logger.warning(
-            "TamperProtection: blocked modification of '\(targetPath)' by pid=\(actorPid) (\(actorPath))"
-        )
-        return true
+    func shouldBlock(targetPath _: String, actorPath _: String, actorPid _: Int32) -> Bool {
+        false
     }
 
     /// Notifies the protection module of an AUTH_UNLINK attempt for logging.
     func handleUnlinkEvent(targetPath: String, actorPath: String, actorPid: Int32) {
-        guard isProtected(path: targetPath), !isTrusted(actorPath: actorPath) else { return }
+        guard isProtected(path: targetPath) else { return }
         onTamperAttempt?(.deleteProtectedPath(path: targetPath, actorPID: actorPid, actorPath: actorPath))
     }
 
     /// Notifies the protection module of an AUTH_RENAME attempt for logging.
-    func handleRenameEvent(srcPath: String, actorPath: String, actorPid: Int32) {
-        guard isProtected(path: srcPath), !isTrusted(actorPath: actorPath) else { return }
-        onTamperAttempt?(.renameProtectedPath(path: srcPath, actorPID: actorPid, actorPath: actorPath))
+    func handleRenameEvent(
+        srcPath: String,
+        destinationPath: String,
+        actorPath: String,
+        actorPid: Int32
+    ) {
+        let observedPath: String
+        if isProtected(path: srcPath) {
+            observedPath = srcPath
+        } else if isProtected(path: destinationPath) {
+            observedPath = destinationPath
+        } else {
+            return
+        }
+        onTamperAttempt?(.renameProtectedPath(path: observedPath, actorPID: actorPid, actorPath: actorPath))
     }
 
     /// Call from `AUTH_EXEC` / `NOTIFY_EXEC` handler.
     ///
     /// Flags attempts to run `systemextensionsctl` (uninstall vector).
-    func handleExecEvent(execPath: String, pid: Int32, args: String = "") {
+    func handleExecEvent(execPath: String, pid: Int32, args: [String] = []) {
         guard execPath.hasSuffix("systemextensionsctl") else { return }
-        Self.logger.warning("TamperProtection: systemextensionsctl exec detected pid=\(pid)")
-        onTamperAttempt?(.systemExtensionsCtlExec(pid: pid, args: args))
+        let commands = Set(args.dropFirst().map { $0.lowercased() })
+        let isSensitive = !commands.isDisjoint(with: ["uninstall", "reset"])
+        Self.logger.info("TamperProtection: system extension management observed pid=\(pid)")
+        onTamperAttempt?(.systemExtensionsCtlExec(pid: pid, isSensitive: isSensitive))
     }
 
     // MARK: - Private
@@ -140,16 +122,5 @@ final class TamperProtection: @unchecked Sendable {
             let root = URL(fileURLWithPath: protected).standardizedFileURL.path
             return standardized == root || standardized.hasPrefix(root + "/")
         }
-    }
-
-    /// Returns `true` when `actorPath` belongs to a trusted process.
-    ///
-    /// Two checks, in order:
-    /// 1. **Prefix match** — any executable inside Nick.app itself is trusted
-    ///    (covers the in-app updater, helper daemon, and development builds).
-    /// 2. **Exact match** — well-known Apple system installers.
-    private func isTrusted(actorPath: String) -> Bool {
-        if trustedActorPrefixes.contains(where: { actorPath.hasPrefix($0) }) { return true }
-        return trustedActorExact.contains(actorPath)
     }
 }

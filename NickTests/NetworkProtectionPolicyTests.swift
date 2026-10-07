@@ -160,8 +160,8 @@ final class NetworkProtectionPolicyTests: XCTestCase {
         )
     }
 
-    func test_blockingRequiresExplicitCurrentConfigurationOptIn() {
-        let policy = NetworkProtectionPolicy(configuration: .init(blockingEnabled: true))
+    func test_blocklistMatchRemainsObservationOnly() {
+        let policy = NetworkProtectionPolicy(configuration: .init())
         XCTAssertEqual(
             policy.evaluate(
                 host: "malware.example",
@@ -169,11 +169,11 @@ final class NetworkProtectionPolicyTests: XCTestCase {
                 isBlocklisted: { _ in true },
                 isScam: { _ in false }
             ),
-            .block(.blocklist)
+            .observe(.knownThreat)
         )
     }
 
-    func test_missingAndLegacyVendorConfigurationsCannotBlock() {
+    func test_missingAndLegacyVendorConfigurationsStayInactive() {
         for vendorConfiguration: [String: Any]? in [
             nil,
             ["protectionEnabled": true, "blockingEnabled": true],
@@ -320,6 +320,168 @@ final class NetworkProtectionPolicyTests: XCTestCase {
         XCTAssertEqual(context.appName, "Codex")
         XCTAssertEqual(context.destinationKind, .localNetworkAddress)
         XCTAssertTrue(context.explanation.contains("local device discovery"))
+    }
+}
+
+@MainActor
+final class UnifiedSourceFindingTests: XCTestCase {
+    func test_phishingObservationBecomesReviewableNetworkEvidence() {
+        let event = NetworkBlockEvent(
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.example.browser",
+            decision: .observed,
+            reason: NetworkObservationReason.scamGuardian.rawValue,
+            reasonTitle: NetworkObservationReason.scamGuardian.userTitle,
+            port: 443
+        )
+        let finding = NetworkFinding(event: event)
+        XCTAssertEqual(finding.signal.id, event.id)
+        XCTAssertEqual(finding.signal.source, .network)
+        XCTAssertEqual(finding.signal.severity, .medium)
+        XCTAssertEqual(finding.signal.metadata["destination"], event.host)
+        XCTAssertTrue(finding.signal.description.contains("did not block"))
+    }
+
+    func test_endpointThreatUsesStableIDAndProtectedTier() throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/open",
+            pid: 42,
+            parentPid: 1,
+            filePath: "/private/tmp/eicar.com",
+            decision: .deny,
+            threat: .init(
+                sha256: "abc",
+                threatName: "EICAR",
+                threatFamily: "test",
+                isCodeSigned: true
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.id, event.id)
+        XCTAssertEqual(finding.signal.source, .endpointSecurity)
+        XCTAssertEqual(finding.signal.severity, .critical)
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
+        XCTAssertEqual(finding.signal.fileInfo?.path, "/private/tmp/eicar.com")
+        XCTAssertEqual(finding.signal.processInfo?.signingStatus, .unknown)
+    }
+
+    func test_endpointFindingUsesOnlyConcreteSigningIdentity() throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/Applications/Example.app/Contents/MacOS/Example",
+            pid: 43,
+            parentPid: 1,
+            decision: .allow,
+            threat: .init(
+                threatName: "Example detection",
+                threatFamily: "test",
+                isCodeSigned: true,
+                teamID: "ABCDE12345",
+                signingID: "com.example.app"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(
+            finding.signal.processInfo?.signingStatus,
+            .signed(teamID: "ABCDE12345", signingID: "com.example.app")
+        )
+    }
+
+    func test_systemExtensionListIsInformationalEndpointEvidence() throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/systemextensionsctl",
+            pid: 44,
+            parentPid: 1,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: "System extension management observed",
+                threatFamily: "endpoint-management"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.source, .endpointSecurity)
+        XCTAssertEqual(finding.signal.severity, .info)
+        XCTAssertEqual(finding.signal.metadata["class"], "audit")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "review")
+    }
+
+    func test_tamperObservationIsAllowedProtectedEndpointEvidence() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/usr/bin/rm",
+            pid: 45,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app",
+            decision: .allow,
+            threat: .init(
+                threatName: "Nick protected path deletion observed",
+                threatFamily: "tamper"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.source, .endpointSecurity)
+        XCTAssertEqual(finding.signal.severity, .high)
+        XCTAssertEqual(finding.signal.metadata["class"], "integrity")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
+        XCTAssertTrue(finding.signal.description.contains("operation was allowed"))
+    }
+
+    func test_persistedFindingEnvelopeRoundTrips() throws {
+        let payload = Data("finding".utf8)
+        let original = PersistedExtensionFinding(
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            kind: .integrityViolation,
+            timestamp: Date(timeIntervalSince1970: 123),
+            payload: payload
+        )
+        let decoded = try JSONDecoder().decode(
+            PersistedExtensionFinding.self,
+            from: JSONEncoder().encode(original)
+        )
+        XCTAssertEqual(decoded.id, original.id)
+        XCTAssertEqual(decoded.kind, .integrityViolation)
+        XCTAssertEqual(decoded.payload, payload)
+    }
+
+    func test_remediationReplayKeepsStableEvidenceID() {
+        let report = RemediationReport(
+            timestamp: Date(timeIntervalSince1970: 456),
+            threatPath: "/private/tmp/eicar.com",
+            threatName: "EICAR",
+            quarantineRecord: nil,
+            actions: []
+        )
+        XCTAssertEqual(
+            ExtensionFinding(report: report).signal.id,
+            ExtensionFinding(report: report).signal.id
+        )
+    }
+
+    func test_extensionWiresGenealogyAndTamperProtection() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("NickExtension/main.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("eventHandler.processTree             = processTree"))
+        XCTAssertTrue(source.contains("eventHandler.tamperProtection        = tamperProtection"))
+        XCTAssertTrue(source.contains("tamperProtection.onTamperAttempt"))
+        XCTAssertTrue(source.contains("processTree.pruneExited()"))
+
+        let tamperSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "NickExtension/TamperProtection/TamperProtection.swift"
+            ),
+            encoding: .utf8
+        )
+        XCTAssertTrue(tamperSource.contains(
+            "func shouldBlock(targetPath _: String, actorPath _: String, actorPid _: Int32) -> Bool {\n        false"
+        ))
     }
 }
 

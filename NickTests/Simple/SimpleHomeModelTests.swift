@@ -75,7 +75,7 @@ final class SimpleHomeModelTests: XCTestCase {
 
     func test_simpleCopyNeverContainsTechnicalTerms() {
         let banned = ["PID", "Team ID", "YARA", "rule", "signature", "%", "/Users/", "persistence", "process"]
-        for kind in [AttentionIssue.Kind.realTimeProtection, .systemAudit, .persistence, .processes, .network] {
+        for kind in [AttentionIssue.Kind.realTimeProtection, .systemAudit, .persistence, .processes, .network, .findings] {
             let issue = AttentionIssue(kind: kind, count: 3)
             for text in [issue.simpleTitle, issue.simpleBody, issue.whyItMatters] {
                 for term in banned {
@@ -83,6 +83,27 @@ final class SimpleHomeModelTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func test_unreviewedFindingPreventsProtectedHomeState() {
+        let issues = AttentionIssue.issues(
+            endpointProtectionActive: true,
+            auditIssues: 0,
+            persistenceIssues: 0,
+            processIssues: 0,
+            networkIssues: 0,
+            unreviewedFindings: 1
+        )
+        let hero = HomeHero.make(
+            incident: nil,
+            issues: issues,
+            websitesProtected: true,
+            lastCheck: now,
+            hadRecentWarnings: false,
+            now: now
+        )
+        XCTAssertEqual(hero.state, .attention)
+        XCTAssertEqual(hero.primaryTitle, "Fix It")
     }
 
     func test_advancedCopyIsUnchanged() {

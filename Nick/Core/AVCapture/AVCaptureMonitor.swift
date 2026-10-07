@@ -45,12 +45,19 @@ final class AVCaptureMonitor: MonitorProtocol {
     // MARK: - Private
 
     private var pendingSignals: [ThreatSignal] = []
+    var signalHandler: ((ThreatSignal) async -> Void)?
 
     /// Tracks device IDs → last-known running state to detect new activations.
     private var knownVideoState:  [CMIODeviceID:  Bool] = [:]
     private var knownAudioState:  [AudioDeviceID: Bool] = [:]
 
     private var deviceObservers: [NSObjectProtocol] = []
+    private var videoActivityListeners: [CMIODeviceID: CMIOObjectPropertyListenerBlock] = [:]
+    private var audioActivityListeners: [AudioDeviceID: AudioObjectPropertyListenerBlock] = [:]
+    private let activityListenerQueue = DispatchQueue(
+        label: "com.ehsanazish.nick.capture-activity",
+        qos: .userInitiated
+    )
 
     private static let log = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -66,6 +73,7 @@ final class AVCaptureMonitor: MonitorProtocol {
 
         await scanAllDevices()
         registerDeviceNotifications()
+        registerActivityListeners()
 
         // Only log when a camera or mic is actually active — avoids CMIO framework noise
         // on machines without supported camera hardware.
@@ -76,6 +84,7 @@ final class AVCaptureMonitor: MonitorProtocol {
 
     func stop() async {
         unregisterDeviceNotifications()
+        unregisterActivityListeners()
         isRunning = false
     }
 
@@ -104,9 +113,7 @@ final class AVCaptureMonitor: MonitorProtocol {
 
             if running && !wasRunning {
                 let name = CaptureDeviceAccessor.cmioDeviceName(deviceID) ?? "Camera"
-                pendingSignals.append(
-                    makeCaptureSignal(mediaType: "camera", deviceName: name, process: nil)
-                )
+                emit(makeCaptureSignal(mediaType: "camera", deviceName: name, process: nil))
                 Self.log.notice("Camera activated: \(name) — owner unavailable")
             }
 
@@ -128,9 +135,7 @@ final class AVCaptureMonitor: MonitorProtocol {
 
             if running && !wasRunning {
                 let name = CaptureDeviceAccessor.audioDeviceName(deviceID) ?? "Microphone"
-                pendingSignals.append(
-                    makeCaptureSignal(mediaType: "microphone", deviceName: name, process: nil)
-                )
+                emit(makeCaptureSignal(mediaType: "microphone", deviceName: name, process: nil))
                 Self.log.notice("Microphone activated: \(name) — owner unavailable")
             }
 
@@ -141,6 +146,12 @@ final class AVCaptureMonitor: MonitorProtocol {
     }
 
     // MARK: - Signal Generation
+
+    private func emit(_ signal: ThreatSignal) {
+        pendingSignals.append(signal)
+        guard let signalHandler else { return }
+        Task { await signalHandler(signal) }
+    }
 
     /// Builds a `ThreatSignal` for a capture-device activation event.
     ///
@@ -235,6 +246,69 @@ final class AVCaptureMonitor: MonitorProtocol {
     private func unregisterDeviceNotifications() {
         deviceObservers.forEach { NotificationCenter.default.removeObserver($0) }
         deviceObservers.removeAll()
+    }
+
+    /// CoreMediaIO/CoreAudio property callbacks provide activity transitions
+    /// without waiting for the next full-system scan. The callback only hops to
+    /// the main actor; the existing state comparison still suppresses repeats.
+    private func registerActivityListeners() {
+        unregisterActivityListeners()
+        for deviceID in CaptureDeviceAccessor.videoDeviceIDs() {
+            var address = CMIOObjectPropertyAddress(
+                mSelector: CMIOObjectPropertySelector(kCMIODevicePropertyDeviceIsRunningSomewhere),
+                mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+                mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain)
+            )
+            let listener: CMIOObjectPropertyListenerBlock = { [weak self] _, _ in
+                Task { @MainActor [weak self] in await self?.scanCameraDevices() }
+            }
+            if CMIOObjectAddPropertyListenerBlock(
+                deviceID, &address, activityListenerQueue, listener
+            ) == noErr {
+                videoActivityListeners[deviceID] = listener
+            }
+        }
+
+        for deviceID in CaptureDeviceAccessor.audioInputDeviceIDs() {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                Task { @MainActor [weak self] in await self?.scanMicrophoneDevices() }
+            }
+            if AudioObjectAddPropertyListenerBlock(
+                deviceID, &address, activityListenerQueue, listener
+            ) == noErr {
+                audioActivityListeners[deviceID] = listener
+            }
+        }
+    }
+
+    private func unregisterActivityListeners() {
+        for (deviceID, listener) in videoActivityListeners {
+            var address = CMIOObjectPropertyAddress(
+                mSelector: CMIOObjectPropertySelector(kCMIODevicePropertyDeviceIsRunningSomewhere),
+                mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+                mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain)
+            )
+            CMIOObjectRemovePropertyListenerBlock(
+                deviceID, &address, activityListenerQueue, listener
+            )
+        }
+        videoActivityListeners.removeAll()
+        for (deviceID, listener) in audioActivityListeners {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectRemovePropertyListenerBlock(
+                deviceID, &address, activityListenerQueue, listener
+            )
+        }
+        audioActivityListeners.removeAll()
     }
 }
 

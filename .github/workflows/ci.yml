@@ -70,7 +70,7 @@ jobs:
             changed_ci="$(git diff "$BASE_SHA" "$HEAD_SHA" -- .github/workflows/ci.yml)"
           else
             changed_files="$(git diff-tree --no-commit-id --name-only -r "$HEAD_SHA")"
-            changed_ci="$(git show --format= -- .github/workflows/ci.yml "$HEAD_SHA")"
+            changed_ci="$(git show --format= "$HEAD_SHA" -- .github/workflows/ci.yml)"
           fi
 
           if [[ "$run_yara" != "true" ]] && grep -Eq \

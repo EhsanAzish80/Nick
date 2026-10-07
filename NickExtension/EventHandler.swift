@@ -81,7 +81,7 @@ final class ESEventHandler {
     // MARK: - Public Entry Point
 
     func handle(message: UnsafePointer<es_message_t>) {
-        let msg = message.pointee
+        var msg = message.pointee
 
         // --- Extract process info synchronously (pointer only valid here) ---
         let process     = msg.process.pointee
@@ -97,6 +97,11 @@ final class ESEventHandler {
             let target      = msg.event.exec.target.pointee
             let targetPath  = esString(target.executable.pointee.path)
             let targetIdentity = FileIdentity(stat: target.executable.pointee.stat)
+            let targetTeamID = esOptionalString(target.team_id)
+            let targetSigningID = esOptionalString(target.signing_id)
+            let execArguments: [String] = withUnsafePointer(to: &msg.event.exec) { event in
+                (0..<es_exec_arg_count(event)).map { esString(es_exec_arg(event, $0)) }
+            }
             // CS_VALID alone is not identity: every arm64 binary is at least
             // ad-hoc signed. Only platform binaries and Team-ID signatures
             // count as a trusted signer.
@@ -138,7 +143,10 @@ final class ESEventHandler {
                         trustedSigner: trustedSigner,
                         scanFirst: verdict == nil,
                         blocked: blocked,
-                        verdict: verdict
+                        verdict: verdict,
+                        teamID: targetTeamID,
+                        signingID: targetSigningID,
+                        arguments: execArguments
                     )
                 }
             }
@@ -425,10 +433,22 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_RENAME:
             let srcPath = esString(msg.event.rename.source.pointee.path)
+            let destinationPath: String
+            if msg.event.rename.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE {
+                destinationPath = esString(msg.event.rename.destination.existing_file.pointee.path)
+            } else {
+                let directory = esString(msg.event.rename.destination.new_path.dir.pointee.path)
+                destinationPath = directory + "/" + esString(msg.event.rename.destination.new_path.filename)
+            }
             let renameBlocked = tamperProtection?.shouldBlock(
                 targetPath: srcPath, actorPath: processPath, actorPid: pid
             ) ?? false
-            tamperProtection?.handleRenameEvent(srcPath: srcPath, actorPath: processPath, actorPid: pid)
+            tamperProtection?.handleRenameEvent(
+                srcPath: srcPath,
+                destinationPath: destinationPath,
+                actorPath: processPath,
+                actorPid: pid
+            )
             esClient?.respond(to: message, allow: !renameBlocked)
             // Behaviour is recorded from NOTIFY_RENAME, which reflects only
             // renames that actually happened (recording both double-counted).
@@ -681,7 +701,10 @@ final class ESEventHandler {
         trustedSigner: Bool,
         scanFirst: Bool,
         blocked: Bool,
-        verdict: ScanCache.Entry?
+        verdict: ScanCache.Entry?,
+        teamID: String?,
+        signingID: String?,
+        arguments: [String]
     ) {
         var verdict = verdict
         // Skip the content scan only for identity-signed code outside
@@ -698,7 +721,7 @@ final class ESEventHandler {
             eventType: .processExec, detail: targetPath
         )
         processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: [])
-        tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid)
+        tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid, args: arguments)
 
         pushEvent(ESEvent(
             eventType:   .authExec,
@@ -711,7 +734,9 @@ final class ESEventHandler {
                 sha256:       verdict?.hash,
                 threatName:   verdict?.threatName,
                 threatFamily: verdict?.threatFamily,
-                isCodeSigned: trustedSigner
+                isCodeSigned: trustedSigner,
+                teamID: teamID,
+                signingID: signingID
             )
         ))
     }

@@ -25,7 +25,7 @@ enum SimpleProtectionCopy {
         case .filesAndRansomware:
             "Nick watches your documents and steps in if something starts locking or changing lots of them."
         case .cameraAndMicrophone:
-            "Nick periodically checks camera and microphone activity and records signals when they are available."
+            "Nick watches camera and microphone activity changes and records signals when macOS exposes them."
         }
     }
 }
