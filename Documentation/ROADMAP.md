@@ -132,13 +132,27 @@ gates pass, not on a fixed date. Planned capabilities:
 
 No unsigned community rule is eligible for automatic enforcement.
 
+## Version 5.2: learns from you (local only)
+
+- Learn from your own decisions on incidents (allowed, dismissed,
+  quarantined) to reduce repeat noise for lower-confidence findings.
+- Learning never hides signature, hash or YARA detections, and never applies
+  to unsigned code or script interpreters.
+- A "What Nick learned" view in Settings showing each learned entry, why it
+  exists and when it expires, with reset and export.
+- On-device incident summaries and plain-language help drafting suppression
+  rules, which you review and confirm.
+- Everything stays on your Mac.
+
 ## Later: behavioral model
 
+- Per-app behavioral baselines with explainable novelty scores.
 - Train and evaluate the CoreML behavioral model on consented, de-identified
   signal data.
 - Publish evaluation methodology, false-positive rate, and model limitations.
 - Keep deterministic rules as an explainable fallback.
 - Require model output to be supported by observable security evidence.
+- No model output triggers kill, quarantine or block on its own.
 - Provide local reset, export, and opt-out controls.
 
 ## Deferred unless a concrete requirement appears

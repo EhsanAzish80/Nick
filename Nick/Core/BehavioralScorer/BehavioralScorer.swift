@@ -14,6 +14,8 @@ enum BehavioralScorerError: LocalizedError {
     case modelNotFound
     /// CoreML model failed to load.
     case modelLoadFailed(underlying: Error)
+    /// A model exists, but it is not a production model that accepts the full schema.
+    case modelNotProduction
     /// Inference failed due to a prediction error.
     case inferenceFailed(underlying: Error)
     /// The model output was malformed or missing the expected output key.
@@ -25,6 +27,8 @@ enum BehavioralScorerError: LocalizedError {
             return "ThreatScorer.mlmodel not found in app bundle. Run the training pipeline first."
         case .modelLoadFailed(let error):
             return "Failed to load ThreatScorer model: \(error.localizedDescription)"
+        case .modelNotProduction:
+            return "No production ThreatScorer model is available."
         case .inferenceFailed(let error):
             return "CoreML inference failed: \(error.localizedDescription)"
         case .unexpectedOutput:
@@ -37,58 +41,44 @@ enum BehavioralScorerError: LocalizedError {
 
 /// On-device CoreML behavioral threat scorer.
 ///
-/// `BehavioralScorer` wraps the auto-generated `ThreatScorer` CoreML class and
-/// provides a clean Swift API for scoring 40-dimensional `FeatureVector` inputs.
-/// It returns a normalized threat probability (0.0 = benign, 1.0 = malicious)
-/// and optionally the top contributing features for explainability.
-///
-/// The model is loaded lazily on first use and cached for the app lifetime.
-/// If the model file is absent (e.g., during tests without the `.mlmodel`),
-/// `isModelAvailable` returns `false` and callers should use the rule-based fallback.
-///
-/// - Note: Inference is synchronous and fast (< 5ms). Do not call on the main thread
-///         if latency is a concern.
-final class BehavioralScorer: Sendable {
+/// This infrastructure is inactive unless a production model accepting the full
+/// feature schema is present in the signed application bundle. Missing, malformed,
+/// or development/stub models cannot produce a score.
+final class BehavioralScorer: @unchecked Sendable {
 
     // MARK: - Private State
 
-    private let modelURL: URL?
+    private let model: MLModel?
     private static let logger = Logger(subsystem: "com.ehsanazish.nick", category: "BehavioralScorer")
 
     // MARK: - Init
 
     /// Creates a scorer that loads the model from the default bundle location.
     init() {
-        modelURL = Bundle.main.url(forResource: "ThreatScorer", withExtension: "mlmodelc")
+        let modelURL = Bundle.main.url(forResource: "ThreatScorer", withExtension: "mlmodelc")
             ?? Bundle.main.url(forResource: "ThreatScorer", withExtension: "mlmodel")
+        model = Self.loadProductionModel(at: modelURL)
     }
 
-    /// Creates a scorer that loads the model from an explicit URL. Used for testing.
+    #if DEBUG
+    /// Creates a scorer from an explicit URL for tests only. Release builds can
+    /// load a model only from the signed application bundle.
     init(modelURL: URL?) {
-        self.modelURL = modelURL
+        model = Self.loadProductionModel(at: modelURL)
     }
+    #endif
 
     // MARK: - Public API
 
-    /// Whether the CoreML model is available in the app bundle.
-    ///
-    /// If `false`, callers must use the rule-based fallback in `ThreatCorrelator`.
-    var isModelAvailable: Bool { modelURL != nil }
+    /// Whether a usable production model is available.
+    var isModelAvailable: Bool { isProductionModel }
 
     /// Whether the loaded model appears to be a production-trained model.
     ///
-    /// Returns `false` when the bundled model is the 1-feature passthrough stub
-    /// shipped with v0.9-rc. A production model accepts all 40 `FeatureVector`
-    /// inputs; the stub accepts only 1. Callers can use this to gate marketing
-    /// language and to decide whether to trust the score or fall back to rules.
-    ///
-    /// Replace `Nick/Resources/ThreatScorer.mlmodel` with the output of
-    /// `Scripts/train_threat_scorer.py` trained on real signal data to make
-    /// this return `true`.
+    /// A production model accepts every named `FeatureVector` input. Merely
+    /// finding a file at the expected URL is not enough to activate scoring.
     var isProductionModel: Bool {
-        guard let url = modelURL,
-              let model = try? MLModel(contentsOf: url) else { return false }
-        return model.modelDescription.inputDescriptionsByName.count >= 40
+        model != nil
     }
 
     /// Scores a feature vector and returns a threat probability in [0, 1].
@@ -99,10 +89,8 @@ final class BehavioralScorer: Sendable {
     /// - Throws: `BehavioralScorerError.modelNotFound` if no model is in the bundle.
     ///           `BehavioralScorerError.inferenceFailed` if prediction fails.
     func score(features: FeatureVector) throws -> Double {
+        guard isProductionModel else { throw BehavioralScorerError.modelNotProduction }
         let result = try predict(features: features)
-        if !isProductionModel {
-            Self.logger.warning("BehavioralScorer: stub model in use — score is not meaningful. Replace ThreatScorer.mlmodel with a trained model.")
-        }
         return result.threatProbability
     }
 
@@ -117,6 +105,7 @@ final class BehavioralScorer: Sendable {
     ///
     /// - Throws: Same errors as `score(features:)`.
     func scoreWithExplanation(features: FeatureVector) throws -> (score: Double, topFeatures: [(name: String, contribution: Double)]) {
+        guard isProductionModel else { throw BehavioralScorerError.modelNotProduction }
         let result = try predict(features: features)
 
         // Approximate feature contributions: feature_value * score_weight
@@ -148,17 +137,8 @@ final class BehavioralScorer: Sendable {
     /// - Note: Loads the model lazily on each call (model is cached internally by CoreML).
     ///         Separate `load()` call not required.
     private func predict(features: FeatureVector) throws -> ScoringResult {
-        guard let url = modelURL else {
+        guard let model else {
             throw BehavioralScorerError.modelNotFound
-        }
-
-        let model: MLModel
-        do {
-            let config = MLModelConfiguration()
-            config.computeUnits = .cpuOnly  // Deterministic, low latency for inference
-            model = try MLModel(contentsOf: url, configuration: config)
-        } catch {
-            throw BehavioralScorerError.modelLoadFailed(underlying: error)
         }
 
         // Build the input feature provider from the flat Double array
@@ -183,6 +163,21 @@ final class BehavioralScorer: Sendable {
         }
 
         return extractResult(from: outputProvider)
+    }
+
+    private static func loadProductionModel(at url: URL?) -> MLModel? {
+        guard let url else { return nil }
+        do {
+            let config = MLModelConfiguration()
+            config.computeUnits = .cpuOnly
+            let candidate = try MLModel(contentsOf: url, configuration: config)
+            let inputs = Set(candidate.modelDescription.inputDescriptionsByName.keys)
+            guard Set(FeatureVector.featureNames).isSubset(of: inputs) else { return nil }
+            return candidate
+        } catch {
+            logger.error("BehavioralScorer model unavailable: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     /// Extracts the threat probability from the CoreML output feature provider.

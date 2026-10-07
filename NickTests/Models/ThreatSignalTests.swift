@@ -107,6 +107,100 @@ final class ThreatSignalTests: XCTestCase {
         XCTAssertEqual(decoded.processInfo?.signingStatus, .unsigned)
     }
 
+    // MARK: - Evidence
+
+    func test_evidence_fromSignal_capturesVersionedTypedIdentity() throws {
+        let observedAt = Date(timeIntervalSince1970: 1_234_567)
+        let signal = ThreatSignal(
+            source: .yara,
+            severity: .high,
+            timestamp: observedAt,
+            title: "Known family",
+            description: "Signature matched a file.",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: "/private/tmp/sample",
+                    sha256Hash: "ABCDEF",
+                    entropy: 7.4,
+                    signingStatus: .unsigned,
+                    sizeBytes: 42
+                ),
+                metadata: [
+                    "class": "signature",
+                    "rule": "known_family_rule",
+                    "device_id": "17",
+                    "inode": "99",
+                    "modification_time": "1234.5"
+                ]
+            )
+        )
+
+        let evidence = Evidence(signal: signal)
+        let decoded = try JSONDecoder().decode(
+            Evidence.self,
+            from: JSONEncoder().encode(evidence)
+        )
+
+        XCTAssertEqual(decoded.schemaVersion, Evidence.currentSchemaVersion)
+        XCTAssertEqual(decoded.source, .yara)
+        XCTAssertEqual(decoded.ruleClass, .signature)
+        XCTAssertEqual(decoded.ruleID, "known_family_rule")
+        XCTAssertEqual(decoded.ruleTier, .protectedDetection)
+        XCTAssertEqual(decoded.signingIdentity?.kind, .unsigned)
+        XCTAssertEqual(decoded.parentChain, [])
+        XCTAssertEqual(decoded.parentChainIsComplete, false)
+        XCTAssertEqual(decoded.pathClass, .temporary)
+        XCTAssertEqual(decoded.destinationClass, .unknown)
+        XCTAssertEqual(decoded.lifecycle?.verdict, .unreviewed)
+        XCTAssertEqual(decoded.lifecycle?.actor, .automatic)
+        XCTAssertEqual(decoded.lifecycle?.timestamp, observedAt)
+        XCTAssertEqual(decoded.subject.kind, .file)
+        XCTAssertEqual(decoded.fileIdentity?.deviceID, 17)
+        XCTAssertEqual(decoded.fileIdentity?.inode, 99)
+        XCTAssertEqual(decoded.fileIdentity?.modificationTime, 1234.5)
+        XCTAssertEqual(decoded.timestamps.observedAt, observedAt)
+        XCTAssertEqual(decoded.threatSignal, signal)
+    }
+
+    func test_unknownRuleDefaultsToProtectedDetection() {
+        let signal = ThreatSignal(
+            source: .process,
+            severity: .medium,
+            title: "Previously unseen behavior",
+            description: "No rule metadata",
+            context: ThreatSignalContext()
+        )
+
+        let evidence = Evidence(signal: signal)
+
+        XCTAssertEqual(evidence.ruleTier, .protectedDetection)
+        XCTAssertTrue(evidence.ruleID?.contains("unclassified") == true)
+    }
+
+    func test_yaraPersistenceHashAndHighRiskPathsAreAlwaysProtected() {
+        let fixtures: [ThreatSignal] = [
+            ThreatSignal(source: .yara, severity: .medium, title: "YARA", description: "match"),
+            ThreatSignal(source: .persistence, severity: .medium, title: "Persistence", description: "item"),
+            ThreatSignal(source: .process, severity: .medium, title: "Hash", description: "hash", context: ThreatSignalContext(fileInfo: FileInfo(path: "/Users/test/file", sha256Hash: "abc", entropy: nil, signingStatus: nil, sizeBytes: nil))),
+            ThreatSignal(source: .process, severity: .medium, title: "Temp", description: "temp", context: ThreatSignalContext(fileInfo: FileInfo(path: "/private/tmp/file", sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil))),
+        ]
+
+        XCTAssertTrue(fixtures.allSatisfy { Evidence(signal: $0).ruleTier == .protectedDetection })
+    }
+
+    func test_pathClassUsesPassedConsoleUserHome() {
+        let signal = ThreatSignal(
+            source: .process,
+            severity: .low,
+            title: "User file",
+            description: "fixture",
+            context: ThreatSignalContext(fileInfo: FileInfo(path: "/Users/alice/Documents/file", sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil))
+        )
+
+        XCTAssertEqual(EvidencePathClass(signal: signal, userHomePath: "/Users/alice"), .user)
+        XCTAssertNotEqual(EvidencePathClass(signal: signal, userHomePath: "/var/root"), .user)
+    }
+
     // MARK: - SigningStatus Codable
 
     func test_signingStatus_codable_roundTrip_signedWithTeamID() throws {

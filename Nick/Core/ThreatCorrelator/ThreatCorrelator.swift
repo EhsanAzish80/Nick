@@ -17,13 +17,8 @@ import os
 /// are discarded before each rule evaluation. This prevents stale signals from
 /// inflating the threat score.
 ///
-/// **ML scoring path**: `BehavioralScorer`, `FeatureExtractor`, and `CorrelationWindow`
-/// are implemented and tested but are **not yet wired into the live correlation path**.
-/// v0.9-rc ships a 1-feature passthrough stub as `ThreatScorer.mlmodel`; the stub
-/// produces scores that are architecturally correct but not meaningful. All production
-/// detection in v0.9-rc runs through the rule-based path below. The ML path will be
-/// connected once the model is trained on real signal telemetry collected post-launch.
-/// Until then, do not describe the product as "AI-powered" in user-facing text.
+/// Core ML scoring infrastructure exists separately but is not wired into this actor.
+/// Production correlation is deterministic and rule-based.
 ///
 /// Usage:
 /// ```swift
@@ -40,20 +35,8 @@ actor ThreatCorrelator {
 
     // MARK: - Private State
 
-    private var signalBuffer: [ThreatSignal] = []
+    private var evidenceBuffer: [Evidence] = []
     private var rules: [CorrelationRule]
-    private var trustedProcessList: TrustedProcessList = TrustedProcessList()
-    private var suppressionRules: [SuppressionRule] = []
-
-    /// Subjects (file, process, …) each rule has already alerted on since the
-    /// last `resetEmittedRules()` call.
-    ///
-    /// Prevents the same rule from re-firing every 5-second tick while its
-    /// contributing signals remain in the 30-second correlation window, while
-    /// still alerting when the same rule matches a *different* file or process.
-    /// (Keying by rule name alone silenced every YARA or persistence finding
-    /// after the first one until the next full scan.)
-    private var emittedSubjects: [String: Set<String>] = [:]
 
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -83,20 +66,6 @@ actor ThreatCorrelator {
 
     // MARK: - Public API
 
-    /// Updates the trusted process list used to filter signals during ingestion.
-    ///
-    /// - Parameter list: The current trusted process configuration from `SecurityEngine`.
-    func updateTrustedProcessList(_ list: TrustedProcessList) {
-        trustedProcessList = list
-    }
-
-    /// Replaces the active suppression rules.
-    ///
-    /// Called by `SecurityEngine` whenever the user edits the suppression list.
-    func updateSuppressionRules(_ rules: [SuppressionRule]) {
-        suppressionRules = rules
-    }
-
     /// Adds new signals to the correlation buffer.
     ///
     /// All signals are accepted regardless of trusted-process status. Severity
@@ -110,14 +79,29 @@ actor ThreatCorrelator {
     ///
     /// - Parameter signals: Signals from any monitor.
     func ingest(_ signals: [ThreatSignal]) {
-        signalBuffer.append(contentsOf: signals)
+        ingestEvidence(signals.map(Evidence.init(signal:)))
+    }
+
+    /// Adds already-normalised evidence to the correlation window.
+    func ingestEvidence(_ evidence: [Evidence]) {
+        evidenceBuffer.append(contentsOf: evidence)
         pruneOldSignals()
         enforceBufferCap()
-        let trustedCount = signals.filter { signal in
-            guard let process = signal.processInfo else { return false }
-            return trustedProcessList.isTrusted(process)
-        }.count
-        Self.logger.debug("Ingested \(signals.count) signals (\(trustedCount) from trusted processes) — buffer: \(self.signalBuffer.count)")
+        Self.logger.debug("Ingested \(evidence.count) evidence items — buffer: \(self.evidenceBuffer.count)")
+    }
+
+    /// Atomically ingests and correlates evidence on this actor. Keeping both
+    /// operations inside one actor turn prevents a full scan and a quick tick
+    /// from interleaving between ingestion and deduplication.
+    func ingestAndCorrelateNew(_ signals: [ThreatSignal]) -> [ThreatAlert] {
+        ingest(signals)
+        return correlateNew()
+    }
+
+    /// Typed-evidence form of `ingestAndCorrelateNew`.
+    func ingestAndCorrelateNew(_ evidence: [Evidence]) -> [ThreatAlert] {
+        ingestEvidence(evidence)
+        return correlateNew()
     }
 
     /// Evaluates all rules against the current signal window and returns alerts.
@@ -126,38 +110,31 @@ actor ThreatCorrelator {
     /// do not produce duplicate alerts. Rules are evaluated in priority order
     /// (highest score first).
     ///
-    /// After rule evaluation, trusted-process severity downgrade is applied:
-    /// - All contributing processes trusted → severity downgraded to `.info`
-    /// - Some contributing processes trusted → severity downgraded by one level
-    /// - No trusted processes involved → severity unchanged
-    ///
-    /// Alerted subjects are recorded per rule in `emittedSubjects` so that a subsequent
-    /// `correlateNew()` call in the same session does not re-deliver the same alerts.
+    /// Trust, suppression and delivery deduplication are intentionally not
+    /// applied here; the shared `IncidentStore` owns those decisions once.
     ///
     /// - Returns: All alerts produced by the current rule set and signal window.
     func correlate() -> [ThreatAlert] {
         pruneOldSignals()
-        guard !signalBuffer.isEmpty else { return [] }
+        guard !evidenceBuffer.isEmpty else { return [] }
 
-        let window = signalBuffer
+        let window = evidenceBuffer.map(\.threatSignal)
         var alerts: [ThreatAlert] = []
 
         // Evaluate rules in descending confidence order
         let sortedRules = rules.sorted { $0.score > $1.score }
         for rule in sortedRules {
             if let alert = rule.evaluate(window) {
-                let adjusted = applyTrustedDowngrade(to: alert)
-                alerts.append(adjusted)
-                emittedSubjects[rule.name, default: []].formUnion(Self.subjectKeys(for: alert))
-                Self.logger.info("Rule '\(rule.name)' fired — score: \(adjusted.score), severity: \(adjusted.severity.displayName)")
+                alerts.append(alert)
+                Self.logger.info("Rule '\(rule.name)' fired — score: \(alert.score), severity: \(alert.severity.displayName)")
             }
         }
 
         return alerts
     }
 
-    /// Like `correlate()` but only returns alerts for rules that have **not** fired
-    /// since the last `resetEmittedRules()` call.
+    /// Compatibility name for correlation after ingestion. Stateful deduplication,
+    /// trust and suppression belong exclusively to `IncidentStore`.
     ///
     /// Used by the pipeline's fast-tick path so that a rule firing at T=5 s is not
     /// re-delivered at T=10 s, T=15 s, … while its contributing signals remain inside
@@ -166,28 +143,9 @@ actor ThreatCorrelator {
     /// - Returns: Alerts for newly-triggered rules only.
     func correlateNew() -> [ThreatAlert] {
         pruneOldSignals()
-        guard !signalBuffer.isEmpty else { return [] }
+        guard !evidenceBuffer.isEmpty else { return [] }
 
-        let window = signalBuffer
-        var alerts: [ThreatAlert] = []
-
-        let sortedRules = rules.sorted { $0.score > $1.score }
-        for rule in sortedRules {
-            if let alert = rule.evaluate(window) {
-                let subjects = Self.subjectKeys(for: alert)
-                guard !subjects.isSubset(of: emittedSubjects[rule.name] ?? []) else { continue }
-                emittedSubjects[rule.name, default: []].formUnion(subjects)
-                let adjusted = applyTrustedDowngrade(to: alert)
-                if isSuppressed(adjusted) {
-                    Self.logger.info("Rule '\(rule.name)' suppressed by active suppression rule")
-                    continue
-                }
-                alerts.append(adjusted)
-                Self.logger.info("Rule '\(rule.name)' fired (new) — score: \(adjusted.score), severity: \(adjusted.severity.displayName)")
-            }
-        }
-
-        return alerts
+        return correlate()
     }
 
     /// Clears the set of already-emitted rule names so that all rules are eligible
@@ -196,17 +154,16 @@ actor ThreatCorrelator {
     /// Call this at the start of each full scan (`performFullScan`) so that a rule
     /// suppressed in a previous scan window can re-fire if the same condition persists.
     func resetEmittedRules() {
-        emittedSubjects.removeAll()
-        Self.logger.debug("Emitted-rule history reset — all rules eligible to fire")
+        Self.logger.debug("Incident deduplication is owned by IncidentStore")
     }
 
     /// Removes all signals from the internal buffer.
     func flush() {
-        signalBuffer.removeAll()
+        evidenceBuffer.removeAll()
     }
 
     /// Returns the number of signals currently in the correlation window.
-    var bufferedSignalCount: Int { signalBuffer.count }
+    var bufferedSignalCount: Int { evidenceBuffer.count }
 
     // MARK: - Private Helpers
 
@@ -226,121 +183,26 @@ actor ThreatCorrelator {
 
     private func pruneOldSignals() {
         let cutoff = Date(timeIntervalSinceNow: -windowDuration)
-        signalBuffer.removeAll { $0.timestamp < cutoff }
+        evidenceBuffer.removeAll { $0.timestamps.lastSeen < cutoff }
     }
 
     /// Enforces `maxBufferSize` by evicting the lowest-severity, oldest signals.
     ///
     /// SECURITY: Prevents unbounded memory growth under a sustained signal flood.
     private func enforceBufferCap() {
-        guard signalBuffer.count > Self.maxBufferSize else { return }
+        guard evidenceBuffer.count > Self.maxBufferSize else { return }
 
         // Sort ascending by severity then timestamp so the weakest/oldest are first.
-        signalBuffer.sort {
-            if $0.severity == $1.severity { return $0.timestamp < $1.timestamp }
+        evidenceBuffer.sort {
+            if $0.severity == $1.severity {
+                return $0.timestamps.observedAt < $1.timestamps.observedAt
+            }
             return $0.severity.rawValue < $1.severity.rawValue
         }
 
-        let excess = signalBuffer.count - Self.maxBufferSize
-        signalBuffer.removeFirst(excess)
+        let excess = evidenceBuffer.count - Self.maxBufferSize
+        evidenceBuffer.removeFirst(excess)
         Self.logger.notice("Signal buffer cap enforced — evicted \(excess) low-severity signals")
     }
 
-    /// Applies trusted-process severity downgrade to a correlated alert.
-    ///
-    /// - All contributing signals from trusted processes → severity becomes `.info`
-    /// - Some signals from trusted processes → severity downgraded by one level
-    /// - No trusted signals → severity unchanged
-    ///
-    /// **Persistence signals are never downgraded**, regardless of what other processes
-    /// are in the correlation window. This prevents the supply-chain attack scenario where
-    /// a signed, trusted app (e.g. VS Code compromised via a malicious extension) installs
-    /// a LaunchAgent for persistence. Even if VS Code process signals are in the same
-    /// 30-second window, the persistence alert must fire at full severity.
-    private func applyTrustedDowngrade(to alert: ThreatAlert) -> ThreatAlert {
-        let signals = alert.contributingSignals
-        guard !signals.isEmpty else { return alert }
-
-        // NEVER downgrade alerts that include persistence signals (LaunchAgent/Daemon,
-        // shell profile, SSH keys). Trusted process status is irrelevant to persistence
-        // detection — a trusted app installing an unsigned LaunchAgent is exactly the
-        // supply-chain compromise scenario this detector exists to catch.
-        if signals.contains(where: { $0.source == .persistence }) {
-            return alert
-        }
-
-        let trustedCount = signals.filter { signal in
-            // Check the signal's own process (leaf) — use PID-aware check when available
-            // to prevent impersonation attacks where a malicious process uses a trusted name.
-            guard let proc = signal.processInfo else { return false }
-            return trustedProcessList.isTrusted(proc)
-        }.count
-
-        let fraction = Double(trustedCount) / Double(signals.count)
-        if fraction == 1.0 {
-            return alert.with(severity: .info)
-        } else if fraction > 0 {
-            return alert.with(severity: alert.severity.downgraded)
-        }
-        return alert
-    }
-
-    // MARK: - Suppression
-
-    /// Returns `true` if any active suppression rule matches the given alert.
-    private func isSuppressed(_ alert: ThreatAlert) -> Bool {
-        guard !suppressionRules.isEmpty else { return false }
-        // Trust never overrides strong or materially different evidence. This
-        // protects against a trusted editor, browser, or extension becoming the
-        // delivery vehicle for persistence or a reverse shell.
-        let nonSuppressibleReasons: Set<String> = [
-            "reverse_shell", "reverse_shell_port", "netcat_connection",
-            "temp_binary_network", "raw_ip_outbound", "ssh_key_added",
-            "shell_profile_modified"
-        ]
-        if alert.severity == .critical ||
-            alert.contributingSignals.contains(where: {
-                $0.source == .persistence ||
-                    ($0.source == .yara && $0.metadata["suppressible"] != "true") ||
-                    $0.source == .systemAudit ||
-                    nonSuppressibleReasons.contains($0.metadata["reason"] ?? "")
-            }) {
-            return false
-        }
-
-        let context = SuppressionRule.contextFingerprint(for: alert)
-        for rule in suppressionRules {
-            guard rule.isActive else { continue }
-            if let learnedContext = rule.behaviorContext,
-               learnedContext != context {
-                continue
-            }
-            let needle = rule.value.lowercased()
-            guard !needle.isEmpty else { continue }
-            switch rule.type {
-            case .ruleName:
-                if alert.title.lowercased().contains(needle) { return true }
-            case .processName:
-                let names = alert.contributingSignals.compactMap { $0.processInfo?.name.lowercased() }
-                if names.contains(where: { $0.contains(needle) }) { return true }
-            case .signedProcess:
-                let identities = alert.contributingSignals.compactMap { signal -> String? in
-                    guard let process = signal.processInfo,
-                          case .signed(let teamID, let signingID?) = process.signingStatus,
-                          !teamID.isEmpty,
-                          !signingID.isEmpty else { return nil }
-                    return "\(teamID.lowercased())|\(signingID.lowercased())"
-                }
-                if identities.contains(needle) { return true }
-            case .path:
-                let paths = alert.contributingSignals.compactMap { signal in
-                    (signal.fileInfo?.path ?? signal.metadata["path"])?.lowercased()
-                }
-                // Prefix-only: a substring match let any path that merely
-                // *contained* an approved folder name inherit the approval.
-                if paths.contains(where: { $0.hasPrefix(needle) }) { return true }
-            }
-        }
-        return false
-    }
 }
