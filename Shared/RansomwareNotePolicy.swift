@@ -1,5 +1,13 @@
 import Foundation
 
+enum RansomwareTerminationPolicy {
+    /// Developer-ID validation is performed off the ES authorization path.
+    /// A copied Team ID or self-signed certificate never reaches this exemption.
+    static func shouldTerminate(isBlockRecommendation: Bool, developerIDValidated: Bool) -> Bool {
+        isBlockRecommendation && !developerIDValidated
+    }
+}
+
 /// Conservative filename policy for ransomware-note detection.
 ///
 /// Common developer files such as README.md, recovery headers, YARA rules, and

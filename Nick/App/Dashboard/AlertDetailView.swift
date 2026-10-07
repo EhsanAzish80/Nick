@@ -94,7 +94,7 @@ struct AlertDetailView: View {
             Text("Description")
                 .font(.nickSubtitle)
                 .foregroundStyle(Color.textSecondary)
-            // Prefer the Foundation Models explanation — it's tailored to the specific
+            // Prefer the stored explanation — it's tailored to the specific
             // threat. Fall back to the generic rule description if not yet generated.
             Text(alert.explanation ?? alert.description)
                 .font(.nickBody)
@@ -281,4 +281,3 @@ private struct SignalRow: View {
         contributingSignals: []
     ))
 }
-

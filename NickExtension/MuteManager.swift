@@ -8,13 +8,10 @@ import os
 
 // MARK: - MuteManager
 
-/// Registers high-volume, trusted path prefixes with the ES client so the
-/// extension never receives events for them.
-///
-/// Muting system paths dramatically reduces event throughput. Without muting,
-/// `/System/` and `/usr/` alone generate thousands of events per second on
-/// a busy system. These paths are definitionally trusted (SIP-protected) and
-/// do not need to be monitored for Phase 2.
+/// Registers only path mutes that have measurement evidence and cannot hide a
+/// monitored target. Process-image prefix mutes were removed because Endpoint
+/// Security applies them to events involving those paths, which can hide a
+/// trusted writer (Finder, Mail, Safari, xpcproxy) modifying an untrusted file.
 ///
 /// Call `applyMutes(to:)` once after the ES client has started and subscribed.
 ///
@@ -29,18 +26,28 @@ enum MuteManager {
 
     // MARK: - Muted Path Prefixes
 
-    /// SIP-protected system locations that are safe to ignore entirely.
-    static let mutedPrefixes: [String] = [
-        "/System/",
-        "/usr/lib/",
-        "/usr/libexec/",
-        "/usr/bin/",
-        "/usr/sbin/",
-        "/Library/Apple/",
-        "/private/var/db/",
-        "/private/var/run/",
-        // NOTE: /private/var/folders/ intentionally NOT muted — malware stages payloads there
+    /// Read/map targets on the sealed system volume. These mutes never apply to
+    /// EXEC or writer events. `/usr/local` is deliberately not covered.
+    static let sealedReadTargetPrefixes: [String] = [
+        "/System/", "/usr/bin/", "/usr/lib/", "/usr/libexec/", "/usr/sbin/",
+        "/usr/share/", "/bin/", "/sbin/", "/Library/Apple/",
     ]
+
+    struct MeasuredProcessMute {
+        let executableName: String
+        let reason: String
+    }
+
+    /// Spotlight workers dominate OPEN/MMAP traffic during indexing. Only
+    /// those two read events are muted; file writes, EXEC and lifecycle events
+    /// remain visible. The real-Mac soak verifies this list before merge.
+    static let measuredProcessMutes: [MeasuredProcessMute] = [
+        .init(executableName: "mds", reason: "Spotlight index traversal produces sustained read-only OPEN/MMAP traffic"),
+        .init(executableName: "mdworker", reason: "Spotlight metadata workers repeatedly read/map indexed content"),
+        .init(executableName: "mdworker_shared", reason: "Spotlight shared workers repeatedly read/map indexed content"),
+    ]
+
+    private static let mutedPIDs = OSAllocatedUnfairLock(initialState: Set<Int32>())
 
     // MARK: - Public API
 
@@ -48,14 +55,42 @@ enum MuteManager {
     ///
     /// - Parameter esClient: A started (post-`start()`) `EndpointSecurityClient`.
     static func applyMutes(to esClient: EndpointSecurityClient) {
+        let readEvents = [ES_EVENT_TYPE_AUTH_OPEN, ES_EVENT_TYPE_AUTH_MMAP]
         var mutedCount = 0
-        for prefix in mutedPrefixes {
-            if esClient.mutePathPrefix(prefix) {
+        for prefix in sealedReadTargetPrefixes {
+            if esClient.muteTargetPrefix(prefix, events: readEvents) {
                 mutedCount += 1
             } else {
                 logger.warning("Failed to mute prefix: \(prefix)")
             }
         }
-        logger.info("Applied \(mutedCount)/\(mutedPrefixes.count) path prefix mutes")
+        logger.info("Applied \(mutedCount)/\(sealedReadTargetPrefixes.count) sealed target-prefix read mutes")
+    }
+
+    static func muteMeasuredProcessIfNeeded(
+        _ process: es_process_t,
+        eventType: es_event_type_t,
+        client: OpaquePointer
+    ) {
+        guard eventType == ES_EVENT_TYPE_AUTH_OPEN || eventType == ES_EVENT_TYPE_AUTH_MMAP else { return }
+        guard process.is_platform_binary else { return }
+        let token = process.executable.pointee.path
+        let path = token.data.map { String(decoding: UnsafeRawBufferPointer(start: $0, count: token.length), as: UTF8.self) } ?? ""
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        guard let entry = measuredProcessMutes.first(where: { $0.executableName == name }) else { return }
+        let pid = audit_token_to_pid(process.audit_token)
+        let shouldMute = mutedPIDs.withLock { $0.insert(pid).inserted }
+        guard shouldMute else { return }
+        var auditToken = process.audit_token
+        let events = [ES_EVENT_TYPE_AUTH_OPEN, ES_EVENT_TYPE_AUTH_MMAP]
+        let result = events.withUnsafeBufferPointer {
+            es_mute_process_events(client, &auditToken, $0.baseAddress!, $0.count)
+        }
+        if result == ES_RETURN_SUCCESS {
+            logger.info("Muted read events for \(name, privacy: .public): \(entry.reason, privacy: .public)")
+        } else {
+            mutedPIDs.withLock { $0.remove(pid) }
+            logger.warning("Could not mute measured process \(name, privacy: .public): \(result.rawValue)")
+        }
     }
 }

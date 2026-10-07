@@ -326,9 +326,21 @@ final class IncidentStore {
             guard !needle.isEmpty else { continue }
             switch rule.type {
             case .ruleName:
-                if alert.title.lowercased().contains(needle) { return true }
+                let ruleIDs = alert.contributingSignals.map { EvidenceRulePolicy.ruleID(for: $0).lowercased() }
+                if ruleIDs.contains(needle) || alert.title.lowercased() == needle { return true }
             case .processName:
-                if alert.contributingSignals.compactMap(\.processInfo?.name).contains(where: { $0.lowercased().contains(needle) }) { return true }
+                let processes = alert.contributingSignals.compactMap(\.processInfo)
+                // Identity-bearing processes must use a signedProcess rule; a
+                // mutable display name must never override their identity.
+                if processes.contains(where: { process in
+                    let hasIdentity: Bool
+                    if case .signed(let teamID, let signingID) = process.signingStatus {
+                        hasIdentity = !teamID.isEmpty && !(signingID ?? "").isEmpty
+                    } else {
+                        hasIdentity = false
+                    }
+                    return !hasIdentity && process.name.lowercased() == needle
+                }) { return true }
             case .signedProcess:
                 let identities = alert.contributingSignals.compactMap { signal -> String? in
                     let identity = EvidenceSigningIdentity(signal: signal)
@@ -338,7 +350,11 @@ final class IncidentStore {
                 if identities.contains(needle) { return true }
             case .path:
                 let paths = alert.contributingSignals.compactMap { $0.fileInfo?.path ?? $0.metadata["path"] }
-                if paths.contains(where: { normalize($0).hasPrefix(normalize(needle)) }) { return true }
+                let root = normalize(needle).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                if paths.contains(where: {
+                    let candidate = normalize($0).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    return candidate == root || candidate.hasPrefix(root + "/")
+                }) { return true }
             }
         }
         return false

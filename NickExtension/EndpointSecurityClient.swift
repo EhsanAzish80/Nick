@@ -25,6 +25,8 @@ import os
 ///   AUTH message — always call `respond(to:allow:)`.
 final class EndpointSecurityClient {
 
+    static let healthMetrics = ExtensionHealthMetrics()
+
     // MARK: - Private
 
     private static let logger = Logger(
@@ -57,8 +59,14 @@ final class EndpointSecurityClient {
     func start() -> Bool {
         var newClient: OpaquePointer?
 
-        let result = es_new_client(&newClient) { [weak self] _, message in
+        let result = es_new_client(&newClient) { [weak self] client, message in
             // This block runs on an ES-internal serial queue — keep it fast.
+            Self.healthMetrics.record(eventType: message.pointee.event_type)
+            MuteManager.muteMeasuredProcessIfNeeded(
+                message.pointee.process.pointee,
+                eventType: message.pointee.event_type,
+                client: client
+            )
             self?.eventHandler?.handle(message: message)
         }
 
@@ -107,6 +115,10 @@ final class EndpointSecurityClient {
         guard let client else { return }
         guard message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return }
 
+        let missedDeadline = mach_absolute_time() >= message.pointee.deadline
+        if missedDeadline {
+            Self.healthMetrics.recordDeadlineMiss()
+        }
         let ret: es_respond_result_t
         if message.pointee.event_type == ES_EVENT_TYPE_AUTH_OPEN {
             // AUTH_OPEN is the one authorization event that requires a flags
@@ -122,6 +134,9 @@ final class EndpointSecurityClient {
             ret = es_respond_auth_result(client, message, authResult, false)
         }
         if ret != ES_RESPOND_RESULT_SUCCESS {
+            if !missedDeadline {
+                Self.healthMetrics.recordDeadlineMiss()
+            }
             Self.logger.warning(
                 "Endpoint Security response returned \(ret.rawValue) for event \(message.pointee.event_type.rawValue) — operation was not answered"
             )
@@ -155,6 +170,24 @@ final class EndpointSecurityClient {
         return result == ES_RETURN_SUCCESS
     }
 
+    @discardableResult
+    func muteTargetPrefix(_ prefix: String, events: [es_event_type_t]) -> Bool {
+        guard let client else { return false }
+        let result = events.withUnsafeBufferPointer { buffer in
+            es_mute_path_events(
+                client,
+                prefix,
+                ES_MUTE_PATH_TYPE_TARGET_PREFIX,
+                buffer.baseAddress!,
+                buffer.count
+            )
+        }
+        if result != ES_RETURN_SUCCESS {
+            Self.logger.warning("es_mute_path_events failed for '\(prefix)': \(result.rawValue)")
+        }
+        return result == ES_RETURN_SUCCESS
+    }
+
     // MARK: - Private Helpers
 
     private func muteSelf(client: OpaquePointer) {
@@ -183,6 +216,51 @@ final class EndpointSecurityClient {
         let ret = es_mute_process(client, &token)
         if ret != ES_RETURN_SUCCESS {
             Self.logger.warning("es_mute_process failed: \(ret.rawValue) — self-events may appear")
+        }
+    }
+}
+
+final class ExtensionHealthMetrics: @unchecked Sendable {
+    private struct State {
+        var startedAt = Date()
+        var eventCounts: [String: UInt64] = [:]
+        var deadlineMisses: UInt64 = 0
+    }
+    private let lock = NSLock()
+    private var state = State()
+
+    func record(eventType: es_event_type_t) {
+        lock.withLock { state.eventCounts[Self.name(eventType), default: 0] += 1 }
+    }
+
+    func recordDeadlineMiss() { lock.withLock { state.deadlineMisses += 1 } }
+
+    func snapshot() -> (eventsPerSecond: [String: Double], deadlineMisses: UInt64) {
+        lock.withLock {
+            let elapsed = max(Date().timeIntervalSince(state.startedAt), 1)
+            let rates = state.eventCounts.mapValues { Double($0) / elapsed }
+            return (rates, state.deadlineMisses)
+        }
+    }
+
+    private static func name(_ type: es_event_type_t) -> String {
+        switch type {
+        case ES_EVENT_TYPE_AUTH_EXEC: return "auth_exec"
+        case ES_EVENT_TYPE_AUTH_OPEN: return "auth_open"
+        case ES_EVENT_TYPE_AUTH_MMAP: return "auth_mmap"
+        case ES_EVENT_TYPE_AUTH_COPYFILE: return "auth_copyfile"
+        case ES_EVENT_TYPE_AUTH_CREATE: return "auth_create"
+        case ES_EVENT_TYPE_AUTH_RENAME: return "auth_rename"
+        case ES_EVENT_TYPE_AUTH_UNLINK: return "auth_unlink"
+        case ES_EVENT_TYPE_NOTIFY_CLOSE: return "notify_close"
+        case ES_EVENT_TYPE_NOTIFY_RENAME: return "notify_rename"
+        case ES_EVENT_TYPE_NOTIFY_UNLINK: return "notify_unlink"
+        case ES_EVENT_TYPE_NOTIFY_FORK: return "notify_fork"
+        case ES_EVENT_TYPE_NOTIFY_EXIT: return "notify_exit"
+        case ES_EVENT_TYPE_NOTIFY_MOUNT: return "notify_mount"
+        case ES_EVENT_TYPE_NOTIFY_UNMOUNT: return "notify_unmount"
+        case ES_EVENT_TYPE_NOTIFY_TCC_MODIFY: return "notify_tcc_modify"
+        default: return "event_\(type.rawValue)"
         }
     }
 }

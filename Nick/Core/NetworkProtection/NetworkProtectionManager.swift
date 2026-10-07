@@ -246,10 +246,10 @@ final class NetworkProtectionManager {
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
             eventMask: [.write, .extend, .rename, .delete],
-            queue: .global(qos: .utility)
+            queue: .main
         )
         source.setEventHandler { [weak self] in
-            Task { @MainActor [weak self] in self?.loadEvents() }
+            MainActor.assumeIsolated { self?.loadEvents() }
         }
         source.setCancelHandler { close(descriptor) }
         source.resume()

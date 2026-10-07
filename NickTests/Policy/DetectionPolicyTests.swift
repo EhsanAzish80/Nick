@@ -46,8 +46,19 @@ final class DetectionPolicyTests: XCTestCase {
         XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid | adhoc, isPlatformBinary: false, teamID: "ABCDE12345"))
         XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: false, teamID: ""))
         XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: 0, isPlatformBinary: true, teamID: nil))
-        XCTAssertTrue(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: false, teamID: "ABCDE12345"))
+        XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: false, teamID: "ABCDE12345"))
         XCTAssertTrue(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: true, teamID: nil))
+    }
+
+    func test_validatedDeveloperIDRansomwareSignalIsAlertOnly() {
+        XCTAssertFalse(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: true
+        ))
+        XCTAssertTrue(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: false
+        ), "A self-signed actor with a copied Team ID must not gain the exemption")
     }
 
     func test_highRiskLocationsCoverStagingAndPersistence() {

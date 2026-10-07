@@ -55,6 +55,8 @@ final class FileSystemWatcher: @unchecked Sendable {
     )
     private let lock = NSLock()
     private var scansInFlight: Set<String> = []
+    private var pendingScans = BoundedPathQueue(capacity: 1_024)
+    private(set) var droppedEventCount = 0
     /// Prevent an installer or build system from queuing thousands of scans at once.
     private static let maxConcurrentScans = 8
     /// Interactive real-time coverage is for downloaded executables. Larger files
@@ -240,19 +242,35 @@ final class FileSystemWatcher: @unchecked Sendable {
             return
         }
 
-        let shouldStart = lock.withLock {
-            guard scansInFlight.count < Self.maxConcurrentScans else { return false }
-            return scansInFlight.insert(path).inserted
+        let shouldStart = lock.withLock { () -> Bool in
+            guard !scansInFlight.contains(path), !pendingScans.contains(path) else { return false }
+            if scansInFlight.count < Self.maxConcurrentScans {
+                scansInFlight.insert(path)
+                return true
+            }
+            guard pendingScans.enqueue(path) else {
+                droppedEventCount += 1
+                Self.log.error("FSEvents scan queue full; dropped count: \(self.droppedEventCount)")
+                return false
+            }
+            return false
         }
         guard shouldStart else { return }
+        startYARAScan(for: path)
+    }
 
+    private func startYARAScan(for path: String) {
         // Detach a low-priority task so the FSEvents callback returns immediately.
         Task.detached(priority: .utility) { [weak self, path] in
             guard let self else { return }
             defer {
-                _ = self.lock.withLock {
+                let next = self.lock.withLock { () -> String? in
                     self.scansInFlight.remove(path)
+                    guard let next = self.pendingScans.dequeue() else { return nil }
+                    self.scansInFlight.insert(next)
+                    return next
                 }
+                if let next { self.startYARAScan(for: next) }
             }
             do {
                 let rawMatches = try await self.yaraEngine.scanFile(at: path)
@@ -325,6 +343,33 @@ final class FileSystemWatcher: @unchecked Sendable {
                 metadata: meta
             )
         )
+    }
+}
+
+/// FIFO queue used by FSEvents. Duplicate paths coalesce; overflow is explicit
+/// so the caller can increment a health counter instead of silently dropping.
+struct BoundedPathQueue: Sendable {
+    private let capacity: Int
+    private var items: [String] = []
+    private var members: Set<String> = []
+
+    init(capacity: Int) { self.capacity = max(1, capacity) }
+
+    func contains(_ path: String) -> Bool { members.contains(path) }
+
+    mutating func enqueue(_ path: String) -> Bool {
+        if members.contains(path) { return true }
+        guard items.count < capacity else { return false }
+        items.append(path)
+        members.insert(path)
+        return true
+    }
+
+    mutating func dequeue() -> String? {
+        guard !items.isEmpty else { return nil }
+        let path = items.removeFirst()
+        members.remove(path)
+        return path
     }
 }
 

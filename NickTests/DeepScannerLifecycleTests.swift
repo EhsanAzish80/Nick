@@ -54,7 +54,11 @@ final class DeepScannerLifecycleTests: XCTestCase {
             metadata: [:]
         )
 
-        XCTAssertEqual(DeepScanner.classify(match: match), .developmentArtifact)
+        XCTAssertEqual(DeepScanner.classify(match: match), .suspicious)
+        XCTAssertEqual(
+            DeepScanner.classify(match: match, approvedDevelopmentRoots: [root.path]),
+            .developmentArtifact
+        )
     }
 
     func test_emailHeuristicInServiceWorkerCacheIsApplicationData() {
@@ -342,7 +346,17 @@ final class DeepScannerLifecycleTests: XCTestCase {
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         try Data().write(to: project.appendingPathComponent("Package.swift"))
         let source = project.appendingPathComponent("Sources/App/main.swift").path
-        XCTAssertTrue(DeepScanner.isVerifiedDevelopmentContext(source, homeDirectory: home.path))
+        XCTAssertFalse(DeepScanner.isVerifiedDevelopmentContext(source, homeDirectory: home.path))
+        XCTAssertTrue(DeepScanner.isVerifiedDevelopmentContext(
+            source,
+            homeDirectory: home.path,
+            approvedRoots: [project.path]
+        ))
+        XCTAssertEqual(DeepScanner.classify(match: behaviorMatch(source)), .suspicious)
+        XCTAssertEqual(
+            DeepScanner.classify(match: behaviorMatch(source), approvedDevelopmentRoots: [project.path]),
+            .developmentArtifact
+        )
     }
 
     func test_persistenceAndDropLocationsNeverReceiveDevelopmentDowngrade() throws {
@@ -680,6 +694,23 @@ final class DeepScannerLifecycleTests: XCTestCase {
         XCTAssertFalse(scanner.isIndexing)
         XCTAssertEqual(scanner.totalFiles, 3)
         XCTAssertEqual(scanner.scannedFiles, 3)
+    }
+
+    func test_totalTimeBudgetReportsSkippedCandidates() async {
+        let scanner = DeepScanner()
+        let candidates = (0..<100).map { "/private/tmp/budget-\($0)" }
+        scanner.start(
+            onlyOnPower: false,
+            timeBudget: 0.05,
+            candidateFiles: candidates
+        ) { _ in
+            try await Task.sleep(for: .milliseconds(150))
+            return []
+        }
+        while scanner.isScanning { try? await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(scanner.timeBudgetExceeded)
+        XCTAssertGreaterThan(scanner.skippedFiles, 0)
+        XCTAssertLessThan(scanner.scannedFiles, scanner.totalFiles)
     }
 
     private func waitUntil(
