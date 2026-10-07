@@ -48,6 +48,7 @@ func writeExtensionHealth() {
         "signatureCount": signatureDB.count,
         "fullDiskAccessReady": fullDiskAccessReady,
         "fimBaselineCount": fileIntegrityMonitor.baselineCount,
+        "fimPendingViolationCount": fileIntegrityMonitor.pendingViolationCount,
         "canaryCount": ransomwareDetector.canaryManager.canaryPaths.count,
         "eventsPerSecond": esMetrics.eventsPerSecond,
         "deadlineMissCount": esMetrics.deadlineMisses

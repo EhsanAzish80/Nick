@@ -12,6 +12,7 @@ import SwiftUI
 struct IntegrityView: View {
 
     @Environment(ExtensionXPCClient.self) private var xpcClient
+    @State private var baselineStatus: String?
 
     var body: some View {
         Group {
@@ -33,9 +34,23 @@ struct IntegrityView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Rebuild Baseline") {
-                    // Phase 4: route through XPCClient → extension requestRebuildBaseline()
+                    xpcClient.requestRebuildFIMBaseline { accepted in
+                        Task { @MainActor in
+                            baselineStatus = accepted
+                                ? "Baseline rebuilt."
+                                : "Review and acknowledge pending changes before rebuilding."
+                        }
+                    }
                 }
                 .help("Clears the current FIM baseline and rebuilds it from the current system state.")
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let baselineStatus {
+                Text(baselineStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
             }
         }
     }

@@ -306,7 +306,15 @@ final class FileIntegrityMonitor {
         lock.unlock()
         let store = BaselineStore(version: BaselineStore.currentVersion, entries: copy)
         guard let data = try? JSONEncoder().encode(store) else { return }
-        try? data.write(to: URL(fileURLWithPath: baselinePath), options: .atomic)
+        do {
+            try data.write(to: URL(fileURLWithPath: baselinePath), options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: baselinePath
+            )
+        } catch {
+            Self.logger.error("Could not persist FIM baseline: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func recordPending(_ violation: IntegrityViolation) -> IntegrityViolation? {

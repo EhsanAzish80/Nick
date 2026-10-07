@@ -80,13 +80,14 @@ final class RemediationEngine {
         threatName:  String,
         processPath: String,
         pid:         Int32,
+        processIdentity: ProcessInstanceIdentity? = nil,
         terminateProcess: Bool = true
     ) -> RemediationReport {
         var actions: [RemediationAction] = []
 
         // 1. Kill the offending process immediately
         if terminateProcess {
-            actions.append(killProcess(pid: pid))
+            actions.append(killProcess(pid: pid, expectedIdentity: processIdentity))
         }
 
         // 2. Quarantine the threat file. Never delete as a fallback: a failed
@@ -126,12 +127,21 @@ final class RemediationEngine {
 
     // MARK: - Private Steps
 
-    private func killProcess(pid: Int32) -> RemediationAction {
+    private func killProcess(pid: Int32, expectedIdentity: ProcessInstanceIdentity?) -> RemediationAction {
         // Never kill init (PID 1) or the extension itself
         guard pid > 1 else {
             return RemediationAction(
                 type: .killProcess, target: "PID \(pid)",
                 success: false, detail: "Refused to kill PID ≤ 1"
+            )
+        }
+        guard RansomwareTerminationPolicy.maySignalKill(
+            expected: expectedIdentity,
+            current: ProcessInstanceIdentity.capture(pid: pid)
+        ) else {
+            return RemediationAction(
+                type: .killProcess, target: "PID \(pid)",
+                success: false, detail: "Process identity changed; refused to signal reused PID"
             )
         }
         let result = Darwin.kill(pid, SIGKILL)
