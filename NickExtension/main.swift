@@ -24,6 +24,7 @@ let scanCache    = ScanCache()
 /// is running. The container app treats this as stale after 30 seconds, so a
 /// crashed or stopped extension can never leave Smart Scan falsely green.
 func writeExtensionHealth() {
+    let esMetrics = EndpointSecurityClient.healthMetrics.snapshot()
     let fullDiskAccessReady: Bool = {
         guard let handle = FileHandle(
             forReadingAtPath: "/Library/Application Support/com.apple.TCC/TCC.db"
@@ -47,7 +48,9 @@ func writeExtensionHealth() {
         "signatureCount": signatureDB.count,
         "fullDiskAccessReady": fullDiskAccessReady,
         "fimBaselineCount": fileIntegrityMonitor.baselineCount,
-        "canaryCount": ransomwareDetector.canaryManager.canaryPaths.count
+        "canaryCount": ransomwareDetector.canaryManager.canaryPaths.count,
+        "eventsPerSecond": esMetrics.eventsPerSecond,
+        "deadlineMissCount": esMetrics.deadlineMisses
     ]
 
     do {
