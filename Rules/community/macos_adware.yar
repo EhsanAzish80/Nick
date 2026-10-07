@@ -48,7 +48,10 @@ rule macos_launch_constraints_bypass
         $lc2 = "amfi_get_out_of_my_way" ascii
     condition:
         (uint32(0) == 0xFEEDFACF or uint32(0) == 0xCAFEBABE or uint32(0) == 0xBEBAFECA)
-        and any of them
+        // The private entitlement string is present in many legitimate Apple
+        // binaries. Require the concrete bypass token as well so that string
+        // alone cannot classify normal platform code.
+        and all of them
 }
 
 rule macos_network_proxy_intercept
