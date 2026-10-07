@@ -337,14 +337,16 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             return
         }
         guard let resolvedPath = EndpointSecurityPath.canonical(standardPath),
-              let identity = FileIdentity(path: resolvedPath) else {
+              let identity = FileIdentity(path: resolvedPath),
+              let currentHash = scanner.contentHash(path: resolvedPath) else {
             reply(false)
             return
         }
         let result = scanner.cache.allowOnce(
             reviewedPath: standardPath,
             authorizationPath: resolvedPath,
-            currentIdentity: identity
+            currentIdentity: identity,
+            currentHash: currentHash
         )
         switch result {
         case .findingExpired:

@@ -117,7 +117,8 @@ final class ESEventHandler {
             let cached   = fileScanner?.cache.lookup(path: targetPath, identity: targetIdentity)
             let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
                 path: targetPath,
-                identity: targetIdentity
+                identity: targetIdentity,
+                currentHash: { fileScanner?.contentHash(path: targetPath) }
             ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
@@ -175,7 +176,8 @@ final class ESEventHandler {
             )
             let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
                 path: filePath,
-                identity: fileIdentity
+                identity: fileIdentity,
+                currentHash: { fileScanner?.contentHash(path: filePath) }
             ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 

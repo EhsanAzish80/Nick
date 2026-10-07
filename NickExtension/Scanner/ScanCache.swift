@@ -91,13 +91,14 @@ final class ScanCache {
 
     /// Consumes an explicit user approval for the next authorization involving
     /// this path. Consuming it prevents an accidental permanent bypass.
-    func consumeOneTimeAllowance(path: String, identity: FileIdentity) -> Bool {
-        lock.withLock {
-            guard let allowance = oneTimeAllowances.removeValue(forKey: path) else {
-                return false
-            }
-            return allowance.permits(identity)
-        }
+    func consumeOneTimeAllowance(
+        path: String,
+        identity: FileIdentity,
+        currentHash: () -> String?
+    ) -> Bool {
+        guard let allowance = lock.withLock({ oneTimeAllowances.removeValue(forKey: path) }),
+              let hash = currentHash() else { return false }
+        return allowance.permits(identity, sha256: hash)
     }
 
     /// Allows the next authorization and clears any stale deny verdict now,
@@ -105,7 +106,8 @@ final class ScanCache {
     func allowOnce(
         reviewedPath: String,
         authorizationPath: String,
-        currentIdentity: FileIdentity
+        currentIdentity: FileIdentity,
+        currentHash: String
     ) -> AllowOnceResult {
         lock.withLock {
             guard let entry = store[reviewedPath] ?? store[authorizationPath],
@@ -119,13 +121,18 @@ final class ScanCache {
             }
             guard ReviewedFileAllowancePolicy.permits(
                 reviewed: entry.identity,
-                current: currentIdentity
+                reviewedHash: entry.hash,
+                current: currentIdentity,
+                currentHash: currentHash
             ) else {
                 oneTimeAllowances.removeValue(forKey: reviewedPath)
                 oneTimeAllowances.removeValue(forKey: authorizationPath)
                 return .fileChanged
             }
-            oneTimeAllowances[authorizationPath] = OneTimeFileAllowance(identity: currentIdentity)
+            oneTimeAllowances[authorizationPath] = OneTimeFileAllowance(
+                identity: currentIdentity,
+                sha256: currentHash
+            )
             store.removeValue(forKey: reviewedPath)
             store.removeValue(forKey: authorizationPath)
             return .allowed
