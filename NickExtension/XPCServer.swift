@@ -83,7 +83,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `ESEvent` to the container app.
     func sendEventToApp(_ eventData: Data) {
-        eventStore.appendIfImportant(eventData)
+        eventStore.appendIfImportant(.init(kind: .endpointEvent, payload: eventData))
         withAppProxy { proxy in
             proxy.reportEvent(eventData)
         }
@@ -91,6 +91,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded threat payload to the container app (Phase 2+).
     func sendThreatToApp(_ threatData: Data) {
+        eventStore.append(.init(kind: .threat, payload: threatData))
         withAppProxy { proxy in
             proxy.reportThreat(threatData)
         }
@@ -98,6 +99,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `RemediationReport` to the container app (Phase 3+).
     func sendRemediationToApp(_ reportData: Data) {
+        eventStore.append(.init(kind: .remediation, payload: reportData))
         withAppProxy { proxy in
             proxy.reportRemediationAction(reportData)
         }
@@ -105,6 +107,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `IntegrityViolation` to the container app (Phase 3+).
     func sendIntegrityViolationToApp(_ violationData: Data) {
+        eventStore.append(.init(kind: .integrityViolation, payload: violationData))
         withAppProxy { proxy in
             proxy.reportIntegrityViolation(violationData)
         }
@@ -112,6 +115,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `PrivacyAlert` to the container app (Phase 5+).
     func sendPrivacyAlertToApp(_ alertData: Data) {
+        eventStore.append(.init(kind: .privacyAlert, payload: alertData))
         withAppProxy { proxy in
             proxy.reportPrivacyAlert(alertData)
         }
@@ -119,6 +123,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `USBThreat` to the container app (Phase 5+).
     func sendUSBThreatToApp(_ threatData: Data) {
+        eventStore.append(.init(kind: .usbThreat, payload: threatData))
         withAppProxy { proxy in
             proxy.reportUSBThreat(threatData)
         }
@@ -457,13 +462,17 @@ private final class EndpointEventStore {
         }
     }
 
-    func appendIfImportant(_ data: Data) {
-        guard let event = try? JSONDecoder().decode(ESEvent.self, from: data),
+    func appendIfImportant(_ finding: PersistedExtensionFinding) {
+        guard let event = try? JSONDecoder().decode(ESEvent.self, from: finding.payload),
               event.decision == .deny || event.threatName != nil else { return }
+        append(finding)
+    }
+
+    func append(_ finding: PersistedExtensionFinding) {
         queue.async {
             var events = self.load()
-            guard !events.contains(where: { $0.id == event.id }) else { return }
-            events.append(event)
+            guard !events.contains(where: { $0.id == finding.id }) else { return }
+            events.append(finding)
             if events.count > self.maximumCount {
                 events.removeFirst(events.count - self.maximumCount)
             }
@@ -493,8 +502,21 @@ private final class EndpointEventStore {
         }
     }
 
-    private func load() -> [ESEvent] {
+    private func load() -> [PersistedExtensionFinding] {
         guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([ESEvent].self, from: data)) ?? []
+        if let findings = try? JSONDecoder().decode([PersistedExtensionFinding].self, from: data) {
+            return findings
+        }
+        // One-time migration from the 4.6.3 ESEvent-only journal.
+        let oldEvents = (try? JSONDecoder().decode([ESEvent].self, from: data)) ?? []
+        return oldEvents.compactMap { event in
+            guard let payload = try? JSONEncoder().encode(event) else { return nil }
+            return PersistedExtensionFinding(
+                id: event.id,
+                kind: .endpointEvent,
+                timestamp: event.timestamp,
+                payload: payload
+            )
+        }
     }
 }

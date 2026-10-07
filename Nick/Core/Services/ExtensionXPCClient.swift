@@ -52,6 +52,11 @@ public final class ExtensionXPCClient: NSObject {
     /// Maximum number of events kept in `events`. Older events are discarded.
     public var maxEventCount = 2_000
 
+    /// Installed by AppDelegate so privileged findings enter SecurityEngine's
+    /// single incident pipeline. Kept as a closure to avoid a Core service
+    /// owning UI/application lifetime state.
+    var findingHandler: ((ExtensionFinding) async -> Void)?
+
     // MARK: - Private
 
     private nonisolated static let logger = Logger(
@@ -130,19 +135,79 @@ public final class ExtensionXPCClient: NSObject {
     private func loadPersistedEvents() {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
         proxy.getPersistedEvents { [weak self] data in
-            guard let replay = try? JSONDecoder().decode([ESEvent].self, from: data) else {
+            guard let replay = try? JSONDecoder().decode([PersistedExtensionFinding].self, from: data) else {
                 return
             }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let existingIDs = Set(events.map(\.id))
-                events.append(contentsOf: replay.filter { !existingIDs.contains($0.id) })
-                events.sort { $0.timestamp > $1.timestamp }
-                if events.count > maxEventCount {
-                    events.removeLast(events.count - maxEventCount)
+                for finding in replay.sorted(by: { $0.timestamp < $1.timestamp }) {
+                    await self.receivePersisted(finding)
                 }
             }
         }
+    }
+
+    private func receivePersisted(_ finding: PersistedExtensionFinding) async {
+        switch finding.kind {
+        case .endpointEvent, .threat:
+            guard let event = try? decoder.decode(ESEvent.self, from: finding.payload) else { return }
+            receive(event)
+        case .remediation:
+            guard let report = try? decoder.decode(RemediationReport.self, from: finding.payload) else { return }
+            receive(report)
+        case .integrityViolation:
+            guard let violation = try? decoder.decode(IntegrityViolation.self, from: finding.payload) else { return }
+            receive(violation)
+        case .privacyAlert:
+            guard let alert = try? decoder.decode(PrivacyAlert.self, from: finding.payload) else { return }
+            receive(alert)
+        case .usbThreat:
+            guard let threat = try? decoder.decode(USBThreat.self, from: finding.payload) else { return }
+            receive(threat)
+        }
+    }
+
+    private func receive(_ event: ESEvent) {
+        if !events.contains(where: { $0.id == event.id }) { events.insert(event, at: 0) }
+        trim(&events)
+        if let finding = ExtensionFinding(event: event) { deliver(finding) }
+    }
+
+    private func receive(_ report: RemediationReport) {
+        if let record = report.quarantineRecord {
+            quarantineRecords.removeAll { $0.id == record.id }
+            quarantineRecords.insert(record, at: 0)
+        }
+        deliver(ExtensionFinding(report: report))
+    }
+
+    private func receive(_ violation: IntegrityViolation) {
+        if !integrityViolations.contains(where: { $0.id == violation.id }) {
+            integrityViolations.insert(violation, at: 0)
+        }
+        trim(&integrityViolations)
+        deliver(ExtensionFinding(violation: violation))
+    }
+
+    private func receive(_ alert: PrivacyAlert) {
+        if !privacyAlerts.contains(where: { $0.id == alert.id }) { privacyAlerts.insert(alert, at: 0) }
+        trim(&privacyAlerts)
+        deliver(ExtensionFinding(privacyAlert: alert))
+    }
+
+    private func receive(_ threat: USBThreat) {
+        if !usbThreats.contains(where: { $0.id == threat.id }) { usbThreats.insert(threat, at: 0) }
+        trim(&usbThreats)
+        deliver(ExtensionFinding(usbThreat: threat))
+    }
+
+    private func trim<T>(_ values: inout [T]) {
+        if values.count > maxEventCount { values.removeLast(values.count - maxEventCount) }
+    }
+
+    private func deliver(_ finding: ExtensionFinding) {
+        guard let findingHandler else { return }
+        Task { await findingHandler(finding) }
     }
 
     // MARK: - Outbound Calls (Container App → Extension)
@@ -257,6 +322,194 @@ public final class ExtensionXPCClient: NSObject {
     }
 }
 
+// MARK: - Unified extension evidence
+
+struct ExtensionFinding: Sendable {
+    let signal: ThreatSignal
+    let score: Double
+    let recommendedAction: String
+
+    init?(event: ESEvent) {
+        guard event.decision == .deny || event.threatName != nil else { return nil }
+        let filePath = event.filePath ?? event.processPath
+        let severity: SignalSeverity = event.decision == .deny ? .critical : .high
+        let process = NickProcessInfo(
+            pid: event.pid,
+            path: event.processPath,
+            name: URL(fileURLWithPath: event.processPath).lastPathComponent,
+            parentPID: event.parentPid,
+            parentName: nil,
+            signingStatus: event.isCodeSigned == true ? .signed(teamID: "unknown") : .unknown
+        )
+        signal = ThreatSignal(
+            id: event.id,
+            source: .yara,
+            severity: severity,
+            timestamp: event.timestamp,
+            title: event.threatName ?? "Endpoint Security blocked a file",
+            description: event.decision == .deny
+                ? "Nick blocked access to a file previously identified as suspicious."
+                : "Nick's system extension found detector-confirmed suspicious file content.",
+            context: ThreatSignalContext(
+                processInfo: process,
+                fileInfo: FileInfo(
+                    path: filePath,
+                    sha256Hash: event.sha256,
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: nil
+                ),
+                metadata: [
+                    "reason": event.decision == .deny ? "endpoint_blocked_threat" : "endpoint_threat",
+                    "rule": event.threatName ?? "endpoint_known_threat",
+                    "ruleTier": "protected",
+                    "threatFamily": event.threatFamily ?? "unknown"
+                ]
+            )
+        )
+        score = event.decision == .deny ? 0.98 : 0.9
+        recommendedAction = "Review the file and quarantine it if you do not recognise it."
+    }
+
+    init(report: RemediationReport) {
+        let stableID = Self.stableUUID(
+            "\(report.timestamp.timeIntervalSince1970)|\(report.threatPath)|\(report.threatName)"
+        )
+        let succeeded = report.actions.contains(where: { $0.success })
+        signal = ThreatSignal(
+            id: stableID,
+            source: .filesystem,
+            severity: succeeded ? .high : .critical,
+            timestamp: report.timestamp,
+            title: succeeded ? "Threat remediation completed" : "Threat remediation needs attention",
+            description: succeeded
+                ? "Nick completed a response action for \(report.threatName)."
+                : "Nick detected \(report.threatName), but the requested response did not complete.",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: report.threatPath,
+                    sha256Hash: nil,
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: nil
+                ),
+                metadata: [
+                    "reason": "endpoint_remediation",
+                    "rule": "endpoint_remediation",
+                    "ruleTier": "protected"
+                ]
+            )
+        )
+        score = succeeded ? 0.88 : 0.98
+        recommendedAction = succeeded
+            ? "Review the remediation record and keep the item quarantined unless you trust it."
+            : "Review the file immediately and retry quarantine if it is still present."
+    }
+
+    /// Deterministic non-cryptographic identifier used only for incident
+    /// replay deduplication. Security decisions never depend on this value.
+    private static func stableUUID(_ value: String) -> UUID {
+        func fnv64(_ bytes: [UInt8], seed: UInt64) -> UInt64 {
+            bytes.reduce(seed) { hash, byte in
+                (hash ^ UInt64(byte)) &* 1_099_511_628_211
+            }
+        }
+        let bytes = Array(value.utf8)
+        let first = fnv64(bytes, seed: 14_695_981_039_346_656_037)
+        let second = fnv64(bytes.reversed(), seed: 10_995_116_282_11)
+        let raw: [UInt8] = (0..<8).map { UInt8(truncatingIfNeeded: first >> ($0 * 8)) }
+            + (0..<8).map { UInt8(truncatingIfNeeded: second >> ($0 * 8)) }
+        return UUID(uuid: (
+            raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+            raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14], raw[15]
+        ))
+    }
+
+    init(violation: IntegrityViolation) {
+        signal = ThreatSignal(
+            id: violation.id,
+            source: .filesystem,
+            severity: .high,
+            timestamp: violation.timestamp,
+            title: "Protected file \(violation.violationType.rawValue)",
+            description: "A monitored security-sensitive file changed outside Nick's recorded baseline.",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: violation.path,
+                    sha256Hash: violation.actualHash,
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: nil
+                ),
+                metadata: [
+                    "reason": "file_integrity_\(violation.violationType.rawValue)",
+                    "rule": "file_integrity_monitor",
+                    "ruleTier": "protected",
+                    "expectedHash": violation.expectedHash ?? "unavailable"
+                ]
+            )
+        )
+        score = 0.9
+        recommendedAction = "Review the file and acknowledge the change only if you made it."
+    }
+
+    init(privacyAlert: PrivacyAlert) {
+        let isGrant = privacyAlert.changeType == .granted
+        signal = ThreatSignal(
+            id: privacyAlert.id,
+            source: .avCapture,
+            severity: isGrant ? .medium : .info,
+            timestamp: privacyAlert.timestamp,
+            title: "\(privacyAlert.service) permission \(privacyAlert.changeType.rawValue)",
+            description: "macOS privacy permission changed for \(privacyAlert.appBundleID).",
+            context: ThreatSignalContext(metadata: [
+                "reason": "tcc_permission_change",
+                "rule": "tcc_\(privacyAlert.service.lowercased().replacingOccurrences(of: " ", with: "_"))",
+                "service": privacyAlert.service,
+                "appBundleID": privacyAlert.appBundleID,
+                "appPath": privacyAlert.appPath,
+                "changeType": privacyAlert.changeType.rawValue,
+                "deviceName": privacyAlert.service,
+                "process": privacyAlert.appBundleID,
+                "attributionConfidence": "authoritative"
+            ])
+        )
+        score = isGrant ? 0.55 : 0.15
+        recommendedAction = isGrant
+            ? "Confirm that you expected this permission change in System Settings."
+            : "No action is needed if you removed this permission."
+    }
+
+    init(usbThreat: USBThreat) {
+        signal = ThreatSignal(
+            id: usbThreat.id,
+            source: .yara,
+            severity: .high,
+            timestamp: usbThreat.timestamp,
+            title: usbThreat.threatName ?? "Threat found on removable media",
+            description: "Nick found suspicious content on an external volume.",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: usbThreat.filePath,
+                    sha256Hash: usbThreat.sha256,
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: nil
+                ),
+                metadata: [
+                    "reason": "usb_threat",
+                    "rule": usbThreat.threatName ?? "usb_threat",
+                    "ruleTier": "protected",
+                    "volumePath": usbThreat.volumePath,
+                    "threatFamily": usbThreat.threatFamily ?? "unknown"
+                ]
+            )
+        )
+        score = 0.92
+        recommendedAction = "Disconnect the volume and quarantine the file if you do not recognise it."
+    }
+}
+
 // MARK: - NickAppXPCProtocol (Inbound from Extension)
 
 extension ExtensionXPCClient: NickAppXPCProtocol {
@@ -267,16 +520,16 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             return
         }
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            events.insert(event, at: 0)
-            if events.count > maxEventCount {
-                events.removeLast(events.count - maxEventCount)
-            }
+            self?.receive(event)
         }
     }
 
     public nonisolated func reportThreat(_ threatData: Data) {
-        Self.logger.notice("Received threat report from extension (\(threatData.count) bytes)")
+        guard let event = try? JSONDecoder().decode(ESEvent.self, from: threatData) else {
+            Self.logger.error("Failed to decode threat report from extension")
+            return
+        }
+        Task { @MainActor [weak self] in self?.receive(event) }
     }
 
     public nonisolated func reportRemediationAction(_ reportData: Data) {
@@ -285,12 +538,7 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             return
         }
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            if let record = report.quarantineRecord {
-                // Prepend; remove duplicates by id
-                quarantineRecords.removeAll { $0.id == record.id }
-                quarantineRecords.insert(record, at: 0)
-            }
+            self?.receive(report)
         }
     }
 
@@ -300,11 +548,7 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             return
         }
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            integrityViolations.insert(violation, at: 0)
-            if integrityViolations.count > maxEventCount {
-                integrityViolations.removeLast(integrityViolations.count - maxEventCount)
-            }
+            self?.receive(violation)
         }
     }
 
@@ -321,11 +565,7 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             return
         }
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            privacyAlerts.insert(alert, at: 0)
-            if privacyAlerts.count > maxEventCount {
-                privacyAlerts.removeLast(privacyAlerts.count - maxEventCount)
-            }
+            self?.receive(alert)
         }
     }
 
@@ -335,11 +575,7 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             return
         }
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            usbThreats.insert(threat, at: 0)
-            if usbThreats.count > maxEventCount {
-                usbThreats.removeLast(usbThreats.count - maxEventCount)
-            }
+            self?.receive(threat)
         }
     }
 }

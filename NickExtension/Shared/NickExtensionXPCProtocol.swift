@@ -4,6 +4,32 @@
 
 import Foundation
 
+/// Durable envelope for security findings produced by the system extension.
+/// The payload remains the original JSON representation so older records can
+/// be migrated without coupling the privileged store to app-only models.
+public struct PersistedExtensionFinding: Codable, Sendable, Identifiable {
+    public enum Kind: String, Codable, Sendable {
+        case endpointEvent
+        case threat
+        case remediation
+        case integrityViolation
+        case privacyAlert
+        case usbThreat
+    }
+
+    public let id: UUID
+    public let kind: Kind
+    public let timestamp: Date
+    public let payload: Data
+
+    public init(id: UUID = UUID(), kind: Kind, timestamp: Date = Date(), payload: Data) {
+        self.id = id
+        self.kind = kind
+        self.timestamp = timestamp
+        self.payload = payload
+    }
+}
+
 // MARK: - NickExtensionXPCProtocol (Container App → Extension)
 
 /// XPC protocol exposed **by the extension** to the container app.
