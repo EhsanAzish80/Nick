@@ -44,14 +44,12 @@ rule macos_launch_constraints_bypass
     strings:
         // Note: com.apple.security.cs.allow-unsigned-executable-memory was
         // removed in 4.6 — it is a standard entitlement of every JIT/Electron app.
-        $lc1 = "com.apple.private.amfi" ascii
         $lc2 = "amfi_get_out_of_my_way" ascii
     condition:
         (uint32(0) == 0xFEEDFACF or uint32(0) == 0xCAFEBABE or uint32(0) == 0xBEBAFECA)
-        // The private entitlement string is present in many legitimate Apple
-        // binaries. Require the concrete bypass token as well so that string
-        // alone cannot classify normal platform code.
-        and all of them
+        // `com.apple.private.amfi` produced 140 benign matches in Apple binaries. `$lc2` is the
+        // concrete AMFI boot-argument bypass and remains independently useful.
+        and $lc2
 }
 
 rule macos_network_proxy_intercept

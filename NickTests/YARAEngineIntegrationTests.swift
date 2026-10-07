@@ -115,6 +115,32 @@ final class YARAEngineIntegrationTests: XCTestCase {
         XCTAssertEqual(match.metadata["description"], "Integration test — NICKTEST signature")
     }
 
+    func test_launchConstraintsRuleTriggersOnBypassTokenButNotPrivateEntitlementAlone() async throws {
+        let engine = try makeEngine(rule: """
+            rule macos_launch_constraints_bypass {
+                strings:
+                    $lc2 = "amfi_get_out_of_my_way" ascii
+                condition:
+                    (uint32(0) == 0xFEEDFACF or uint32(0) == 0xCAFEBABE or uint32(0) == 0xBEBAFECA)
+                    and $lc2
+            }
+            """)
+        func machOFixture(_ text: String, name: String) throws -> URL {
+            var data = Data([0xCF, 0xFA, 0xED, 0xFE])
+            data.append(Data(repeating: 0, count: 60))
+            data.append(Data(text.utf8))
+            let url = tmpDir.appendingPathComponent(name)
+            try data.write(to: url)
+            return url
+        }
+        let positive = try machOFixture("amfi_get_out_of_my_way", name: "positive-macho")
+        let negative = try machOFixture("com.apple.private.amfi", name: "negative-macho")
+        let positiveMatches = try await engine.scanFile(at: positive.path)
+        let negativeMatches = try await engine.scanFile(at: negative.path)
+        XCTAssertEqual(positiveMatches.map(\.ruleName), ["macos_launch_constraints_bypass"])
+        XCTAssertTrue(negativeMatches.isEmpty)
+    }
+
     // MARK: - Test 3: Scan of unreadable path throws fileNotReadable
 
     /// Confirms that scanning a path that does not exist raises the typed error.
