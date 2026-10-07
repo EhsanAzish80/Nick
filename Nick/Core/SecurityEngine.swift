@@ -225,8 +225,8 @@ final class SecurityEngine {
     /// Use this in simple-mode UI instead of reading `alerts` directly.
     private(set) var userFacingAlerts: [UserFacingAlert] = []
 
-    /// Shared Foundation Models explainer — used by both the full scan path and
-    /// the real-time pipeline so every new alert gets an AI explanation.
+    /// Shared local explainer used by both the full scan path and the real-time
+    /// pipeline so every new alert gets deterministic display text.
     let explainer = AlertExplainer()
 
     /// Historical scan snapshots powering sparkline charts in the Overview.

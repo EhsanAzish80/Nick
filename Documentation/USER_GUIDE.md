@@ -71,7 +71,7 @@ Build 416 also contains no Network Extension traffic-drop path.
 ## Local analysis and network access
 
 Nick has no hosted detection service. File scanning, signal correlation,
-Runtime Compare, and Apple Foundation Models alert explanations run locally.
+Runtime Compare, and deterministic alert explanations run locally.
 Nick still uses the network for explicit product functions: Sparkle update
 checks, an optional webhook configured in Settings, and links the user opens.
 Exports remain local until the user chooses where to save or share them.
