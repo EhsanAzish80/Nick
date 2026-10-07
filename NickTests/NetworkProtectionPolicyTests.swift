@@ -483,6 +483,23 @@ final class UnifiedSourceFindingTests: XCTestCase {
             "func shouldBlock(targetPath _: String, actorPath _: String, actorPid _: Int32) -> Bool {\n        false"
         ))
     }
+
+    func test_tamperProtectionDoesNotWatchItsMutableEventStore() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "NickExtension/TamperProtection/TamperProtection.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("\"/Applications/Nick.app\""))
+        XCTAssertFalse(source.contains(
+            "\"/Library/Application Support/com.ehsanazish.nick\""
+        ))
+    }
 }
 
 final class ScamGuardianTests: XCTestCase {
