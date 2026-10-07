@@ -469,7 +469,7 @@ struct SystemAuditView: View {
                     .padding(.bottom, 24)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(xpcClient.integrityViolations.prefix(5).enumerated()), id: \.element.id) { idx, v in
+                    ForEach(Array(xpcClient.integrityViolations.enumerated()), id: \.element.id) { idx, v in
                         if idx > 0 { Divider().padding(.leading, 44) }
                         let createdOrModifiedIcon = v.violationType == .created ? "plus.circle" : "pencil"
                         let violationIcon = v.violationType == .deleted ? "trash" : createdOrModifiedIcon
