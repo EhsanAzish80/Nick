@@ -35,10 +35,9 @@ enum NetworkPolicyVerdict: Equatable, Sendable {
 }
 
 struct NetworkProtectionConfiguration: Equatable, Sendable {
-    static let configurationVersion = 5
+    static let configurationVersion = 6
 
     var protectionEnabled: Bool
-    var blockingEnabled: Bool
     var allowedDomains: Set<String>
     var allowedAppIdentifiers: Set<String>
     var temporaryAllowedDomains: [String: TimeInterval]
@@ -46,14 +45,12 @@ struct NetworkProtectionConfiguration: Equatable, Sendable {
 
     init(
         protectionEnabled: Bool = true,
-        blockingEnabled: Bool = false,
         allowedDomains: Set<String> = [],
         allowedAppIdentifiers: Set<String> = [],
         temporaryAllowedDomains: [String: TimeInterval] = [:],
         temporaryAllowedAppIdentifiers: [String: TimeInterval] = [:]
     ) {
         self.protectionEnabled = protectionEnabled
-        self.blockingEnabled = blockingEnabled
         self.allowedDomains = Set(allowedDomains.compactMap(Self.normalizedDomain))
         self.allowedAppIdentifiers = Set(
             allowedAppIdentifiers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
@@ -79,8 +76,6 @@ struct NetworkProtectionConfiguration: Equatable, Sendable {
             // An absent or stale configuration must never inherit enforcement.
             protectionEnabled: hasCurrentVersion
                 && (vendorConfiguration?["protectionEnabled"] as? Bool == true),
-            blockingEnabled: hasCurrentVersion
-                && (vendorConfiguration?["blockingEnabled"] as? Bool == true),
             allowedDomains: Set(vendorConfiguration?["allowedDomains"] as? [String] ?? []),
             allowedAppIdentifiers: Set(vendorConfiguration?["allowedAppIdentifiers"] as? [String] ?? []),
             temporaryAllowedDomains:
@@ -94,7 +89,6 @@ struct NetworkProtectionConfiguration: Equatable, Sendable {
         [
             "configurationVersion": Self.configurationVersion,
             "protectionEnabled": protectionEnabled,
-            "blockingEnabled": blockingEnabled,
             "allowedDomains": allowedDomains.sorted(),
             "allowedAppIdentifiers": allowedAppIdentifiers.sorted(),
             "temporaryAllowedDomains": temporaryAllowedDomains,
@@ -166,11 +160,7 @@ struct NetworkProtectionPolicy: Sendable {
         }) {
             return .allow
         }
-        if isBlocklisted(host) {
-            return configuration.blockingEnabled
-                ? .block(.blocklist)
-                : .observe(.knownThreat)
-        }
+        if isBlocklisted(host) { return .observe(.knownThreat) }
         // Local heuristics are valuable context, but they are not sufficient
         // evidence to interrupt basic connectivity. Only signed blocklist
         // matches are enforced; heuristic matches remain visible for review.

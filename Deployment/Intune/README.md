@@ -33,7 +33,7 @@ The expected result is exit code `0`, managed configuration detected, and both
 `responsive`.
 
 The Network Filter profile deliberately starts build 419 in fail-open
-observation mode (`blockingEnabled = false`). This pilot profile must not be
+observation mode. This pilot profile must not be
 used as evidence that network blocking policy is enforced.
 
 ## Identity lock

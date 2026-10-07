@@ -228,6 +228,12 @@ final class FilterDataProvider: NEFilterDataProvider {
             reasonTitle: reason.userTitle,
             port: port >= 0 ? port : nil
         ))
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("com.ehsanazish.nick.network-observation"),
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
     }
 
     private func signingIdentifier(for auditToken: Data?) -> String? {
