@@ -62,7 +62,11 @@ final class EndpointSecurityClient {
         let result = es_new_client(&newClient) { [weak self] client, message in
             // This block runs on an ES-internal serial queue — keep it fast.
             Self.healthMetrics.record(eventType: message.pointee.event_type)
-            MuteManager.muteMeasuredProcessIfNeeded(message.pointee.process.pointee, client: client)
+            MuteManager.muteMeasuredProcessIfNeeded(
+                message.pointee.process.pointee,
+                eventType: message.pointee.event_type,
+                client: client
+            )
             self?.eventHandler?.handle(message: message)
         }
 

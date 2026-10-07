@@ -67,7 +67,12 @@ enum MuteManager {
         logger.info("Applied \(mutedCount)/\(sealedReadTargetPrefixes.count) sealed target-prefix read mutes")
     }
 
-    static func muteMeasuredProcessIfNeeded(_ process: es_process_t, client: OpaquePointer) {
+    static func muteMeasuredProcessIfNeeded(
+        _ process: es_process_t,
+        eventType: es_event_type_t,
+        client: OpaquePointer
+    ) {
+        guard eventType == ES_EVENT_TYPE_AUTH_OPEN || eventType == ES_EVENT_TYPE_AUTH_MMAP else { return }
         guard process.is_platform_binary else { return }
         let token = process.executable.pointee.path
         let path = token.data.map { String(decoding: UnsafeRawBufferPointer(start: $0, count: token.length), as: UTF8.self) } ?? ""
