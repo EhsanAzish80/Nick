@@ -335,58 +335,58 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    private func receivePersisted(_ finding: PersistedExtensionFinding) async {
+    func receivePersisted(_ finding: PersistedExtensionFinding) async {
         switch finding.kind {
         case .endpointEvent, .threat:
             guard let event = try? decoder.decode(ESEvent.self, from: finding.payload) else { return }
-            receive(event)
+            receive(event, deliverToEngine: false)
         case .remediation:
             guard let report = try? decoder.decode(RemediationReport.self, from: finding.payload) else { return }
-            receive(report)
+            receive(report, deliverToEngine: false)
         case .integrityViolation:
             guard let violation = try? decoder.decode(IntegrityViolation.self, from: finding.payload) else { return }
-            receive(violation)
+            receive(violation, deliverToEngine: false)
         case .privacyAlert:
             guard let alert = try? decoder.decode(PrivacyAlert.self, from: finding.payload) else { return }
-            receive(alert)
+            receive(alert, deliverToEngine: false)
         case .usbThreat:
             guard let threat = try? decoder.decode(USBThreat.self, from: finding.payload) else { return }
-            receive(threat)
+            receive(threat, deliverToEngine: false)
         }
     }
 
-    private func receive(_ event: ESEvent) {
+    private func receive(_ event: ESEvent, deliverToEngine: Bool = true) {
         if !events.contains(where: { $0.id == event.id }) { events.insert(event, at: 0) }
         trim(&events)
-        if let finding = ExtensionFinding(event: event) { deliver(finding) }
+        if deliverToEngine, let finding = ExtensionFinding(event: event) { deliver(finding) }
     }
 
-    private func receive(_ report: RemediationReport) {
+    private func receive(_ report: RemediationReport, deliverToEngine: Bool = true) {
         if let record = report.quarantineRecord {
             quarantineRecords.removeAll { $0.id == record.id }
             quarantineRecords.insert(record, at: 0)
         }
-        deliver(ExtensionFinding(report: report))
+        if deliverToEngine { deliver(ExtensionFinding(report: report)) }
     }
 
-    private func receive(_ violation: IntegrityViolation) {
+    private func receive(_ violation: IntegrityViolation, deliverToEngine: Bool = true) {
         if !integrityViolations.contains(where: { $0.id == violation.id }) {
             integrityViolations.insert(violation, at: 0)
         }
         trim(&integrityViolations)
-        deliver(ExtensionFinding(violation: violation))
+        if deliverToEngine { deliver(ExtensionFinding(violation: violation)) }
     }
 
-    private func receive(_ alert: PrivacyAlert) {
+    private func receive(_ alert: PrivacyAlert, deliverToEngine: Bool = true) {
         if !privacyAlerts.contains(where: { $0.id == alert.id }) { privacyAlerts.insert(alert, at: 0) }
         trim(&privacyAlerts)
-        deliver(ExtensionFinding(privacyAlert: alert))
+        if deliverToEngine { deliver(ExtensionFinding(privacyAlert: alert)) }
     }
 
-    private func receive(_ threat: USBThreat) {
+    private func receive(_ threat: USBThreat, deliverToEngine: Bool = true) {
         if !usbThreats.contains(where: { $0.id == threat.id }) { usbThreats.insert(threat, at: 0) }
         trim(&usbThreats)
-        deliver(ExtensionFinding(usbThreat: threat))
+        if deliverToEngine { deliver(ExtensionFinding(usbThreat: threat)) }
     }
 
     private func trim<T>(_ values: inout [T]) {

@@ -446,6 +446,31 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertEqual(decoded.payload, payload)
     }
 
+    func test_persistedEndpointReplayRestoresUIStateWithoutRedeliveringAlert() async throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/open",
+            pid: 42,
+            parentPid: 1,
+            filePath: "/private/tmp/replayed",
+            decision: .deny,
+            threat: .init(threatName: "Replayed threat", threatFamily: "test")
+        )
+        let envelope = PersistedExtensionFinding(
+            kind: .threat,
+            timestamp: Date(timeIntervalSince1970: 123),
+            payload: try JSONEncoder().encode(event)
+        )
+        let client = ExtensionXPCClient()
+        var deliveredCount = 0
+        client.findingHandler = { _ in deliveredCount += 1 }
+
+        await client.receivePersisted(envelope)
+
+        XCTAssertEqual(client.events.map(\.id), [event.id])
+        XCTAssertEqual(deliveredCount, 0)
+    }
+
     func test_remediationReplayKeepsStableEvidenceID() {
         let report = RemediationReport(
             timestamp: Date(timeIntervalSince1970: 456),
