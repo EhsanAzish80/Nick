@@ -54,7 +54,10 @@ struct SimpleHomeView: View {
             auditIssues: engine.auditResults.filter { $0.status != .pass }.count,
             persistenceIssues: engine.persistenceItems.filter { $0.signingStatus?.isSuspicious == true }.count,
             processIssues: engine.processes.filter { $0.signingStatus == .unsigned || $0.signingStatus == .invalid }.count,
-            networkIssues: engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count
+            networkIssues: engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count,
+            unreviewedFindings: engine.activeActionableAlerts.filter {
+                UserFacingAlertBuilder.shared.build(from: $0).severity != .critical
+            }.count
         )
     }
 

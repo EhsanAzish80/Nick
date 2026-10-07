@@ -48,6 +48,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case persistence
         case processes
         case network
+        case findings
     }
 
     /// What "Fix It" does in Simple mode.
@@ -71,6 +72,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case .persistence:        "Persistence items need review"
         case .processes:          "Running processes need review"
         case .network:            "Network activity needs review"
+        case .findings:           "Security findings need review"
         }
     }
 
@@ -86,6 +88,8 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
             "\(count) process\(count == 1 ? " has" : "es have") unsigned or invalid signing evidence."
         case .network:
             "\(count) outbound shell connection\(count == 1 ? "" : "s") need context."
+        case .findings:
+            "\(count) new finding\(count == 1 ? " needs" : "s need") your review."
         }
     }
 
@@ -98,6 +102,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case .persistence:        count == 1 ? "An app set itself to start automatically" : "Some apps set themselves to start automatically"
         case .processes:          "An app is behaving unusually"
         case .network:            "An app is making unusual connections"
+        case .findings:           count == 1 ? "Something needs your review" : "Some findings need your review"
         }
     }
 
@@ -115,6 +120,8 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
             "Nick couldn’t confirm who made an app that’s running. Take a look to make sure you trust it."
         case .network:
             "A command-line program is talking to the internet. That’s normal for some tools, but worth a look."
+        case .findings:
+            "Nick found activity that needs your decision before Home can show all clear."
         }
     }
 
@@ -130,6 +137,8 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
             "Apps from real developers carry a digital stamp that proves who made them. Apps without one aren’t always harmful, but most malware has none."
         case .network:
             "Attackers sometimes use command-line tools to send data out of a Mac without an app window."
+        case .findings:
+            "Reviewing each finding lets you decide whether the activity belongs on your Mac."
         }
     }
 
@@ -138,7 +147,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case .realTimeProtection: .openURL("x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
         case .systemAudit:        .showProtection
         case .persistence:        .openURL("x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
-        case .processes, .network: .showActivity
+        case .processes, .network, .findings: .showActivity
         }
     }
 
@@ -149,6 +158,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case .persistence:        .persistence
         case .processes:          .processes
         case .network:            .network
+        case .findings:           .alerts
         }
     }
 
@@ -157,7 +167,8 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         auditIssues: Int,
         persistenceIssues: Int,
         processIssues: Int,
-        networkIssues: Int
+        networkIssues: Int,
+        unreviewedFindings: Int = 0
     ) -> [AttentionIssue] {
         var issues: [AttentionIssue] = []
         if !endpointProtectionActive { issues.append(.init(kind: .realTimeProtection, count: 1)) }
@@ -165,6 +176,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         if persistenceIssues > 0 { issues.append(.init(kind: .persistence, count: persistenceIssues)) }
         if processIssues > 0 { issues.append(.init(kind: .processes, count: processIssues)) }
         if networkIssues > 0 { issues.append(.init(kind: .network, count: networkIssues)) }
+        if unreviewedFindings > 0 { issues.append(.init(kind: .findings, count: unreviewedFindings)) }
         return issues
     }
 }
