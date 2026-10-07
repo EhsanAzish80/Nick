@@ -80,14 +80,18 @@ explanation and notification policy once.
 compiled into immutable rule sets, and scanned with bounded concurrency and a
 10-second per-file timeout.
 
-`DeepScanner` streams candidate discovery and scanning concurrently. Match
+`DeepScanner` streams candidate discovery and scanning concurrently and stops
+at a bounded total time budget, reporting candidates skipped by that budget. Match
 classification considers rule class and severity, file format, verified
-development layouts, Homebrew receipts, signed application context, and code
+development layouts or repositories explicitly selected by the user, Homebrew receipts, signed application context, and code
 signing state. Concrete family signatures remain actionable regardless of
 path; broad behavior matches can remain visible without becoming alerts.
 
-An FSEvents watcher provides additional YARA coverage for newly created or
-modified executable content in selected directories.
+An FSEvents watcher provides additional post-write YARA coverage for newly
+created or modified executable content in selected directories. Its bounded,
+coalescing queue counts overload drops rather than silently discarding them.
+This is post-launch evidence; only the curated exact-hash lookup participates
+in the measured pre-launch authorization budget.
 
 ### Network observation
 

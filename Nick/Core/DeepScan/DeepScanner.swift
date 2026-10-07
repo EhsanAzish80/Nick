@@ -57,6 +57,8 @@ final class DeepScanner {
     var discoveredFiles:    Int          = 0
     /// The location currently being walked, for progress text.
     var indexingLocation:   String       = ""
+    var skippedFiles:       Int          = 0
+    var timeBudgetExceeded: Bool         = false
 
     // MARK: - Private
 
@@ -64,6 +66,8 @@ final class DeepScanner {
     private var activeScanID: UUID?
     private var storedOnlyOnPower = false
     private var ignoredPaths: Set<String> = []
+    private var approvedDevelopmentRoots: Set<String> = []
+    private var scanTimeBudget: TimeInterval = 20 * 60
     /// Weak reference to the engine used to ingest YARA signals during a deep scan.
     /// Set by the caller (e.g. `ScannerDetailView`) before calling `start()`.
     weak var engine: SecurityEngine?
@@ -84,6 +88,8 @@ final class DeepScanner {
     func start(
         onlyOnPower: Bool,
         ignoredPaths: Set<String> = [],
+        approvedDevelopmentRoots: Set<String> = [],
+        timeBudget: TimeInterval = 20 * 60,
         candidateFiles: [String]? = nil,
         scanFile: @escaping @Sendable (String) async throws -> [YARAMatch]
     ) {
@@ -91,6 +97,8 @@ final class DeepScanner {
         let scanID = UUID()
         storedOnlyOnPower = onlyOnPower
         self.ignoredPaths = Set(ignoredPaths.map(Self.canonicalPath))
+        self.approvedDevelopmentRoots = Set(approvedDevelopmentRoots.map(Self.canonicalPath))
+        scanTimeBudget = max(0.01, timeBudget)
         activeScanID = scanID
         progress = 0
         totalFiles = 0
@@ -105,6 +113,8 @@ final class DeepScanner {
         isScanning = true
         isCancelling = false
         hasCompletedScan = false
+        skippedFiles = 0
+        timeBudgetExceeded = false
         scanTask = Task { [weak self] in
             await self?.performDeepScan(
                 scanID: scanID,
@@ -137,6 +147,8 @@ final class DeepScanner {
         results = []
         resultVerdicts = [:]
         hasCompletedScan = false
+        skippedFiles = 0
+        timeBudgetExceeded = false
     }
 
     // MARK: - Private Implementation
@@ -177,17 +189,26 @@ final class DeepScanner {
         let workerCount = Self.workerCount()
         var completed = 0
         var lastPublish = Date.distantPast
+        let deadline = startTime.addingTimeInterval(scanTimeBudget)
 
         await withTaskGroup(of: FileOutcome.self) { group in
             var inFlight = 0
             var exhausted = false
 
             while true {
+                if Date() >= deadline {
+                    timeBudgetExceeded = true
+                    exhausted = true
+                    enumeration.cancel()
+                }
                 // Keep every worker busy while candidates are available.
                 fill: while !exhausted, inFlight < workerCount, !Task.isCancelled {
                     switch queue.pop() {
                     case .item(let candidate):
-                        group.addTask { await Self.scan(candidate, with: scanFile) }
+                        let roots = approvedDevelopmentRoots
+                        group.addTask {
+                            await Self.scan(candidate, approvedDevelopmentRoots: roots, with: scanFile)
+                        }
                         inFlight += 1
                     case .finished:
                         exhausted = true
@@ -239,12 +260,14 @@ final class DeepScanner {
 
         guard !Task.isCancelled else { return finishCancelledScan(scanID: scanID) }
 
-        totalFiles = queue.snapshot().discovered
+        let finalState = queue.snapshot()
+        totalFiles = finalState.discovered
+        skippedFiles = timeBudgetExceeded ? max(finalState.remaining, totalFiles - completed) : 0
         Self.log.info("DeepScanner: \(self.totalFiles) files scanned")
 
         // Finalise only a scan that genuinely reached the end.
         progress     = 1.0
-        scannedFiles = totalFiles
+        scannedFiles = completed
         isScanning   = false
         isPaused     = false
         isCancelling = false
@@ -254,8 +277,8 @@ final class DeepScanner {
             scanTask = nil
             activeScanID = nil
         }
-        engine?.recordDeepScan(fileCount: totalFiles)
-        Self.log.info("DeepScanner: complete — \(self.threatsFound) actionable finding(s)")
+        engine?.recordDeepScan(fileCount: completed)
+        Self.log.info("DeepScanner: complete — \(self.threatsFound) actionable finding(s), \(self.skippedFiles) skipped")
     }
 
     /// Result of scanning and classifying one file in a worker task.
@@ -272,6 +295,7 @@ final class DeepScanner {
 
     nonisolated private static func scan(
         _ candidate: Candidate,
+        approvedDevelopmentRoots: Set<String>,
         with scanFile: @escaping @Sendable (String) async throws -> [YARAMatch]
     ) async -> FileOutcome {
         let file = candidate.path
@@ -286,7 +310,9 @@ final class DeepScanner {
             return FileOutcome(path: file, classified: [])
         }
         let unique = uniqueMatches(matches)
-        return FileOutcome(path: file, classified: unique.map { ($0, classify(match: $0)) })
+        return FileOutcome(path: file, classified: unique.map {
+            ($0, classify(match: $0, approvedDevelopmentRoots: approvedDevelopmentRoots))
+        })
     }
 
     /// Records one file's findings and forwards actionable ones to the correlator.
@@ -525,7 +551,8 @@ final class DeepScanner {
     /// signing. Attacker-controlled directory names never downgrade concrete rules.
     nonisolated static func classify(
         match: YARAMatch,
-        cellarRoots: [String] = ["/opt/homebrew/Cellar", "/usr/local/Cellar"]
+        cellarRoots: [String] = ["/opt/homebrew/Cellar", "/usr/local/Cellar"],
+        approvedDevelopmentRoots: Set<String> = []
     ) -> ThreatVerdict {
         let path = match.filePath.lowercased()
 
@@ -557,7 +584,7 @@ final class DeepScanner {
         // source checkout, test fixture, package-manager cache, or documentation corpus,
         // those strings are evidence about source text rather than executed behavior.
         // Keep them in the completed report, but do not turn them into active threats.
-        if isVerifiedDevelopmentContext(path) {
+        if isVerifiedDevelopmentContext(match.filePath, approvedRoots: approvedDevelopmentRoots) {
             return .developmentArtifact
         }
 
@@ -706,11 +733,16 @@ final class DeepScanner {
     /// Downloads, Desktop, and Application Support into "source code".
     nonisolated static func isVerifiedDevelopmentContext(
         _ path: String,
-        homeDirectory: String = NSHomeDirectory()
+        homeDirectory: String = NSHomeDirectory(),
+        approvedRoots: Set<String> = []
     ) -> Bool {
         let canonical = canonicalPath(path)
         guard !isDevelopmentDowngradeForbidden(canonical) else { return false }
         let home = canonicalPath(homeDirectory)
+        let approved = Set(approvedRoots.map(canonicalPath))
+        guard approved.contains(where: { canonical == $0 || canonical.hasPrefix($0 + "/") }) else {
+            return false
+        }
         let boundaries: Set<String> = [
             "/", "/Users", "/Volumes", "/private", "/private/tmp", "/private/var",
             "/private/var/tmp", "/private/var/folders", home,
@@ -773,7 +805,7 @@ final class DeepScanner {
         // Anywhere else — notably temporary directories — a build-layout name
         // is attacker-choosable. Require the metadata Xcode writes into a
         // derived-data root, or a verified repository.
-        return hasXcodeDerivedDataRoot(canonical) || isVerifiedDevelopmentContext(canonical)
+        return hasXcodeDerivedDataRoot(canonical)
     }
 
     /// Xcode writes `info.plist` with a `WorkspacePath` key into every
@@ -987,6 +1019,7 @@ final class CandidateQueue: Sendable {
         let discovered: Int
         let location: String
         let finished: Bool
+        let remaining: Int
     }
 
     private struct State: Sendable {
@@ -1031,6 +1064,13 @@ final class CandidateQueue: Sendable {
     }
 
     func snapshot() -> Snapshot {
-        state.withLock { Snapshot(discovered: $0.discovered, location: $0.location, finished: $0.finished) }
+        state.withLock {
+            Snapshot(
+                discovered: $0.discovered,
+                location: $0.location,
+                finished: $0.finished,
+                remaining: max(0, $0.items.count - $0.head)
+            )
+        }
     }
 }
