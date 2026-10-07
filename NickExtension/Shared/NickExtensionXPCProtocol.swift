@@ -125,6 +125,10 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
     /// `IntegrityView`.
     func requestRebuildFIMBaseline(reply: @escaping (Bool) -> Void)
 
+    /// Returns the authoritative root-owned set of pending integrity changes.
+    /// This rehydrates the UI after either side of the XPC connection restarts.
+    func getPendingFIMViolations(reply: @escaping (Data) -> Void)
+
     /// Accepts one durable FIM violation and advances its baseline only when
     /// the current file still matches the reviewed evidence.
     func acknowledgeFIMViolation(id: String, reply: @escaping (Bool) -> Void)

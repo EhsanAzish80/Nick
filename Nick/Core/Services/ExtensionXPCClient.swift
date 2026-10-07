@@ -177,6 +177,7 @@ public final class ExtensionXPCClient: NSObject {
                 if active {
                     self?.startHealthRefresh()
                     self?.loadPersistedEvents()
+                    self?.loadPendingFIMViolations()
                     self?.bootstrapIncidentStore(
                         legacyPayload: self?.bootstrapLegacyPayload,
                         completion: self?.bootstrapCompletion
@@ -210,6 +211,18 @@ public final class ExtensionXPCClient: NSObject {
         extensionHealth = data.isEmpty
             ? nil
             : (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func loadPendingFIMViolations() {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        proxy.getPendingFIMViolations { [weak self] data in
+            guard !data.isEmpty,
+                  let violations = try? JSONDecoder().decode([IntegrityViolation].self, from: data)
+            else { return }
+            Task { @MainActor [weak self] in
+                self?.integrityViolations = violations.sorted { $0.timestamp > $1.timestamp }
+            }
+        }
     }
 
     public func bootstrapSecuritySettings(legacyPayload: Data) async -> Data? {

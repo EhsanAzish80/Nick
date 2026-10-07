@@ -421,6 +421,15 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         }
     }
 
+    func getPendingFIMViolations(reply: @escaping (Data) -> Void) {
+        guard let monitor = ESXPCServer.fimMonitorRef,
+              let data = try? JSONEncoder().encode(monitor.pendingViolationSnapshot()) else {
+            reply(Data())
+            return
+        }
+        reply(data)
+    }
+
     func acknowledgeFIMViolation(id: String, reply: @escaping (Bool) -> Void) {
         guard let id = UUID(uuidString: id),
               let monitor = ESXPCServer.fimMonitorRef else {
