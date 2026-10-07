@@ -469,7 +469,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         ))
         let store = IncidentStore(defaults: defaults)
         _ = store.ingest([dismissedAlert])
-        store.perform(.dismissed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
+        store.performAuthenticatedUserAction(.dismissed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
 
         for index in 0..<150 {
             let noise = makeSignal(
@@ -492,7 +492,7 @@ final class ThreatCorrelatorTests: XCTestCase {
             metadata: ["reason": "repeat_behavior", "path": "/Users/test/repeated"]
         ))
         _ = store.ingest([first])
-        store.perform(.reviewed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
+        store.performAuthenticatedUserAction(.reviewed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
 
         let repeated = makeAlert(signal: makeSignal(
             metadata: ["reason": "repeat_behavior", "path": "/Users/test/repeated"]
@@ -548,7 +548,7 @@ final class ThreatCorrelatorTests: XCTestCase {
 
         let firstStore = IncidentStore(defaults: defaults)
         _ = firstStore.ingest([alert])
-        firstStore.perform(.resolved, alertID: try XCTUnwrap(firstStore.visibleAlerts.first?.id))
+        firstStore.performAuthenticatedUserAction(.resolved, alertID: try XCTUnwrap(firstStore.visibleAlerts.first?.id))
 
         let restored = IncidentStore(defaults: defaults)
         let incident = try XCTUnwrap(restored.incidents.first)
@@ -561,6 +561,82 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(incident.evidence.first?.parentChainIsComplete, false)
         XCTAssertNotNil(incident.evidence.first?.signingIdentity)
         XCTAssertNotNil(incident.evidence.first?.lifecycle)
+    }
+
+    func test_privilegedMigrationPreservesIncidentAndDismissalTombstoneWithoutLoss() throws {
+        let suite = "IncidentPrivilegedMigrationTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        let kept = makeAlert(signal: makeSignal(
+            metadata: ["reason": "kept", "path": "/Users/test/kept"]
+        ))
+        let dismissed = makeAlert(signal: makeSignal(
+            metadata: ["reason": "dismissed", "path": "/Users/test/dismissed"]
+        ))
+        let legacy = IncidentStore(defaults: defaults)
+        _ = legacy.ingest([kept, dismissed])
+        let dismissedID = try XCTUnwrap(
+            legacy.visibleAlerts.first(where: { $0.deduplicationKey == dismissed.deduplicationKey })?.id
+        )
+        legacy.performAuthenticatedUserAction(.dismissed, alertID: dismissedID)
+
+        let payload = try legacy.prepareLegacyMigration(defaults: defaults)
+        let restored = IncidentStore()
+        var writes: [Data] = []
+        try restored.installPrivilegedSnapshot(payload) { writes.append($0) }
+
+        XCTAssertEqual(restored.incidents.count, 1)
+        XCTAssertEqual(restored.incidents.first?.alert.deduplicationKey, kept.deduplicationKey)
+        XCTAssertTrue(restored.dismissedAlertDeduplicationKeys.contains(dismissed.deduplicationKey))
+        XCTAssertTrue(writes.isEmpty, "Installing an unchanged snapshot must not rewrite it")
+
+        restored.removeLegacyPersistence(defaults: defaults)
+        XCTAssertNil(defaults.data(forKey: IncidentStore.persistenceKey))
+        XCTAssertNil(defaults.data(forKey: IncidentStore.dismissalPersistenceKey))
+        XCTAssertNil(defaults.data(forKey: "nickPersistedAlerts"))
+    }
+
+    func test_userVerdictIsRecordedOnlyAfterAuthenticatedAuthorisation() async throws {
+        let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [],
+            dismissalTombstones: [],
+            expectedCooldowns: [:]
+        ))
+        let deniedEngine = SecurityEngine()
+        try deniedEngine.installPrivilegedIncidentStore(
+            payload: payload,
+            persistence: { _ in },
+            authorizer: { _, _ in false },
+            removeLegacyState: false
+        )
+        let deniedAlert = makeAlert(signal: makeSignal(
+            metadata: ["reason": "denied_verdict", "path": "/Users/test/denied"]
+        ))
+        deniedEngine.addAlert(deniedAlert)
+        deniedEngine.hideAlert(deniedAlert.id)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(deniedEngine.incidentStore.visibleAlerts.count, 1)
+        XCTAssertFalse(deniedEngine.incidentStore.incidents.flatMap(\.actions).contains { $0.actor == .user })
+
+        let allowedEngine = SecurityEngine()
+        try allowedEngine.installPrivilegedIncidentStore(
+            payload: payload,
+            persistence: { _ in },
+            authorizer: { _, action in action == .hidden },
+            removeLegacyState: false
+        )
+        let allowedAlert = makeAlert(signal: makeSignal(
+            metadata: ["reason": "allowed_verdict", "path": "/Users/test/allowed"]
+        ))
+        allowedEngine.addAlert(allowedAlert)
+        allowedEngine.hideAlert(allowedAlert.id)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertTrue(allowedEngine.incidentStore.visibleAlerts.isEmpty)
+        XCTAssertTrue(allowedEngine.incidentStore.incidents.flatMap(\.actions).contains {
+            $0.action == .hidden && $0.actor == .user
+        })
     }
 
     // MARK: - ThreatAlert

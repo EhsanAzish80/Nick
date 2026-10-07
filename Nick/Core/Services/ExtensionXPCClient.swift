@@ -66,14 +66,22 @@ public final class ExtensionXPCClient: NSObject {
 
     private var connection: NSXPCConnection?
     private let decoder = JSONDecoder()
+    private var incidentRevision: UInt64?
+    private var pendingIncidentPayload: Data?
+    private var incidentWriteInFlight = false
+    private var incidentBootstrapCompleted = false
 
     // MARK: - Public API
 
     /// Opens the XPC connection to the System Extension.
     ///
     /// Safe to call multiple times — an existing connection is reused.
-    public func connect() {
+    public func connect(
+        legacyIncidentPayload: Data? = nil,
+        incidentStoreReady: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)? = nil
+    ) {
         guard connection == nil else { return }
+        incidentBootstrapCompleted = false
 
         let conn = NSXPCConnection(machServiceName: NickExtensionConstants.machServiceName)
 
@@ -89,6 +97,7 @@ public final class ExtensionXPCClient: NSObject {
                 Self.logger.warning("XPC connection to extension invalidated")
                 self?.isConnected = false
                 self?.connection  = nil
+                self?.incidentBootstrapCompleted = false
             }
         }
         conn.interruptionHandler = { [weak self] in
@@ -106,11 +115,18 @@ public final class ExtensionXPCClient: NSObject {
         // Opening an NSXPCConnection does not prove the service exists or that
         // its Endpoint Security client started successfully. Only promote the
         // connection after the extension answers its status request.
-        let errorHandler: @Sendable (Error) -> Void = { error in
+        let errorHandler: @Sendable (Error) -> Void = { [weak self] error in
             Self.logger.warning("Extension status verification failed: \(error.localizedDescription)")
+            Task { @MainActor [weak self] in
+                guard let self, !self.incidentBootstrapCompleted else { return }
+                self.incidentBootstrapCompleted = true
+                incidentStoreReady?(nil, false)
+            }
         }
         guard let proxy = conn.remoteObjectProxyWithErrorHandler(errorHandler)
             as? NickExtensionXPCProtocol else {
+            incidentBootstrapCompleted = true
+            incidentStoreReady?(nil, false)
             return
         }
         let statusReply: @Sendable (Bool) -> Void = { [weak self] active in
@@ -119,10 +135,96 @@ public final class ExtensionXPCClient: NSObject {
                 Self.logger.info("Verified extension status: isActive=\(active)")
                 if active {
                     self?.loadPersistedEvents()
+                    self?.bootstrapIncidentStore(
+                        legacyPayload: legacyIncidentPayload,
+                        completion: incidentStoreReady
+                    )
+                } else {
+                    self?.incidentBootstrapCompleted = true
+                    incidentStoreReady?(nil, false)
                 }
             }
         }
         proxy.getStatus(reply: statusReply)
+    }
+
+    private func bootstrapIncidentStore(
+        legacyPayload: Data?,
+        completion: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)?
+    ) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion?(nil, false)
+            return
+        }
+        proxy.getIncidentStore { [weak self] data in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: data) {
+                    self.incidentRevision = record.revision
+                    self.incidentBootstrapCompleted = true
+                    completion?(record, false)
+                    return
+                }
+                guard let legacyPayload else {
+                    self.incidentBootstrapCompleted = true
+                    completion?(nil, false)
+                    return
+                }
+                proxy.migrateIncidentStore(legacyPayload) { [weak self] accepted, recordData in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let record = try? JSONDecoder().decode(
+                            PrivilegedIncidentStoreRecord.self,
+                            from: recordData
+                        )
+                        self.incidentRevision = record?.revision
+                        self.incidentBootstrapCompleted = true
+                        completion?(record, accepted && record != nil)
+                    }
+                }
+            }
+        }
+    }
+
+    func persistIncidentStore(_ payload: Data) {
+        pendingIncidentPayload = payload
+        drainIncidentStoreWrites()
+    }
+
+    private func drainIncidentStoreWrites() {
+        guard !incidentWriteInFlight,
+              let payload = pendingIncidentPayload,
+              let revision = incidentRevision,
+              let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        pendingIncidentPayload = nil
+        incidentWriteInFlight = true
+        proxy.replaceIncidentStore(payload, expectedRevision: revision) { [weak self] accepted, recordData in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.incidentWriteInFlight = false
+                if let record = try? JSONDecoder().decode(
+                    PrivilegedIncidentStoreRecord.self,
+                    from: recordData
+                ) {
+                    self.incidentRevision = record.revision
+                }
+                if !accepted {
+                    self.pendingIncidentPayload = self.pendingIncidentPayload ?? payload
+                }
+                self.drainIncidentStoreWrites()
+            }
+        }
+    }
+
+    func authoriseIncidentVerdict(id: UUID, action: IncidentActionKind) async -> Bool {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return false }
+        return await withCheckedContinuation { continuation in
+            proxy.authoriseIncidentVerdict(
+                incidentID: id.uuidString,
+                action: action.rawValue,
+                reply: { continuation.resume(returning: $0) }
+            )
+        }
     }
 
     /// Closes the XPC connection.
@@ -130,6 +232,7 @@ public final class ExtensionXPCClient: NSObject {
         connection?.invalidate()
         connection  = nil
         isConnected = false
+        incidentBootstrapCompleted = false
     }
 
     private func loadPersistedEvents() {
