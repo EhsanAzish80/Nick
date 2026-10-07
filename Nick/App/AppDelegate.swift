@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let endpointManager = ExtensionManager()
             endpointExtensionManager = endpointManager
-            endpointManager.ensureBundledVersionIsActive()
+            await endpointManager.ensureBundledVersionIsActive()
             // A healthy older Network Filter is not sufficient after an app
             // update. Submit a replacement request once per bundled build so
             // macOS runs the provider shipped with this version of Nick.
