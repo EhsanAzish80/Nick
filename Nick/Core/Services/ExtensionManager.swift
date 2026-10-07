@@ -78,14 +78,18 @@ public final class ExtensionManager: NSObject {
     }
 
     private static var bundledExtensionVersion: String? {
-        guard let extensionURL = Bundle.main.builtInPlugInsURL?
-            .deletingLastPathComponent()
-            .appendingPathComponent("SystemExtensions")
-            .appendingPathComponent("com.ehsanazish.nick.NickExtension.systemextension"),
-              let bundle = Bundle(url: extensionURL) else {
+        guard let bundle = Bundle(url: bundledExtensionURL(in: Bundle.main.bundleURL)) else {
             return nil
         }
         return bundle.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
+    }
+
+    static func bundledExtensionURL(in appBundleURL: URL) -> URL {
+        appBundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("SystemExtensions", isDirectory: true)
+            .appendingPathComponent("com.ehsanazish.nick.NickExtension.systemextension", isDirectory: true)
     }
 
     private static var runningExtensionVersion: String? {

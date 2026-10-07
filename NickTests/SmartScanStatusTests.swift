@@ -206,6 +206,15 @@ final class SmartScanStatusTests: XCTestCase {
         )
     }
 
+    func test_endpointExtensionBundleURLUsesSystemExtensionsInstallLocation() {
+        let appURL = URL(fileURLWithPath: "/Applications/Nick.app", isDirectory: true)
+
+        XCTAssertEqual(
+            ExtensionManager.bundledExtensionURL(in: appURL).path,
+            "/Applications/Nick.app/Contents/Library/SystemExtensions/com.ehsanazish.nick.NickExtension.systemextension"
+        )
+    }
+
     func test_uninstallDoesNotFailWhenLaunchAtLoginRemovalIsDenied() {
         let denied = NSError(
             domain: NSPOSIXErrorDomain,
