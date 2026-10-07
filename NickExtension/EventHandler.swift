@@ -263,12 +263,6 @@ final class ESEventHandler {
             // The content changed: any cached verdict describes the old bytes.
             fileScanner?.cache.invalidate(path: filePath)
             let actorIsPlatformBinary = process.is_platform_binary
-            // Apple's toolchain binaries are Apple-signed but carry no Team ID,
-            // so a valid, non-ad-hoc signature plus a toolchain location is the
-            // bar here (see isTrustedDeveloperBuild).
-            let actorHasValidSignature =
-                process.codesigning_flags & ExecutionTrustPolicy.csValid != 0
-                && process.codesigning_flags & ExecutionTrustPolicy.csAdhoc == 0
             let actorHasTrustedSigner = self.actorHasTrustedSigner(process)
 
             dispatchQueue.async { [weak self] in
@@ -283,7 +277,7 @@ final class ESEventHandler {
                 )
                 let isTrustedBuildOutput = self.isTrustedDeveloperBuild(
                     actorPath: processPath,
-                    actorHasValidSignature: actorHasValidSignature,
+                    actorIsPlatformBinary: actorIsPlatformBinary,
                     filePath: filePath
                 )
 
@@ -654,6 +648,7 @@ final class ESEventHandler {
         completion: @escaping (Bool, ScanCache.Entry?) -> Void
     ) {
         let retained = RetainedMessage(message)
+        let startedAt = DispatchTime.now().uptimeNanoseconds
         let budgetNanoseconds = Self.preLaunchBudgetNanoseconds(deadline: message.pointee.deadline)
         guard budgetNanoseconds > 50_000_000 else {
             _ = retained.claimResponse()
@@ -664,7 +659,8 @@ final class ESEventHandler {
 
         preLaunchQueue.asyncAfter(deadline: .now() + .nanoseconds(Int(budgetNanoseconds))) { [weak self] in
             guard retained.claimResponse() else { return }
-            Self.logger.info("Pre-launch hash exceeded budget; allowing \(path, privacy: .private)")
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+            Self.logger.info("Pre-launch hash exceeded budget after \(elapsed / 1_000_000) ms; allowing \(path, privacy: .private)")
             self?.esClient?.respond(to: retained.pointer, allow: true)
             completion(false, nil)
         }
@@ -672,6 +668,8 @@ final class ESEventHandler {
         preLaunchQueue.async { [weak self] in
             let match = scanner.preLaunchHashMatch(path: path, identity: identity)
             guard retained.claimResponse() else { return }
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+            Self.logger.debug("Pre-launch exact-hash lookup completed in \(elapsed / 1_000_000) ms")
             self?.esClient?.respond(to: retained.pointer, allow: match == nil)
             if let match {
                 Self.logger.notice("Blocked first launch of known threat \(match.name, privacy: .public): \(path, privacy: .private)")
@@ -871,15 +869,15 @@ final class ESEventHandler {
     }
 
     /// Build products written by Apple's toolchain skip heuristic scanning.
-    /// The actor must be a validly (non-ad-hoc) signed binary inside a
-    /// toolchain location — a process merely *named* `ld` or `swift` anywhere
-    /// on disk no longer qualifies.
+    /// The actor must carry Apple's kernel-established platform identity inside
+    /// a toolchain location. A self-signed binary with a copied Team ID or tool
+    /// name cannot qualify.
     private func isTrustedDeveloperBuild(
         actorPath: String,
-        actorHasValidSignature: Bool,
+        actorIsPlatformBinary: Bool,
         filePath: String
     ) -> Bool {
-        guard actorHasValidSignature else { return false }
+        guard actorIsPlatformBinary else { return false }
         let actor = URL(fileURLWithPath: actorPath).lastPathComponent.lowercased()
         let trustedActors: Set<String> = [
             "xcode", "xcbuild", "xcodebuild", "swbbuildservice",

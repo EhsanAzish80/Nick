@@ -283,6 +283,32 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertFalse(result.visibleAlerts.isEmpty)
     }
 
+    func test_pathApprovalRequiresComponentBoundary() {
+        let signal = makeSignal(
+            metadata: ["path": "/Applications/dev-evil/payload", "reason": "system_hardening"]
+        )
+        let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
+            SuppressionRule(type: .path, value: "/Applications/dev", expiresAt: Date().addingTimeInterval(3_600))
+        ])
+        XCTAssertEqual(store.ingest([makeAlert(signal: signal)]).visibleAlerts.count, 1)
+    }
+
+    func test_ruleNameSuppressionRequiresExactRuleID() {
+        let signal = makeSignal(metadata: ["reason": "system_hardening"])
+        let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
+            SuppressionRule(type: .ruleName, value: "hardening", expiresAt: Date().addingTimeInterval(3_600))
+        ])
+        XCTAssertEqual(store.ingest([makeAlert(signal: signal)]).visibleAlerts.count, 1)
+    }
+
+    func test_processNameSuppressionDoesNotOverrideSignedIdentity() {
+        let signal = makeSignedSignal(reason: "system_hardening")
+        let store = IncidentStore(defaults: isolatedDefaults(), suppressionRules: [
+            SuppressionRule(type: .processName, value: "Editor", expiresAt: Date().addingTimeInterval(3_600))
+        ])
+        XCTAssertEqual(store.ingest([makeAlert(signal: signal)]).visibleAlerts.count, 1)
+    }
+
     func test_learnedApproval_suppressesOnlySameSignedBehavior() async {
         let rule = passthroughRule()
         let approved = makeSignedSignal(reason: "system_hardening")

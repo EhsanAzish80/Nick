@@ -46,7 +46,7 @@ final class DetectionPolicyTests: XCTestCase {
         XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid | adhoc, isPlatformBinary: false, teamID: "ABCDE12345"))
         XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: false, teamID: ""))
         XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: 0, isPlatformBinary: true, teamID: nil))
-        XCTAssertTrue(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: false, teamID: "ABCDE12345"))
+        XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: false, teamID: "ABCDE12345"))
         XCTAssertTrue(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: true, teamID: nil))
     }
 

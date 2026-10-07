@@ -8,13 +8,10 @@ import os
 
 // MARK: - MuteManager
 
-/// Registers high-volume, trusted path prefixes with the ES client so the
-/// extension never receives events for them.
-///
-/// Muting system paths dramatically reduces event throughput. Without muting,
-/// `/System/` and `/usr/` alone generate thousands of events per second on
-/// a busy system. These paths are definitionally trusted (SIP-protected) and
-/// do not need to be monitored for Phase 2.
+/// Registers only path mutes that have measurement evidence and cannot hide a
+/// monitored target. Process-image prefix mutes were removed because Endpoint
+/// Security applies them to events involving those paths, which can hide a
+/// trusted writer (Finder, Mail, Safari, xpcproxy) modifying an untrusted file.
 ///
 /// Call `applyMutes(to:)` once after the ES client has started and subscribed.
 ///
@@ -29,18 +26,9 @@ enum MuteManager {
 
     // MARK: - Muted Path Prefixes
 
-    /// SIP-protected system locations that are safe to ignore entirely.
-    static let mutedPrefixes: [String] = [
-        "/System/",
-        "/usr/lib/",
-        "/usr/libexec/",
-        "/usr/bin/",
-        "/usr/sbin/",
-        "/Library/Apple/",
-        "/private/var/db/",
-        "/private/var/run/",
-        // NOTE: /private/var/folders/ intentionally NOT muted — malware stages payloads there
-    ]
+    /// Empty until a prefix is proven noisy and safe for every subscribed event.
+    /// Nick's own extension process is muted separately by audit token.
+    static let mutedPrefixes: [String] = []
 
     // MARK: - Public API
 
