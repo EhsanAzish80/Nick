@@ -521,6 +521,22 @@ final class UnifiedSourceFindingTests: XCTestCase {
             "Task { @MainActor [weak self] in\n                guard let self else { return }\n                await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()"
         ))
     }
+
+    func test_viewsDoNotRaceAppDelegateIncidentBootstrap() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        for path in [
+            "Nick/App/Onboarding/ProtectionSetupView.swift",
+            "Nick/App/Dashboard/SmartScanSheetView.swift",
+        ] {
+            let source = try String(
+                contentsOf: root.appendingPathComponent(path),
+                encoding: .utf8
+            )
+            XCTAssertFalse(source.contains("xpcClient.connect()"), path)
+        }
+    }
 }
 
 final class ScamGuardianTests: XCTestCase {

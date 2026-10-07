@@ -7,6 +7,34 @@ import XCTest
 
 @MainActor
 final class SmartScanStatusTests: XCTestCase {
+    func testSetupDoesNotTrapUserOnUnactionableWarning() {
+        let warning = ProtectionCheck(
+            id: "network_monitor",
+            title: "Network Monitor",
+            status: .warning,
+            headline: "Network monitoring is not running",
+            explanation: "Monitoring is still starting.",
+            icon: "network",
+            resolution: .none
+        )
+
+        XCTAssertFalse(ProtectionSetupPolicy.needsGuidance(warning))
+    }
+
+    func testSetupGuidesUserWhenAnActionIsAvailable() {
+        let warning = ProtectionCheck(
+            id: "endpoint_security",
+            title: "Real-Time Protection",
+            status: .warning,
+            headline: "Install protection",
+            explanation: "The extension is not active.",
+            icon: "shield",
+            resolution: .installExtension(extensionName: "NickExtension")
+        )
+
+        XCTAssertTrue(ProtectionSetupPolicy.needsGuidance(warning))
+    }
+
     func testNetworkFilterVersionActivationIsRequiredWhenVersionChanges() {
         XCTAssertTrue(
             NetworkFilterInstaller.needsBundledVersionActivation(

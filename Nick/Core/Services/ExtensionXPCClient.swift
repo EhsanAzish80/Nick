@@ -84,7 +84,24 @@ public final class ExtensionXPCClient: NSObject {
         legacyIncidentPayload: Data? = nil,
         incidentStoreReady: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)? = nil
     ) {
-        guard connection == nil else { return }
+        if connection != nil {
+            // A view may have opened the shared connection before AppDelegate
+            // supplies the migration payload and completion handler. Attach the
+            // privileged-store bootstrap to that live connection instead of
+            // silently discarding the security-critical request.
+            guard legacyIncidentPayload != nil || incidentStoreReady != nil else { return }
+            incidentBootstrapCompleted = false
+            bootstrapLegacyPayload = legacyIncidentPayload
+            bootstrapCompletion = incidentStoreReady
+            bootstrapReconnectAttempt = 0
+            if isConnected {
+                bootstrapIncidentStore(
+                    legacyPayload: legacyIncidentPayload,
+                    completion: incidentStoreReady
+                )
+            }
+            return
+        }
         incidentBootstrapCompleted = false
         bootstrapLegacyPayload = legacyIncidentPayload
         bootstrapCompletion = incidentStoreReady
