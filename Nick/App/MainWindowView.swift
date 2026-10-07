@@ -1396,12 +1396,8 @@ struct ScannerDetailView: View {
     @State private var showFileScanSheet: Bool          = false
 
     // MARK: - Ignore list (newline-delimited paths persisted in UserDefaults)
-    @AppStorage("deepScanIgnoredPaths") private var ignoredPathsRaw: String = ""
-
     private var ignoredPaths: Set<String> {
-        Set(ignoredPathsRaw.split(separator: "\n").map {
-            DeepScanner.canonicalPath(String($0))
-        })
+        engine.deepScanIgnoredPaths
     }
 
     // MARK: - Body
@@ -1738,7 +1734,7 @@ struct ScannerDetailView: View {
     private func addIgnored(_ path: String) {
         var paths = ignoredPaths
         paths.insert(DeepScanner.canonicalPath(path))
-        ignoredPathsRaw = paths.sorted().joined(separator: "\n")
+        engine.deepScanIgnoredPaths = paths
     }
 
     // MARK: - Scan File helpers

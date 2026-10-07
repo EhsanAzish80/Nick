@@ -6,6 +6,17 @@ import Foundation
 import Observation
 import os
 
+private struct PrivilegedSecuritySettingsPayload: Codable {
+    static let schemaVersion = 1
+    let schemaVersion: Int
+    var trustedNames: Set<String>
+    var trustedEntries: Set<TrustedProcessList.UserEntry>
+    var suppressionRules: [SuppressionRule]
+    var ignoredPaths: Set<String>
+    var webhookURL: String?
+    var notificationThresholdRaw: Int
+}
+
 enum MenuBarAttentionState: Int, Comparable, Sendable {
     case protected
     case review
@@ -128,47 +139,15 @@ final class SecurityEngine {
     ///
     /// Changing this takes effect on the next `runFullScan()` call.
     /// The user-trusted subset is automatically persisted to `UserDefaults`.
-    var trustedProcessList: TrustedProcessList = {
-        let saved = UserDefaults.standard.stringArray(forKey: "userTrustedProcesses") ?? []
-        let entries: Set<TrustedProcessList.UserEntry>
-        if let data = UserDefaults.standard.data(forKey: "userTrustedProcessIdentities"),
-           let decoded = try? JSONDecoder().decode(Set<TrustedProcessList.UserEntry>.self, from: data) {
-            entries = decoded
-        } else {
-            entries = []
-        }
-        return TrustedProcessList(userTrusted: Set(saved), userEntries: entries)
-    }() {
-        didSet {
-            // Persist user-configured entries whenever the list changes.
-            let names = Array(trustedProcessList.userTrusted)
-            UserDefaults.standard.set(names, forKey: "userTrustedProcesses")
-            if let data = try? JSONEncoder().encode(trustedProcessList.userEntries) {
-                UserDefaults.standard.set(data, forKey: "userTrustedProcessIdentities")
-            }
-        }
-    }
+    var trustedProcessList = TrustedProcessList() { didSet { persistSecuritySettingsIfReady() } }
 
     /// Active suppression rules. Persisted to UserDefaults as JSON.
-    var suppressionRules: [SuppressionRule] = {
-        guard let data = UserDefaults.standard.data(forKey: "suppressionRulesData"),
-              let rules = try? JSONDecoder().decode([SuppressionRule].self, from: data) else { return [] }
-        let result = SuppressionRule.migrateLegacySignedProcessRules(rules) {
-            SignatureValidator.shared.evaluate(binaryPath: $0)
-        }
-        if result.changed,
-           let migratedData = try? JSONEncoder().encode(result.rules) {
-            UserDefaults.standard.set(migratedData, forKey: "suppressionRulesData")
-        }
-        UserDefaults.standard.set(result.notices, forKey: "suppressionRuleMigrationNotices")
-        return result.rules
-    }() {
-        didSet {
-            if let data = try? JSONEncoder().encode(suppressionRules) {
-                UserDefaults.standard.set(data, forKey: "suppressionRulesData")
-            }
-        }
-    }
+    var suppressionRules: [SuppressionRule] = [] { didSet { persistSecuritySettingsIfReady() } }
+    var deepScanIgnoredPaths: Set<String> = [] { didSet { persistSecuritySettingsIfReady() } }
+    var webhookURLString: String? { didSet { persistSecuritySettingsIfReady() } }
+    var notificationThreshold: SignalSeverity = .high { didSet { persistSecuritySettingsIfReady() } }
+    private var securitySettingsPersistence: ((Data) -> Void)?
+    private var installingSecuritySettings = false
 
     var suppressionRuleMigrationNotices: [String] {
         UserDefaults.standard.stringArray(forKey: "suppressionRuleMigrationNotices") ?? []
@@ -176,6 +155,80 @@ final class SecurityEngine {
 
     func dismissSuppressionMigrationNotices() {
         UserDefaults.standard.removeObject(forKey: "suppressionRuleMigrationNotices")
+    }
+
+    func prepareLegacySecuritySettingsMigration() -> Data {
+        let defaults = UserDefaults.standard
+        let names = Set(defaults.stringArray(forKey: "userTrustedProcesses") ?? [])
+        let entries = defaults.data(forKey: "userTrustedProcessIdentities")
+            .flatMap { try? JSONDecoder().decode(Set<TrustedProcessList.UserEntry>.self, from: $0) }
+            ?? []
+        let legacyRules = defaults.data(forKey: "suppressionRulesData")
+            .flatMap { try? JSONDecoder().decode([SuppressionRule].self, from: $0) }
+            ?? []
+        let migrated = SuppressionRule.migrateLegacySignedProcessRules(legacyRules) {
+            SignatureValidator.shared.evaluate(binaryPath: $0)
+        }
+        defaults.set(migrated.notices, forKey: "suppressionRuleMigrationNotices")
+        let ignored = Set((defaults.string(forKey: "deepScanIgnoredPaths") ?? "")
+            .split(separator: "\n").map { DeepScanner.canonicalPath(String($0)) })
+        let payload = PrivilegedSecuritySettingsPayload(
+            schemaVersion: PrivilegedSecuritySettingsPayload.schemaVersion,
+            trustedNames: names,
+            trustedEntries: entries,
+            suppressionRules: migrated.rules,
+            ignoredPaths: ignored,
+            webhookURL: defaults.string(forKey: "webhookURL"),
+            notificationThresholdRaw: defaults.object(forKey: "notificationThresholdRaw") as? Int
+                ?? SignalSeverity.high.rawValue
+        )
+        return (try? JSONEncoder().encode(payload)) ?? Data("{}".utf8)
+    }
+
+    func installPrivilegedSecuritySettings(
+        payload: Data,
+        persistence: @escaping (Data) -> Void
+    ) throws {
+        let settings = try JSONDecoder().decode(PrivilegedSecuritySettingsPayload.self, from: payload)
+        guard settings.schemaVersion == PrivilegedSecuritySettingsPayload.schemaVersion else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        installingSecuritySettings = true
+        trustedProcessList = TrustedProcessList(
+            userTrusted: settings.trustedNames,
+            userEntries: settings.trustedEntries
+        )
+        suppressionRules = settings.suppressionRules
+        deepScanIgnoredPaths = settings.ignoredPaths
+        webhookURLString = settings.webhookURL
+        notificationThreshold = SignalSeverity(rawValue: settings.notificationThresholdRaw) ?? .high
+        installingSecuritySettings = false
+        securitySettingsPersistence = persistence
+        NotificationManager.shared.notificationThreshold = notificationThreshold
+        PrivilegedWebhookSettings.setURL(webhookURLString)
+
+        let defaults = UserDefaults.standard
+        ["userTrustedProcesses", "userTrustedProcessIdentities", "suppressionRulesData",
+         "deepScanIgnoredPaths", "webhookURL", "notificationThresholdRaw"].forEach {
+            defaults.removeObject(forKey: $0)
+        }
+    }
+
+    private func persistSecuritySettingsIfReady() {
+        guard !installingSecuritySettings, let securitySettingsPersistence else { return }
+        let payload = PrivilegedSecuritySettingsPayload(
+            schemaVersion: PrivilegedSecuritySettingsPayload.schemaVersion,
+            trustedNames: trustedProcessList.userTrusted,
+            trustedEntries: trustedProcessList.userEntries,
+            suppressionRules: suppressionRules,
+            ignoredPaths: deepScanIgnoredPaths,
+            webhookURL: webhookURLString,
+            notificationThresholdRaw: notificationThreshold.rawValue
+        )
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        NotificationManager.shared.notificationThreshold = notificationThreshold
+        PrivilegedWebhookSettings.setURL(webhookURLString)
+        securitySettingsPersistence(data)
     }
 
     // MARK: - Overall Health Score (0–100)

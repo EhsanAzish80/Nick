@@ -166,7 +166,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         )
                     }
                 }
-                self.startMonitoringAfterIncidentStoreBootstrap()
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let legacySettings = self.engine.prepareLegacySecuritySettingsMigration()
+                    if let privilegedSettings = await self.xpcClient.bootstrapSecuritySettings(
+                        legacyPayload: legacySettings
+                    ) {
+                        do {
+                            try self.engine.installPrivilegedSecuritySettings(
+                                payload: privilegedSettings,
+                                persistence: { [weak self] payload in
+                                    self?.xpcClient.persistSecuritySettings(payload)
+                                }
+                            )
+                        } catch {
+                            self.incidentStoreLogger.error(
+                                "Could not load root-owned security settings: \(error.localizedDescription)"
+                            )
+                        }
+                    }
+                    self.startMonitoringAfterIncidentStoreBootstrap()
+                }
             }
 
             // Network Filter replacement/configuration is independent of the

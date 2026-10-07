@@ -70,6 +70,9 @@ public final class ExtensionXPCClient: NSObject {
     private var connection: NSXPCConnection?
     private let decoder = JSONDecoder()
     private var incidentRevision: UInt64?
+    private var securitySettingsRevision: UInt64?
+    private var pendingSecuritySettingsPayload: Data?
+    private var securitySettingsWriteInFlight = false
     private var pendingIncidentPayload: Data?
     private var incidentWriteInFlight = false
     private var incidentBootstrapCompleted = false
@@ -207,6 +210,51 @@ public final class ExtensionXPCClient: NSObject {
         extensionHealth = data.isEmpty
             ? nil
             : (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    public func bootstrapSecuritySettings(legacyPayload: Data) async -> Data? {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return nil }
+        let response: (Bool, Data) = await withCheckedContinuation { continuation in
+            proxy.migrateSecuritySettings(legacyPayload) {
+                continuation.resume(returning: ($0, $1))
+            }
+        }
+        guard response.0,
+              let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: response.1)
+        else { return nil }
+        securitySettingsRevision = record.revision
+        return record.payload
+    }
+
+    public func persistSecuritySettings(_ payload: Data) {
+        pendingSecuritySettingsPayload = payload
+        flushSecuritySettingsIfNeeded()
+    }
+
+    private func flushSecuritySettingsIfNeeded() {
+        guard !securitySettingsWriteInFlight,
+              let payload = pendingSecuritySettingsPayload,
+              let revision = securitySettingsRevision,
+              let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        pendingSecuritySettingsPayload = nil
+        securitySettingsWriteInFlight = true
+        proxy.replaceSecuritySettings(payload, expectedRevision: revision) { [weak self] accepted, data in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.securitySettingsWriteInFlight = false
+                guard let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: data) else {
+                    return
+                }
+                self.securitySettingsRevision = record.revision
+                if !accepted {
+                    Self.logger.warning("Security settings write lost a revision race; authoritative state retained")
+                    if self.pendingSecuritySettingsPayload == nil {
+                        self.pendingSecuritySettingsPayload = payload
+                    }
+                }
+                self.flushSecuritySettingsIfNeeded()
+            }
+        }
     }
 
     private func scheduleBootstrapReconnect() {

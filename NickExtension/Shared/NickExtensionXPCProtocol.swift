@@ -103,6 +103,16 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
         reply: @escaping (Bool, Data) -> Void
     )
 
+    /// Root-owned security preferences. The payload schema belongs to the app;
+    /// the extension authenticates the caller and owns persistence/revisions.
+    func getSecuritySettings(reply: @escaping (Data) -> Void)
+    func migrateSecuritySettings(_ payload: Data, reply: @escaping (Bool, Data) -> Void)
+    func replaceSecuritySettings(
+        _ payload: Data,
+        expectedRevision: UInt64,
+        reply: @escaping (Bool, Data) -> Void
+    )
+
     /// Authenticates a UI verdict before the app records actor `.user`.
     func authoriseIncidentVerdict(
         incidentID: String,

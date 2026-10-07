@@ -15,7 +15,6 @@ struct SimpleScanView: View {
     private enum Job: Equatable { case quick, full, file }
 
     @Environment(SecurityEngine.self) private var engine
-    @AppStorage("deepScanIgnoredPaths") private var ignoredPathsRaw: String = ""
 
     @State private var lastJob: Job?
     @State private var quickFinished = false
@@ -28,7 +27,7 @@ struct SimpleScanView: View {
     private var scanner: DeepScanner { engine.deepScanner }
 
     private var ignoredPaths: Set<String> {
-        Set(ignoredPathsRaw.split(separator: "\n").map { DeepScanner.canonicalPath(String($0)) })
+        engine.deepScanIgnoredPaths
     }
 
     private var quickResult: SimpleScanResult {

@@ -37,6 +37,20 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         XCTAssertEqual(repeatedRecord.payload, original)
     }
 
+    func test_existingRootSettingsIgnoreASecondDefaultsMigration() throws {
+        let fileURL = temporaryDirectory.appendingPathComponent("state/settings.json")
+        let store = PrivilegedIncidentFileStore(fileURL: fileURL)
+        let approved = try XCTUnwrap("{\"threshold\":3}".data(using: .utf8))
+        let defaultsTampering = try XCTUnwrap("{\"threshold\":0}".data(using: .utf8))
+
+        XCTAssertTrue(store.migrate(payload: approved).accepted)
+        let repeated = store.migrate(payload: defaultsTampering)
+        let record = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: repeated.record)
+
+        XCTAssertTrue(repeated.accepted)
+        XCTAssertEqual(record.payload, approved)
+    }
+
     func test_changeOnlyPersistenceKeepsRevisionForIdenticalPayload() throws {
         let fileURL = temporaryDirectory.appendingPathComponent("state/incidents.json")
         let store = PrivilegedIncidentFileStore(fileURL: fileURL)

@@ -36,6 +36,9 @@ final class ESXPCServer: NSObject {
         legacyPath: "/Library/Application Support/com.ehsanazish.nick/endpoint-events.json"
     )
     private let incidentStore = PrivilegedIncidentFileStore()
+    private let settingsStore = PrivilegedIncidentFileStore(
+        fileURL: URL(fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/settings.json")
+    )
 
     // MARK: - Init
 
@@ -253,6 +256,24 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
     func getIncidentStore(reply: @escaping (Data) -> Void) {
         reply(incidentStore.load())
+    }
+
+    func getSecuritySettings(reply: @escaping (Data) -> Void) {
+        reply(settingsStore.load())
+    }
+
+    func migrateSecuritySettings(_ payload: Data, reply: @escaping (Bool, Data) -> Void) {
+        let result = settingsStore.migrate(payload: payload)
+        reply(result.accepted, result.record)
+    }
+
+    func replaceSecuritySettings(
+        _ payload: Data,
+        expectedRevision: UInt64,
+        reply: @escaping (Bool, Data) -> Void
+    ) {
+        let result = settingsStore.replace(payload: payload, expectedRevision: expectedRevision)
+        reply(result.accepted, result.record)
     }
 
     func migrateIncidentStore(_ payload: Data, reply: @escaping (Bool, Data) -> Void) {
