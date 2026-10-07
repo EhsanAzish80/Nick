@@ -1,0 +1,100 @@
+import XCTest
+@testable import Nick
+
+final class PrivilegedIncidentFileStoreTests: XCTestCase {
+    private var temporaryDirectory: URL!
+
+    override func setUpWithError() throws {
+        temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NickIncidentStoreTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: temporaryDirectory,
+            withIntermediateDirectories: true
+        )
+    }
+
+    override func tearDownWithError() throws {
+        if let temporaryDirectory {
+            try? FileManager.default.removeItem(at: temporaryDirectory)
+        }
+    }
+
+    func test_migrationIsIdempotentAndDoesNotReplaceExistingEvidence() throws {
+        let fileURL = temporaryDirectory.appendingPathComponent("state/incidents.json")
+        let store = PrivilegedIncidentFileStore(fileURL: fileURL)
+        let original = try XCTUnwrap("{\"incident\":\"original\"}".data(using: .utf8))
+        let replacement = try XCTUnwrap("{\"incident\":\"replacement\"}".data(using: .utf8))
+
+        let first = store.migrate(payload: original)
+        let repeated = store.migrate(payload: replacement)
+        let firstRecord = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: first.record)
+        let repeatedRecord = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: repeated.record)
+
+        XCTAssertTrue(first.accepted)
+        XCTAssertTrue(repeated.accepted)
+        XCTAssertEqual(firstRecord.revision, 1)
+        XCTAssertEqual(repeatedRecord, firstRecord)
+        XCTAssertEqual(repeatedRecord.payload, original)
+    }
+
+    func test_changeOnlyPersistenceKeepsRevisionForIdenticalPayload() throws {
+        let fileURL = temporaryDirectory.appendingPathComponent("state/incidents.json")
+        let store = PrivilegedIncidentFileStore(fileURL: fileURL)
+        let payload = try XCTUnwrap("{\"incidents\":[]}".data(using: .utf8))
+        let migrated = store.migrate(payload: payload)
+        let first = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: migrated.record)
+
+        let unchanged = store.replace(payload: payload, expectedRevision: first.revision)
+        let second = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: unchanged.record)
+
+        XCTAssertTrue(unchanged.accepted)
+        XCTAssertEqual(second.revision, first.revision)
+        XCTAssertEqual(second.payload, payload)
+    }
+
+    func test_staleRevisionCannotOverwriteNewerEvidence() throws {
+        let fileURL = temporaryDirectory.appendingPathComponent("state/incidents.json")
+        let store = PrivilegedIncidentFileStore(fileURL: fileURL)
+        let firstPayload = try XCTUnwrap("{\"revision\":1}".data(using: .utf8))
+        let secondPayload = try XCTUnwrap("{\"revision\":2}".data(using: .utf8))
+        let stalePayload = try XCTUnwrap("{\"revision\":\"stale\"}".data(using: .utf8))
+        let migrated = store.migrate(payload: firstPayload)
+        let first = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: migrated.record)
+        let replaced = store.replace(payload: secondPayload, expectedRevision: first.revision)
+        let second = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: replaced.record)
+
+        let stale = store.replace(payload: stalePayload, expectedRevision: first.revision)
+        let authoritative = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: stale.record)
+
+        XCTAssertFalse(stale.accepted)
+        XCTAssertEqual(authoritative, second)
+        XCTAssertEqual(authoritative.payload, secondPayload)
+    }
+
+    func test_storeCreatesPrivateDirectoryAndFilePermissions() throws {
+        let fileURL = temporaryDirectory.appendingPathComponent("state/incidents.json")
+        let store = PrivilegedIncidentFileStore(fileURL: fileURL)
+        let payload = try XCTUnwrap("{\"incidents\":[]}".data(using: .utf8))
+
+        XCTAssertTrue(store.migrate(payload: payload).accepted)
+
+        let directoryAttributes = try FileManager.default.attributesOfItem(
+            atPath: fileURL.deletingLastPathComponent().path
+        )
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        XCTAssertEqual(directoryAttributes[.posixPermissions] as? NSNumber, NSNumber(value: 0o700))
+        XCTAssertEqual(fileAttributes[.posixPermissions] as? NSNumber, NSNumber(value: 0o600))
+    }
+
+    func test_symlinkedStateDirectoryIsRefused() throws {
+        let outside = temporaryDirectory.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let state = temporaryDirectory.appendingPathComponent("state")
+        try FileManager.default.createSymbolicLink(at: state, withDestinationURL: outside)
+        let store = PrivilegedIncidentFileStore(fileURL: state.appendingPathComponent("incidents.json"))
+        let payload = try XCTUnwrap("{\"incidents\":[]}".data(using: .utf8))
+
+        XCTAssertFalse(store.migrate(payload: payload).accepted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("incidents.json").path))
+    }
+}

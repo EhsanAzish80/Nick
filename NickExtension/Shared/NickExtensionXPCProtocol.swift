@@ -30,6 +30,26 @@ public struct PersistedExtensionFinding: Codable, Sendable, Identifiable {
     }
 }
 
+/// Opaque, versioned transport for the app's incident/evidence state. The
+/// extension owns the file and revision; the app owns the payload schema.
+public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
+    public static let currentSchemaVersion = 1
+
+    public let schemaVersion: Int
+    public let revision: UInt64
+    public let payload: Data
+
+    public init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        revision: UInt64,
+        payload: Data
+    ) {
+        self.schemaVersion = schemaVersion
+        self.revision = revision
+        self.payload = payload
+    }
+}
+
 // MARK: - NickExtensionXPCProtocol (Container App → Extension)
 
 /// XPC protocol exposed **by the extension** to the container app.
@@ -62,6 +82,29 @@ public struct PersistedExtensionFinding: Codable, Sendable, Identifiable {
     /// Returns a bounded JSON array of important events recorded while the
     /// container app was closed.
     func getPersistedEvents(reply: @escaping (Data) -> Void)
+
+    /// Returns the root-owned incident/evidence snapshot. An empty Data value
+    /// means no privileged store has been created yet.
+    func getIncidentStore(reply: @escaping (Data) -> Void)
+
+    /// Creates the privileged store only when none exists. Repeating the call
+    /// returns the existing record without overwriting it.
+    func migrateIncidentStore(_ payload: Data, reply: @escaping (Bool, Data) -> Void)
+
+    /// Replaces the privileged snapshot if the caller's revision is current.
+    /// The reply always includes the authoritative record when available.
+    func replaceIncidentStore(
+        _ payload: Data,
+        expectedRevision: UInt64,
+        reply: @escaping (Bool, Data) -> Void
+    )
+
+    /// Authenticates a UI verdict before the app records actor `.user`.
+    func authoriseIncidentVerdict(
+        incidentID: String,
+        action: String,
+        reply: @escaping (Bool) -> Void
+    )
 
     /// Instructs the extension to rebuild the FIM baseline from the current
     /// state of monitored paths. Used by the "Rebuild Baseline" button in
