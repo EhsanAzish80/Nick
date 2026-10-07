@@ -19,7 +19,7 @@ import os
 /// explanation so the caller always receives a non-empty, actionable string.
 /// The result is display text only; this API has no access to verdict, severity,
 /// suppression, scoring, or privileged response operations.
-final class AlertExplainer: @unchecked Sendable {
+actor AlertExplainer {
 
     // MARK: - Private
 
