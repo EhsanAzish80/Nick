@@ -500,6 +500,27 @@ final class UnifiedSourceFindingTests: XCTestCase {
             "\"/Library/Application Support/com.ehsanazish.nick\""
         ))
     }
+
+    func test_networkFilterActivationDoesNotGateIncidentStoreBootstrap() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Nick/App/AppDelegate.swift"),
+            encoding: .utf8
+        )
+        let connectRange = try XCTUnwrap(
+            source.range(of: "xpcClient.connect(legacyIncidentPayload:")
+        )
+        let networkActivationRange = try XCTUnwrap(
+            source.range(of: "await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()")
+        )
+
+        XCTAssertLessThan(connectRange.lowerBound, networkActivationRange.lowerBound)
+        XCTAssertTrue(source.contains(
+            "Task { @MainActor [weak self] in\n                guard let self else { return }\n                await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()"
+        ))
+    }
 }
 
 final class ScamGuardianTests: XCTestCase {

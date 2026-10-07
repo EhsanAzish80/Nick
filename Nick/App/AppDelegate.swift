@@ -130,10 +130,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let endpointManager = ExtensionManager()
             endpointExtensionManager = endpointManager
             await endpointManager.ensureBundledVersionIsActive()
-            // A healthy older Network Filter is not sufficient after an app
-            // update. Submit a replacement request once per bundled build so
-            // macOS runs the provider shipped with this version of Nick.
-            await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()
             xpcClient.findingHandler = { [weak self] finding in
                 guard let self else { return }
                 _ = await self.engine.ingestLiveFinding(
@@ -150,7 +146,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     recommendedAction: finding.recommendedAction
                 )
             }
-            await networkProtection.refresh()
             let legacyPayload = engine.prepareLegacyIncidentMigration()
             xpcClient.connect(legacyIncidentPayload: legacyPayload) { [weak self] record, _ in
                 guard let self else { return }
@@ -174,6 +169,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
                 self.startMonitoringAfterIncidentStoreBootstrap()
+            }
+
+            // Network Filter replacement/configuration is independent of the
+            // Endpoint Security XPC bootstrap. A system-extension request can
+            // remain pending while macOS waits for approval or provider health;
+            // it must never delay loading or migrating the incident store.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()
+                await self.networkProtection.refresh()
             }
         }
         NotificationCenter.default.addObserver(
