@@ -50,6 +50,17 @@ final class DetectionPolicyTests: XCTestCase {
         XCTAssertTrue(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: true, teamID: nil))
     }
 
+    func test_validatedDeveloperIDRansomwareSignalIsAlertOnly() {
+        XCTAssertFalse(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: true
+        ))
+        XCTAssertTrue(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: false
+        ), "A self-signed actor with a copied Team ID must not gain the exemption")
+    }
+
     func test_highRiskLocationsCoverStagingAndPersistence() {
         let risky = [
             "/Users/a/Library/Application Support/x/agent",

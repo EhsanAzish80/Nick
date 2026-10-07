@@ -5,7 +5,43 @@
 import CryptoKit
 import Darwin
 import Foundation
+import Security
 import os
+
+/// Validates a third-party actor against Apple's Developer ID Application
+/// anchor off the Endpoint Security authorization path. Results are cached by
+/// cdhash, never by a caller-supplied Team ID.
+final class DeveloperIDTrustValidator: @unchecked Sendable {
+    static let shared = DeveloperIDTrustValidator()
+    private let lock = NSLock()
+    private var cache: [Data: Bool] = [:]
+
+    func isValidated(path: String) -> Bool {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code else { return false }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any],
+              let cdhash = dict[kSecCodeInfoUnique as String] as? Data else { return false }
+        if let cached = lock.withLock({ cache[cdhash] }) { return cached }
+
+        var requirement: SecRequirement?
+        let text = "anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        // Security exposes these CSCommon flags to C but not Swift in every SDK.
+        // Values are stable API constants: revocation 1<<30, expiration 1<<31.
+        let enforceRevocation = UInt32(1) << 30
+        let considerExpiration = UInt32(1) << 31
+        let rawFlags = UInt32(kSecCSDoNotValidateResources)
+            | enforceRevocation
+            | considerExpiration
+        let valid = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: rawFlags), requirement) == errSecSuccess
+        lock.withLock { cache[cdhash] = valid }
+        return valid
+    }
+}
 
 // MARK: - RemediationEngine
 

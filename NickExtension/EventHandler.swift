@@ -759,14 +759,20 @@ final class ESEventHandler {
         // One burst produces an event for every file it touches. Report a
         // process once per minute unless the evidence escalates to a block.
         let isBlock = alert.recommendation == .block
+        let developerIDValidated = isBlock
+            && DeveloperIDTrustValidator.shared.isValidated(path: processPath)
+        let shouldTerminate = RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: isBlock,
+            developerIDValidated: developerIDValidated
+        )
         let shouldReport = ransomwareReportLock.withLock { () -> Bool in
             let now = Date()
             if let previous = lastRansomwareReport[pid],
                now.timeIntervalSince(previous.date) < 60,
-               previous.blocked || !isBlock {
+               previous.blocked || !shouldTerminate {
                 return false
             }
-            lastRansomwareReport[pid] = (now, isBlock)
+            lastRansomwareReport[pid] = (now, shouldTerminate)
             if lastRansomwareReport.count > 256 {
                 lastRansomwareReport = lastRansomwareReport.filter { now.timeIntervalSince($0.value.date) < 60 }
             }
@@ -775,7 +781,7 @@ final class ESEventHandler {
         guard shouldReport else { return }
 
         Self.logger.warning(
-            "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) action=\(String(describing: alert.recommendation))"
+            "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) terminate=\(shouldTerminate)"
         )
         let ransomwareEvent = ESEvent(
             eventType: .notifyWrite,
@@ -793,7 +799,7 @@ final class ESEventHandler {
         if let data = try? encoder.encode(ransomwareEvent) {
             xpcServer?.sendThreatToApp(data)
         }
-        guard alert.recommendation == .block, let engine = remediationEngine else { return }
+        guard shouldTerminate, let engine = remediationEngine else { return }
         // A deleted canary cannot be hashed; the writer is still stopped.
         let hash = fileScanner?.scan(filePath: filePath).hash ?? ""
         let report = engine.remediate(
