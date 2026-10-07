@@ -43,6 +43,8 @@ xcodebuild \
   -configuration Release \
   -derivedDataPath "${DERIVED_DATA_PATH}" \
   -archivePath "${ARCHIVE_PATH}" \
+  MARKETING_VERSION="${EXPECTED_VERSION}" \
+  CURRENT_PROJECT_VERSION="${EXPECTED_BUILD}" \
   archive
 
 ARCHIVED_APP="${ARCHIVE_PATH}/Products/Applications/Nick.app"
