@@ -458,18 +458,10 @@ struct OverviewDetailView: View {
     /// times during every view evaluation.
     @State private var endpointExtensionHealth: [String: Any]?
 
-    private static let endpointHealthPath =
-        "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
-
     private func refreshEndpointHealth() async {
-        let path = Self.endpointHealthPath
         while !Task.isCancelled {
-            let data = await Task.detached(priority: .utility) {
-                FileManager.default.contents(atPath: path)
-            }.value
-            endpointExtensionHealth = data.flatMap {
-                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-            }
+            await xpcClient.refreshExtensionHealth()
+            endpointExtensionHealth = xpcClient.extensionHealth
             try? await Task.sleep(for: .seconds(5))
         }
     }
@@ -1404,12 +1396,8 @@ struct ScannerDetailView: View {
     @State private var showFileScanSheet: Bool          = false
 
     // MARK: - Ignore list (newline-delimited paths persisted in UserDefaults)
-    @AppStorage("deepScanIgnoredPaths") private var ignoredPathsRaw: String = ""
-
     private var ignoredPaths: Set<String> {
-        Set(ignoredPathsRaw.split(separator: "\n").map {
-            DeepScanner.canonicalPath(String($0))
-        })
+        engine.deepScanIgnoredPaths
     }
 
     // MARK: - Body
@@ -1746,7 +1734,7 @@ struct ScannerDetailView: View {
     private func addIgnored(_ path: String) {
         var paths = ignoredPaths
         paths.insert(DeepScanner.canonicalPath(path))
-        ignoredPathsRaw = paths.sorted().joined(separator: "\n")
+        engine.deepScanIgnoredPaths = paths
     }
 
     // MARK: - Scan File helpers

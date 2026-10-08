@@ -61,6 +61,14 @@ final class DetectionPolicyTests: XCTestCase {
         ), "A self-signed actor with a copied Team ID must not gain the exemption")
     }
 
+    func test_pidReuseCannotAuthoriseProcessTermination() {
+        let reviewed = ProcessInstanceIdentity(pid: 42, startSeconds: 100, startMicroseconds: 1)
+        let reused = ProcessInstanceIdentity(pid: 42, startSeconds: 101, startMicroseconds: 1)
+        XCTAssertTrue(RansomwareTerminationPolicy.maySignalKill(expected: reviewed, current: reviewed))
+        XCTAssertFalse(RansomwareTerminationPolicy.maySignalKill(expected: reviewed, current: reused))
+        XCTAssertFalse(RansomwareTerminationPolicy.maySignalKill(expected: nil, current: reviewed))
+    }
+
     func test_highRiskLocationsCoverStagingAndPersistence() {
         let risky = [
             "/Users/a/Library/Application Support/x/agent",

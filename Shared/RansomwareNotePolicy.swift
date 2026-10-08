@@ -1,10 +1,34 @@
+import Darwin
 import Foundation
+
+struct ProcessInstanceIdentity: Equatable, Sendable {
+    let pid: Int32
+    let startSeconds: UInt64
+    let startMicroseconds: UInt64
+
+    static func capture(pid: Int32) -> Self? {
+        guard pid > 1 else { return nil }
+        var info = proc_bsdinfo()
+        let size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size))
+        guard size == MemoryLayout<proc_bsdinfo>.size else { return nil }
+        return Self(
+            pid: pid,
+            startSeconds: info.pbi_start_tvsec,
+            startMicroseconds: info.pbi_start_tvusec
+        )
+    }
+}
 
 enum RansomwareTerminationPolicy {
     /// Developer-ID validation is performed off the ES authorization path.
     /// A copied Team ID or self-signed certificate never reaches this exemption.
     static func shouldTerminate(isBlockRecommendation: Bool, developerIDValidated: Bool) -> Bool {
         isBlockRecommendation && !developerIDValidated
+    }
+
+    static func maySignalKill(expected: ProcessInstanceIdentity?, current: ProcessInstanceIdentity?) -> Bool {
+        guard let expected, let current else { return false }
+        return expected == current
     }
 }
 

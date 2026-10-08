@@ -32,6 +32,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     /// Shared instance — created once and retained for the app lifetime.
     static let shared = NotificationManager()
+    var notificationThreshold: SignalSeverity = .high
 
     // MARK: - Private
 
@@ -140,8 +141,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             return
         }
 
-        let thresholdRaw = UserDefaults.standard.integer(forKey: "notificationThresholdRaw")
-        let threshold = SignalSeverity(rawValue: thresholdRaw) ?? .high
+        let threshold = notificationThreshold
         guard alert.severity >= threshold else {
             Self.log.debug("Alert '\(alert.title)' below threshold (\(threshold.displayName)) — suppressed")
             return

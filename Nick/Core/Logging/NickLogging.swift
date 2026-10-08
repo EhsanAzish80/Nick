@@ -136,7 +136,7 @@ func buildPipeline() -> (AlertFormatter, [AlertOutput]) {
     }
 
     let allowInsecureLocalhost = UserDefaults.standard.bool(forKey: "allowInsecureLocalWebhook")
-    if let webhookString = UserDefaults.standard.string(forKey: "webhookURL"),
+    if let webhookString = PrivilegedWebhookSettings.urlString,
        let url = URL(string: webhookString),
        WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalhost) {
         outputs.append(AlertOutputs.http(url: url))
@@ -189,5 +189,17 @@ enum NickLogFilePruner {
                 try? FileManager.default.removeItem(at: file)
             }
         }
+    }
+}
+enum PrivilegedWebhookSettings {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var value: String?
+
+    static func setURL(_ value: String?) {
+        lock.withLock { self.value = value }
+    }
+
+    static var urlString: String? {
+        lock.withLock { value }
     }
 }

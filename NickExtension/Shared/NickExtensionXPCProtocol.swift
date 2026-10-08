@@ -64,6 +64,10 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
     /// Returns whether the ES client is initialised and actively subscribed.
     func getStatus(reply: @escaping (Bool) -> Void)
 
+    /// Returns the root-published health snapshot. The app never reads the
+    /// privileged health file directly.
+    func getExtensionHealth(reply: @escaping (Data) -> Void)
+
     /// Re-scans and moves a confirmed threat into Nick's protected vault.
     /// The encoded record lets the app update Quarantine immediately.
     func requestQuarantineFile(
@@ -99,6 +103,16 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
         reply: @escaping (Bool, Data) -> Void
     )
 
+    /// Root-owned security preferences. The payload schema belongs to the app;
+    /// the extension authenticates the caller and owns persistence/revisions.
+    func getSecuritySettings(reply: @escaping (Data) -> Void)
+    func migrateSecuritySettings(_ payload: Data, reply: @escaping (Bool, Data) -> Void)
+    func replaceSecuritySettings(
+        _ payload: Data,
+        expectedRevision: UInt64,
+        reply: @escaping (Bool, Data) -> Void
+    )
+
     /// Authenticates a UI verdict before the app records actor `.user`.
     func authoriseIncidentVerdict(
         incidentID: String,
@@ -110,6 +124,14 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
     /// state of monitored paths. Used by the "Rebuild Baseline" button in
     /// `IntegrityView`.
     func requestRebuildFIMBaseline(reply: @escaping (Bool) -> Void)
+
+    /// Returns the authoritative root-owned set of pending integrity changes.
+    /// This rehydrates the UI after either side of the XPC connection restarts.
+    func getPendingFIMViolations(reply: @escaping (Data) -> Void)
+
+    /// Accepts one durable FIM violation and advances its baseline only when
+    /// the current file still matches the reviewed evidence.
+    func acknowledgeFIMViolation(id: String, reply: @escaping (Bool) -> Void)
 
     /// Instructs the extension to deploy ransomware canary files into the
     /// user's common directories (Desktop, Documents, Downloads, Pictures).

@@ -162,9 +162,7 @@ private final class UninstallModel: ObservableObject {
         configuration.addsToRecentItems = false
         configuration.createsNewApplicationInstance = true
         configuration.arguments = [
-            "--prepare-uninstall",
-            "--result",
-            marker.path
+            "--prepare-uninstall"
         ]
         let maintenanceApplication = try await NSWorkspace.shared.openApplication(
             at: nickURL,

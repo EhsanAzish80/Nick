@@ -2,6 +2,7 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
+import CryptoKit
 import Foundation
 import os
 
@@ -76,9 +77,29 @@ final class QuarantineManager {
             return nil
         }
 
+        let sourceFD = open(canonicalOriginalPath, O_RDONLY | O_NOFOLLOW)
+        guard sourceFD >= 0 else {
+            Self.logger.warning("Quarantine refused because the selected item could not be opened safely")
+            return nil
+        }
+        defer { close(sourceFD) }
+
         var originalStat = stat()
-        guard lstat(canonicalOriginalPath, &originalStat) == 0,
-              originalStat.st_mode & S_IFMT == S_IFREG else {
+        guard fstat(sourceFD, &originalStat) == 0,
+              originalStat.st_mode & S_IFMT == S_IFREG,
+              let openedHash = sha256(fileDescriptor: sourceFD) else {
+            Self.logger.warning("Quarantine refused because the opened file does not match the reviewed hash")
+            return nil
+        }
+        let reviewedIdentity = FileIdentity(stat: originalStat)
+        var pathStat = stat()
+        guard lstat(canonicalOriginalPath, &pathStat) == 0,
+              QuarantineMovePolicy.matchesReviewedFile(
+                  reviewedIdentity: reviewedIdentity,
+                  reviewedHash: normalizedHash,
+                  currentIdentity: FileIdentity(stat: pathStat),
+                  currentHash: openedHash
+              ) else {
             Self.logger.warning("Quarantine refused because the selected item is not a regular file")
             return nil
         }
@@ -108,6 +129,21 @@ final class QuarantineManager {
             // overwrite earlier evidence or share a stale database reference.
             try fm.moveItem(atPath: canonicalOriginalPath, toPath: quarantinedPath)
 
+            // The path can be replaced between scan and move. Bind the move to
+            // the file opened above, then verify both identity and content at
+            // the vault destination before accepting it as quarantined.
+            var quarantinedStat = stat()
+            guard lstat(quarantinedPath, &quarantinedStat) == 0,
+                  let quarantinedHash = sha256(fileDescriptor: sourceFD),
+                  QuarantineMovePolicy.matchesReviewedFile(
+                      reviewedIdentity: reviewedIdentity,
+                      reviewedHash: normalizedHash,
+                      currentIdentity: FileIdentity(stat: quarantinedStat),
+                      currentHash: quarantinedHash
+                  ) else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+
             // Strip attributes while the owner can still access the file, then
             // lock the vault copy against reading, writing, and execution.
             stripXattrs(path: quarantinedPath)
@@ -134,6 +170,20 @@ final class QuarantineManager {
             try? fm.removeItem(atPath: metaPath)
             return nil
         }
+    }
+
+    private func sha256(fileDescriptor: Int32) -> String? {
+        guard lseek(fileDescriptor, 0, SEEK_SET) >= 0 else { return nil }
+        defer { _ = lseek(fileDescriptor, 0, SEEK_SET) }
+        var hasher = SHA256()
+        var buffer = [UInt8](repeating: 0, count: 1_024 * 1_024)
+        while true {
+            let count = read(fileDescriptor, &buffer, buffer.count)
+            if count == 0 { break }
+            guard count > 0 else { return nil }
+            hasher.update(data: Data(buffer[0..<count]))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Restores a quarantined file to its original path.

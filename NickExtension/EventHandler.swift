@@ -88,6 +88,7 @@ final class ESEventHandler {
         let processPath = esString(process.executable.pointee.path)
         let pid         = audit_token_to_pid(process.audit_token)
         let parentPid   = audit_token_to_pid(process.parent_audit_token)
+        let processIdentity = ProcessInstanceIdentity.capture(pid: pid)
 
         switch msg.event_type {
 
@@ -117,7 +118,8 @@ final class ESEventHandler {
             let cached   = fileScanner?.cache.lookup(path: targetPath, identity: targetIdentity)
             let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
                 path: targetPath,
-                identity: targetIdentity
+                identity: targetIdentity,
+                currentHash: { fileScanner?.contentHash(path: targetPath) }
             ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
@@ -175,7 +177,8 @@ final class ESEventHandler {
             )
             let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
                 path: filePath,
-                identity: fileIdentity
+                identity: fileIdentity,
+                currentHash: { fileScanner?.contentHash(path: filePath) }
             ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
@@ -353,7 +356,8 @@ final class ESEventHandler {
                         pid: pid,
                         parentPid: parentPid,
                         processPath: processPath,
-                        filePath: filePath
+                        filePath: filePath,
+                        processIdentity: processIdentity
                     )
                 }
 
@@ -410,6 +414,7 @@ final class ESEventHandler {
                         threatName:  result.threatName ?? "Unknown",
                         processPath: processPath,
                         pid:         pid,
+                        processIdentity: processIdentity,
                         // Mail and Outlook are delivery processes, not the
                         // malware itself. Quarantine the confirmed attachment
                         // without terminating the user's mail client.
@@ -486,7 +491,8 @@ final class ESEventHandler {
                         pid: pid,
                         parentPid: parentPid,
                         processPath: processPath,
-                        filePath: notifyDestPath
+                        filePath: notifyDestPath,
+                        processIdentity: processIdentity
                     )
                 }
             }
@@ -531,7 +537,8 @@ final class ESEventHandler {
                         pid: pid,
                         parentPid: parentPid,
                         processPath: processPath,
-                        filePath: filePath
+                        filePath: filePath,
+                        processIdentity: processIdentity
                     )
                 }
             }
@@ -754,7 +761,8 @@ final class ESEventHandler {
         pid: Int32,
         parentPid: Int32,
         processPath: String,
-        filePath: String
+        filePath: String,
+        processIdentity: ProcessInstanceIdentity?
     ) {
         // One burst produces an event for every file it touches. Report a
         // process once per minute unless the evidence escalates to a block.
@@ -807,7 +815,8 @@ final class ESEventHandler {
             hash: hash,
             threatName: "Ransomware (\(alert.indicators.first ?? "unknown"))",
             processPath: processPath,
-            pid: pid
+            pid: pid,
+            processIdentity: processIdentity
         )
         if let data = try? JSONEncoder().encode(report) {
             xpcServer?.sendRemediationToApp(data)

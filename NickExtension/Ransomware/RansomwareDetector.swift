@@ -287,10 +287,15 @@ final class CanaryFileManager {
     private(set) var canaryPaths: Set<String> = []
 
     private let homeDirectories: [URL]
+    private let installationToken: String
     private let protectedFolderNames = ["Desktop", "Documents", "Downloads", "Pictures"]
 
-    init(homeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories()) {
+    init(
+        homeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories(),
+        tokenURL: URL = URL(fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/canary-token")
+    ) {
         self.homeDirectories = homeDirectories
+        self.installationToken = Self.loadOrCreateInstallationToken(at: tokenURL)
     }
 
     // MARK: - Public API
@@ -308,17 +313,17 @@ final class CanaryFileManager {
                 // deliberately persistent. Legacy dot-file canaries stay
                 // registered alongside the document canary.
                 let existingNames = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-                for name in existingNames where Self.isCanaryName(name) {
+                for name in existingNames where isManagedCanaryName(name) {
                     canaryPaths.insert(directory.appendingPathComponent(name).path)
                 }
-                guard !existingNames.contains(where: Self.isDocumentCanaryName) else { continue }
+                guard !existingNames.contains(where: isManagedDocumentCanaryName) else { continue }
 
                 // Ransomware typically skips dot-files and only encrypts known
                 // document and image extensions, so the canary is a visible
                 // name with a targeted extension, hidden from Finder by flag.
                 let ext = folderName == "Pictures" ? "jpg" : "docx"
                 let canaryPath = directory
-                    .appendingPathComponent("\(Self.documentCanaryPrefix)\(UUID().uuidString.prefix(6)).\(ext)")
+                    .appendingPathComponent(".\(installationToken)-\(UUID().uuidString.prefix(8)).\(ext)")
                     .path
 
                 let content = "NICK_CANARY_DO_NOT_MODIFY_\(Date())"
@@ -342,7 +347,7 @@ final class CanaryFileManager {
         if canaryPaths.contains(path) {
             return true
         }
-        return Self.isCanaryName((path as NSString).lastPathComponent)
+        return isManagedCanaryName((path as NSString).lastPathComponent)
     }
 
     static let documentCanaryPrefix = "Nick Canary - do not modify "
@@ -353,6 +358,36 @@ final class CanaryFileManager {
 
     static func isCanaryName(_ name: String) -> Bool {
         isDocumentCanaryName(name) || (name.hasPrefix(".~nick_canary_") && name.hasSuffix(".tmp"))
+    }
+
+    private func isManagedDocumentCanaryName(_ name: String) -> Bool {
+        name.hasPrefix(".\(installationToken)-")
+            && ["docx", "jpg"].contains((name as NSString).pathExtension.lowercased())
+    }
+
+    private func isManagedCanaryName(_ name: String) -> Bool {
+        isManagedDocumentCanaryName(name) || Self.isCanaryName(name)
+    }
+
+    private static func loadOrCreateInstallationToken(at url: URL) -> String {
+        if let existing = try? String(contentsOf: url, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           existing.count == 24 {
+            return existing
+        }
+        let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try Data(token.utf8).write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            Self.logger.error("Could not persist randomized canary token: \(error.localizedDescription, privacy: .public)")
+        }
+        return String(token)
     }
 
     /// Removes all canary files from disk and clears the set.

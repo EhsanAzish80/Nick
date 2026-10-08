@@ -22,6 +22,8 @@ struct SystemAuditView: View {
 
     @State private var isExporting   = false
     @State private var exportMessage: String?
+    @State private var fimActionMessage: String?
+    @State private var acknowledgingFIM: Set<UUID> = []
 
     // Separate XProtect result from the rest so it gets its own section.
     private var xprotectResult: SystemCheckResult? {
@@ -467,7 +469,7 @@ struct SystemAuditView: View {
                     .padding(.bottom, 24)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(xpcClient.integrityViolations.prefix(5).enumerated()), id: \.element.id) { idx, v in
+                    ForEach(Array(xpcClient.integrityViolations.enumerated()), id: \.element.id) { idx, v in
                         if idx > 0 { Divider().padding(.leading, 44) }
                         let createdOrModifiedIcon = v.violationType == .created ? "plus.circle" : "pencil"
                         let violationIcon = v.violationType == .deleted ? "trash" : createdOrModifiedIcon
@@ -487,9 +489,25 @@ struct SystemAuditView: View {
                                     .foregroundStyle(Color.textSecondary)
                             }
                             Spacer()
-                            Text(Self.compactDateFormatter.string(from: v.timestamp))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(Color.textTertiary)
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(Self.compactDateFormatter.string(from: v.timestamp))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(Color.textTertiary)
+                                Button("Acknowledge") {
+                                    acknowledgingFIM.insert(v.id)
+                                    xpcClient.acknowledgeFIMViolation(id: v.id) { accepted in
+                                        Task { @MainActor in
+                                            acknowledgingFIM.remove(v.id)
+                                            fimActionMessage = accepted
+                                                ? "Change acknowledged and baseline advanced."
+                                                : "The file changed again. Review it and retry."
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.link)
+                                .disabled(acknowledgingFIM.contains(v.id))
+                                .accessibilityLabel("Acknowledge integrity change for \(v.path)")
+                            }
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
@@ -504,7 +522,13 @@ struct SystemAuditView: View {
                         .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
                 )
                 .padding(.horizontal, 20)
-                .padding(.bottom, 24)
+                if let fimActionMessage {
+                    Text(fimActionMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.textSecondary)
+                        .padding(.horizontal, 20)
+                }
+                Spacer().frame(height: 24)
             }
         }
     }

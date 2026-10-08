@@ -89,9 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         traceUninstall("Nick launched; maintenance mode: \(CommandLine.arguments.contains("--prepare-uninstall"))")
         if CommandLine.arguments.contains("--prepare-uninstall") {
             traceUninstall("Maintenance mode detected in applicationDidFinishLaunching")
-            prepareForUninstall(
-                markerPath: uninstallArgumentValue(after: "--result")
-            )
+            prepareForUninstall()
             return
         }
 
@@ -168,7 +166,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         )
                     }
                 }
-                self.startMonitoringAfterIncidentStoreBootstrap()
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let legacySettings = self.engine.prepareLegacySecuritySettingsMigration()
+                    if let privilegedSettings = await self.xpcClient.bootstrapSecuritySettings(
+                        legacyPayload: legacySettings
+                    ) {
+                        do {
+                            try self.engine.installPrivilegedSecuritySettings(
+                                payload: privilegedSettings,
+                                persistence: { [weak self] payload in
+                                    self?.xpcClient.persistSecuritySettings(payload)
+                                }
+                            )
+                        } catch {
+                            self.incidentStoreLogger.error(
+                                "Could not load root-owned security settings: \(error.localizedDescription)"
+                            )
+                        }
+                    }
+                    self.startMonitoringAfterIncidentStoreBootstrap()
+                }
             }
 
             // Network Filter replacement/configuration is independent of the
@@ -210,7 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `--prepare-uninstall`. These APIs must execute from Nick's own bundle:
     /// NetworkExtension preferences and ServiceManagement registrations are
     /// scoped to the app that created them.
-    private func prepareForUninstall(markerPath requestedMarkerPath: String?) {
+    private func prepareForUninstall() {
         guard !uninstallPreparationInProgress else {
             uninstallLogger.notice("Ignoring duplicate uninstall preparation request")
             traceUninstall("Ignored duplicate preparation request")
@@ -219,8 +237,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         uninstallPreparationInProgress = true
         NSApp.setActivationPolicy(.prohibited)
 
-        let markerPath = requestedMarkerPath
-            ?? Self.uninstallResultURL.path
+        // Never let a command-line argument choose a privileged app's write
+        // destination. The bundled uninstaller and Nick independently derive
+        // the same per-user, fixed receipt path.
+        let markerPath = Self.uninstallResultURL.path
         uninstallLogger.notice("Preparing Nick for removal")
         traceUninstall("Preparation started; result path: \(markerPath)")
 
@@ -394,13 +414,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             print("[Nick Uninstall] Could not append trace: \(error.localizedDescription)")
         }
-    }
-
-    private func uninstallArgumentValue(after flag: String) -> String? {
-        guard let index = CommandLine.arguments.firstIndex(of: flag) else { return nil }
-        let valueIndex = CommandLine.arguments.index(after: index)
-        guard valueIndex < CommandLine.arguments.endIndex else { return nil }
-        return CommandLine.arguments[valueIndex]
     }
 
     /// Keep Nick alive in the background when the last window closes.

@@ -48,6 +48,7 @@ func writeExtensionHealth() {
         "signatureCount": signatureDB.count,
         "fullDiskAccessReady": fullDiskAccessReady,
         "fimBaselineCount": fileIntegrityMonitor.baselineCount,
+        "fimPendingViolationCount": fileIntegrityMonitor.pendingViolationCount,
         "canaryCount": ransomwareDetector.canaryManager.canaryPaths.count,
         "eventsPerSecond": esMetrics.eventsPerSecond,
         "deadlineMissCount": esMetrics.deadlineMisses
@@ -62,7 +63,7 @@ func writeExtensionHealth() {
         let data = try JSONSerialization.data(withJSONObject: health, options: [.sortedKeys])
         try data.write(to: URL(fileURLWithPath: healthPath), options: .atomic)
         try FileManager.default.setAttributes(
-            [.posixPermissions: 0o644],
+            [.posixPermissions: 0o600],
             ofItemAtPath: healthPath
         )
     } catch {
@@ -118,7 +119,11 @@ let quarantineManager    = QuarantineManager(supportDir: supportDir)
 let remediationEngine    = RemediationEngine(quarantineManager: quarantineManager)
 
 let fimBaselinePath      = (supportDir as NSString).appendingPathComponent("fim_baseline.json")
-let fileIntegrityMonitor = FileIntegrityMonitor(baselinePath: fimBaselinePath)
+let fimPendingPath       = (supportDir as NSString).appendingPathComponent("fim_pending.json")
+let fileIntegrityMonitor = FileIntegrityMonitor(
+    baselinePath: fimBaselinePath,
+    pendingViolationsPath: fimPendingPath
+)
 
 // Build FIM baseline on first run (baseline file absent means first launch)
 if !FileManager.default.fileExists(atPath: fimBaselinePath) {

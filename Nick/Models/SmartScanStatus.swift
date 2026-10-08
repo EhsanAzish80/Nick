@@ -727,14 +727,7 @@ final class SmartScanChecker {
 
     private var endpointExtensionHealth: [String: Any]? {
         guard useLiveRuntimeState else { return nil }
-        let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
-        guard
-            let data = FileManager.default.contents(atPath: path),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
-        }
-        return object
+        return xpcClient?.extensionHealth
     }
 
     static func isEmailScannerReady(

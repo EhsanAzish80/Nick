@@ -84,4 +84,34 @@ final class QuarantineRecordCompatibilityTests: XCTestCase {
         XCTAssertEqual(QuarantineRestorePolicy.restoredPermissions(0o1755), 0o1755)
         XCTAssertEqual(QuarantineRestorePolicy.restoredPermissions(nil), 0o600)
     }
+
+    func test_quarantineMoveRequiresReviewedIdentityAndHashBeforeAndAfterMove() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NickQuarantineIdentity-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("reviewed".utf8).write(to: file)
+        let reviewed = try XCTUnwrap(FileIdentity(path: file.path))
+
+        XCTAssertTrue(QuarantineMovePolicy.matchesReviewedFile(
+            reviewedIdentity: reviewed,
+            reviewedHash: "reviewed-hash",
+            currentIdentity: reviewed,
+            currentHash: "reviewed-hash"
+        ))
+        XCTAssertFalse(QuarantineMovePolicy.matchesReviewedFile(
+            reviewedIdentity: reviewed,
+            reviewedHash: "reviewed-hash",
+            currentIdentity: reviewed,
+            currentHash: "replacement-hash"
+        ))
+
+        try Data("replacement".utf8).write(to: file)
+        let replaced = try XCTUnwrap(FileIdentity(path: file.path))
+        XCTAssertFalse(QuarantineMovePolicy.matchesReviewedFile(
+            reviewedIdentity: reviewed,
+            reviewedHash: "reviewed-hash",
+            currentIdentity: replaced,
+            currentHash: "reviewed-hash"
+        ))
+    }
 }

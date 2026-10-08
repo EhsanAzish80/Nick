@@ -33,7 +33,6 @@ struct SettingsView: View {
 
     // MARK: App Storage
 
-    @AppStorage("notificationThresholdRaw") private var notificationThresholdRaw: Int = SignalSeverity.high.rawValue
     @AppStorage("deepScanIntervalSeconds") private var deepScanIntervalSeconds: Int = 300
     @AppStorage("logFormatter") private var logFormatter: String = "kv"
     @AppStorage("fileLoggingEnabled") private var fileLoggingEnabled: Bool = false
@@ -48,7 +47,7 @@ struct SettingsView: View {
 
     // MARK: Private State
 
-    @State private var webhookURLString: String = UserDefaults.standard.url(forKey: "webhookURL")?.absoluteString ?? ""
+    @State private var webhookURLString: String = ""
     @State private var webhookTestStatus: String? = nil
     @State private var newSuppressionType: SuppressionType = .processName
     @State private var newSuppressionValue: String = ""
@@ -113,7 +112,10 @@ struct SettingsView: View {
             .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
         }
-        .onAppear(perform: refreshLaunchAtLogin)
+        .onAppear {
+            refreshLaunchAtLogin()
+            webhookURLString = engine.webhookURLString ?? ""
+        }
         .task { await networkProtection.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshLaunchAtLogin()
@@ -231,7 +233,10 @@ struct SettingsView: View {
                 icon: "bell.fill", tint: .red,
                 title: "Minimum severity"
             ) {
-                Picker("", selection: $notificationThresholdRaw) {
+                Picker("", selection: Binding(
+                    get: { engine.notificationThreshold.rawValue },
+                    set: { engine.notificationThreshold = SignalSeverity(rawValue: $0) ?? .high }
+                )) {
                     ForEach(SignalSeverity.allCases.filter { $0 != .info }, id: \.rawValue) { sev in
                         Text(sev.displayName).tag(sev.rawValue)
                     }
@@ -1180,13 +1185,12 @@ struct SettingsView: View {
     private func saveWebhookURL() {
         let trimmed = webhookURLString.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
-            UserDefaults.standard.removeObject(forKey: "webhookURL")
+            engine.webhookURLString = nil
         } else if let url = URL(string: trimmed),
                   WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook) {
-            // Store as String so buildPipeline() can read it with string(forKey:)
-            UserDefaults.standard.set(trimmed, forKey: "webhookURL")
+            engine.webhookURLString = trimmed
         } else {
-            UserDefaults.standard.removeObject(forKey: "webhookURL")
+            engine.webhookURLString = nil
         }
     }
 

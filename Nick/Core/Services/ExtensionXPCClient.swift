@@ -47,6 +47,9 @@ public final class ExtensionXPCClient: NSObject {
     /// Threats found on external/removable volumes (Phase 5+).
     public private(set) var usbThreats: [USBThreat] = []
 
+    /// Authenticated health snapshot returned by the system extension.
+    public private(set) var extensionHealth: [String: Any]?
+
     // MARK: - Configuration
 
     /// Maximum number of events kept in `events`. Older events are discarded.
@@ -67,6 +70,9 @@ public final class ExtensionXPCClient: NSObject {
     private var connection: NSXPCConnection?
     private let decoder = JSONDecoder()
     private var incidentRevision: UInt64?
+    private var securitySettingsRevision: UInt64?
+    private var pendingSecuritySettingsPayload: Data?
+    private var securitySettingsWriteInFlight = false
     private var pendingIncidentPayload: Data?
     private var incidentWriteInFlight = false
     private var incidentBootstrapCompleted = false
@@ -74,6 +80,7 @@ public final class ExtensionXPCClient: NSObject {
     private var bootstrapCompletion: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)?
     private var bootstrapReconnectTask: Task<Void, Never>?
     private var bootstrapReconnectAttempt = 0
+    private var healthRefreshTask: Task<Void, Never>?
 
     // MARK: - Public API
 
@@ -168,7 +175,9 @@ public final class ExtensionXPCClient: NSObject {
                 self?.isConnected = active
                 Self.logger.info("Verified extension status: isActive=\(active)")
                 if active {
+                    self?.startHealthRefresh()
                     self?.loadPersistedEvents()
+                    self?.loadPendingFIMViolations()
                     self?.bootstrapIncidentStore(
                         legacyPayload: self?.bootstrapLegacyPayload,
                         completion: self?.bootstrapCompletion
@@ -179,6 +188,86 @@ public final class ExtensionXPCClient: NSObject {
             }
         }
         proxy.getStatus(reply: statusReply)
+    }
+
+    private func startHealthRefresh() {
+        healthRefreshTask?.cancel()
+        healthRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshExtensionHealth()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    public func refreshExtensionHealth() async {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            extensionHealth = nil
+            return
+        }
+        let data: Data = await withCheckedContinuation { continuation in
+            proxy.getExtensionHealth { continuation.resume(returning: $0) }
+        }
+        extensionHealth = data.isEmpty
+            ? nil
+            : (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func loadPendingFIMViolations() {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        proxy.getPendingFIMViolations { [weak self] data in
+            guard !data.isEmpty,
+                  let violations = try? JSONDecoder().decode([IntegrityViolation].self, from: data)
+            else { return }
+            Task { @MainActor [weak self] in
+                self?.integrityViolations = violations.sorted { $0.timestamp > $1.timestamp }
+            }
+        }
+    }
+
+    public func bootstrapSecuritySettings(legacyPayload: Data) async -> Data? {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return nil }
+        let response: (Bool, Data) = await withCheckedContinuation { continuation in
+            proxy.migrateSecuritySettings(legacyPayload) {
+                continuation.resume(returning: ($0, $1))
+            }
+        }
+        guard response.0,
+              let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: response.1)
+        else { return nil }
+        securitySettingsRevision = record.revision
+        return record.payload
+    }
+
+    public func persistSecuritySettings(_ payload: Data) {
+        pendingSecuritySettingsPayload = payload
+        flushSecuritySettingsIfNeeded()
+    }
+
+    private func flushSecuritySettingsIfNeeded() {
+        guard !securitySettingsWriteInFlight,
+              let payload = pendingSecuritySettingsPayload,
+              let revision = securitySettingsRevision,
+              let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        pendingSecuritySettingsPayload = nil
+        securitySettingsWriteInFlight = true
+        proxy.replaceSecuritySettings(payload, expectedRevision: revision) { [weak self] accepted, data in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.securitySettingsWriteInFlight = false
+                guard let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: data) else {
+                    return
+                }
+                self.securitySettingsRevision = record.revision
+                if !accepted {
+                    Self.logger.warning("Security settings write lost a revision race; authoritative state retained")
+                    if self.pendingSecuritySettingsPayload == nil {
+                        self.pendingSecuritySettingsPayload = payload
+                    }
+                }
+                self.flushSecuritySettingsIfNeeded()
+            }
+        }
     }
 
     private func scheduleBootstrapReconnect() {
@@ -462,6 +551,24 @@ public final class ExtensionXPCClient: NSObject {
             return
         }
         proxy.requestRebuildFIMBaseline(reply: completion)
+    }
+
+    public func acknowledgeFIMViolation(
+        id: UUID,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.acknowledgeFIMViolation(id: id.uuidString) { [weak self] accepted in
+            Task { @MainActor [weak self] in
+                if accepted {
+                    self?.integrityViolations.removeAll { $0.id == id }
+                }
+                completion(accepted)
+            }
+        }
     }
 
     /// Instructs the extension to deploy ransomware canary files into common user directories.

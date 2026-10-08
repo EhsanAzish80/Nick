@@ -6,15 +6,40 @@ import XCTest
 @testable import Nick
 
 final class FileIdentityAllowanceTests: XCTestCase {
+    func test_fimAcknowledgementRequiresReviewedContentToRemainCurrent() {
+        let modified = IntegrityViolation(
+            path: "/tmp/watched",
+            violationType: .modified,
+            expectedHash: "before",
+            actualHash: "reviewed",
+            timestamp: Date()
+        )
+        XCTAssertTrue(FIMAcknowledgementPolicy.canAcknowledge(modified, currentHash: "reviewed"))
+        XCTAssertFalse(FIMAcknowledgementPolicy.canAcknowledge(modified, currentHash: "changed-again"))
+
+        let deleted = IntegrityViolation(
+            path: "/tmp/deleted",
+            violationType: .deleted,
+            expectedHash: "before",
+            actualHash: nil,
+            timestamp: Date()
+        )
+        XCTAssertTrue(FIMAcknowledgementPolicy.canAcknowledge(deleted, currentHash: nil))
+        XCTAssertFalse(FIMAcknowledgementPolicy.canAcknowledge(deleted, currentHash: "recreated"))
+    }
+
 
     func test_allowanceMatchesUnchangedFile() throws {
         let file = try temporaryFile(contents: Data("reviewed".utf8))
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
 
         let reviewed = try XCTUnwrap(FileIdentity(path: file.path))
-        let allowance = OneTimeFileAllowance(identity: reviewed)
+        let allowance = OneTimeFileAllowance(identity: reviewed, sha256: "reviewed-hash")
 
-        XCTAssertTrue(allowance.permits(try XCTUnwrap(FileIdentity(path: file.path))))
+        XCTAssertTrue(allowance.permits(
+            try XCTUnwrap(FileIdentity(path: file.path)),
+            sha256: "reviewed-hash"
+        ))
     }
 
     func test_allowanceRejectsFileModifiedAtSamePath() throws {
@@ -22,11 +47,15 @@ final class FileIdentityAllowanceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
 
         let allowance = OneTimeFileAllowance(
-            identity: try XCTUnwrap(FileIdentity(path: file.path))
+            identity: try XCTUnwrap(FileIdentity(path: file.path)),
+            sha256: "reviewed-hash"
         )
         try Data("replacement content".utf8).write(to: file)
 
-        XCTAssertFalse(allowance.permits(try XCTUnwrap(FileIdentity(path: file.path))))
+        XCTAssertFalse(allowance.permits(
+            try XCTUnwrap(FileIdentity(path: file.path)),
+            sha256: "reviewed-hash"
+        ))
     }
 
     func test_reviewRequiresTheIdentityCapturedByTheScan() throws {
@@ -37,8 +66,33 @@ final class FileIdentityAllowanceTests: XCTestCase {
         try Data("swapped after scan".utf8).write(to: file)
         let current = try XCTUnwrap(FileIdentity(path: file.path))
 
-        XCTAssertFalse(ReviewedFileAllowancePolicy.permits(reviewed: reviewed, current: current))
-        XCTAssertFalse(ReviewedFileAllowancePolicy.permits(reviewed: nil, current: current))
+        XCTAssertFalse(ReviewedFileAllowancePolicy.permits(
+            reviewed: reviewed,
+            reviewedHash: "reviewed-hash",
+            current: current,
+            currentHash: "replacement-hash"
+        ))
+        XCTAssertFalse(ReviewedFileAllowancePolicy.permits(
+            reviewed: nil,
+            reviewedHash: "reviewed-hash",
+            current: current,
+            currentHash: "reviewed-hash"
+        ))
+    }
+
+    func test_allowanceRejectsDifferentContentHashEvenWhenIdentityMatches() throws {
+        let file = try temporaryFile(contents: Data("reviewed".utf8))
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let identity = try XCTUnwrap(FileIdentity(path: file.path))
+        let allowance = OneTimeFileAllowance(identity: identity, sha256: "reviewed-hash")
+
+        XCTAssertFalse(allowance.permits(identity, sha256: "replacement-hash"))
+        XCTAssertFalse(ReviewedFileAllowancePolicy.permits(
+            reviewed: identity,
+            reviewedHash: "reviewed-hash",
+            current: identity,
+            currentHash: "replacement-hash"
+        ))
     }
 
     func test_identityFollowsFinalSymlinkLikeEndpointSecurity() throws {

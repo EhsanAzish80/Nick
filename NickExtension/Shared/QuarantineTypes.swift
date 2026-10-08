@@ -36,16 +36,46 @@ struct FileIdentity: Hashable, Sendable {
 /// A one-use approval for the exact file that the user reviewed.
 struct OneTimeFileAllowance: Sendable {
     let identity: FileIdentity
+    let sha256: String
 
-    func permits(_ currentIdentity: FileIdentity) -> Bool {
-        identity == currentIdentity
+    func permits(_ currentIdentity: FileIdentity, sha256 currentHash: String) -> Bool {
+        identity == currentIdentity && sha256 == currentHash
     }
 }
 
 enum ReviewedFileAllowancePolicy {
-    static func permits(reviewed: FileIdentity?, current: FileIdentity) -> Bool {
-        guard let reviewed else { return false }
-        return reviewed == current
+    static func permits(
+        reviewed: FileIdentity?,
+        reviewedHash: String,
+        current: FileIdentity,
+        currentHash: String
+    ) -> Bool {
+        guard let reviewed, !reviewedHash.isEmpty, !currentHash.isEmpty else { return false }
+        return reviewed == current && reviewedHash == currentHash
+    }
+}
+
+enum QuarantineMovePolicy {
+    static func matchesReviewedFile(
+        reviewedIdentity: FileIdentity,
+        reviewedHash: String,
+        currentIdentity: FileIdentity,
+        currentHash: String
+    ) -> Bool {
+        !reviewedHash.isEmpty
+            && reviewedIdentity == currentIdentity
+            && reviewedHash == currentHash
+    }
+}
+
+enum FIMAcknowledgementPolicy {
+    static func canAcknowledge(_ violation: IntegrityViolation, currentHash: String?) -> Bool {
+        switch violation.violationType {
+        case .deleted:
+            return currentHash == nil
+        case .created, .modified:
+            return currentHash != nil && currentHash == violation.actualHash
+        }
     }
 }
 
