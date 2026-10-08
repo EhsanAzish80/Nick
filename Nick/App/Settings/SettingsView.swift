@@ -61,6 +61,9 @@ struct SettingsView: View {
     }()
     @State private var newProcessName: String = ""
     @State private var trustedProcessStatus: String?
+#if DEBUG
+    @State private var authorizationHarnessStatus: String?
+#endif
     @State private var newAllowedDomain: String = ""
     @State private var newAllowedApp: String = ""
     @State private var showRemoveProcessConfirmation = false
@@ -664,11 +667,23 @@ struct SettingsView: View {
                 Button("Remove", role: .destructive) {
                     if let n = nameToRemove { removeProcess(n) }
                 }
-               
-                Button("Cancel", role: .cancel) {
-                     // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
+                Button("Cancel", role: .cancel) {}
+            }
+#if DEBUG
+            Button("Test Refused Authorization Form") {
+                xpcClient.debugSendNeverAuthorizedProtectionCall { accepted in
+                    authorizationHarnessStatus = accepted
+                        ? "FAILED: the unapproved form was accepted"
+                        : "Passed: the unapproved form was refused"
                 }
             }
+            .buttonStyle(.bordered)
+            if let authorizationHarnessStatus {
+                Text(authorizationHarnessStatus)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(authorizationHarnessStatus.hasPrefix("Passed") ? .green : .red)
+            }
+#endif
         } header: {
             Text("Trusted Processes")
         } footer: {
@@ -1110,14 +1125,6 @@ struct SettingsView: View {
     }
 
     private func authorizeAndAddProcess() {
-        guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
-            trustedProcessStatus = "Approval was cancelled. Settings were not changed."
-            return
-        }
-        addProcess(authorization: authorization)
-    }
-
-    private func addProcess(authorization: Data) {
         let trimmed = newProcessName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         let matches = engine.processes.filter {
@@ -1133,6 +1140,10 @@ struct SettingsView: View {
         }
         if let reason = TrustedProcessList.trustRejectionReason(for: process) {
             trustedProcessStatus = reason
+            return
+        }
+        guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
+            trustedProcessStatus = "Approval was cancelled. Settings were not changed."
             return
         }
         engine.authorizeNextSecuritySettingsWrite(with: authorization)

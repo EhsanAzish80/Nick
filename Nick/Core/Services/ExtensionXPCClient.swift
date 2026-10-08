@@ -76,7 +76,9 @@ public final class ExtensionXPCClient: NSObject {
     private var pendingSecuritySettingsAuthorization: Data?
     private var securitySettingsWriteInFlight = false
     private var pendingIncidentPayload: Data?
+    private var pendingIncidentAuthorization: Data?
     private var incidentWriteInFlight = false
+    private var activeProtectionAuthorizations: [Data: AuthorizationRef] = [:]
     private var incidentBootstrapCompleted = false
     private var bootstrapLegacyPayload: Data?
     private var bootstrapCompletion: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)?
@@ -244,6 +246,7 @@ public final class ExtensionXPCClient: NSObject {
     public func persistSecuritySettings(_ payload: Data, authorizationExternalForm: Data? = nil) {
         pendingSecuritySettingsPayload = payload
         if let authorizationExternalForm {
+            finishProtectionAuthorization(pendingSecuritySettingsAuthorization)
             pendingSecuritySettingsAuthorization = authorizationExternalForm
         }
         flushSecuritySettingsIfNeeded()
@@ -265,6 +268,7 @@ public final class ExtensionXPCClient: NSObject {
         ) { [weak self] accepted, data in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.finishProtectionAuthorization(authorization)
                 self.securitySettingsWriteInFlight = false
                 guard let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: data) else {
                     return
@@ -363,8 +367,12 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    func persistIncidentStore(_ payload: Data) {
+    func persistIncidentStore(_ payload: Data, authorizationExternalForm: Data? = nil) {
         pendingIncidentPayload = payload
+        if let authorizationExternalForm {
+            finishProtectionAuthorization(pendingIncidentAuthorization)
+            pendingIncidentAuthorization = authorizationExternalForm
+        }
         drainIncidentStoreWrites()
     }
 
@@ -374,10 +382,17 @@ public final class ExtensionXPCClient: NSObject {
               let revision = incidentRevision,
               let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
         pendingIncidentPayload = nil
+        let authorization = pendingIncidentAuthorization
+        pendingIncidentAuthorization = nil
         incidentWriteInFlight = true
-        proxy.replaceIncidentStore(payload, expectedRevision: revision) { [weak self] accepted, recordData in
+        proxy.replaceIncidentStore(
+            payload,
+            expectedRevision: revision,
+            authorizationExternalForm: authorization
+        ) { [weak self] accepted, recordData in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.finishProtectionAuthorization(authorization)
                 self.incidentWriteInFlight = false
                 if let record = try? JSONDecoder().decode(
                     PrivilegedIncidentStoreRecord.self,
@@ -385,21 +400,27 @@ public final class ExtensionXPCClient: NSObject {
                 ) {
                     self.incidentRevision = record.revision
                 }
-                if !accepted {
+                if !accepted, authorization == nil {
                     self.pendingIncidentPayload = self.pendingIncidentPayload ?? payload
+                } else if !accepted {
+                    Self.logger.error("Authorized incident-store write was rejected; authoritative state retained")
                 }
                 self.drainIncidentStoreWrites()
             }
         }
     }
 
-    func validateIncidentVerdictTarget(id: UUID, action: IncidentActionKind) async -> Bool {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return false }
-        let authorization = action == .alwaysAllowed
+    func validateIncidentVerdictTarget(
+        id: UUID,
+        action: IncidentActionKind
+    ) async -> IncidentActionApproval? {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return nil }
+        let requiresAuthorization: Bool = [.dismissed, .allowedOnce, .alwaysAllowed].contains(action)
+        let authorization = requiresAuthorization
             ? requestProtectionModificationAuthorization()
             : nil
-        if action == .alwaysAllowed && authorization == nil { return false }
-        return await withCheckedContinuation { continuation in
+        if requiresAuthorization && authorization == nil { return nil }
+        let accepted = await withCheckedContinuation { continuation in
             proxy.validateIncidentVerdictTarget(
                 incidentID: id.uuidString,
                 action: action.rawValue,
@@ -407,6 +428,11 @@ public final class ExtensionXPCClient: NSObject {
                 reply: { continuation.resume(returning: $0) }
             )
         }
+        guard accepted else {
+            finishProtectionAuthorization(authorization)
+            return nil
+        }
+        return IncidentActionApproval(authorizationExternalForm: authorization)
     }
 
     /// Requests explicit user presence for an action that weakens protection.
@@ -416,8 +442,7 @@ public final class ExtensionXPCClient: NSObject {
         var authorization: AuthorizationRef?
         guard AuthorizationCreate(nil, nil, [], &authorization) == errAuthorizationSuccess,
               let authorization else { return nil }
-        defer { AuthorizationFree(authorization, []) }
-        return "com.ehsanazish.nick.modify-protection".withCString { name in
+        let externalForm: Data? = "com.ehsanazish.nick.modify-protection".withCString { name in
             var item = AuthorizationItem(name: name, valueLength: 0, value: nil, flags: 0)
             return withUnsafeMutablePointer(to: &item) { pointer in
                 var rights = AuthorizationRights(count: 1, items: pointer)
@@ -435,6 +460,19 @@ public final class ExtensionXPCClient: NSObject {
                 return withUnsafeBytes(of: external) { Data($0) }
             }
         }
+        guard let externalForm else {
+            AuthorizationFree(authorization, [.destroyRights])
+            return nil
+        }
+        activeProtectionAuthorizations[externalForm] = authorization
+        return externalForm
+    }
+
+    private func finishProtectionAuthorization(_ externalForm: Data?) {
+        guard let externalForm,
+              let authorization = activeProtectionAuthorizations.removeValue(forKey: externalForm)
+        else { return }
+        AuthorizationFree(authorization, [.destroyRights])
     }
 
     /// Closes the XPC connection.
@@ -448,6 +486,10 @@ public final class ExtensionXPCClient: NSObject {
         bootstrapLegacyPayload = nil
         bootstrapCompletion = nil
         bootstrapReconnectAttempt = 0
+        for authorization in activeProtectionAuthorizations.values {
+            AuthorizationFree(authorization, [.destroyRights])
+        }
+        activeProtectionAuthorizations.removeAll()
     }
 
     private func loadPersistedEvents() {
@@ -571,7 +613,19 @@ public final class ExtensionXPCClient: NSObject {
             completion(false)
             return
         }
-        proxy.requestAllowFileOnce(path: path, reply: completion)
+        guard let authorization = requestProtectionModificationAuthorization() else {
+            completion(false)
+            return
+        }
+        proxy.requestAllowFileOnce(
+            path: path,
+            authorizationExternalForm: authorization
+        ) { [weak self] accepted in
+            Task { @MainActor [weak self] in
+                self?.finishProtectionAuthorization(authorization)
+                completion(accepted)
+            }
+        }
     }
 
     public func requestBlockReviewedFile(
@@ -611,6 +665,7 @@ public final class ExtensionXPCClient: NSObject {
             authorizationExternalForm: authorization
         ) { [weak self] accepted in
             Task { @MainActor [weak self] in
+                self?.finishProtectionAuthorization(authorization)
                 if accepted {
                     self?.integrityViolations.removeAll { $0.id == id }
                 }
@@ -636,8 +691,16 @@ public final class ExtensionXPCClient: NSObject {
             completion(false)
             return
         }
-        proxy.requestRestoreQuarantinedFile(id: id.uuidString) { [weak self] success in
+        guard let authorization = requestProtectionModificationAuthorization() else {
+            completion(false)
+            return
+        }
+        proxy.requestRestoreQuarantinedFile(
+            id: id.uuidString,
+            authorizationExternalForm: authorization
+        ) { [weak self] success in
             Task { @MainActor [weak self] in
+                self?.finishProtectionAuthorization(authorization)
                 if success {
                     self?.quarantineRecords.removeAll { $0.id == id }
                 }
@@ -645,6 +708,34 @@ public final class ExtensionXPCClient: NSObject {
             }
         }
     }
+
+#if DEBUG
+    public func debugSendNeverAuthorizedProtectionCall(
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        var authorization: AuthorizationRef?
+        guard AuthorizationCreate(nil, nil, [], &authorization) == errAuthorizationSuccess,
+              let authorization else {
+            completion(false)
+            return
+        }
+        var external = AuthorizationExternalForm()
+        guard AuthorizationMakeExternalForm(authorization, &external) == errAuthorizationSuccess else {
+            AuthorizationFree(authorization, [.destroyRights])
+            completion(false)
+            return
+        }
+        let form = withUnsafeBytes(of: external) { Data($0) }
+        proxy.debugValidateProtectionAuthorization(authorizationExternalForm: form) { accepted in
+            AuthorizationFree(authorization, [.destroyRights])
+            completion(accepted)
+        }
+    }
+#endif
 
     public func requestDeleteQuarantinedFile(
         id: UUID,

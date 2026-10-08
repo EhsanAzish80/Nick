@@ -39,6 +39,10 @@ enum MenuBarAttentionState: Int, Comparable, Sendable {
     }
 }
 
+struct IncidentActionApproval: Sendable {
+    let authorizationExternalForm: Data?
+}
+
 extension ThreatAlert {
     /// Whether this alert still has evidence a user can act on. Keeping this in
     /// Core gives the sidebar badge, Alerts view, and menu-bar state one source
@@ -279,7 +283,8 @@ final class SecurityEngine {
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
     private(set) var incidentStore = IncidentStore()
-    private var incidentActionAuthorizer: ((UUID, IncidentActionKind) async -> Bool)?
+    private var incidentActionAuthorizer: ((UUID, IncidentActionKind) async -> IncidentActionApproval?)?
+    private var nextIncidentStoreAuthorization: Data?
 
     /// Phase 7 — Performance / disk-cleanup engine.
     private(set) var performanceMonitor: PerformanceMonitor?
@@ -371,11 +376,15 @@ final class SecurityEngine {
 
     func installPrivilegedIncidentStore(
         payload: Data,
-        persistence: @escaping (Data) -> Void,
-        authorizer: @escaping (UUID, IncidentActionKind) async -> Bool,
+        persistence: @escaping (Data, Data?) -> Void,
+        authorizer: @escaping (UUID, IncidentActionKind) async -> IncidentActionApproval?,
         removeLegacyState: Bool
     ) throws {
-        try incidentStore.installPrivilegedSnapshot(payload, persistence: persistence)
+        try incidentStore.installPrivilegedSnapshot(payload) { [weak self] payload in
+            let authorization = self?.nextIncidentStoreAuthorization
+            self?.nextIncidentStoreAuthorization = nil
+            persistence(payload, authorization)
+        }
         incidentActionAuthorizer = authorizer
         if removeLegacyState {
             incidentStore.removeLegacyPersistence()
@@ -727,8 +736,12 @@ final class SecurityEngine {
         guard let alert = alerts.first(where: { $0.id == alertID }),
               let incidentActionAuthorizer else { return }
         Task { @MainActor [weak self] in
-            guard await incidentActionAuthorizer(alertID, action), let self else { return }
+            guard let approval = await incidentActionAuthorizer(alertID, action), let self else { return }
+            self.nextIncidentStoreAuthorization = approval.authorizationExternalForm
             mutation(alert)
+            // A guarded mutation may decide it cannot safely change state.
+            // Do not let that approval authorize a later, unrelated write.
+            self.nextIncidentStoreAuthorization = nil
             self.syncAlertsFromStore()
         }
     }
