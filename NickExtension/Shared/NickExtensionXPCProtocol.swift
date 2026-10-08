@@ -50,6 +50,24 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
     }
 }
 
+enum IncidentVerdictValidationPolicy {
+    private static let allowedActions: Set<String> = [
+        "reviewed", "hidden", "dismissed", "resolved", "allowedOnce", "alwaysAllowed"
+    ]
+
+    static func accepts(
+        incidentID: String,
+        action: String,
+        existingIncidentIDs: Set<String>,
+        hasProtectionAuthorization: Bool
+    ) -> Bool {
+        guard UUID(uuidString: incidentID) != nil,
+              allowedActions.contains(action),
+              existingIncidentIDs.contains(incidentID) else { return false }
+        return action != "alwaysAllowed" || hasProtectionAuthorization
+    }
+}
+
 // MARK: - NickExtensionXPCProtocol (Container App → Extension)
 
 /// XPC protocol exposed **by the extension** to the container app.
@@ -110,13 +128,16 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
     func replaceSecuritySettings(
         _ payload: Data,
         expectedRevision: UInt64,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool, Data) -> Void
     )
 
-    /// Authenticates a UI verdict before the app records actor `.user`.
-    func authoriseIncidentVerdict(
+    /// Validates that a verdict targets an incident in the privileged store.
+    /// Security-reducing verdicts additionally require a user-authorized right.
+    func validateIncidentVerdictTarget(
         incidentID: String,
         action: String,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool) -> Void
     )
 
@@ -131,7 +152,11 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
 
     /// Accepts one durable FIM violation and advances its baseline only when
     /// the current file still matches the reviewed evidence.
-    func acknowledgeFIMViolation(id: String, reply: @escaping (Bool) -> Void)
+    func acknowledgeFIMViolation(
+        id: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
 
     /// Instructs the extension to deploy ransomware canary files into the
     /// user's common directories (Desktop, Documents, Downloads, Pictures).

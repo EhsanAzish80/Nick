@@ -156,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             },
                             authorizer: { [weak self] id, action in
                                 guard let self else { return false }
-                                return await self.xpcClient.authoriseIncidentVerdict(id: id, action: action)
+                                return await self.xpcClient.validateIncidentVerdictTarget(id: id, action: action)
                             },
                             removeLegacyState: true
                         )
@@ -175,8 +175,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         do {
                             try self.engine.installPrivilegedSecuritySettings(
                                 payload: privilegedSettings,
-                                persistence: { [weak self] payload in
-                                    self?.xpcClient.persistSecuritySettings(payload)
+                                persistence: { [weak self] payload, authorization in
+                                    self?.xpcClient.persistSecuritySettings(
+                                        payload,
+                                        authorizationExternalForm: authorization
+                                    )
                                 }
                             )
                         } catch {

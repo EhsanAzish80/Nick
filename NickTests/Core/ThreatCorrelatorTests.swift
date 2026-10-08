@@ -596,7 +596,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: "nickPersistedAlerts"))
     }
 
-    func test_userVerdictIsRecordedOnlyAfterAuthenticatedAuthorisation() async throws {
+    func test_userVerdictIsRecordedOnlyAfterExtensionAcceptsTarget() async throws {
         let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [],
             dismissalTombstones: [],

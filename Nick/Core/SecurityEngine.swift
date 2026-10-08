@@ -146,7 +146,8 @@ final class SecurityEngine {
     var deepScanIgnoredPaths: Set<String> = [] { didSet { persistSecuritySettingsIfReady() } }
     var webhookURLString: String? { didSet { persistSecuritySettingsIfReady() } }
     var notificationThreshold: SignalSeverity = .high { didSet { persistSecuritySettingsIfReady() } }
-    private var securitySettingsPersistence: ((Data) -> Void)?
+    private var securitySettingsPersistence: ((Data, Data?) -> Void)?
+    private var nextSecuritySettingsAuthorization: Data?
     private var installingSecuritySettings = false
 
     var suppressionRuleMigrationNotices: [String] {
@@ -187,7 +188,7 @@ final class SecurityEngine {
 
     func installPrivilegedSecuritySettings(
         payload: Data,
-        persistence: @escaping (Data) -> Void
+        persistence: @escaping (Data, Data?) -> Void
     ) throws {
         let settings = try JSONDecoder().decode(PrivilegedSecuritySettingsPayload.self, from: payload)
         guard settings.schemaVersion == PrivilegedSecuritySettingsPayload.schemaVersion else {
@@ -214,6 +215,13 @@ final class SecurityEngine {
         }
     }
 
+    /// Attaches a user-presence authorization to exactly the next settings
+    /// mutation. The extension still decides whether the change is reducing
+    /// and verifies the right independently.
+    func authorizeNextSecuritySettingsWrite(with externalForm: Data) {
+        nextSecuritySettingsAuthorization = externalForm
+    }
+
     private func persistSecuritySettingsIfReady() {
         guard !installingSecuritySettings, let securitySettingsPersistence else { return }
         let payload = PrivilegedSecuritySettingsPayload(
@@ -228,7 +236,9 @@ final class SecurityEngine {
         guard let data = try? JSONEncoder().encode(payload) else { return }
         NotificationManager.shared.notificationThreshold = notificationThreshold
         PrivilegedWebhookSettings.setURL(webhookURLString)
-        securitySettingsPersistence(data)
+        let authorization = nextSecuritySettingsAuthorization
+        nextSecuritySettingsAuthorization = nil
+        securitySettingsPersistence(data, authorization)
     }
 
     // MARK: - Overall Health Score (0–100)

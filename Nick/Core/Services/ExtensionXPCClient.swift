@@ -4,6 +4,7 @@
 
 import Foundation
 import os
+import Security
 
 // MARK: - ExtensionXPCClient
 
@@ -72,6 +73,7 @@ public final class ExtensionXPCClient: NSObject {
     private var incidentRevision: UInt64?
     private var securitySettingsRevision: UInt64?
     private var pendingSecuritySettingsPayload: Data?
+    private var pendingSecuritySettingsAuthorization: Data?
     private var securitySettingsWriteInFlight = false
     private var pendingIncidentPayload: Data?
     private var incidentWriteInFlight = false
@@ -239,8 +241,11 @@ public final class ExtensionXPCClient: NSObject {
         return record.payload
     }
 
-    public func persistSecuritySettings(_ payload: Data) {
+    public func persistSecuritySettings(_ payload: Data, authorizationExternalForm: Data? = nil) {
         pendingSecuritySettingsPayload = payload
+        if let authorizationExternalForm {
+            pendingSecuritySettingsAuthorization = authorizationExternalForm
+        }
         flushSecuritySettingsIfNeeded()
     }
 
@@ -250,8 +255,14 @@ public final class ExtensionXPCClient: NSObject {
               let revision = securitySettingsRevision,
               let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
         pendingSecuritySettingsPayload = nil
+        let authorization = pendingSecuritySettingsAuthorization
+        pendingSecuritySettingsAuthorization = nil
         securitySettingsWriteInFlight = true
-        proxy.replaceSecuritySettings(payload, expectedRevision: revision) { [weak self] accepted, data in
+        proxy.replaceSecuritySettings(
+            payload,
+            expectedRevision: revision,
+            authorizationExternalForm: authorization
+        ) { [weak self] accepted, data in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.securitySettingsWriteInFlight = false
@@ -260,10 +271,7 @@ public final class ExtensionXPCClient: NSObject {
                 }
                 self.securitySettingsRevision = record.revision
                 if !accepted {
-                    Self.logger.warning("Security settings write lost a revision race; authoritative state retained")
-                    if self.pendingSecuritySettingsPayload == nil {
-                        self.pendingSecuritySettingsPayload = payload
-                    }
+                    Self.logger.warning("Security settings write was rejected; authoritative state retained")
                 }
                 self.flushSecuritySettingsIfNeeded()
             }
@@ -385,14 +393,47 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    func authoriseIncidentVerdict(id: UUID, action: IncidentActionKind) async -> Bool {
+    func validateIncidentVerdictTarget(id: UUID, action: IncidentActionKind) async -> Bool {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return false }
+        let authorization = action == .alwaysAllowed
+            ? requestProtectionModificationAuthorization()
+            : nil
+        if action == .alwaysAllowed && authorization == nil { return false }
         return await withCheckedContinuation { continuation in
-            proxy.authoriseIncidentVerdict(
+            proxy.validateIncidentVerdictTarget(
                 incidentID: id.uuidString,
                 action: action.rawValue,
+                authorizationExternalForm: authorization,
                 reply: { continuation.resume(returning: $0) }
             )
+        }
+    }
+
+    /// Requests explicit user presence for an action that weakens protection.
+    /// The returned external form is never trusted by the app; the extension
+    /// reconstructs and verifies the right for the individual XPC call.
+    public func requestProtectionModificationAuthorization() -> Data? {
+        var authorization: AuthorizationRef?
+        guard AuthorizationCreate(nil, nil, [], &authorization) == errAuthorizationSuccess,
+              let authorization else { return nil }
+        defer { AuthorizationFree(authorization, []) }
+        return "com.ehsanazish.nick.modify-protection".withCString { name in
+            var item = AuthorizationItem(name: name, valueLength: 0, value: nil, flags: 0)
+            return withUnsafeMutablePointer(to: &item) { pointer in
+                var rights = AuthorizationRights(count: 1, items: pointer)
+                guard AuthorizationCopyRights(
+                    authorization,
+                    &rights,
+                    nil,
+                    [.interactionAllowed, .extendRights, .preAuthorize],
+                    nil
+                ) == errAuthorizationSuccess else { return nil }
+                var external = AuthorizationExternalForm()
+                guard AuthorizationMakeExternalForm(authorization, &external) == errAuthorizationSuccess else {
+                    return nil
+                }
+                return withUnsafeBytes(of: external) { Data($0) }
+            }
         }
     }
 
@@ -561,7 +602,14 @@ public final class ExtensionXPCClient: NSObject {
             completion(false)
             return
         }
-        proxy.acknowledgeFIMViolation(id: id.uuidString) { [weak self] accepted in
+        guard let authorization = requestProtectionModificationAuthorization() else {
+            completion(false)
+            return
+        }
+        proxy.acknowledgeFIMViolation(
+            id: id.uuidString,
+            authorizationExternalForm: authorization
+        ) { [weak self] accepted in
             Task { @MainActor [weak self] in
                 if accepted {
                     self?.integrityViolations.removeAll { $0.id == id }

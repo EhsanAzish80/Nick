@@ -111,4 +111,36 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         XCTAssertFalse(store.migrate(payload: payload).accepted)
         XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("incidents.json").path))
     }
+
+    func test_incidentVerdictRequiresAnExistingIncident() {
+        let existing = UUID()
+        XCTAssertTrue(IncidentVerdictValidationPolicy.accepts(
+            incidentID: existing.uuidString,
+            action: "reviewed",
+            existingIncidentIDs: [existing.uuidString],
+            hasProtectionAuthorization: false
+        ))
+        XCTAssertFalse(IncidentVerdictValidationPolicy.accepts(
+            incidentID: UUID().uuidString,
+            action: "reviewed",
+            existingIncidentIDs: [existing.uuidString],
+            hasProtectionAuthorization: true
+        ))
+    }
+
+    func test_securityReducingVerdictRequiresProtectionAuthorization() {
+        let existing = UUID()
+        XCTAssertFalse(IncidentVerdictValidationPolicy.accepts(
+            incidentID: existing.uuidString,
+            action: "alwaysAllowed",
+            existingIncidentIDs: [existing.uuidString],
+            hasProtectionAuthorization: false
+        ))
+        XCTAssertTrue(IncidentVerdictValidationPolicy.accepts(
+            incidentID: existing.uuidString,
+            action: "alwaysAllowed",
+            existingIncidentIDs: [existing.uuidString],
+            hasProtectionAuthorization: true
+        ))
+    }
 }
