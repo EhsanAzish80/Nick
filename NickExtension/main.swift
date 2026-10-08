@@ -230,6 +230,23 @@ ESXPCServer.ransomwareDetectorRef = ransomwareDetector
 // Expose quarantine operations to the app's Quarantine view.
 ESXPCServer.quarantineManagerRef = quarantineManager
 ESXPCServer.fileScannerRef = fileScanner
+quarantineManager.onReviewedFileSwap = { path in
+    let event = ESEvent(
+        eventType: .notifyWrite,
+        processPath: "",
+        pid: 0,
+        parentPid: 0,
+        filePath: path,
+        decision: .notApplicable,
+        threat: .init(
+            threatName: "Quarantine target changed during review",
+            threatFamily: "tamper"
+        )
+    )
+    if let data = try? JSONEncoder().encode(event) {
+        xpcServer.sendThreatToApp(data)
+    }
+}
 
 // Start XPC listener first — container app can connect as soon as the extension launches
 xpcServer.start()
