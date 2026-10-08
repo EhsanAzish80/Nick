@@ -596,7 +596,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: "nickPersistedAlerts"))
     }
 
-    func test_userVerdictIsRecordedOnlyAfterAuthenticatedAuthorisation() async throws {
+    func test_userVerdictIsRecordedOnlyAfterExtensionAcceptsTarget() async throws {
         let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [],
             dismissalTombstones: [],
@@ -605,8 +605,8 @@ final class ThreatCorrelatorTests: XCTestCase {
         let deniedEngine = SecurityEngine()
         try deniedEngine.installPrivilegedIncidentStore(
             payload: payload,
-            persistence: { _ in },
-            authorizer: { _, _ in false },
+            persistence: { _, _ in },
+            authorizer: { _, _ in nil },
             removeLegacyState: false
         )
         let deniedAlert = makeAlert(signal: makeSignal(
@@ -622,8 +622,10 @@ final class ThreatCorrelatorTests: XCTestCase {
         let allowedEngine = SecurityEngine()
         try allowedEngine.installPrivilegedIncidentStore(
             payload: payload,
-            persistence: { _ in },
-            authorizer: { _, action in action == .hidden },
+            persistence: { _, _ in },
+            authorizer: { _, action in
+                action == .hidden ? IncidentActionApproval(authorizationExternalForm: nil) : nil
+            },
             removeLegacyState: false
         )
         let allowedAlert = makeAlert(signal: makeSignal(

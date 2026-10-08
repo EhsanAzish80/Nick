@@ -50,6 +50,80 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
     }
 }
 
+enum IncidentVerdictValidationPolicy {
+    private static let allowedActions: Set<String> = [
+        "reviewed", "hidden", "dismissed", "resolved", "allowedOnce", "alwaysAllowed"
+    ]
+
+    static func accepts(
+        incidentID: String,
+        action: String,
+        existingIncidentIDs: Set<String>,
+        hasProtectionAuthorization: Bool
+    ) -> Bool {
+        guard UUID(uuidString: incidentID) != nil,
+              allowedActions.contains(action),
+              existingIncidentIDs.contains(incidentID) else { return false }
+        let protectionReducingActions: Set<String> = ["dismissed", "allowedOnce", "alwaysAllowed"]
+        return !protectionReducingActions.contains(action) || hasProtectionAuthorization
+    }
+}
+
+enum ProtectionAuthorizationRightPolicy {
+    static func isExpected(_ dictionary: [String: Any]) -> Bool {
+        let value = dictionary["rule"]
+        let rules = (value as? [String]) ?? (value as? String).map { [$0] } ?? []
+        return dictionary["class"] as? String == "rule"
+            && rules == ["authenticate-session-owner-or-admin"]
+            && (dictionary["timeout"] as? NSNumber)?.intValue == 120
+            && (dictionary["shared"] as? NSNumber)?.boolValue == false
+    }
+}
+
+enum IncidentStoreWritePolicy {
+    static func requiresAuthorization(previousPayload: Data, proposedPayload: Data) -> Bool {
+        guard let old = try? JSONSerialization.jsonObject(with: previousPayload) as? [String: Any],
+              let new = try? JSONSerialization.jsonObject(with: proposedPayload) as? [String: Any] else {
+            return true
+        }
+        let oldIncidents = (old["incidents"] as? [[String: Any]]) ?? []
+        let newIncidents = (new["incidents"] as? [[String: Any]]) ?? []
+        let oldByID = Dictionary(uniqueKeysWithValues: oldIncidents.compactMap { incident -> (String, [String: Any])? in
+            guard let id = incident["id"] as? String else { return nil }
+            return (id, incident)
+        })
+        func protectedActions(_ incident: [String: Any]) -> Set<String> {
+            let reducing: Set<String> = ["dismissed", "allowedOnce", "alwaysAllowed"]
+            let actions = (incident["actions"] as? [[String: Any]]) ?? []
+            return Set(actions.compactMap { $0["action"] as? String }).intersection(reducing)
+        }
+        for incident in newIncidents {
+            guard let id = incident["id"] as? String else { return true }
+            guard let previous = oldByID[id] else {
+                if incident["state"] as? String == "allowed"
+                    || incident["permanentlyDismissed"] as? Bool == true
+                    || !protectedActions(incident).isEmpty {
+                    return true
+                }
+                continue
+            }
+            if incident["state"] as? String == "allowed",
+               previous["state"] as? String != "allowed" { return true }
+            if incident["permanentlyDismissed"] as? Bool == true,
+               previous["permanentlyDismissed"] as? Bool != true { return true }
+            if !protectedActions(incident).isSubset(of: protectedActions(previous)) { return true }
+        }
+        func tombstoneKeys(_ object: [String: Any]) -> Set<String> {
+            let values = (object["dismissalTombstones"] as? [[String: Any]]) ?? []
+            return Set(values.compactMap { value in
+                guard let incidentKey = value["incidentKey"] as? String else { return nil }
+                return incidentKey + "|" + (value["alertDeduplicationKey"] as? String ?? "")
+            })
+        }
+        return !tombstoneKeys(new).isSubset(of: tombstoneKeys(old))
+    }
+}
+
 // MARK: - NickExtensionXPCProtocol (Container App → Extension)
 
 /// XPC protocol exposed **by the extension** to the container app.
@@ -78,7 +152,11 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
 
     /// Clears a stale cached denial and permits the next authorization for the
     /// selected file. This is deliberately one-shot.
-    func requestAllowFileOnce(path: String, reply: @escaping (Bool) -> Void)
+    func requestAllowFileOnce(
+        path: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
 
     /// Promotes a reviewed heuristic finding to an explicit user block.
     func requestBlockReviewedFile(path: String, reply: @escaping (Bool) -> Void)
@@ -100,6 +178,7 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
     func replaceIncidentStore(
         _ payload: Data,
         expectedRevision: UInt64,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool, Data) -> Void
     )
 
@@ -110,13 +189,16 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
     func replaceSecuritySettings(
         _ payload: Data,
         expectedRevision: UInt64,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool, Data) -> Void
     )
 
-    /// Authenticates a UI verdict before the app records actor `.user`.
-    func authoriseIncidentVerdict(
+    /// Validates that a verdict targets an incident in the privileged store.
+    /// Security-reducing verdicts additionally require a user-authorized right.
+    func validateIncidentVerdictTarget(
         incidentID: String,
         action: String,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool) -> Void
     )
 
@@ -131,16 +213,32 @@ public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
 
     /// Accepts one durable FIM violation and advances its baseline only when
     /// the current file still matches the reviewed evidence.
-    func acknowledgeFIMViolation(id: String, reply: @escaping (Bool) -> Void)
+    func acknowledgeFIMViolation(
+        id: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
 
     /// Instructs the extension to deploy ransomware canary files into the
     /// user's common directories (Desktop, Documents, Downloads, Pictures).
     /// Useful when the user manually enables the Ransomware Shield from Smart Scan.
     func requestDeployCanaries(reply: @escaping (Bool) -> Void)
 
-    func requestRestoreQuarantinedFile(id: String, reply: @escaping (Bool) -> Void)
+    func requestRestoreQuarantinedFile(
+        id: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
 
     func requestDeleteQuarantinedFile(id: String, reply: @escaping (Bool) -> Void)
+
+#if DEBUG
+    /// Test hook: verifies that a form which was never granted Nick's right is refused.
+    func debugValidateProtectionAuthorization(
+        authorizationExternalForm: Data,
+        reply: @escaping (Bool) -> Void
+    )
+#endif
 }
 
 // MARK: - NickAppXPCProtocol (Extension → Container App)

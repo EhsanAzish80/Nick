@@ -111,4 +111,130 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         XCTAssertFalse(store.migrate(payload: payload).accepted)
         XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("incidents.json").path))
     }
+
+    func test_incidentVerdictRequiresAnExistingIncident() {
+        let existing = UUID()
+        XCTAssertTrue(IncidentVerdictValidationPolicy.accepts(
+            incidentID: existing.uuidString,
+            action: "reviewed",
+            existingIncidentIDs: [existing.uuidString],
+            hasProtectionAuthorization: false
+        ))
+        XCTAssertFalse(IncidentVerdictValidationPolicy.accepts(
+            incidentID: UUID().uuidString,
+            action: "reviewed",
+            existingIncidentIDs: [existing.uuidString],
+            hasProtectionAuthorization: true
+        ))
+    }
+
+    func test_securityReducingVerdictRequiresProtectionAuthorization() {
+        let existing = UUID()
+        for action in ["dismissed", "allowedOnce", "alwaysAllowed"] {
+            XCTAssertFalse(IncidentVerdictValidationPolicy.accepts(
+                incidentID: existing.uuidString,
+                action: action,
+                existingIncidentIDs: [existing.uuidString],
+                hasProtectionAuthorization: false
+            ))
+            XCTAssertTrue(IncidentVerdictValidationPolicy.accepts(
+                incidentID: existing.uuidString,
+                action: action,
+                existingIncidentIDs: [existing.uuidString],
+                hasProtectionAuthorization: true
+            ))
+        }
+    }
+
+    func test_authorizationRightPolicyRejectsWeakerDefinitions() {
+        let expected: [String: Any] = [
+            "class": "rule",
+            "rule": ["authenticate-session-owner-or-admin"],
+            "timeout": 120,
+            "shared": false
+        ]
+        XCTAssertTrue(ProtectionAuthorizationRightPolicy.isExpected(expected))
+
+        var shared = expected
+        shared["shared"] = true
+        XCTAssertFalse(ProtectionAuthorizationRightPolicy.isExpected(shared))
+
+        var longerTimeout = expected
+        longerTimeout["timeout"] = 300
+        XCTAssertFalse(ProtectionAuthorizationRightPolicy.isExpected(longerTimeout))
+
+        var weakerRule = expected
+        weakerRule["rule"] = ["allow"]
+        XCTAssertFalse(ProtectionAuthorizationRightPolicy.isExpected(weakerRule))
+    }
+
+    func test_incidentStoreRequiresAuthorizationForNewReducingStateOrAction() throws {
+        let id = UUID().uuidString
+        let original = try payload(incidents: [["id": id, "state": "new", "actions": []]])
+
+        let allowed = try payload(incidents: [["id": id, "state": "allowed", "actions": []]])
+        XCTAssertTrue(IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: original,
+            proposedPayload: allowed
+        ))
+
+        for action in ["dismissed", "allowedOnce", "alwaysAllowed"] {
+            let changed = try payload(incidents: [[
+                "id": id,
+                "state": "new",
+                "actions": [["action": action]]
+            ]])
+            XCTAssertTrue(IncidentStoreWritePolicy.requiresAuthorization(
+                previousPayload: original,
+                proposedPayload: changed
+            ))
+        }
+
+        let reviewed = try payload(incidents: [[
+            "id": id,
+            "state": "reviewed",
+            "actions": [["action": "reviewed"]]
+        ]])
+        XCTAssertFalse(IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: original,
+            proposedPayload: reviewed
+        ))
+    }
+
+    func test_incidentStoreRequiresAuthorizationForNewProtectedIncidentAndTombstone() throws {
+        let original = try payload(incidents: [])
+        let newAllowed = try payload(incidents: [[
+            "id": UUID().uuidString,
+            "state": "allowed",
+            "actions": [["action": "alwaysAllowed"]]
+        ]])
+        XCTAssertTrue(IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: original,
+            proposedPayload: newAllowed
+        ))
+
+        let tombstone = try payload(
+            incidents: [],
+            tombstones: [[
+                "incidentKey": "rule|actor",
+                "alertDeduplicationKey": "dedupe"
+            ]]
+        )
+        XCTAssertTrue(IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: original,
+            proposedPayload: tombstone
+        ))
+    }
+
+    private func payload(
+        incidents: [[String: Any]],
+        tombstones: [[String: Any]] = []
+    ) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1,
+            "incidents": incidents,
+            "dismissalTombstones": tombstones,
+            "expectedCooldowns": [:]
+        ])
+    }
 }

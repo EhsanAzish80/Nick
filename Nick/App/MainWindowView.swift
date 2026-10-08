@@ -1379,6 +1379,7 @@ enum ThreatVerdict: String, Sendable {
 struct ScannerDetailView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
 
     // MARK: - Deep scan state
     @State private var onlyOnPower  = false
@@ -1732,6 +1733,8 @@ struct ScannerDetailView: View {
     }
 
     private func addIgnored(_ path: String) {
+        guard let authorization = xpcClient.requestProtectionModificationAuthorization() else { return }
+        engine.authorizeNextSecuritySettingsWrite(with: authorization)
         var paths = ignoredPaths
         paths.insert(DeepScanner.canonicalPath(path))
         engine.deepScanIgnoredPaths = paths

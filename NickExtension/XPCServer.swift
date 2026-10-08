@@ -4,6 +4,69 @@
 
 import Foundation
 import os
+import Security
+
+private enum ProtectionAuthorization {
+    static let rightName = "com.ehsanazish.nick.modify-protection"
+    enum RightState { case valid, installed, repaired, failed }
+
+    static func ensureRight() -> RightState {
+        var definition: CFDictionary?
+        let getStatus = rightName.withCString { AuthorizationRightGet($0, &definition) }
+        if getStatus == errAuthorizationSuccess, let dictionary = definition as? [String: Any] {
+            if ProtectionAuthorizationRightPolicy.isExpected(dictionary) { return .valid }
+            return registerRight() ? .repaired : .failed
+        }
+        return registerRight() ? .installed : .failed
+    }
+
+    private static func registerRight() -> Bool {
+        var authorization: AuthorizationRef?
+        guard AuthorizationCreate(nil, nil, [], &authorization) == errAuthorizationSuccess,
+              let authorization else { return false }
+        defer { AuthorizationFree(authorization, []) }
+        let rule: [String: Any] = [
+            "class": "rule",
+            "rule": ["authenticate-session-owner-or-admin"],
+            "timeout": 120,
+            "shared": false
+        ]
+        let status = AuthorizationRightSet(
+            authorization,
+            rightName,
+            rule as CFTypeRef,
+            "Nick needs approval to reduce protection settings." as CFString,
+            nil,
+            nil
+        )
+        return status == errAuthorizationSuccess
+    }
+
+    static func verify(_ data: Data?) -> Bool {
+        guard let data, data.count == MemoryLayout<AuthorizationExternalForm>.size else {
+            return false
+        }
+        var external = AuthorizationExternalForm()
+        _ = withUnsafeMutableBytes(of: &external) { data.copyBytes(to: $0) }
+        var authorization: AuthorizationRef?
+        guard AuthorizationCreateFromExternalForm(&external, &authorization) == errAuthorizationSuccess,
+              let authorization else { return false }
+        defer { AuthorizationFree(authorization, []) }
+        return rightName.withCString { name in
+            var item = AuthorizationItem(name: name, valueLength: 0, value: nil, flags: 0)
+            return withUnsafeMutablePointer(to: &item) { pointer in
+                var rights = AuthorizationRights(count: 1, items: pointer)
+                return AuthorizationCopyRights(
+                    authorization,
+                    &rights,
+                    nil,
+                    [.extendRights],
+                    nil
+                ) == errAuthorizationSuccess
+            }
+        }
+    }
+}
 
 // MARK: - ESXPCServer
 
@@ -65,6 +128,15 @@ final class ESXPCServer: NSObject {
         self.listener = configuredListener
         self.listenerIsConfigured = configured
         super.init()
+        let rightState = ProtectionAuthorization.ensureRight()
+        switch rightState {
+        case .failed:
+            Self.logger.fault("Could not register the protection-modification authorization right")
+        case .repaired:
+            reportAuthorizationRuleTamper()
+        case .valid, .installed:
+            break
+        }
         listener.delegate = self
     }
 
@@ -82,6 +154,37 @@ final class ESXPCServer: NSObject {
 
     var listenerConfigurationStatus: String {
         listenerIsConfigured ? "configured" : "missing"
+    }
+
+    private func verifyProtectionAuthorization(_ data: Data?) -> Bool {
+        switch ProtectionAuthorization.ensureRight() {
+        case .repaired:
+            reportAuthorizationRuleTamper()
+        case .failed:
+            return false
+        case .valid, .installed:
+            break
+        }
+        return ProtectionAuthorization.verify(data)
+    }
+
+    private func reportAuthorizationRuleTamper() {
+        Self.logger.fault("Protection-modification authorization rule was changed and has been restored")
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "",
+            pid: 0,
+            parentPid: 0,
+            filePath: nil,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: "Nick authorization policy tampering detected",
+                threatFamily: "tamper"
+            )
+        )
+        if let data = try? JSONEncoder().encode(event) {
+            sendThreatToApp(data)
+        }
     }
 
     // MARK: - Outbound: Extension → Container App
@@ -270,8 +373,14 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     func replaceSecuritySettings(
         _ payload: Data,
         expectedRevision: UInt64,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool, Data) -> Void
     ) {
+        if securitySettingsReduction(from: settingsStore.load(), to: payload),
+           !verifyProtectionAuthorization(authorizationExternalForm) {
+            reply(false, settingsStore.load())
+            return
+        }
         let result = settingsStore.replace(payload: payload, expectedRevision: expectedRevision)
         reply(result.accepted, result.record)
     }
@@ -284,21 +393,30 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     func replaceIncidentStore(
         _ payload: Data,
         expectedRevision: UInt64,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool, Data) -> Void
     ) {
+        if incidentStoreReduction(from: incidentStore.load(), to: payload),
+           !verifyProtectionAuthorization(authorizationExternalForm) {
+            reply(false, incidentStore.load())
+            return
+        }
         let result = incidentStore.replace(payload: payload, expectedRevision: expectedRevision)
         reply(result.accepted, result.record)
     }
 
-    func authoriseIncidentVerdict(
+    func validateIncidentVerdictTarget(
         incidentID: String,
         action: String,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool) -> Void
     ) {
-        let allowedActions: Set<String> = [
-            "reviewed", "hidden", "dismissed", "resolved", "allowedOnce", "alwaysAllowed"
-        ]
-        reply(UUID(uuidString: incidentID) != nil && allowedActions.contains(action))
+        reply(IncidentVerdictValidationPolicy.accepts(
+            incidentID: incidentID,
+            action: action,
+            existingIncidentIDs: incidentIDs(),
+            hasProtectionAuthorization: verifyProtectionAuthorization(authorizationExternalForm)
+        ))
     }
 
     func requestQuarantineFile(
@@ -353,7 +471,15 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         }
     }
 
-    func requestAllowFileOnce(path: String, reply: @escaping (Bool) -> Void) {
+    func requestAllowFileOnce(
+        path: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    ) {
+        guard verifyProtectionAuthorization(authorizationExternalForm) else {
+            reply(false)
+            return
+        }
         guard let scanner = ESXPCServer.fileScannerRef else {
             reply(false)
             return
@@ -430,15 +556,68 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         reply(data)
     }
 
-    func acknowledgeFIMViolation(id: String, reply: @escaping (Bool) -> Void) {
+    func acknowledgeFIMViolation(
+        id: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    ) {
         guard let id = UUID(uuidString: id),
-              let monitor = ESXPCServer.fimMonitorRef else {
+              let monitor = ESXPCServer.fimMonitorRef,
+              verifyProtectionAuthorization(authorizationExternalForm) else {
             reply(false)
             return
         }
         DispatchQueue.global(qos: .utility).async {
             reply(monitor.acknowledgeViolation(id: id))
         }
+    }
+
+    private func incidentIDs() -> Set<String> {
+        guard let record = try? JSONDecoder().decode(
+            PrivilegedIncidentStoreRecord.self,
+            from: incidentStore.load()
+        ),
+        let object = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
+        let incidents = object["incidents"] as? [[String: Any]] else { return [] }
+        return Set(incidents.compactMap { $0["id"] as? String })
+    }
+
+    private func securitySettingsReduction(from encodedRecord: Data, to payload: Data) -> Bool {
+        guard let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: encodedRecord),
+              let old = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
+              let new = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+            return true
+        }
+        func strings(_ key: String, _ object: [String: Any]) -> Set<String> {
+            Set((object[key] as? [String]) ?? [])
+        }
+        func objectFingerprints(_ key: String, _ object: [String: Any]) -> Set<String> {
+            guard let values = object[key] as? [Any] else { return [] }
+            return Set(values.compactMap { value in
+                guard JSONSerialization.isValidJSONObject(value),
+                      let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+                else { return nil }
+                return String(decoding: data, as: UTF8.self)
+            })
+        }
+        if !strings("trustedNames", new).isSubset(of: strings("trustedNames", old)) { return true }
+        if !strings("ignoredPaths", new).isSubset(of: strings("ignoredPaths", old)) { return true }
+        if !objectFingerprints("trustedEntries", new).isSubset(of: objectFingerprints("trustedEntries", old)) { return true }
+        if !objectFingerprints("suppressionRules", new).isSubset(of: objectFingerprints("suppressionRules", old)) { return true }
+        let oldThreshold = old["notificationThresholdRaw"] as? Int ?? 3
+        let newThreshold = new["notificationThresholdRaw"] as? Int ?? 3
+        return newThreshold > oldThreshold
+    }
+
+    private func incidentStoreReduction(from encodedRecord: Data, to payload: Data) -> Bool {
+        guard let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: encodedRecord),
+              record.schemaVersion == PrivilegedIncidentStoreRecord.currentSchemaVersion else {
+            return true
+        }
+        return IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: record.payload,
+            proposedPayload: payload
+        )
     }
 
     func requestDeployCanaries(reply: @escaping (Bool) -> Void) {
@@ -454,8 +633,13 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
     func requestRestoreQuarantinedFile(
         id: String,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool) -> Void
     ) {
+        guard verifyProtectionAuthorization(authorizationExternalForm) else {
+            reply(false)
+            return
+        }
         guard let id = UUID(uuidString: id),
               let manager = ESXPCServer.quarantineManagerRef else {
             reply(false)
@@ -465,6 +649,15 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             reply(manager.restore(id: id))
         }
     }
+
+#if DEBUG
+    func debugValidateProtectionAuthorization(
+        authorizationExternalForm: Data,
+        reply: @escaping (Bool) -> Void
+    ) {
+        reply(verifyProtectionAuthorization(authorizationExternalForm))
+    }
+#endif
 
     func requestDeleteQuarantinedFile(
         id: String,

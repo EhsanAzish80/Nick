@@ -85,7 +85,7 @@ final class QuarantineRecordCompatibilityTests: XCTestCase {
         XCTAssertEqual(QuarantineRestorePolicy.restoredPermissions(nil), 0o600)
     }
 
-    func test_quarantineMoveRequiresReviewedIdentityAndHashBeforeAndAfterMove() throws {
+    func test_quarantineMoveRequiresReviewedIdentityAndHashBeforeMove() throws {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("NickQuarantineIdentity-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: file) }

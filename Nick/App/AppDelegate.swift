@@ -151,12 +151,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     do {
                         try self.engine.installPrivilegedIncidentStore(
                             payload: record.payload,
-                            persistence: { [weak self] payload in
-                                self?.xpcClient.persistIncidentStore(payload)
+                            persistence: { [weak self] payload, authorization in
+                                self?.xpcClient.persistIncidentStore(
+                                    payload,
+                                    authorizationExternalForm: authorization
+                                )
                             },
                             authorizer: { [weak self] id, action in
-                                guard let self else { return false }
-                                return await self.xpcClient.authoriseIncidentVerdict(id: id, action: action)
+                                guard let self else { return nil }
+                                return await self.xpcClient.validateIncidentVerdictTarget(id: id, action: action)
                             },
                             removeLegacyState: true
                         )
@@ -175,8 +178,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         do {
                             try self.engine.installPrivilegedSecuritySettings(
                                 payload: privilegedSettings,
-                                persistence: { [weak self] payload in
-                                    self?.xpcClient.persistSecuritySettings(payload)
+                                persistence: { [weak self] payload, authorization in
+                                    self?.xpcClient.persistSecuritySettings(
+                                        payload,
+                                        authorizationExternalForm: authorization
+                                    )
                                 }
                             )
                         } catch {

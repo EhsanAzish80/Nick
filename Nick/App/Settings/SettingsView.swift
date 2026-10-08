@@ -30,6 +30,7 @@ struct SettingsView: View {
 
     @Environment(SecurityEngine.self) private var engine
     @Environment(NetworkProtectionManager.self) private var networkProtection
+    @Environment(ExtensionXPCClient.self) private var xpcClient
 
     // MARK: App Storage
 
@@ -60,6 +61,9 @@ struct SettingsView: View {
     }()
     @State private var newProcessName: String = ""
     @State private var trustedProcessStatus: String?
+#if DEBUG
+    @State private var authorizationHarnessStatus: String?
+#endif
     @State private var newAllowedDomain: String = ""
     @State private var newAllowedApp: String = ""
     @State private var showRemoveProcessConfirmation = false
@@ -235,7 +239,17 @@ struct SettingsView: View {
             ) {
                 Picker("", selection: Binding(
                     get: { engine.notificationThreshold.rawValue },
-                    set: { engine.notificationThreshold = SignalSeverity(rawValue: $0) ?? .high }
+                    set: { newValue in
+                        guard let severity = SignalSeverity(rawValue: newValue) else { return }
+                        // Raising the threshold hides more notifications and is
+                        // therefore a protection-reducing change.
+                        if severity > engine.notificationThreshold {
+                            guard let authorization = xpcClient.requestProtectionModificationAuthorization()
+                            else { return }
+                            engine.authorizeNextSecuritySettingsWrite(with: authorization)
+                        }
+                        engine.notificationThreshold = severity
+                    }
                 )) {
                     ForEach(SignalSeverity.allCases.filter { $0 != .info }, id: \.rawValue) { sev in
                         Text(sev.displayName).tag(sev.rawValue)
@@ -629,8 +643,8 @@ struct SettingsView: View {
                     .background(Color.green, in: RoundedRectangle(cornerRadius: 6))
                 TextField("Process name (e.g. MyApp)", text: $newProcessName)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { addProcess() }
-                Button("Add", action: addProcess)
+                    .onSubmit { authorizeAndAddProcess() }
+                Button("Add") { authorizeAndAddProcess() }
                     .disabled(newProcessName.trimmingCharacters(in: .whitespaces).isEmpty)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -653,11 +667,23 @@ struct SettingsView: View {
                 Button("Remove", role: .destructive) {
                     if let n = nameToRemove { removeProcess(n) }
                 }
-               
-                Button("Cancel", role: .cancel) {
-                     // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
+                Button("Cancel", role: .cancel) {}
+            }
+#if DEBUG
+            Button("Test Refused Authorization Form") {
+                xpcClient.debugSendNeverAuthorizedProtectionCall { accepted in
+                    authorizationHarnessStatus = accepted
+                        ? "FAILED: the unapproved form was accepted"
+                        : "Passed: the unapproved form was refused"
                 }
             }
+            .buttonStyle(.bordered)
+            if let authorizationHarnessStatus {
+                Text(authorizationHarnessStatus)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(authorizationHarnessStatus.hasPrefix("Passed") ? .green : .red)
+            }
+#endif
         } header: {
             Text("Trusted Processes")
         } footer: {
@@ -790,7 +816,7 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: .infinity)
 
-                    Button("Add Rule") { addSuppressionRule() }
+                    Button("Add Rule") { authorizeAndAddSuppressionRule() }
                         .disabled(newSuppressionValue.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -813,9 +839,11 @@ struct SettingsView: View {
         }
     }
 
-    private func addSuppressionRule() {
+    private func authorizeAndAddSuppressionRule() {
+        guard let authorization = xpcClient.requestProtectionModificationAuthorization() else { return }
         let trimmed = newSuppressionValue.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        engine.authorizeNextSecuritySettingsWrite(with: authorization)
         let rule = SuppressionRule(
             type: newSuppressionType,
             value: trimmed,
@@ -1096,7 +1124,7 @@ struct SettingsView: View {
         }
     }
 
-    private func addProcess() {
+    private func authorizeAndAddProcess() {
         let trimmed = newProcessName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         let matches = engine.processes.filter {
@@ -1114,6 +1142,11 @@ struct SettingsView: View {
             trustedProcessStatus = reason
             return
         }
+        guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
+            trustedProcessStatus = "Approval was cancelled. Settings were not changed."
+            return
+        }
+        engine.authorizeNextSecuritySettingsWrite(with: authorization)
         @Bindable var bindableEngine = engine
         guard bindableEngine.trustedProcessList.addUserTrusted(process) else {
             trustedProcessStatus = "Nick could not approve this process."
@@ -1125,7 +1158,7 @@ struct SettingsView: View {
 
     private func reapproveLegacyProcess(_ name: String) {
         newProcessName = name
-        addProcess()
+        authorizeAndAddProcess()
     }
 
     private func addAllowedDomain() {

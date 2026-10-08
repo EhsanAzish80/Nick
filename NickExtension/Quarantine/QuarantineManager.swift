@@ -21,6 +21,10 @@ import os
 /// - Persisted in `QuarantineDatabase` for display and restore operations
 final class QuarantineManager {
 
+    /// Raised when the path was replaced after review but before the move.
+    /// The extension turns this into a durable high-severity incident.
+    var onReviewedFileSwap: ((String) -> Void)?
+
     // MARK: - Private
 
     private static let logger = Logger(
@@ -130,17 +134,14 @@ final class QuarantineManager {
             try fm.moveItem(atPath: canonicalOriginalPath, toPath: quarantinedPath)
 
             // The path can be replaced between scan and move. Bind the move to
-            // the file opened above, then verify both identity and content at
-            // the vault destination before accepting it as quarantined.
+            // the file opened above, then verify its identity at the vault
+            // destination before accepting it as quarantined. Re-hashing the
+            // still-open source descriptor would only hash the reviewed inode
+            // again and cannot establish what the pathname move selected.
             var quarantinedStat = stat()
             guard lstat(quarantinedPath, &quarantinedStat) == 0,
-                  let quarantinedHash = sha256(fileDescriptor: sourceFD),
-                  QuarantineMovePolicy.matchesReviewedFile(
-                      reviewedIdentity: reviewedIdentity,
-                      reviewedHash: normalizedHash,
-                      currentIdentity: FileIdentity(stat: quarantinedStat),
-                      currentHash: quarantinedHash
-                  ) else {
+                  reviewedIdentity == FileIdentity(stat: quarantinedStat) else {
+                onReviewedFileSwap?(canonicalOriginalPath)
                 throw CocoaError(.fileWriteFileExists)
             }
 
