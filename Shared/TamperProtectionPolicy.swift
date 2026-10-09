@@ -2,6 +2,7 @@
 // Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
 // Licensed under AGPL-3.0. See LICENSE for details.
 
+import Darwin
 import Foundation
 
 struct TamperActorIdentity: Sendable, Equatable {
@@ -16,14 +17,22 @@ struct TamperActorIdentity: Sendable, Equatable {
     }
 }
 
+struct TamperConsoleUser: Sendable, Equatable {
+    let uid: uid_t
+    let homeDirectory: String
+}
+
 /// Pure, testable authorization policy for Nick's protected installation paths.
 enum TamperProtectionPolicy {
     static let nickTeamID = "UXGW5V3BY6"
 
-    static func isTrustedMaintenanceActor(_ identity: TamperActorIdentity) -> Bool {
+    static func isTrustedMaintenanceActor(
+        _ identity: TamperActorIdentity,
+        nickIdentityValidated: Bool
+    ) -> Bool {
         guard identity.isValidIdentitySignature, let signingID = identity.signingID else { return false }
         if identity.teamID == nickTeamID {
-            return nickMaintenanceSigningIDs.contains(signingID)
+            return nickIdentityValidated && nickMaintenanceSigningIDs.contains(signingID)
         }
         return identity.isPlatformBinary && appleInstallerSigningIDs.contains(signingID)
     }
@@ -31,23 +40,33 @@ enum TamperProtectionPolicy {
     static func isDocumentedFinderUninstall(
         sourcePath: String,
         destinationPath: String,
-        identity: TamperActorIdentity
+        identity: TamperActorIdentity,
+        consoleUser: TamperConsoleUser?
     ) -> Bool {
         guard identity.isValidIdentitySignature,
               identity.isPlatformBinary,
               identity.signingID == "com.apple.finder",
-              standardized(sourcePath) == "/Applications/Nick.app"
+              standardized(sourcePath) == "/Applications/Nick.app",
+              let consoleUser
         else { return false }
         let destination = standardized(destinationPath)
-        return destination.hasSuffix("/.Trash/Nick.app")
-            || destination.range(of: #"/\.Trash/Nick(?: [0-9]+)?\.app$"#, options: .regularExpression) != nil
+        let homeTrash = standardized(consoleUser.homeDirectory) + "/.Trash"
+        let homePattern = "^" + NSRegularExpression.escapedPattern(for: homeTrash)
+            + #"/Nick(?: [0-9]+)?\.app$"#
+        if destination.range(of: homePattern, options: .regularExpression) != nil {
+            return true
+        }
+        let volumePattern = #"^/Volumes/[^/]+/\.Trashes/"#
+            + String(consoleUser.uid)
+            + #"/Nick(?: [0-9]+)?\.app$"#
+        return destination.range(of: volumePattern, options: .regularExpression) != nil
     }
 
     private static func standardized(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
     }
 
-    private static let nickMaintenanceSigningIDs: Set<String> = [
+    static let nickMaintenanceSigningIDs: Set<String> = [
         "com.ehsanazish.nick",
         "com.ehsanazish.nick.NickExtension",
         "com.ehsanazish.nick.NickNetFilter",

@@ -768,11 +768,12 @@ struct ExtensionFinding: Sendable {
         let filePath = event.filePath ?? event.processPath
         let isTamper = event.threatFamily == "tamper"
         let isNickMaintenance = event.threatFamily == "nick-maintenance"
+        let isDocumentedUninstall = event.threatFamily == "nick-documented-uninstall"
         let isManagementObservation = event.threatFamily == "endpoint-management"
         let severity: SignalSeverity
         if event.decision == .deny {
             severity = .critical
-        } else if isManagementObservation || isNickMaintenance {
+        } else if isManagementObservation || isNickMaintenance || isDocumentedUninstall {
             severity = .info
         } else {
             severity = .high
@@ -791,8 +792,9 @@ struct ExtensionFinding: Sendable {
             parentName: nil,
             signingStatus: signingStatus
         )
-        let ruleClass = isTamper ? "integrity" : ((isManagementObservation || isNickMaintenance) ? "audit" : "signature")
-        let ruleTier = (isManagementObservation || isNickMaintenance) ? "review" : "protected"
+        let isAuditEvent = isManagementObservation || isNickMaintenance || isDocumentedUninstall
+        let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : "signature")
+        let ruleTier = isAuditEvent ? "review" : "protected"
         signal = ThreatSignal(
             id: event.id,
             source: .endpointSecurity,
@@ -803,7 +805,8 @@ struct ExtensionFinding: Sendable {
                 for: event,
                 isTamper: isTamper,
                 isManagementObservation: isManagementObservation,
-                isNickMaintenance: isNickMaintenance
+                isNickMaintenance: isNickMaintenance,
+                isDocumentedUninstall: isDocumentedUninstall
             ),
             context: ThreatSignalContext(
                 processInfo: process,
@@ -817,16 +820,16 @@ struct ExtensionFinding: Sendable {
                 metadata: [
                     "reason": isTamper
                         ? "endpoint_tamper_observed"
-                        : (isNickMaintenance ? "nick_protected_path_maintenance" : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat")),
-                    "rule": isNickMaintenance ? "nick_protected_path_maintenance" : (event.threatName ?? "endpoint_known_threat"),
+                        : (isDocumentedUninstall ? "nick_documented_uninstall" : (isNickMaintenance ? "nick_protected_path_maintenance" : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat"))),
+                    "rule": isDocumentedUninstall ? "nick_documented_uninstall" : (isNickMaintenance ? "nick_protected_path_maintenance" : (event.threatName ?? "endpoint_known_threat")),
                     "class": ruleClass,
                     "ruleTier": ruleTier,
                     "threatFamily": event.threatFamily ?? "unknown"
                 ]
             )
         )
-        score = event.decision == .deny ? 0.98 : ((isManagementObservation || isNickMaintenance) ? 0.1 : 0.9)
-        recommendedAction = (isManagementObservation || isNickMaintenance)
+        score = event.decision == .deny ? 0.98 : (isAuditEvent ? 0.1 : 0.9)
+        recommendedAction = isAuditEvent
             ? "No action is needed if you ran this command."
             : "Review the event and investigate it if you do not recognise the activity."
     }
@@ -835,7 +838,8 @@ struct ExtensionFinding: Sendable {
         for event: ESEvent,
         isTamper: Bool,
         isManagementObservation: Bool,
-        isNickMaintenance: Bool
+        isNickMaintenance: Bool,
+        isDocumentedUninstall: Bool
     ) -> String {
         if isManagementObservation {
             return "Nick observed routine use of Apple's system-extension management tool."
@@ -847,6 +851,9 @@ struct ExtensionFinding: Sendable {
         }
         if isNickMaintenance {
             return "A validated Nick update, reinstall, or uninstall changed protected Nick files."
+        }
+        if isDocumentedUninstall {
+            return "Finder is moving Nick.app to the Trash. Protection components and generated data remain until you use Nick Uninstaller."
         }
         return event.decision == .deny
             ? "Nick blocked access to a file previously identified as suspicious."

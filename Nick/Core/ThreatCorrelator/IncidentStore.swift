@@ -279,7 +279,9 @@ final class IncidentStore {
                 )
                 incident.actions.append(Self.action(.detected, actor: .automatic))
                 incidents.append(incident)
-                if candidate.severity != .info { newlyActionable.append(candidate) }
+                if candidate.severity != .info || Self.requiresVisibleNotification(candidate) {
+                    newlyActionable.append(candidate)
+                }
             }
         }
 
@@ -409,6 +411,12 @@ final class IncidentStore {
             return "\(rule)|subject:\(EvidenceSubjectIdentity(signal: signal).stableIdentifier)"
         }).sorted()
         return ([alert.title.lowercased()] + subjects).joined(separator: "||")
+    }
+
+    static func requiresVisibleNotification(_ alert: ThreatAlert) -> Bool {
+        alert.contributingSignals.contains {
+            $0.metadata["rule"] == "nick_documented_uninstall"
+        }
     }
 
     private func applyTrustedDowngrade(to alert: ThreatAlert) -> ThreatAlert {

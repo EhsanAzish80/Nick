@@ -12,22 +12,22 @@ final class TamperProtectionPolicyTests: XCTestCase {
         XCTAssertTrue(TamperProtectionPolicy.isTrustedMaintenanceActor(identity(
             team: TamperProtectionPolicy.nickTeamID,
             signing: "com.ehsanazish.nick"
-        )))
+        ), nickIdentityValidated: true))
         XCTAssertTrue(TamperProtectionPolicy.isTrustedMaintenanceActor(identity(
             team: TamperProtectionPolicy.nickTeamID,
             signing: "org.sparkle-project.InstallerLauncher"
-        )))
+        ), nickIdentityValidated: true))
     }
 
     func test_appleInstallerRequiresPlatformIdentity() {
         XCTAssertTrue(TamperProtectionPolicy.isTrustedMaintenanceActor(identity(
             signing: "com.apple.installd",
             platform: true
-        )))
+        ), nickIdentityValidated: false))
         XCTAssertFalse(TamperProtectionPolicy.isTrustedMaintenanceActor(identity(
             signing: "com.apple.installd",
             platform: false
-        )))
+        ), nickIdentityValidated: false))
     }
 
     func test_fakeTeamInvalidAndUnknownIdentityAreRejected() {
@@ -35,29 +35,62 @@ final class TamperProtectionPolicyTests: XCTestCase {
             team: TamperProtectionPolicy.nickTeamID,
             signing: "com.ehsanazish.nick",
             flags: ExecutionTrustPolicy.csValid | ExecutionTrustPolicy.csAdhoc
-        )))
+        ), nickIdentityValidated: false))
         XCTAssertFalse(TamperProtectionPolicy.isTrustedMaintenanceActor(identity(
             team: TamperProtectionPolicy.nickTeamID,
             signing: "com.example.not-nick"
-        )))
+        ), nickIdentityValidated: true))
+    }
+
+    func test_selfSignedActorClaimingNickTeamAndIdentifierIsRejectedWithoutSecCodeValidation() {
+        let selfAsserted = identity(
+            team: TamperProtectionPolicy.nickTeamID,
+            signing: "com.ehsanazish.nick"
+        )
+        XCTAssertFalse(TamperProtectionPolicy.isTrustedMaintenanceActor(
+            selfAsserted,
+            nickIdentityValidated: false
+        ))
     }
 
     func test_finderUninstallOnlyAllowsNickMoveIntoTrash() {
         let finder = identity(signing: "com.apple.finder", platform: true)
+        let consoleUser = TamperConsoleUser(uid: 501, homeDirectory: "/Users/test")
         XCTAssertTrue(TamperProtectionPolicy.isDocumentedFinderUninstall(
             sourcePath: "/Applications/Nick.app",
             destinationPath: "/Users/test/.Trash/Nick.app",
-            identity: finder
+            identity: finder,
+            consoleUser: consoleUser
+        ))
+        XCTAssertTrue(TamperProtectionPolicy.isDocumentedFinderUninstall(
+            sourcePath: "/Applications/Nick.app",
+            destinationPath: "/Volumes/External/.Trashes/501/Nick 2.app",
+            identity: finder,
+            consoleUser: consoleUser
         ))
         XCTAssertFalse(TamperProtectionPolicy.isDocumentedFinderUninstall(
             sourcePath: "/private/tmp/Fake.app",
             destinationPath: "/Applications/Nick.app",
-            identity: finder
+            identity: finder,
+            consoleUser: consoleUser
         ))
         XCTAssertFalse(TamperProtectionPolicy.isDocumentedFinderUninstall(
             sourcePath: "/Applications/Nick.app",
             destinationPath: "/private/tmp/Nick.app",
-            identity: finder
+            identity: finder,
+            consoleUser: consoleUser
+        ))
+        XCTAssertFalse(TamperProtectionPolicy.isDocumentedFinderUninstall(
+            sourcePath: "/Applications/Nick.app",
+            destinationPath: "/tmp/x/.Trash/Nick.app",
+            identity: finder,
+            consoleUser: consoleUser
+        ))
+        XCTAssertFalse(TamperProtectionPolicy.isDocumentedFinderUninstall(
+            sourcePath: "/Applications/Nick.app",
+            destinationPath: "/Users/other/.Trash/Nick.app",
+            identity: finder,
+            consoleUser: consoleUser
         ))
     }
 

@@ -495,6 +495,28 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertEqual(finding.signal.metadata["ruleTier"], "review")
     }
 
+    func test_documentedFinderUninstallIsVisibleInformationalReviewRule() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+            pid: 47,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app",
+            decision: .allow,
+            threat: .init(
+                threatName: "Nick is being moved to the Trash",
+                threatFamily: "nick-documented-uninstall",
+                isCodeSigned: true,
+                signingID: "com.apple.finder"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.severity, .info)
+        XCTAssertEqual(finding.signal.metadata["rule"], "nick_documented_uninstall")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "review")
+        XCTAssertTrue(finding.signal.description.contains("Nick Uninstaller"))
+    }
+
     func test_persistedFindingEnvelopeRoundTrips() throws {
         let payload = Data("finding".utf8)
         let original = PersistedExtensionFinding(
@@ -572,6 +594,13 @@ final class UnifiedSourceFindingTests: XCTestCase {
         )
         XCTAssertTrue(tamperSource.contains("func shouldBlockRename("))
         XCTAssertTrue(tamperSource.contains("func shouldBlockUnlink("))
+        XCTAssertTrue(tamperSource.contains("SecCodeCopyGuestWithAttributes"))
+        XCTAssertTrue(tamperSource.contains("SecCodeCheckValidity"))
+        XCTAssertTrue(tamperSource.contains("kSecCodeInfoUnique"))
+
+        XCTAssertTrue(source.contains("ES_EVENT_TYPE_AUTH_TRUNCATE"))
+        XCTAssertTrue(source.contains("ES_EVENT_TYPE_AUTH_LINK"))
+        XCTAssertTrue(source.contains("ES_EVENT_TYPE_AUTH_CLONE"))
     }
 
     func test_tamperProtectionDoesNotWatchItsMutableEventStore() throws {

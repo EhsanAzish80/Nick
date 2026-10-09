@@ -3,7 +3,86 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import Security
+import SystemConfiguration
 import os
+
+/// Validates a live Endpoint Security actor from its kernel audit token.
+/// Endpoint Security's Team ID and signing ID fields select an allow-listed
+/// requirement but never establish trust themselves. Results are cached by the
+/// kernel cdhash plus identifier after one dynamic Apple-chain validation.
+final class TamperActorValidator: @unchecked Sendable {
+    static let shared = TamperActorValidator()
+
+    private struct CacheKey: Hashable {
+        let cdhash: Data
+        let signingID: String
+    }
+
+    private let lock = NSLock()
+    private var cache: [CacheKey: Bool] = [:]
+
+    func validatesNickActor(auditToken: audit_token_t, identity: TamperActorIdentity) -> Bool {
+        guard identity.teamID == TamperProtectionPolicy.nickTeamID,
+              let signingID = identity.signingID,
+              TamperProtectionPolicy.nickMaintenanceSigningIDs.contains(signingID)
+        else { return false }
+
+        var token = auditToken
+        let tokenData = Data(bytes: &token, count: MemoryLayout<audit_token_t>.size)
+        let attributes = [kSecGuestAttributeAudit: tokenData] as CFDictionary
+        var code: SecCode?
+        guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
+              let code,
+              let cdhash = Self.cdhash(for: code)
+        else { return false }
+
+        let key = CacheKey(cdhash: cdhash, signingID: signingID)
+        if let cached = lock.withLock({ cache[key] }) { return cached }
+
+        let requirementText = "anchor apple generic and certificate leaf[subject.OU] = \""
+            + TamperProtectionPolicy.nickTeamID
+            + "\" and identifier \""
+            + signingID
+            + "\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(requirementText as CFString, [], &requirement) == errSecSuccess,
+              let requirement
+        else { return false }
+
+        let valid = SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+        lock.withLock { cache[key] = valid }
+        return valid
+    }
+
+    private static func cdhash(for code: SecCode) -> Data? {
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
+              let staticCode else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &info
+        ) == errSecSuccess,
+              let dictionary = info as? [String: Any]
+        else { return nil }
+        return dictionary[kSecCodeInfoUnique as String] as? Data
+    }
+}
+
+enum TamperConsoleUserResolver {
+    static func current() -> TamperConsoleUser? {
+        var uid: uid_t = 0
+        var gid: gid_t = 0
+        guard let name = SCDynamicStoreCopyConsoleUser(nil, &uid, &gid) as String?,
+              name != "loginwindow",
+              let record = getpwuid(uid),
+              let home = record.pointee.pw_dir
+        else { return nil }
+        return TamperConsoleUser(uid: uid, homeDirectory: String(cString: home))
+    }
+}
 
 // MARK: - TamperProtection
 
@@ -86,21 +165,49 @@ final class TamperProtection: @unchecked Sendable {
 
     // MARK: - Public API
 
-    func shouldBlockUnlink(targetPath: String, identity: TamperActorIdentity) -> Bool {
-        isProtected(path: targetPath) && !TamperProtectionPolicy.isTrustedMaintenanceActor(identity)
+    func protects(path: String) -> Bool {
+        isProtected(path: path)
+    }
+
+    func shouldBlockUnlink(
+        targetPath: String,
+        identity: TamperActorIdentity,
+        nickIdentityValidated: Bool
+    ) -> Bool {
+        isProtected(path: targetPath) && !TamperProtectionPolicy.isTrustedMaintenanceActor(
+            identity,
+            nickIdentityValidated: nickIdentityValidated
+        )
     }
 
     func shouldBlockRename(
         sourcePath: String,
         destinationPath: String,
-        identity: TamperActorIdentity
+        identity: TamperActorIdentity,
+        nickIdentityValidated: Bool,
+        consoleUser: TamperConsoleUser?
     ) -> Bool {
         guard isProtected(path: sourcePath) || isProtected(path: destinationPath) else { return false }
-        if TamperProtectionPolicy.isTrustedMaintenanceActor(identity) { return false }
+        if TamperProtectionPolicy.isTrustedMaintenanceActor(
+            identity,
+            nickIdentityValidated: nickIdentityValidated
+        ) { return false }
         return !TamperProtectionPolicy.isDocumentedFinderUninstall(
             sourcePath: sourcePath,
             destinationPath: destinationPath,
-            identity: identity
+            identity: identity,
+            consoleUser: consoleUser
+        )
+    }
+
+    func shouldBlockWrite(
+        targetPath: String,
+        identity: TamperActorIdentity,
+        nickIdentityValidated: Bool
+    ) -> Bool {
+        isProtected(path: targetPath) && !TamperProtectionPolicy.isTrustedMaintenanceActor(
+            identity,
+            nickIdentityValidated: nickIdentityValidated
         )
     }
 
@@ -129,7 +236,8 @@ final class TamperProtection: @unchecked Sendable {
         actorPath: String,
         actorPid: Int32,
         identity: TamperActorIdentity,
-        blocked: Bool
+        blocked: Bool,
+        consoleUser: TamperConsoleUser?
     ) {
         let observedPath: String
         if isProtected(path: srcPath) {
@@ -145,7 +253,8 @@ final class TamperProtection: @unchecked Sendable {
         } else if TamperProtectionPolicy.isDocumentedFinderUninstall(
             sourcePath: srcPath,
             destinationPath: destinationPath,
-            identity: identity
+            identity: identity,
+            consoleUser: consoleUser
         ) {
             disposition = .documentedUninstall
         } else {
@@ -157,6 +266,23 @@ final class TamperProtection: @unchecked Sendable {
             actorPath: actorPath,
             identity: identity,
             disposition: disposition
+        ))
+    }
+
+    func handleWriteEvent(
+        targetPath: String,
+        actorPath: String,
+        actorPid: Int32,
+        identity: TamperActorIdentity,
+        blocked: Bool
+    ) {
+        guard isProtected(path: targetPath) else { return }
+        onTamperAttempt?(.renameProtectedPath(
+            path: targetPath,
+            actorPID: actorPid,
+            actorPath: actorPath,
+            identity: identity,
+            disposition: blocked ? .blocked : .maintenance
         ))
     }
 

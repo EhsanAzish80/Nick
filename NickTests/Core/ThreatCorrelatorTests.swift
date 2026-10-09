@@ -522,6 +522,23 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(store.evictedIncidentCount, 0)
     }
 
+    func test_documentedUninstallInfoIncidentRequestsOneVisibleNotification() {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let signal = makeSignal(
+            severity: .info,
+            title: "Nick is being moved to the Trash",
+            metadata: ["rule": "nick_documented_uninstall", "class": "audit"]
+        )
+        let alert = makeAlert(signal: signal, severity: .info)
+
+        let first = store.ingest([alert])
+        let repeated = store.ingest([alert])
+
+        XCTAssertEqual(first.newlyActionable.count, 1)
+        XCTAssertTrue(IncidentStore.requiresVisibleNotification(alert))
+        XCTAssertTrue(repeated.newlyActionable.isEmpty)
+    }
+
     func test_perRuleShareCapCannotEvictCriticalIncident() {
         let store = IncidentStore(defaults: isolatedDefaults())
         let critical = makeAlert(

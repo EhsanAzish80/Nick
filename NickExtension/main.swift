@@ -200,6 +200,7 @@ tamperProtection.onTamperAttempt = { attempt in
             )
         )
     case .renameProtectedPath(let path, let pid, let actorPath, let identity, let disposition):
+        let isDocumentedUninstall = disposition == .documentedUninstall
         event = ESEvent(
             eventType: .notifyWrite,
             processPath: actorPath,
@@ -210,8 +211,12 @@ tamperProtection.onTamperAttempt = { attempt in
             threat: .init(
                 threatName: disposition == .blocked
                     ? "Nick protected path change blocked"
-                    : "Nick maintenance updated protected files",
-                threatFamily: disposition == .blocked ? "tamper" : "nick-maintenance",
+                    : (isDocumentedUninstall
+                        ? "Nick is being moved to the Trash"
+                        : "Nick maintenance updated protected files"),
+                threatFamily: disposition == .blocked
+                    ? "tamper"
+                    : (isDocumentedUninstall ? "nick-documented-uninstall" : "nick-maintenance"),
                 isCodeSigned: identity.isValidIdentitySignature,
                 teamID: identity.teamID,
                 signingID: identity.signingID
@@ -290,6 +295,9 @@ let phase4Events: [es_event_type_t] = [
     ES_EVENT_TYPE_AUTH_MMAP,         // block mapping a previously scanned threat
     ES_EVENT_TYPE_AUTH_COPYFILE,     // block copying a previously scanned threat
     ES_EVENT_TYPE_AUTH_CREATE,       // block suspicious creation chains
+    ES_EVENT_TYPE_AUTH_TRUNCATE,     // protect Nick bundle files from truncation
+    ES_EVENT_TYPE_AUTH_LINK,         // protect Nick bundle destinations from hard links
+    ES_EVENT_TYPE_AUTH_CLONE,        // protect Nick bundle destinations from clones
     ES_EVENT_TYPE_AUTH_RENAME,       // protect Nick files from replacement
     ES_EVENT_TYPE_AUTH_UNLINK,       // protect Nick files from deletion
 
