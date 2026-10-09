@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// update, even when Nick's main window is hidden. Otherwise the installer
     /// waits forever for the menu-bar app to exit.
     private var sparkleInstallationInProgress = false
+    private var sparkleUpdateLeaseFailed = false
     private var uninstallPreparationInProgress = false
     private let uninstallLogger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -440,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isRunningTests: isRunningTests,
             forceQuit: forceQuit,
             sparkleInstallationInProgress: sparkleInstallationInProgress,
+            sparkleUpdateLeaseFailed: sparkleUpdateLeaseFailed,
             windowVisible: windowVisible
         )
     }
@@ -448,8 +450,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isRunningTests: Bool,
         forceQuit: Bool,
         sparkleInstallationInProgress: Bool,
+        sparkleUpdateLeaseFailed: Bool = false,
         windowVisible: Bool
     ) -> NSApplication.TerminateReply {
+        if sparkleUpdateLeaseFailed && !isRunningTests && !forceQuit {
+            return .terminateCancel
+        }
         if isRunningTests || forceQuit || sparkleInstallationInProgress {
             return .terminateNow
         }
@@ -754,8 +760,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate: SPUUpdaterDelegate {
     func updater(_: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
-        sparkleInstallationInProgress = true
-        updateLogger.info("Sparkle will install update build=\(item.versionString, privacy: .public); allowing application termination")
+        let sourceBuild = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+            .flatMap(Int.init) ?? 0
+        let destinationBuild = Int(item.versionString) ?? 0
+        let leasePrepared = xpcClient.prepareUpdateLeaseSynchronously(
+            sourceBuild: sourceBuild,
+            destinationBuild: destinationBuild
+        )
+        sparkleInstallationInProgress = leasePrepared
+        sparkleUpdateLeaseFailed = !leasePrepared
+        if leasePrepared {
+            updateLogger.info("Sparkle prepared an authorised update lease for build=\(item.versionString, privacy: .public)")
+        } else {
+            updateLogger.error("Sparkle update stopped because Nick could not prepare an authorised update lease")
+            postUpdateCheckStatus("Nick could not authorize this update. The installed version was not changed; try again.")
+        }
     }
 
     func feedURLString(for updater: SPUUpdater) -> String? {
@@ -771,6 +790,7 @@ extension AppDelegate: SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         receivedUpdateCheckResult = true
+        sparkleUpdateLeaseFailed = false
         UserDefaults.standard.set(true, forKey: "nickUpdateAvailable")
         UserDefaults.standard.set(item.displayVersionString, forKey: "nickUpdateAvailableVersion")
         updateLogger.info("Sparkle found update version=\(item.displayVersionString, privacy: .public) build=\(item.versionString, privacy: .public)")

@@ -61,6 +61,132 @@ final class TamperProtectionPolicyTests: XCTestCase {
         ))
     }
 
+    func test_updateLeaseFailsClosedUnlessDestinationBuildIsStrictlyNewer() {
+        XCTAssertNil(NickUpdateLeasePolicy.makeLease(
+            consoleUID: 501,
+            sourceBuild: 5017,
+            destinationBuild: 5017,
+            duration: 600,
+            now: Date(timeIntervalSince1970: 1),
+            uptime: 10
+        ))
+        let lease = NickUpdateLeasePolicy.makeLease(
+            consoleUID: 501,
+            sourceBuild: 5017,
+            destinationBuild: 5018,
+            duration: 600,
+            now: Date(timeIntervalSince1970: 1),
+            uptime: 10
+        )
+        XCTAssertEqual(lease?.consoleUID, 501)
+        XCTAssertEqual(lease?.expiresAtUptime, 610)
+        XCTAssertNil(NickUpdateLeasePolicy.makeLease(
+            consoleUID: 501,
+            sourceBuild: 5017,
+            destinationBuild: 5018,
+            duration: 601,
+            now: Date(),
+            uptime: 10
+        ))
+    }
+
+    func test_updateLeaseOnlyCoversExactNickBundleTree() {
+        XCTAssertTrue(NickUpdateLeasePolicy.containsProtectedUpdateDestination(
+            "/Applications/Nick.app"
+        ))
+        XCTAssertTrue(NickUpdateLeasePolicy.containsProtectedUpdateDestination(
+            "/Applications/Nick.app/Contents/MacOS/Nick"
+        ))
+        XCTAssertFalse(NickUpdateLeasePolicy.containsProtectedUpdateDestination(
+            "/Applications/Nick.app-evil/Contents/MacOS/Nick"
+        ))
+        XCTAssertFalse(NickUpdateLeasePolicy.containsProtectedUpdateDestination(
+            "/Applications/Other.app"
+        ))
+    }
+
+    func test_updateLeaseAcceptsValidatedOmittedSparkleIdentityButNotSelfAssertion() {
+        let autoupdate = identity(
+            team: TamperProtectionPolicy.nickTeamID,
+            signing: "Autoupdate"
+        )
+        XCTAssertFalse(TamperProtectionPolicy.isTrustedMaintenanceActor(
+            autoupdate,
+            nickIdentityValidated: true
+        ))
+        XCTAssertTrue(NickUpdateLeasePolicy.isEligibleInstallerActor(
+            identity: autoupdate,
+            nickUpdateIdentityValidated: true,
+            actorPath: "/Applications/Nick.app/Contents/Frameworks/Sparkle.framework/Autoupdate"
+        ))
+        XCTAssertFalse(NickUpdateLeasePolicy.isEligibleInstallerActor(
+            identity: autoupdate,
+            nickUpdateIdentityValidated: false,
+            actorPath: "/Applications/Nick.app/Contents/Frameworks/Sparkle.framework/Autoupdate"
+        ))
+    }
+
+    func test_updateLeaseConsumesOnlyAtTopLevelReplacementBoundary() {
+        XCTAssertFalse(NickUpdateLeasePolicy.isReplacementBoundary(
+            sourcePath: "/private/tmp/Nick.app/Contents/MacOS/Nick",
+            destinationPath: "/Applications/Nick.app/Contents/MacOS/Nick",
+            operation: .rename
+        ))
+        XCTAssertTrue(NickUpdateLeasePolicy.isReplacementBoundary(
+            sourcePath: "/private/tmp/Nick.app",
+            destinationPath: "/Applications/Nick.app",
+            operation: .rename
+        ))
+        XCTAssertFalse(NickUpdateLeasePolicy.isReplacementBoundary(
+            sourcePath: "/private/tmp/Nick.app",
+            destinationPath: "/Applications/Nick.app",
+            operation: .write
+        ))
+    }
+
+    func test_updateLeaseDecisionExpiresRejectsAndConsumes() throws {
+        let lease = try XCTUnwrap(NickUpdateLeasePolicy.makeLease(
+            consoleUID: 501,
+            sourceBuild: 5017,
+            destinationBuild: 5018,
+            duration: 60,
+            now: Date(),
+            uptime: 100
+        ))
+        let autoupdate = identity(
+            team: TamperProtectionPolicy.nickTeamID,
+            signing: "Autoupdate"
+        )
+        XCTAssertEqual(NickUpdateLeasePolicy.decision(
+            lease: lease,
+            uptime: 161,
+            targetPath: "/Applications/Nick.app",
+            operation: .rename,
+            actorPath: "/Applications/Nick.app/Contents/Frameworks/Sparkle.framework/Autoupdate",
+            identity: autoupdate,
+            nickUpdateIdentityValidated: true
+        ), .expired)
+        XCTAssertEqual(NickUpdateLeasePolicy.decision(
+            lease: lease,
+            uptime: 120,
+            targetPath: "/Applications/Other.app",
+            operation: .write,
+            actorPath: "/Applications/Nick.app/Contents/Frameworks/Sparkle.framework/Autoupdate",
+            identity: autoupdate,
+            nickUpdateIdentityValidated: true
+        ), .rejected)
+        XCTAssertEqual(NickUpdateLeasePolicy.decision(
+            lease: lease,
+            uptime: 120,
+            targetPath: "/Applications/Nick.app",
+            sourcePath: "/private/tmp/Nick.app",
+            operation: .rename,
+            actorPath: "/Applications/Nick.app/Contents/Frameworks/Sparkle.framework/Autoupdate",
+            identity: autoupdate,
+            nickUpdateIdentityValidated: true
+        ), .allowed(consume: true))
+    }
+
     func test_finderUninstallOnlyAllowsNickMoveIntoTrash() {
         let finder = identity(signing: "com.apple.finder", platform: true)
         let consoleUser = TamperConsoleUser(uid: 501, homeDirectory: "/Users/test")

@@ -27,4 +27,17 @@ final class AppDelegateTerminationPolicyTests: XCTestCase {
             .terminateNow
         )
     }
+
+    func test_failedUpdateLeaseStopsSparkleTerminationEvenWithVisibleWindow() {
+        XCTAssertEqual(
+            AppDelegate.terminationReply(
+                isRunningTests: false,
+                forceQuit: false,
+                sparkleInstallationInProgress: false,
+                sparkleUpdateLeaseFailed: true,
+                windowVisible: true
+            ),
+            .terminateCancel
+        )
+    }
 }

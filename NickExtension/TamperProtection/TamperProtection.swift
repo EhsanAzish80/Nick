@@ -28,6 +28,32 @@ final class TamperActorValidator: @unchecked Sendable {
               TamperProtectionPolicy.nickMaintenanceSigningIDs.contains(signingID)
         else { return false }
 
+        return validatesNickActor(
+            auditToken: auditToken,
+            signingID: signingID,
+            identity: identity
+        )
+    }
+
+    func validatesNickUpdateActor(auditToken: audit_token_t, identity: TamperActorIdentity) -> Bool {
+        guard identity.teamID == TamperProtectionPolicy.nickTeamID,
+              let signingID = identity.signingID,
+              TamperProtectionPolicy.nickLeasedUpdateSigningIDs.contains(signingID)
+        else { return false }
+
+        return validatesNickActor(
+            auditToken: auditToken,
+            signingID: signingID,
+            identity: identity
+        )
+    }
+
+    private func validatesNickActor(
+        auditToken: audit_token_t,
+        signingID: String,
+        identity: TamperActorIdentity
+    ) -> Bool {
+
         var token = auditToken
         let tokenData = Data(bytes: &token, count: MemoryLayout<audit_token_t>.size)
         let attributes = [kSecGuestAttributeAudit: tokenData] as CFDictionary
@@ -69,6 +95,188 @@ final class TamperActorValidator: @unchecked Sendable {
         else { return nil }
         return dictionary[kSecCodeInfoUnique as String] as? Data
     }
+}
+
+struct NickUpdateLeaseAudit: Codable, Sendable, Equatable {
+    enum Action: String, Codable, Sendable {
+        case created
+        case used
+        case expired
+        case rejected
+        case clearedOnRestart
+    }
+
+    let timestamp: Date
+    let action: Action
+    let leaseID: UUID?
+    let detail: String
+}
+
+private struct NickUpdateLeaseState: Codable {
+    var activeLease: NickUpdateLease?
+    var audit: [NickUpdateLeaseAudit]
+}
+
+/// Root-owned, single-use update authorization. The monotonic expiry is
+/// authoritative only in this extension process; startup always clears a
+/// persisted active lease so a restart cannot revive maintenance access.
+final class NickUpdateLeaseManager: @unchecked Sendable {
+    private let lock = NSLock()
+    private let stateURL: URL
+    private let now: @Sendable () -> Date
+    private let uptime: @Sendable () -> TimeInterval
+    private var state: NickUpdateLeaseState
+    var onAudit: ((NickUpdateLeaseAudit) -> Void)?
+
+    init(
+        stateURL: URL = URL(
+            fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/update-lease.json"
+        ),
+        now: @escaping @Sendable () -> Date = Date.init,
+        uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
+        self.stateURL = stateURL
+        self.now = now
+        self.uptime = uptime
+        let decoded = (try? Data(contentsOf: stateURL))
+            .flatMap { try? JSONDecoder().decode(NickUpdateLeaseState.self, from: $0) }
+        var initial = decoded ?? NickUpdateLeaseState(activeLease: nil, audit: [])
+        if let oldLease = initial.activeLease {
+            initial.audit.append(.init(
+                timestamp: now(),
+                action: .clearedOnRestart,
+                leaseID: oldLease.id,
+                detail: "Active update lease cleared when protection restarted"
+            ))
+        }
+        initial.activeLease = nil
+        initial.audit = Array(initial.audit.suffix(100))
+        self.state = initial
+        _ = persist(initial)
+    }
+
+    @discardableResult
+    func create(
+        consoleUID: uid_t,
+        sourceBuild: Int,
+        destinationBuild: Int,
+        duration: TimeInterval = NickUpdateLeasePolicy.maximumDuration
+    ) -> Bool {
+        guard let lease = NickUpdateLeasePolicy.makeLease(
+            consoleUID: consoleUID,
+            sourceBuild: sourceBuild,
+            destinationBuild: destinationBuild,
+            duration: duration,
+            now: now(),
+            uptime: uptime()
+        ) else {
+            record(.init(
+                timestamp: now(), action: .rejected, leaseID: nil,
+                detail: "Rejected invalid update lease request"
+            ))
+            return false
+        }
+        return lock.withLock {
+            state.activeLease = lease
+            let persisted = appendLocked(.init(
+                timestamp: now(), action: .created, leaseID: lease.id,
+                detail: "Authorised build \(sourceBuild) to \(destinationBuild) for uid \(consoleUID)"
+            ))
+            if !persisted { state.activeLease = nil }
+            return persisted
+        }
+    }
+
+    func authorizes(
+        targetPath: String,
+        sourcePath: String? = nil,
+        operation: NickUpdateLeaseOperation,
+        actorPath: String,
+        identity: TamperActorIdentity,
+        nickUpdateIdentityValidated: Bool
+    ) -> Bool {
+        lock.withLock {
+            guard let lease = state.activeLease else { return false }
+            switch NickUpdateLeasePolicy.decision(
+                lease: lease,
+                uptime: uptime(),
+                targetPath: targetPath,
+                sourcePath: sourcePath,
+                operation: operation,
+                actorPath: actorPath,
+                identity: identity,
+                nickUpdateIdentityValidated: nickUpdateIdentityValidated
+            ) {
+            case .expired:
+                state.activeLease = nil
+                _ = appendLocked(.init(
+                    timestamp: now(), action: .expired, leaseID: lease.id,
+                    detail: "Update lease expired before use"
+                ))
+                return false
+            case .rejected:
+                _ = appendLocked(.init(
+                    timestamp: now(), action: .rejected, leaseID: lease.id,
+                    detail: "Lease rejected \(operation.rawValue) by \(identity.signingID ?? "unknown")"
+                ))
+                return false
+            case .allowed(let consume):
+                if consume {
+                    state.activeLease = nil
+                    guard appendLocked(.init(
+                        timestamp: now(), action: .used, leaseID: lease.id,
+                        detail: "Lease consumed by the Nick application replacement"
+                    )) else { return false }
+                }
+                return true
+            }
+        }
+    }
+
+    func snapshot() -> (lease: NickUpdateLease?, audit: [NickUpdateLeaseAudit]) {
+        lock.withLock { (state.activeLease, state.audit) }
+    }
+
+    private func record(_ entry: NickUpdateLeaseAudit) {
+        lock.withLock { _ = appendLocked(entry) }
+    }
+
+    @discardableResult
+    private func appendLocked(_ entry: NickUpdateLeaseAudit) -> Bool {
+        state.audit.append(entry)
+        state.audit = Array(state.audit.suffix(100))
+        guard persist(state) else { return false }
+        onAudit?(entry)
+        return true
+    }
+
+    private func persist(_ state: NickUpdateLeaseState) -> Bool {
+        do {
+            let directory = stateURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700], ofItemAtPath: directory.path
+            )
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: stateURL, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: stateURL.path
+            )
+            return true
+        } catch {
+            Self.logger.error("Could not persist update lease audit: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    private static let logger = Logger(
+        subsystem: "com.ehsanazish.nick.NickExtension",
+        category: "UpdateLease"
+    )
 }
 
 enum TamperConsoleUserResolver {

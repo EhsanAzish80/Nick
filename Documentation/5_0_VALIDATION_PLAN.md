@@ -69,7 +69,7 @@ and whether protection was ever disabled.
 | Installer.app GUI | Yes | Higher build installs atomically; both extensions replace and activate; no blocked self-update incident. | Pending |
 | `/usr/sbin/installer -pkg … -target /` | Yes | Same result from the command-line PackageKit path while the old extension enforces. | Pending |
 | Sparkle package update | Yes | Signed staging appcast installs the higher package, clears the update badge after genuine interaction, and produces at most one informational maintenance incident. | Pending (ordered-session step 12) |
-| MDM/Intune package deployment | Conditional | Required only if Nick documents the channel as supported. Test with the documented deployment profile and tool; otherwise mark **Not supported**, remove deployment claims/assets, and do not call it passed. | Pending product decision |
+| MDM/Intune package deployment | **Not supported in 5.0** | The experimental profiles are not release assets and have not been validated in a managed tenant. Do not claim or score this channel as passed. | Not applicable |
 
 The successful same-build 5016 Installer.app reinstall proves the immediate
 `com.apple.shove` correction, but it does not replace this lower-to-higher
@@ -101,6 +101,16 @@ The install-channel matrix must pass both with ordinary validated maintenance
 identity and with a deliberately omitted nonessential allow-list identity while
 the authorized lease is active. That second test proves the safety valve is
 independent of the stale allow-list rather than merely widening it.
+
+Implementation gate: Sparkle's `Autoupdate` identity is deliberately absent
+from the permanent maintenance list. A Sparkle update from this candidate to a
+strictly newer candidate must prompt once for Nick's protection right, create a
+root-owned lease, complete the atomic replacement, consume the lease, and leave
+an audit record. Cancelling the prompt, using the same/lower build, restarting
+the extension, waiting more than ten minutes, targeting any path outside the
+exact Nick application bundle, or using an unvalidated actor must leave the
+installed app unchanged. Confirm `state/update-lease.json` is root-owned and
+mode `0600` after the test.
 
 ## Fixed alert-count workload for steps 15–18
 

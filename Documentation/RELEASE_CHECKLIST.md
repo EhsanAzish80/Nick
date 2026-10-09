@@ -83,9 +83,9 @@
       both a manual Check for Updates and a scheduled check.
 - [ ] With the previous public release's Endpoint Security extension active,
       upgrades to this exact candidate succeed through Installer.app, the
-      command-line `installer` tool, Sparkle, and every documented MDM/Intune
-      deployment path; protection is never disabled merely to make the test
-      pass.
+      command-line `installer` tool, and Sparkle; protection is never disabled
+      merely to make the test pass. MDM/Intune deployment is not supported in
+      5.0 and must not be presented as a verified release channel.
 - [ ] The live appcast at `https://3nsofts.com/nick/appcast.xml` is fetched
       after upload and matches `Packaging/Release/<version>/appcast.xml`.
 - [ ] Uninstall deactivates both system extensions before deleting Nick.app or

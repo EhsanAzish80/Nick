@@ -153,6 +153,7 @@ let usbScanner   = USBScanner(fileScanner: fileScanner)
 
 let processTree = ProcessTree()
 let tamperProtection = TamperProtection()
+let updateLeaseManager = NickUpdateLeaseManager()
 
 // MARK: Phase 6 — Email attachment monitoring
 
@@ -177,6 +178,30 @@ eventHandler.usbScanner              = usbScanner
 eventHandler.processTree             = processTree
 eventHandler.emailAttachmentMonitor  = emailAttachmentMonitor
 eventHandler.tamperProtection        = tamperProtection
+eventHandler.updateLeaseManager      = updateLeaseManager
+xpcServer.updateLeaseManager         = updateLeaseManager
+
+updateLeaseManager.onAudit = { audit in
+    let event = ESEvent(
+        eventType: .notifyWrite,
+        processPath: Bundle.main.executableURL?.path ?? "",
+        pid: 0,
+        parentPid: 0,
+        filePath: "/Applications/Nick.app",
+        decision: .notApplicable,
+        threat: .init(
+            threatName: "Nick update authorization \(audit.action.rawValue)",
+            threatFamily: "nick-update-lease",
+            metadata: [
+                "leaseID": audit.leaseID?.uuidString ?? "none",
+                "detail": audit.detail
+            ]
+        )
+    )
+    if let data = try? JSONEncoder().encode(event) {
+        xpcServer.sendThreatToApp(data)
+    }
+}
 
 tamperProtection.onTamperAttempt = { attempt in
     let event: ESEvent

@@ -6,6 +6,14 @@ import Foundation
 import os
 import Security
 
+private final class UpdateLeaseReplyBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+
+    func set(_ value: Bool) { lock.withLock { stored = value } }
+    func value() -> Bool { lock.withLock { stored } }
+}
+
 enum IncidentVerdictAuthorizationFlow {
     @MainActor
     static func complete(
@@ -533,6 +541,37 @@ public final class ExtensionXPCClient: NSObject {
         }
         activeProtectionAuthorizations[externalForm] = authorization
         return externalForm
+    }
+
+    /// Sparkle calls its installation delegate synchronously immediately
+    /// before termination. Keep the verified AuthorizationRef alive until the
+    /// extension acknowledges the lease, and bound the wait so a disconnected
+    /// extension fails closed instead of hanging the updater.
+    func prepareUpdateLeaseSynchronously(
+        sourceBuild: Int,
+        destinationBuild: Int,
+        timeout: TimeInterval = 15
+    ) -> Bool {
+        guard destinationBuild > sourceBuild,
+              let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                  Self.logger.error("Update lease XPC failed: \(error.localizedDescription, privacy: .public)")
+              }) as? NickExtensionXPCProtocol,
+              let authorization = requestProtectionModificationAuthorization()
+        else { return false }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let reply = UpdateLeaseReplyBox()
+        proxy.requestUpdateLease(
+            sourceBuild: sourceBuild,
+            destinationBuild: destinationBuild,
+            authorizationExternalForm: authorization
+        ) { accepted in
+            reply.set(accepted)
+            semaphore.signal()
+        }
+        let completed = semaphore.wait(timeout: .now() + timeout) == .success
+        finishProtectionAuthorization(authorization)
+        return completed && reply.value()
     }
 
     private func finishProtectionAuthorization(_ externalForm: Data?) {
