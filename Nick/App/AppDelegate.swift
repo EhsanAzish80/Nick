@@ -158,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 )
                             },
                             authorizer: { [weak self] id, action in
-                                guard let self else { return nil }
+                                guard let self else { return .protectionDisconnected }
                                 return await self.xpcClient.validateIncidentVerdictTarget(id: id, action: action)
                             },
                             removeLegacyState: true

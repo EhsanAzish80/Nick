@@ -452,6 +452,23 @@ enum EvidenceVerdictActor: String, Sendable, Codable {
     case user
     case automatic
     case migration
+    case unknown
+
+    var displayName: String {
+        switch self {
+        case .user: "User"
+        case .automatic: "Nick"
+        case .migration: "Migration"
+        case .unknown: "Unknown"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = (try? container.decode(String.self))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self = raw.flatMap(Self.init(rawValue:)) ?? .unknown
+    }
 }
 
 struct EvidenceLifecycle: Sendable, Codable, Equatable {

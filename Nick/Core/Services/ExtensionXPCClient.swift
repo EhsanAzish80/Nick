@@ -6,6 +6,39 @@ import Foundation
 import os
 import Security
 
+enum IncidentVerdictAuthorizationFlow {
+    @MainActor
+    static func complete(
+        preflight: IncidentVerdictValidationResult,
+        requiresAuthorization: Bool,
+        requestAuthorization: () -> Data?,
+        submitAuthorized: (Data) async -> IncidentVerdictValidationResult
+    ) async -> IncidentActionAuthorizationResult {
+        switch preflight {
+        case .accepted:
+            return .approved(IncidentActionApproval(authorizationExternalForm: nil))
+        case .targetMissing:
+            return .targetMissing
+        case .invalidRequest:
+            return .rejected
+        case .authorizationRequired:
+            guard requiresAuthorization else { return .rejected }
+        }
+
+        guard let authorization = requestAuthorization() else {
+            return .approvalCancelled
+        }
+        switch await submitAuthorized(authorization) {
+        case .accepted:
+            return .approved(IncidentActionApproval(authorizationExternalForm: authorization))
+        case .targetMissing:
+            return .targetMissing
+        case .authorizationRequired, .invalidRequest:
+            return .rejected
+        }
+    }
+}
+
 // MARK: - ExtensionXPCClient
 
 /// XPC client in the container app that connects to the `NickExtension`
@@ -413,26 +446,60 @@ public final class ExtensionXPCClient: NSObject {
     func validateIncidentVerdictTarget(
         id: UUID,
         action: IncidentActionKind
-    ) async -> IncidentActionApproval? {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return nil }
+    ) async -> IncidentActionAuthorizationResult {
+        guard isConnected,
+              let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            return .protectionDisconnected
+        }
+        await refreshExtensionHealth()
+        guard isConnected else { return .protectionDisconnected }
+        let appBuild = Bundle.main.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
+        let extensionBuild = extensionHealth?["version"] as? String
+        if let appBuild, let extensionBuild, appBuild != extensionBuild {
+            return .versionMismatch(appBuild: appBuild, extensionBuild: extensionBuild)
+        }
+
         let requiresAuthorization: Bool = [.dismissed, .allowedOnce, .alwaysAllowed].contains(action)
-        let authorization = requiresAuthorization
-            ? requestProtectionModificationAuthorization()
-            : nil
-        if requiresAuthorization && authorization == nil { return nil }
-        let accepted = await withCheckedContinuation { continuation in
+        let preflight = await withCheckedContinuation { continuation in
             proxy.validateIncidentVerdictTarget(
-                incidentID: id.uuidString,
+                alertID: id.uuidString,
                 action: action.rawValue,
-                authorizationExternalForm: authorization,
+                authorizationExternalForm: nil,
                 reply: { continuation.resume(returning: $0) }
             )
         }
-        guard accepted else {
-            finishProtectionAuthorization(authorization)
-            return nil
+        guard let preflightResult = IncidentVerdictValidationResult(rawValue: preflight) else {
+            return .rejected
         }
-        return IncidentActionApproval(authorizationExternalForm: authorization)
+        var requestedAuthorization: Data?
+        let result = await IncidentVerdictAuthorizationFlow.complete(
+            preflight: preflightResult,
+            requiresAuthorization: requiresAuthorization,
+            requestAuthorization: {
+                requestedAuthorization = requestProtectionModificationAuthorization()
+                return requestedAuthorization
+            },
+            submitAuthorized: { authorization in
+                let raw = await withCheckedContinuation { continuation in
+                    proxy.validateIncidentVerdictTarget(
+                        alertID: id.uuidString,
+                        action: action.rawValue,
+                        authorizationExternalForm: authorization,
+                        reply: { continuation.resume(returning: $0) }
+                    )
+                }
+                return IncidentVerdictValidationResult(rawValue: raw) ?? .invalidRequest
+            }
+        )
+        switch result {
+        case .approved:
+            return result
+        case .approvalCancelled, .targetMissing, .protectionDisconnected, .versionMismatch, .rejected:
+            // A successful result keeps the AuthorizationRef alive until the
+            // root-store write replies; every failure releases this exact one.
+            finishProtectionAuthorization(requestedAuthorization)
+            return result
+        }
     }
 
     /// Requests explicit user presence for an action that weakens protection.
