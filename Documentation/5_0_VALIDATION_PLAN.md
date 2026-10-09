@@ -43,8 +43,10 @@ minutes before starting.
 Run this fixed 20-minute workload in the same order:
 
 1. Five idle minutes with Safari and Finder open.
-2. In Terminal: `git pull`, `brew update`, and `swift build` in the same clean
-   fixture checkout.
+2. In Terminal: run `git pull` in the same recorded Git fixture, `brew update`,
+   and `swift build` in the same separate Swift-package fixture (which must
+   contain its own `Package.swift`). These are workload fixtures, not commands
+   to run from Nick's repository root.
 3. Perform a clean Xcode Release build of Nick.
 4. Deep Scan the same projects fixture.
 5. Use Finder to copy and rename ordinary documents; save one file atomically

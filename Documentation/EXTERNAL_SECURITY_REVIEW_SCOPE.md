@@ -51,12 +51,21 @@ Reviewers receive the exact candidate commit and should trace, at minimum:
 - `NickExtension/` — Endpoint Security client, XPC listener/service, protected
   storage, quarantine, FIM, tamper and scanner paths.
 - `NickNetFilter/` — Network Extension provider, rule validation and events.
-- `Nick/Core/Security/`, `Nick/Core/Correlation/`, `Nick/Core/Models/` — identity,
-  evidence tiers, correlator and incident lifecycle.
+- `Nick/Core/ThreatCorrelator/` — evidence correlation, incident lifecycle,
+  suppression, root-store client and verdict learning.
+- `Nick/Models/` — shared app-side evidence, process, health and UI models.
+- `Nick/Core/Services/` — system-extension activation, health and XPC client.
+- `Nick/Core/BehavioralScorer/` — deterministic scoring boundary, explanation
+  prompts and user-facing alert construction.
+- `Shared/` — cross-target enforcement policy, especially
+  `Shared/ExecutionTrustPolicy.swift`, `Shared/TamperProtectionPolicy.swift`,
+  `Shared/YARAVerdictPolicy.swift`, `Shared/RansomwareNotePolicy.swift`,
+  `Shared/NetworkProtectionPolicy.swift` and `Shared/BundledHashCatalog.swift`.
 - `Nick/Core/YARAEngine/` and `Rules/` — parser/engine boundary and confidence
   metadata; use safe fixtures only.
 - `Nick/App/`, settings and extension-management code — authorization requests,
   health presentation, verdict actions and mixed-version errors.
+- `NickUninstaller/` — documented removal flow and privileged-component cleanup.
 - `Packaging/`, `.github/workflows/` and dependency manifests — build, signing,
   notarization, appcast and supply-chain controls.
 
