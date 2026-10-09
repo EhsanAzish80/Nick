@@ -56,6 +56,52 @@ an evidence path; a checkmark without evidence is not a result.
 | 18 | **5.0 learning active.** Activate one eligible review-tier pattern using two authenticated decisions from different incidents; repeat the workload. Only that review-tier pattern may be de-prioritized, never hidden. | Pending |
 | 19 | **Automated final gate and closeout.** On the exact final candidate run unit/detection tests, repository validation, YARA lint, documentation drift and the **~17k files (cap 120k)** benign corpus. Record final checksums and every failure. | Pending |
 
+## Active-enforcement upgrade matrix
+
+Run every supported channel from the same installed lower build while its
+Endpoint Security extension is active. The destination must be a higher build
+containing both higher-build extensions. Record the old and new complete
+`systemextensionsctl list`, installer/update logs, UI result, incident changes,
+and whether protection was ever disabled.
+
+| Channel | Supported for 5.0 | Required result | Result |
+|---|---|---|---|
+| Installer.app GUI | Yes | Higher build installs atomically; both extensions replace and activate; no blocked self-update incident. | Pending |
+| `/usr/sbin/installer -pkg … -target /` | Yes | Same result from the command-line PackageKit path while the old extension enforces. | Pending |
+| Sparkle package update | Yes | Signed staging appcast installs the higher package, clears the update badge after genuine interaction, and produces at most one informational maintenance incident. | Pending (ordered-session step 12) |
+| MDM/Intune package deployment | Conditional | Required only if Nick documents the channel as supported. Test with the documented deployment profile and tool; otherwise mark **Not supported**, remove deployment claims/assets, and do not call it passed. | Pending product decision |
+
+The successful same-build 5016 Installer.app reinstall proves the immediate
+`com.apple.shove` correction, but it does not replace this lower-to-higher
+matrix.
+
+## Upgrade safety-valve proposal
+
+An update must not depend solely on a permanent list of installer executable
+identifiers compiled into the already-installed extension. Before 5.0 ships,
+implement and threat-model a short-lived update lease with these properties:
+
+1. Nick.app requests the existing protection Authorization Services right and
+   sends the external form over authenticated XPC.
+2. The root-owned settings store records a single-use lease with a monotonic
+   expiry (maximum ten minutes), current console UID, expected Nick Team ID,
+   current build, and strictly higher destination build.
+3. While the lease is valid, tamper protection permits replacement only of the
+   exact Nick application and bundled-extension destinations. The responsible
+   process must still validate to Apple's PackageKit/installd chain or Nick's
+   validated Sparkle chain; arbitrary writes, deletes and renames remain
+   blocked.
+4. The lease is consumed by the first successful replacement, cleared on
+   timeout/restart, and cannot be extended without fresh authorization. Every
+   creation, use, expiry and rejection becomes durable audit evidence.
+5. A failed update leaves the old app runnable. Package layout and preflight
+   must not remove `/Applications/Nick.app` before the replacement is ready.
+
+The install-channel matrix must pass both with ordinary validated maintenance
+identity and with a deliberately omitted nonessential allow-list identity while
+the authorized lease is active. That second test proves the safety valve is
+independent of the stale allow-list rather than merely widening it.
+
 ## Fixed alert-count workload for steps 15–18
 
 Start each run from the same documented alert state. Do not clear or dismiss
