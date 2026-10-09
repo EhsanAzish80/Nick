@@ -1,11 +1,31 @@
 {
-  "version": 1,
+  "version": 2,
+  "retrievedAt": "2026-10-09T00:00:00Z",
   "entries": [
-    {
-      "hash": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
-      "name": "EICAR Anti-Malware Test File",
-      "family": "Test",
-      "severity": "critical"
-    }
+    { "hash": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f", "name": "EICAR Anti-Malware Test File", "family": "Test", "severity": "low" },
+    { "hash": "bbbfe62cf15006014e356885fbc7447e3fd37c3743e0522b1f8320ad5c3791c9", "name": "DazzleSpy sample", "family": "DazzleSpy", "severity": "high" },
+    { "hash": "7965c61a4581f4b2f199595a6b3f0a416fe49bd8eaac0538e37e050d893f9e3c", "name": "DazzleSpy sample", "family": "DazzleSpy", "severity": "high" },
+    { "hash": "f9ad42a9bd9ade188e997845cae1b0587bf496a35c3bffacd20fefe07860a348", "name": "DazzleSpy sample", "family": "DazzleSpy", "severity": "high" },
+    { "hash": "49feb795e6d9bce63ee445e581c4cf4a8297fbf7848b6026538298d708bed172", "name": "GMERA sample", "family": "GMERA", "severity": "high" },
+    { "hash": "eacf7e3865e9995fd5fe74e61b2073441cba4029610cae739b2006de8e5787dc", "name": "GMERA sample", "family": "GMERA", "severity": "high" },
+    { "hash": "ad27ae075010795c04a6c5f1303531f3f2884962be4d741bf38ced0180710d06", "name": "GMERA sample", "family": "GMERA", "severity": "high" },
+    { "hash": "9becf766448205a3bdab89f191b1f77942843021b200462f47988d06d705e0ec", "name": "GMERA sample", "family": "GMERA", "severity": "high" },
+    { "hash": "3d0e3c351e79ec72b2412428219f0700838175799e82d8c28c3ff09c7a4234fa", "name": "GMERA sample", "family": "GMERA", "severity": "high" },
+    { "hash": "138a54a0a1fe717cf0ffd63ef2a27d296456b5338aed8ef301ad0e90b0fe25ae", "name": "GMERA sample", "family": "GMERA", "severity": "high" },
+    { "hash": "85e5429c06cf3dd370755ce418c471f44a947c427c5ef44cd9c3d5037ccc3495", "name": "GMERA sample", "family": "GMERA", "severity": "high" },
+    { "hash": "1429a3bf995ba8a5563d4988ea4d824f192d01d0f85427abbd8a2d0f863a64f6", "name": "GMERA sample", "family": "GMERA", "severity": "high" },
+    { "hash": "0aa69c3ecdc8f63f9de9bc2b8440cfb01d06b68a7452f4a59f422662ff476eb9", "name": "GMERA sample", "family": "GMERA", "severity": "high" },
+    { "hash": "5d68d761026f6c5354a70c20b304b4c7972d7a1a55ae0ddebc7bab10f355437a", "name": "Keydnap sample", "family": "Keydnap", "severity": "high" },
+    { "hash": "f7331310cf59049d42cc1e51b95f54aa8160b50769147ff0c9ef7a9ca04c6dba", "name": "Keydnap sample", "family": "Keydnap", "severity": "high" },
+    { "hash": "23296f664e9d40be3a20f6bb4e5bb328556e0aa0408fb006725f9db72ae4682c", "name": "Keydnap sample", "family": "Keydnap", "severity": "high" },
+    { "hash": "52415bc62c68fee6f26c303aeecb132939951d7fd4651338b27a5c69e8771bfa", "name": "Keydnap sample", "family": "Keydnap", "severity": "high" },
+    { "hash": "8d2bd504125d815339af52558a38f804048a56a213424378af83fd3c0d4c131c", "name": "Keydnap sample", "family": "Keydnap", "severity": "high" },
+    { "hash": "ebaba752e9e6f0a0233467a7162f0342ce7dd702bf3d2a30981a9bf28b22f766", "name": "Keydnap sample", "family": "Keydnap", "severity": "high" },
+    { "hash": "64cc212853359ec2164ceb142961db25452e576a94bc1e092417eb4cd2bf9186", "name": "Keydnap sample", "family": "Keydnap", "severity": "high" },
+    { "hash": "924035cf6990fcda744737bde60036a3938fd42ac5d06a5cddd8f66d0e9eac2a", "name": "Keydnap sample", "family": "Keydnap", "severity": "high" },
+    { "hash": "296e962560f69f12f93e457549a8612ab66b9df1d93c27b074bb8609764db480", "name": "Keydnap sample", "family": "Keydnap", "severity": "high" },
+    { "hash": "b8a61adccefb13b7058e47edcd10a127c483403cf38f7ece126954e95e86f2bd", "name": "CloudMensis sample", "family": "CloudMensis", "severity": "high" },
+    { "hash": "273633eee4776aef40904124ed1722a0793e6567f3009cdb037ed0a9d79c1b0b", "name": "CloudMensis sample", "family": "CloudMensis", "severity": "high" },
+    { "hash": "317ce26cae14dc9a5e4d4667f00fee771b4543e91c944580bbb136e7fe339427", "name": "CloudMensis sample", "family": "CloudMensis", "severity": "high" }
   ]
 }

@@ -60,6 +60,8 @@ final class SignatureDatabase {
 
     private var db: OpaquePointer?
     private let lock = NSLock()
+    private(set) var bundledCatalogEntryCount = 0
+    private(set) var bundledCatalogRetrievedAt: String?
 
     // MARK: - Init
 
@@ -84,7 +86,7 @@ final class SignatureDatabase {
         applyPragmas()
         createTableIfNeeded()
         createMetadataTableIfNeeded()
-        seedBundledCatalogIfNeeded(from: bundledCatalogURL)
+        loadBundledCatalog(from: bundledCatalogURL)
         Self.logger.info("Signature database ready at \(path)")
     }
 
@@ -234,22 +236,32 @@ final class SignatureDatabase {
         )
     }
 
-    private func seedBundledCatalogIfNeeded(from url: URL?) {
-        guard let db, let url,
-              let data = try? Data(contentsOf: url),
-              let catalog = try? JSONDecoder().decode(BundledHashCatalog.self, from: data),
-              catalog.version > metadataInteger(for: "bundled_catalog_version")
-        else { return }
+    private func loadBundledCatalog(from url: URL?) {
+        guard let db, let url else { return }
+        let catalog: BundledHashCatalog
+        let validEntries: [BundledHashCatalog.Entry]
+        do {
+            let data = try Data(contentsOf: url)
+            catalog = try JSONDecoder().decode(BundledHashCatalog.self, from: data)
+            validEntries = try catalog.validatedEntries()
+        } catch {
+            Self.logger.error("Rejected invalid bundled signature catalog: \(error.localizedDescription)")
+            return
+        }
 
-        let validEntries = catalog.validatedEntries.map {
+        bundledCatalogEntryCount = validEntries.count
+        bundledCatalogRetrievedAt = catalog.retrievedAt
+        guard catalog.version > metadataInteger(for: "bundled_catalog_version") else { return }
+
+        let databaseEntries = validEntries.map {
             ($0.hash, $0.name, $0.family, $0.severity)
         }
-        guard !validEntries.isEmpty else {
+        guard !databaseEntries.isEmpty else {
             Self.logger.error("Bundled signature catalog contained no valid entries")
             return
         }
 
-        bulkUpsert(validEntries)
+        bulkUpsert(databaseEntries)
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(
             db,
@@ -262,7 +274,7 @@ final class SignatureDatabase {
         sqlite3_bind_text(statement, 1, String(catalog.version), -1, sqliteTransient)
         if sqlite3_step(statement) == SQLITE_DONE {
             Self.logger.info(
-                "Loaded bundled signature catalog version \(catalog.version) with \(validEntries.count) entries"
+                "Loaded bundled signature catalog version \(catalog.version) with \(databaseEntries.count) entries"
             )
         }
     }
