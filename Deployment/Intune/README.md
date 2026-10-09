@@ -1,13 +1,16 @@
-# Nick Enterprise Pilot - Intune profiles
+# Unsupported experimental Intune profiles
 
-These profiles are the canonical, Nick-owned deployment payloads for Nick. They
-were generated from 4.1 build 419; their designated requirements depend only on
-the Team ID and bundle identifiers, so they remain valid for later builds with
-the same signing identity (re-verify with `codesign -d -r-` before each release). They are intended for deployment through a device-management
-service to a dedicated pilot Mac. Do not manually install them on a personal
-or production Mac.
+> **Not supported in Nick 5.0.** These profiles are retained as development
+> material only. They have not passed a managed-tenant deployment, upgrade, or
+> rollback matrix and are not release assets. Do not distribute them as a
+> supported Nick installation or management channel.
 
-## Deployment order
+These profiles were generated for an earlier 4.1 experiment. Their presence in
+the repository is not evidence that they remain correct for current builds.
+Use them only when developing a future managed-tenant validation plan; do not
+manually install them on a personal or production Mac.
+
+## Historical 4.1 experiment (not a 5.0 deployment guide)
 
 1. `Nick_System_Extensions.mobileconfig`
 2. `Nick_Full_Disk_Access.mobileconfig`

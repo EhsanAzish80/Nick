@@ -103,6 +103,7 @@ final class ESXPCServer: NSObject {
     private let settingsStore = PrivilegedIncidentFileStore(
         fileURL: URL(fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/settings.json")
     )
+    weak var updateLeaseManager: NickUpdateLeaseManager?
 
     // MARK: - Init
 
@@ -433,6 +434,30 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             existingAlertIDs: incidentAlertIDs(),
             hasProtectionAuthorization: verifyProtectionAuthorization(authorizationExternalForm)
         ).rawValue)
+    }
+
+    func requestUpdateLease(
+        sourceBuild: Int,
+        destinationBuild: Int,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    ) {
+        guard verifyProtectionAuthorization(authorizationExternalForm),
+              let manager = updateLeaseManager,
+              let consoleUser = TamperConsoleUserResolver.current(),
+              let runningBuildString = Bundle.main.object(
+                  forInfoDictionaryKey: "CFBundleVersion"
+              ) as? String,
+              let runningBuild = Int(runningBuildString),
+              sourceBuild == runningBuild else {
+            reply(false)
+            return
+        }
+        reply(manager.create(
+            consoleUID: consoleUser.uid,
+            sourceBuild: sourceBuild,
+            destinationBuild: destinationBuild
+        ))
     }
 
     func requestQuarantineFile(

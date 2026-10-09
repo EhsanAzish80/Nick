@@ -303,6 +303,16 @@ enum IncidentStoreWritePolicy {
         reply: @escaping (String) -> Void
     )
 
+    /// Creates one short-lived, single-use lease for a strictly newer signed
+    /// Nick update. The extension verifies the protection right and binds the
+    /// lease to the current console user before persisting it root-owned.
+    func requestUpdateLease(
+        sourceBuild: Int,
+        destinationBuild: Int,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
+
     /// Instructs the extension to rebuild the FIM baseline from the current
     /// state of monitored paths. Used by the "Rebuild Baseline" button in
     /// `IntegrityView`.

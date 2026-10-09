@@ -62,6 +62,7 @@ final class ESEventHandler {
 
     /// Phase 6 — tamper protection for Nick's own files.
     var tamperProtection: TamperProtection?
+    var updateLeaseManager: NickUpdateLeaseManager?
 
     // MARK: - Private
 
@@ -179,7 +180,7 @@ final class ESEventHandler {
             let isWriteOpen = msg.event.open.fflag & (FWRITE | O_TRUNC | O_APPEND) != 0
             let isProtectedWrite = isWriteOpen && tamperProtection?.protects(path: filePath) == true
             if isProtectedWrite {
-                let writeBlocked = tamperProtection?.shouldBlockWrite(
+                var writeBlocked = tamperProtection?.shouldBlockWrite(
                    targetPath: filePath,
                    identity: tamperActorIdentity,
                    nickIdentityValidated: validatedNickTamperActor(
@@ -187,6 +188,14 @@ final class ESEventHandler {
                        identity: tamperActorIdentity
                    )
                 ) ?? false
+                let leaseAllowed = leasedUpdateAuthorization(
+                    targetPath: filePath,
+                    operation: .write,
+                    process: process,
+                    processPath: processPath,
+                    identity: tamperActorIdentity
+                )
+                writeBlocked = writeBlocked && !leaseAllowed
                 tamperProtection?.handleWriteEvent(
                     targetPath: filePath,
                     actorPath: processPath,
@@ -245,7 +254,7 @@ final class ESEventHandler {
 
             let createBlocked: Bool
             if tamperProtection?.protects(path: filePath) == true {
-                createBlocked = tamperProtection?.shouldBlockWrite(
+                let ordinarilyBlocked = tamperProtection?.shouldBlockWrite(
                     targetPath: filePath,
                     identity: tamperActorIdentity,
                     nickIdentityValidated: validatedNickTamperActor(
@@ -253,6 +262,14 @@ final class ESEventHandler {
                         identity: tamperActorIdentity
                     )
                 ) ?? false
+                let leaseAllowed = leasedUpdateAuthorization(
+                    targetPath: filePath,
+                    operation: .write,
+                    process: process,
+                    processPath: processPath,
+                    identity: tamperActorIdentity
+                )
+                createBlocked = ordinarilyBlocked && !leaseAllowed
             } else {
                 createBlocked = false
             }
@@ -554,7 +571,7 @@ final class ESEventHandler {
             let consoleUser = protectsRename ? TamperConsoleUserResolver.current() : nil
             let renameBlocked: Bool
             if protectsRename {
-                renameBlocked = tamperProtection?.shouldBlockRename(
+                let ordinarilyBlocked = tamperProtection?.shouldBlockRename(
                     sourcePath: srcPath,
                     destinationPath: destinationPath,
                     identity: tamperActorIdentity,
@@ -564,6 +581,15 @@ final class ESEventHandler {
                     ),
                     consoleUser: consoleUser
                 ) ?? false
+                let leaseAllowed = leasedUpdateAuthorization(
+                    targetPath: destinationPath,
+                    sourcePath: srcPath,
+                    operation: .rename,
+                    process: process,
+                    processPath: processPath,
+                    identity: tamperActorIdentity
+                )
+                renameBlocked = ordinarilyBlocked && !leaseAllowed
             } else {
                 renameBlocked = false
             }
@@ -645,7 +671,7 @@ final class ESEventHandler {
             let unlinkTarget = esString(msg.event.unlink.target.pointee.path)
             let unlinkBlocked: Bool
             if tamperProtection?.protects(path: unlinkTarget) == true {
-                unlinkBlocked = tamperProtection?.shouldBlockUnlink(
+                let ordinarilyBlocked = tamperProtection?.shouldBlockUnlink(
                     targetPath: unlinkTarget,
                     identity: tamperActorIdentity,
                     nickIdentityValidated: validatedNickTamperActor(
@@ -653,6 +679,14 @@ final class ESEventHandler {
                         identity: tamperActorIdentity
                     )
                 ) ?? false
+                let leaseAllowed = leasedUpdateAuthorization(
+                    targetPath: unlinkTarget,
+                    operation: .unlink,
+                    process: process,
+                    processPath: processPath,
+                    identity: tamperActorIdentity
+                )
+                unlinkBlocked = ordinarilyBlocked && !leaseAllowed
             } else {
                 unlinkBlocked = false
             }
@@ -1144,6 +1178,27 @@ final class ESEventHandler {
         )
     }
 
+    private func leasedUpdateAuthorization(
+        targetPath: String,
+        sourcePath: String? = nil,
+        operation: NickUpdateLeaseOperation,
+        process: es_process_t,
+        processPath: String,
+        identity: TamperActorIdentity
+    ) -> Bool {
+        updateLeaseManager?.authorizes(
+            targetPath: targetPath,
+            sourcePath: sourcePath,
+            operation: operation,
+            actorPath: processPath,
+            identity: identity,
+            nickUpdateIdentityValidated: TamperActorValidator.shared.validatesNickUpdateActor(
+                auditToken: process.audit_token,
+                identity: identity
+            )
+        ) ?? false
+    }
+
     private func handleProtectedWriteAuthorization(
         message: UnsafePointer<es_message_t>,
         targetPath: String,
@@ -1156,7 +1211,7 @@ final class ESEventHandler {
             esClient?.respond(to: message, allow: true)
             return
         }
-        let blocked = tamperProtection?.shouldBlockWrite(
+        let ordinarilyBlocked = tamperProtection?.shouldBlockWrite(
             targetPath: targetPath,
             identity: identity,
             nickIdentityValidated: validatedNickTamperActor(
@@ -1164,6 +1219,14 @@ final class ESEventHandler {
                 identity: identity
             )
         ) ?? false
+        let leaseAllowed = leasedUpdateAuthorization(
+            targetPath: targetPath,
+            operation: .write,
+            process: process,
+            processPath: processPath,
+            identity: identity
+        )
+        let blocked = ordinarilyBlocked && !leaseAllowed
         esClient?.respond(to: message, allow: !blocked)
         tamperProtection?.handleWriteEvent(
             targetPath: targetPath,
