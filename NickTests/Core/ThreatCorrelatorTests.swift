@@ -962,7 +962,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         try deniedEngine.installPrivilegedIncidentStore(
             payload: payload,
             persistence: { _, _ in },
-            authorizer: { _, _ in nil },
+            authorizer: { _, _ in .targetMissing },
             removeLegacyState: false
         )
         let deniedAlert = makeAlert(signal: makeSignal(
@@ -975,7 +975,10 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(deniedEngine.incidentStore.visibleAlerts.count, 1)
         XCTAssertFalse(deniedEngine.incidentStore.incidents.flatMap(\.actions).contains { $0.actor == .user })
         XCTAssertTrue(deniedEngine.learnedReviewEntries.isEmpty)
-        XCTAssertNotNil(deniedEngine.incidentActionRetryMessage)
+        XCTAssertEqual(
+            deniedEngine.incidentActionRetryMessage,
+            "This item is no longer in Nick's protected record. Refresh Activity and try again."
+        )
         deniedEngine.cancelPendingIncidentAction()
         XCTAssertNil(deniedEngine.incidentActionRetryMessage)
 
@@ -984,7 +987,9 @@ final class ThreatCorrelatorTests: XCTestCase {
             payload: payload,
             persistence: { _, _ in },
             authorizer: { _, action in
-                action == .hidden ? IncidentActionApproval(authorizationExternalForm: nil) : nil
+                action == .hidden
+                    ? .approved(IncidentActionApproval(authorizationExternalForm: nil))
+                    : .rejected
             },
             removeLegacyState: false
         )
@@ -1015,7 +1020,9 @@ final class ThreatCorrelatorTests: XCTestCase {
             persistence: { _, _ in },
             authorizer: { _, _ in
                 attempts += 1
-                return attempts == 1 ? nil : IncidentActionApproval(authorizationExternalForm: nil)
+                return attempts == 1
+                    ? .protectionDisconnected
+                    : .approved(IncidentActionApproval(authorizationExternalForm: nil))
             },
             removeLegacyState: false
         )
@@ -1034,6 +1041,53 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertNil(engine.incidentActionRetryMessage)
         XCTAssertTrue(engine.incidentStore.visibleAlerts.isEmpty)
         XCTAssertEqual(attempts, 2)
+    }
+
+    func test_incidentActionFailuresUseDistinctHonestMessages() async throws {
+        let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [],
+            dismissalTombstones: [],
+            expectedCooldowns: [:]
+        ))
+        let cases: [(IncidentActionAuthorizationResult, String)] = [
+            (.approvalCancelled, "Approval was cancelled. Your action was not applied."),
+            (.protectionDisconnected, "Protection is not connected. Your action was not applied."),
+            (.versionMismatch(appBuild: "5017", extensionBuild: "5016"),
+             "App and protection versions differ (app 5017, protection 5016). Nick may still be updating; reopen Nick after the update completes."),
+            (.rejected, "Protection refused this action. Refresh Activity and try again.")
+        ]
+
+        for (result, expectedMessage) in cases {
+            let engine = SecurityEngine()
+            try engine.installPrivilegedIncidentStore(
+                payload: payload,
+                persistence: { _, _ in },
+                authorizer: { _, _ in result },
+                removeLegacyState: false
+            )
+            let alert = makeAlert(signal: makeSignal(
+                metadata: ["reason": UUID().uuidString, "path": "/Users/test/failure"]
+            ))
+            engine.addAlert(alert)
+            engine.hideAlert(alert.id)
+            try await Task.sleep(for: .milliseconds(25))
+            XCTAssertEqual(engine.incidentActionRetryMessage, expectedMessage)
+        }
+    }
+
+    func test_blankLegacyActionActorDecodesAndDisplaysAsUnknown() throws {
+        let timestamp = Date(timeIntervalSince1970: 123)
+        let encoded = try JSONSerialization.data(withJSONObject: [
+            "action": "reviewed",
+            "actor": "   ",
+            "firstTimestamp": timestamp.timeIntervalSinceReferenceDate,
+            "lastTimestamp": timestamp.timeIntervalSinceReferenceDate,
+            "count": 1
+        ])
+        let record = try JSONDecoder().decode(IncidentActionRecord.self, from: encoded)
+
+        XCTAssertEqual(record.actor, .unknown)
+        XCTAssertEqual(record.actor.displayName, "Unknown")
     }
 
     // MARK: - ThreatAlert

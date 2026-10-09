@@ -15,6 +15,7 @@ struct AlertDetailView: View {
 
     let alert: ThreatAlert
     @Environment(\.dismiss) private var dismiss
+    @Environment(SecurityEngine.self) private var engine
 
     // Phase 4: simple/technical mode
     @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
@@ -40,6 +41,9 @@ struct AlertDetailView: View {
                     if !alert.contributingSignals.isEmpty {
                         signalsSection
                     }
+                    if !actionHistory.isEmpty {
+                        actionHistorySection
+                    }
                     actionSection
                 }
                 .padding(NickSpacing.xl)
@@ -51,6 +55,30 @@ struct AlertDetailView: View {
         }
         .frame(width: NickLayout.windowWidth, height: 540)
         .background(Color.backgroundPrimary)
+    }
+
+    private var actionHistory: [IncidentActionRecord] {
+        engine.incidentStore.incidents.first(where: { $0.alert.id == alert.id })?.actions ?? []
+    }
+
+    private var actionHistorySection: some View {
+        VStack(alignment: .leading, spacing: NickSpacing.sm) {
+            Text("Action History")
+                .font(.nickSubtitle)
+                .foregroundStyle(Color.textSecondary)
+            ForEach(Array(actionHistory.enumerated()), id: \.offset) { _, record in
+                HStack {
+                    Text(record.action.rawValue.capitalized)
+                    Spacer()
+                    Text(record.actor.displayName)
+                        .foregroundStyle(Color.textSecondary)
+                    Text(record.timestamp.formatted(date: .abbreviated, time: .shortened))
+                        .font(.nickMonoSmall)
+                        .foregroundStyle(Color.textTertiary)
+                }
+                .font(.nickBodySmall)
+            }
+        }
     }
 
     // MARK: - Technical Mode Header
