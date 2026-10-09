@@ -177,6 +177,29 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         ))
     }
 
+    func test_addingApprovedDevelopmentRootRequiresProtectionAuthorization() throws {
+        func settings(_ roots: [String]) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1,
+                "trustedNames": [],
+                "trustedEntries": [],
+                "suppressionRules": [],
+                "ignoredPaths": [],
+                "notificationThresholdRaw": 3,
+                "verdictLearningEnabled": false,
+                "approvedDevelopmentRoots": roots
+            ])
+        }
+        let oldPayload = try settings([])
+        let oldRecord = try JSONEncoder().encode(
+            PrivilegedIncidentStoreRecord(revision: 1, payload: oldPayload)
+        )
+        XCTAssertTrue(SecuritySettingsWritePolicy.requiresAuthorization(
+            previousRecord: oldRecord,
+            proposedPayload: try settings(["/Users/a/Projects/App"])
+        ))
+    }
+
     func test_authorizationRightPolicyRejectsWeakerDefinitions() {
         let expected: [String: Any] = [
             "class": "rule",
@@ -185,6 +208,13 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
             "shared": false
         ]
         XCTAssertTrue(ProtectionAuthorizationRightPolicy.isExpected(expected))
+        XCTAssertTrue(ProtectionAuthorizationRightPolicy.isExpected([
+            "class": "rule",
+            "rule": ["authenticate-session-owner-or-admin"],
+            "created": 813_229_657.0,
+            "identifier": "com.ehsanazish.nick.NickExtension",
+            "version": 0
+        ]), "authd omits timeout/shared from the canonical dictionary it returns")
 
         var shared = expected
         shared["shared"] = true

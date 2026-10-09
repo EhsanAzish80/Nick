@@ -8,14 +8,15 @@ import Security
 
 private enum ProtectionAuthorization {
     static let rightName = "com.ehsanazish.nick.modify-protection"
-    enum RightState { case valid, installed, repaired, failed }
+    enum RightState { case valid, installed, repaired(observed: String), failed }
 
     static func ensureRight() -> RightState {
         var definition: CFDictionary?
         let getStatus = rightName.withCString { AuthorizationRightGet($0, &definition) }
         if getStatus == errAuthorizationSuccess, let dictionary = definition as? [String: Any] {
             if ProtectionAuthorizationRightPolicy.isExpected(dictionary) { return .valid }
-            return registerRight() ? .repaired : .failed
+            let observed = ProtectionAuthorizationRightPolicy.observedSummary(dictionary)
+            return registerRight() ? .repaired(observed: observed) : .failed
         }
         return registerRight() ? .installed : .failed
     }
@@ -132,8 +133,8 @@ final class ESXPCServer: NSObject {
         switch rightState {
         case .failed:
             Self.logger.fault("Could not register the protection-modification authorization right")
-        case .repaired:
-            reportAuthorizationRuleTamper()
+        case .repaired(let observed):
+            reportAuthorizationRuleTamper(observed: observed)
         case .valid, .installed:
             break
         }
@@ -156,10 +157,20 @@ final class ESXPCServer: NSObject {
         listenerIsConfigured ? "configured" : "missing"
     }
 
+    func approvedDevelopmentRoots() -> Set<String> {
+        guard let record = try? JSONDecoder().decode(
+            PrivilegedIncidentStoreRecord.self,
+            from: settingsStore.load()
+        ),
+              let object = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any]
+        else { return [] }
+        return Set((object["approvedDevelopmentRoots"] as? [String]) ?? [])
+    }
+
     private func verifyProtectionAuthorization(_ data: Data?) -> Bool {
         switch ProtectionAuthorization.ensureRight() {
-        case .repaired:
-            reportAuthorizationRuleTamper()
+        case .repaired(let observed):
+            reportAuthorizationRuleTamper(observed: observed)
         case .failed:
             return false
         case .valid, .installed:
@@ -168,18 +179,23 @@ final class ESXPCServer: NSObject {
         return ProtectionAuthorization.verify(data)
     }
 
-    private func reportAuthorizationRuleTamper() {
+    private func reportAuthorizationRuleTamper(observed: String) {
         Self.logger.fault("Protection-modification authorization rule was changed and has been restored")
         let event = ESEvent(
             eventType: .notifyWrite,
-            processPath: "",
+            processPath: Bundle.main.executableURL?.path ?? "/Library/SystemExtensions/com.ehsanazish.nick.NickExtension",
             pid: 0,
             parentPid: 0,
             filePath: nil,
             decision: .notApplicable,
             threat: .init(
                 threatName: "Nick authorization policy tampering detected",
-                threatFamily: "tamper"
+                threatFamily: "tamper",
+                metadata: [
+                    "observedRule": observed,
+                    "expectedRule": ProtectionAuthorizationRightPolicy.expectedSummary,
+                    "repairStatus": "restored"
+                ]
             )
         )
         if let data = try? JSONEncoder().encode(event) {
