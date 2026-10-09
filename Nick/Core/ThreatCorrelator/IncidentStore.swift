@@ -312,6 +312,12 @@ final class IncidentStore {
         Set(dismissalTombstones.map(\.alertDeduplicationKey))
     }
 
+    var legacyDismissalTombstones: [IncidentDismissalTombstone] {
+        dismissalTombstones
+            .filter { Self.isLegacyTombstone($0) }
+            .sorted { $0.dismissedAt > $1.dismissedAt }
+    }
+
     func installPrivilegedSnapshot(
         _ payload: Data,
         persistence: @escaping (Data) -> Void
@@ -367,9 +373,7 @@ final class IncidentStore {
             let candidate = applyLearnedPriority(to: applyTrustedDowngrade(to: rawCandidate))
             guard !isSuppressed(candidate), !isCoolingDown(candidate) else { continue }
             let key = Self.incidentKey(for: candidate)
-            guard !dismissalTombstones.contains(where: {
-                $0.incidentKey == key || $0.alertDeduplicationKey == candidate.deduplicationKey
-            }) else { continue }
+            guard !isDismissed(candidate, incidentKey: key) else { continue }
             if let index = incidents.firstIndex(where: { $0.key == key }) {
                 let prior = incidents[index]
                 let escalated = candidate.severity > prior.alert.severity
@@ -460,6 +464,13 @@ final class IncidentStore {
 
     func resetAllLearnedEntries() {
         learnedReviewEntries.removeAll()
+        persist()
+    }
+
+    func resetLegacyDismissal(incidentKey: String) {
+        dismissalTombstones.removeAll {
+            Self.isLegacyTombstone($0) && $0.incidentKey == incidentKey
+        }
         persist()
     }
 
@@ -647,6 +658,20 @@ final class IncidentStore {
         alert.contributingSignals.contains {
             EvidenceRulePolicy.tier(for: $0, ruleClass: EvidenceRuleClass(signal: $0)) == .protectedDetection
         }
+    }
+
+    private func isDismissed(_ alert: ThreatAlert, incidentKey: String) -> Bool {
+        dismissalTombstones.contains { tombstone in
+            if Self.isLegacyTombstone(tombstone) {
+                return !isProtected(alert)
+                    && tombstone.alertDeduplicationKey == alert.deduplicationKey
+            }
+            return tombstone.incidentKey == incidentKey
+        }
+    }
+
+    private static func isLegacyTombstone(_ tombstone: IncidentDismissalTombstone) -> Bool {
+        tombstone.incidentKey.hasPrefix("legacy-alert-dedup:")
     }
 
     private func applyLearnedPriority(to alert: ThreatAlert) -> ThreatAlert {

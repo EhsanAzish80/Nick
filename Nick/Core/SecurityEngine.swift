@@ -744,6 +744,10 @@ final class SecurityEngine {
         incidentStore.learnedReviewEntries.sorted { $0.lastConfirmedAt > $1.lastConfirmedAt }
     }
 
+    var legacyDismissalTombstones: [IncidentDismissalTombstone] {
+        incidentStore.legacyDismissalTombstones
+    }
+
     func setVerdictLearningEnabled(_ enabled: Bool, authorizationExternalForm: Data? = nil) {
         if enabled { nextSecuritySettingsAuthorization = authorizationExternalForm }
         verdictLearningEnabled = enabled
@@ -757,6 +761,11 @@ final class SecurityEngine {
 
     func resetAllLearnedEntries() {
         incidentStore.resetAllLearnedEntries()
+    }
+
+    func resetLegacyDismissal(incidentKey: String) {
+        incidentStore.resetLegacyDismissal(incidentKey: incidentKey)
+        syncAlertsFromStore()
     }
 
     func exportLearnedEntries() throws -> Data {
