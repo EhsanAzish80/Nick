@@ -3,6 +3,12 @@
 Use these checks on the final artifacts. They answer different questions and
 are all required; one command does not replace another.
 
+All maintained release scripts use the `NickNotary` keychain profile by
+default. Create that profile locally with `notarytool store-credentials`; never
+commit Apple credentials or pass an app-specific password on a command line.
+Override `NOTARY_PROFILE` only for an intentionally separate local keychain
+profile.
+
 ```sh
 pkgutil --check-signature Nick.pkg
 xcrun stapler validate Nick.pkg
