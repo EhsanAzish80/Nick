@@ -113,6 +113,7 @@ enum RansomwareRenamePolicy {
     private static let routineDestinationExtensions: Set<String> = [
         "json", "plist", "xml", "db", "sqlite", "sqlite3", "wal", "shm", "log", "txt",
         "md", "csv", "html", "css", "js", "ts", "swift", "h", "m", "c", "cpp", "o",
+        "make",
         "png", "jpg", "jpeg", "heic", "gif", "webp", "mov", "mp4", "m4a", "mp3", "wav",
         "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
         "zip", "gz", "tar", "dmg", "pkg", "app", "bak", "old", "orig", "backup",

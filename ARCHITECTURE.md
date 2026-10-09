@@ -72,7 +72,23 @@ Deep Scan, FSEvents, detector-confirmed Endpoint Security findings, privacy and
 integrity findings, USB findings, and Network Extension observations enter that
 incident boundary. The source detector still decides what its raw observation
 means; the incident store applies suppression, deduplication, lifecycle, local
-explanation and notification policy once.
+explanation and notification policy once. File-oriented bursts are coalesced
+by rule and actor identity, each rule has a bounded share of the 100 retained
+incident slots, and Diagnostics reports how many incidents retention evicted.
+
+The Endpoint Security extension denies deletion or replacement of Nick's
+protected installation paths unless the actor has one of the exact validated
+Nick/Sparkle or Apple-installer signing identities. Nick/Sparkle actors are
+resolved from the Endpoint Security audit token and checked dynamically against
+an Apple-anchored Team ID plus identifier requirement; results are cached by
+cdhash. Rename authorization checks both source and destination, and untrusted
+opens, truncates, creates, links and clones into the app bundle are denied. The bundled uninstaller is the complete removal
+path; Finder's narrow move of `/Applications/Nick.app` into the user's Trash is
+also allowed only for the console user's real Trash or a mounted volume's
+`.Trashes/<uid>` directory. It creates a visible informational notice but does
+not remove Nick's generated data or system components.
+Validated update/reinstall activity is collapsed into one informational
+maintenance incident instead of a protected-path alert burst.
 
 ### YARA and Deep Scan
 
@@ -253,7 +269,8 @@ from four family-specific ESET IOC lists under BSD-2-Clause; EICAR remains a
 low-severity Test-family entry. The catalog enforces a 5,000-entry maximum and
 rejects malformed or duplicate entries as a whole. Its provenance manifest is
 bundled beside the catalog. There is no network lookup or automatic hash-feed
-update in this version.
+update in this version. The ESET BSD-2-Clause notice ships inside the app and
+extension bundles and is readable in Settings → Acknowledgements.
 
 ## Known product limits
 

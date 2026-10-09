@@ -486,6 +486,123 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertTrue(restored.dismissedAlertDeduplicationKeys.contains(dismissedAlert.deduplicationKey))
     }
 
+    func test_fileFloodCoalescesByRuleAndSignedActorIdentity() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        for index in 0..<50 {
+            let process = NickProcessInfo(
+                pid: Int32(index + 100),
+                path: "/usr/libexec/installd",
+                name: "installd",
+                parentPID: 1,
+                parentName: "launchd",
+                signingStatus: .signed(teamID: "APPLE", signingID: "com.apple.installd")
+            )
+            let signal = ThreatSignal(
+                source: .endpointSecurity,
+                severity: .info,
+                title: "Nick maintenance updated protected files",
+                description: "Validated maintenance",
+                context: ThreatSignalContext(
+                    processInfo: process,
+                    fileInfo: FileInfo(
+                        path: "/Applications/Nick.app/file-\(index)",
+                        sha256Hash: nil,
+                        entropy: nil,
+                        signingStatus: nil,
+                        sizeBytes: nil
+                    ),
+                    metadata: ["rule": "nick_protected_path_maintenance", "class": "audit"]
+                )
+            )
+            _ = store.ingest([makeAlert(signal: signal, severity: .info)])
+        }
+
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 50)
+        XCTAssertEqual(store.evictedIncidentCount, 0)
+    }
+
+    func test_documentedUninstallInfoIncidentRequestsOneVisibleNotification() {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let signal = makeSignal(
+            severity: .info,
+            title: "Nick is being moved to the Trash",
+            metadata: ["rule": "nick_documented_uninstall", "class": "audit"]
+        )
+        let alert = makeAlert(signal: signal, severity: .info)
+
+        let first = store.ingest([alert])
+        let repeated = store.ingest([alert])
+
+        XCTAssertEqual(first.newlyActionable.count, 1)
+        XCTAssertTrue(IncidentStore.requiresVisibleNotification(alert))
+        XCTAssertTrue(repeated.newlyActionable.isEmpty)
+    }
+
+    func test_perRuleShareCapCannotEvictCriticalIncident() {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let critical = makeAlert(
+            signal: makeSignal(
+                severity: .critical,
+                title: "Critical evidence",
+                metadata: ["reason": "critical_rule", "path": "/private/tmp/critical"]
+            ),
+            severity: .critical
+        )
+        _ = store.ingest([critical])
+
+        for index in 0..<(IncidentStore.maximumIncidentsPerRule + 15) {
+            let process = NickProcessInfo(
+                pid: Int32(index + 200),
+                path: "/Applications/Noise\(index).app/Contents/MacOS/Noise",
+                name: "Noise\(index)",
+                parentPID: 1,
+                parentName: "launchd",
+                signingStatus: .signed(teamID: "TEAM\(index)", signingID: "com.example.noise.\(index)")
+            )
+            let signal = ThreatSignal(
+                source: .process,
+                severity: .info,
+                title: "Repeated noisy rule",
+                description: "Noise",
+                context: ThreatSignalContext(
+                    processInfo: process,
+                    metadata: ["rule": "one_noisy_rule"]
+                )
+            )
+            _ = store.ingest([makeAlert(signal: signal, severity: .info)])
+        }
+
+        XCTAssertEqual(
+            store.incidents.filter { $0.evidence.first?.ruleID == "one_noisy_rule" }.count,
+            IncidentStore.maximumIncidentsPerRule
+        )
+        XCTAssertTrue(store.incidents.contains { $0.alert.severity == .critical })
+        XCTAssertEqual(store.evictedIncidentCount, 15)
+    }
+
+    func test_evictedCountPersistsAndLegacySnapshotDefaultsToZero() throws {
+        let current = IncidentStoreSnapshot(
+            incidents: [],
+            dismissalTombstones: [],
+            expectedCooldowns: [:],
+            evictedIncidentCount: 17
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(
+                IncidentStoreSnapshot.self,
+                from: JSONEncoder().encode(current)
+            ).evictedIncidentCount,
+            17
+        )
+
+        let legacy = Data(#"{"schemaVersion":1,"incidents":[],"dismissalTombstones":[],"expectedCooldowns":{}}"#.utf8)
+        XCTAssertEqual(
+            try JSONDecoder().decode(IncidentStoreSnapshot.self, from: legacy).evictedIncidentCount,
+            0
+        )
+    }
+
     func test_repeatSameSubjectPreservesReviewUntilSeverityEscalates() throws {
         let store = IncidentStore(defaults: isolatedDefaults())
         let first = makeAlert(signal: makeSignal(

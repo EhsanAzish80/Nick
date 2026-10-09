@@ -72,6 +72,7 @@ struct SettingsView: View {
     @State private var showResetHistoryConfirmation = false
     @State private var showRemoveHelperConfirmation = false
     @State private var updateCheckStatus: String?
+    @State private var showsAcknowledgements = false
     @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
     @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
     @AppStorage("nickUpdateAvailable") private var updateAvailable = false
@@ -100,6 +101,7 @@ struct SettingsView: View {
                     dataSection
                     updatesSection
                     maintenanceSection
+                    acknowledgementsSection
                     if interfaceMode == .simple {
                         advancedSettingsDisclosure
                         if showsAdvancedSettings {
@@ -123,6 +125,9 @@ struct SettingsView: View {
         .task { await networkProtection.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshLaunchAtLogin()
+        }
+        .sheet(isPresented: $showsAcknowledgements) {
+            AcknowledgementsView()
         }
     }
 
@@ -1073,6 +1078,19 @@ struct SettingsView: View {
         }
     }
 
+    private var acknowledgementsSection: some View {
+        Section("About") {
+            LabeledTile(
+                icon: "doc.text.fill", tint: .gray,
+                title: "Acknowledgements",
+                subtitle: "Open-source software and detection-data licences included with Nick."
+            ) {
+                Button("View…") { showsAcknowledgements = true }
+                    .controlSize(.small)
+            }
+        }
+    }
+
     // MARK: Footer
 
     private var appVersion: String {
@@ -1293,6 +1311,45 @@ struct SettingsView: View {
                     .stroke(Color.white.opacity(0.35), lineWidth: 0.5)
                     .blendMode(.plusLighter)
             )
+    }
+}
+
+private struct AcknowledgementsView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private var esetNotice: String {
+        guard let url = Bundle.main.url(
+            forResource: "eset",
+            withExtension: "txt",
+            subdirectory: "Rules/families/LICENSES"
+        ), let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return "The bundled ESET BSD-2-Clause notice is unavailable in this build."
+        }
+        return text
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Acknowledgements").font(.title2.weight(.semibold))
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            Text("ESET malware-ioc data")
+                .font(.headline)
+            Text("Nick includes a small, pinned set of macOS SHA-256 indicators from ESET's malware-ioc repository under the BSD-2-Clause licence.")
+                .foregroundStyle(.secondary)
+            ScrollView {
+                Text(esetNotice)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(12)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(24)
+        .frame(minWidth: 640, minHeight: 520)
     }
 }
 

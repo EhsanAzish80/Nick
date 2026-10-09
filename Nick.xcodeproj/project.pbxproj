@@ -11,7 +11,6 @@
 		8805B7AC2FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA11223344556677AABB0011 /* ESEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0001 /* ESEvent.swift */; };
 		AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */; };
-		F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */; };
 		AA11223344556677AABB0013 /* NickExtensionConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0003 /* NickExtensionConstants.swift */; };
 		AA11223344556677AABB0014 /* QuarantineTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0004 /* QuarantineTypes.swift */; };
 		AA11223344556677AABB0015 /* YARAEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0005 /* YARAEngine.swift */; };
@@ -34,6 +33,9 @@
 		E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000300 /* ScanCandidatePolicy.swift */; };
 		E40000000000000000000401 /* BundledHashCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000400 /* BundledHashCatalog.swift */; };
 		E40000000000000000000402 /* BundledHashCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000400 /* BundledHashCatalog.swift */; };
+		E40000000000000000000501 /* TamperProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000500 /* TamperProtectionPolicy.swift */; };
+		E40000000000000000000502 /* TamperProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000500 /* TamperProtectionPolicy.swift */; };
+		F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -116,7 +118,6 @@
 		8B8901B2276260484B8A6A0C /* Nick.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nick.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA11223344556677AABB0001 /* ESEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ESEvent.swift; path = NickExtension/Shared/ESEvent.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionXPCProtocol.swift; path = NickExtension/Shared/NickExtensionXPCProtocol.swift; sourceTree = SOURCE_ROOT; };
-		F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PrivilegedIncidentFileStore.swift; path = Nick/Core/ThreatCorrelator/PrivilegedIncidentFileStore.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0003 /* NickExtensionConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionConstants.swift; path = NickExtension/Shared/NickExtensionConstants.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0004 /* QuarantineTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineTypes.swift; path = NickExtension/Shared/QuarantineTypes.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0005 /* YARAEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAEngine.swift; path = Nick/Core/YARAEngine/YARAEngine.swift; sourceTree = SOURCE_ROOT; };
@@ -131,6 +132,8 @@
 		E40000000000000000000200 /* ExecutionTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ExecutionTrustPolicy.swift; path = Shared/ExecutionTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000300 /* ScanCandidatePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScanCandidatePolicy.swift; path = Shared/ScanCandidatePolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000400 /* BundledHashCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BundledHashCatalog.swift; path = Shared/BundledHashCatalog.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000500 /* TamperProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TamperProtectionPolicy.swift; path = Shared/TamperProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
+		F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PrivilegedIncidentFileStore.swift; path = Nick/Core/ThreatCorrelator/PrivilegedIncidentFileStore.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -289,6 +292,8 @@
 				E40000000000000000000200 /* ExecutionTrustPolicy.swift */,
 				E40000000000000000000100 /* YARAVerdictPolicy.swift */,
 				E40000000000000000000400 /* BundledHashCatalog.swift */,
+				E40000000000000000000500 /* TamperProtectionPolicy.swift */,
+				F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -686,6 +691,7 @@
 				E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */,
 				E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */,
 				E40000000000000000000402 /* BundledHashCatalog.swift in Sources */,
+				E40000000000000000000502 /* TamperProtectionPolicy.swift in Sources */,
 				E40000000000000000000007 /* RansomwareNotePolicy.swift in Sources */,
 				AA11223344556677AABB0015 /* YARAEngine.swift in Sources */,
 				AA11223344556677AABB0016 /* YARAMatch.swift in Sources */,
@@ -722,6 +728,7 @@
 				E40000000000000000000201 /* ExecutionTrustPolicy.swift in Sources */,
 				E40000000000000000000101 /* YARAVerdictPolicy.swift in Sources */,
 				E40000000000000000000401 /* BundledHashCatalog.swift in Sources */,
+				E40000000000000000000501 /* TamperProtectionPolicy.swift in Sources */,
 				E40000000000000000000001 /* NetworkProtectionPolicy.swift in Sources */,
 				E40000000000000000000006 /* RansomwareNotePolicy.swift in Sources */,
 				E40000000000000000000004 /* ScamGuardian.swift in Sources */,

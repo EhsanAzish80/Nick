@@ -89,6 +89,12 @@ final class ESEventHandler {
         let pid         = audit_token_to_pid(process.audit_token)
         let parentPid   = audit_token_to_pid(process.parent_audit_token)
         let processIdentity = ProcessInstanceIdentity.capture(pid: pid)
+        let tamperActorIdentity = TamperActorIdentity(
+            teamID: esOptionalString(process.team_id),
+            signingID: esOptionalString(process.signing_id),
+            codesigningFlags: process.codesigning_flags,
+            isPlatformBinary: process.is_platform_binary
+        )
 
         switch msg.event_type {
 
@@ -170,6 +176,29 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_OPEN:
             let filePath = esString(msg.event.open.file.pointee.path)
+            let isWriteOpen = msg.event.open.fflag & (FWRITE | O_TRUNC | O_APPEND) != 0
+            let isProtectedWrite = isWriteOpen && tamperProtection?.protects(path: filePath) == true
+            if isProtectedWrite {
+                let writeBlocked = tamperProtection?.shouldBlockWrite(
+                   targetPath: filePath,
+                   identity: tamperActorIdentity,
+                   nickIdentityValidated: validatedNickTamperActor(
+                       auditToken: process.audit_token,
+                       identity: tamperActorIdentity
+                   )
+                ) ?? false
+                tamperProtection?.handleWriteEvent(
+                    targetPath: filePath,
+                    actorPath: processPath,
+                    actorPid: pid,
+                    identity: tamperActorIdentity,
+                    blocked: writeBlocked
+                )
+                if writeBlocked {
+                    esClient?.respond(to: message, allow: false)
+                    break
+                }
+            }
             let fileIdentity = FileIdentity(stat: msg.event.open.file.pointee.stat)
             let cached   = fileScanner?.cache.lookup(
                 path: filePath,
@@ -214,6 +243,40 @@ final class ESEventHandler {
                 filePath = dir + "/" + name
             }
 
+            let createBlocked: Bool
+            if tamperProtection?.protects(path: filePath) == true {
+                createBlocked = tamperProtection?.shouldBlockWrite(
+                    targetPath: filePath,
+                    identity: tamperActorIdentity,
+                    nickIdentityValidated: validatedNickTamperActor(
+                        auditToken: process.audit_token,
+                        identity: tamperActorIdentity
+                    )
+                ) ?? false
+            } else {
+                createBlocked = false
+            }
+            if createBlocked {
+                esClient?.respond(to: message, allow: false)
+                tamperProtection?.handleWriteEvent(
+                    targetPath: filePath,
+                    actorPath: processPath,
+                    actorPid: pid,
+                    identity: tamperActorIdentity,
+                    blocked: true
+                )
+                break
+            }
+            if tamperProtection?.protects(path: filePath) == true {
+                tamperProtection?.handleWriteEvent(
+                    targetPath: filePath,
+                    actorPath: processPath,
+                    actorPid: pid,
+                    identity: tamperActorIdentity,
+                    blocked: false
+                )
+            }
+
             // This is heuristic-only: there is no file to hash yet. Observe and
             // report suspicious creates, but fail open so AirDrop, Handoff,
             // installers and developer builds cannot be disrupted.
@@ -234,6 +297,40 @@ final class ESEventHandler {
                 ))
             }
 
+        // MARK: AUTH_TRUNCATE / AUTH_LINK / AUTH_CLONE — protect Nick bundle contents
+
+        case ES_EVENT_TYPE_AUTH_TRUNCATE:
+            handleProtectedWriteAuthorization(
+                message: message,
+                targetPath: esString(msg.event.truncate.target.pointee.path),
+                process: process,
+                processPath: processPath,
+                pid: pid,
+                identity: tamperActorIdentity
+            )
+
+        case ES_EVENT_TYPE_AUTH_LINK:
+            handleProtectedWriteAuthorization(
+                message: message,
+                targetPath: esString(msg.event.link.target_dir.pointee.path)
+                    + "/" + esString(msg.event.link.target_filename),
+                process: process,
+                processPath: processPath,
+                pid: pid,
+                identity: tamperActorIdentity
+            )
+
+        case ES_EVENT_TYPE_AUTH_CLONE:
+            handleProtectedWriteAuthorization(
+                message: message,
+                targetPath: esString(msg.event.clone.target_dir.pointee.path)
+                    + "/" + esString(msg.event.clone.target_name),
+                process: process,
+                processPath: processPath,
+                pid: pid,
+                identity: tamperActorIdentity
+            )
+
         // MARK: AUTH_MMAP — block mapping of cached-threat files
 
         case ES_EVENT_TYPE_AUTH_MMAP:
@@ -250,6 +347,19 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_COPYFILE:
             let srcPath  = esString(msg.event.copyfile.source.pointee.path)
+            let copyDestination = esString(msg.event.copyfile.target_dir.pointee.path)
+                + "/" + esString(msg.event.copyfile.target_name)
+            if tamperProtection?.protects(path: copyDestination) == true {
+                handleProtectedWriteAuthorization(
+                    message: message,
+                    targetPath: copyDestination,
+                    process: process,
+                    processPath: processPath,
+                    pid: pid,
+                    identity: tamperActorIdentity
+                )
+                break
+            }
             let cached   = fileScanner?.cache.lookup(
                 path: srcPath,
                 identity: FileIdentity(stat: msg.event.copyfile.source.pointee.stat)
@@ -439,16 +549,34 @@ final class ESEventHandler {
                 let directory = esString(msg.event.rename.destination.new_path.dir.pointee.path)
                 destinationPath = directory + "/" + esString(msg.event.rename.destination.new_path.filename)
             }
-            let renameBlocked = tamperProtection?.shouldBlock(
-                targetPath: srcPath, actorPath: processPath, actorPid: pid
-            ) ?? false
+            let protectsRename = tamperProtection?.protects(path: srcPath) == true
+                || tamperProtection?.protects(path: destinationPath) == true
+            let consoleUser = protectsRename ? TamperConsoleUserResolver.current() : nil
+            let renameBlocked: Bool
+            if protectsRename {
+                renameBlocked = tamperProtection?.shouldBlockRename(
+                    sourcePath: srcPath,
+                    destinationPath: destinationPath,
+                    identity: tamperActorIdentity,
+                    nickIdentityValidated: validatedNickTamperActor(
+                        auditToken: process.audit_token,
+                        identity: tamperActorIdentity
+                    ),
+                    consoleUser: consoleUser
+                ) ?? false
+            } else {
+                renameBlocked = false
+            }
+            esClient?.respond(to: message, allow: !renameBlocked)
             tamperProtection?.handleRenameEvent(
                 srcPath: srcPath,
                 destinationPath: destinationPath,
                 actorPath: processPath,
-                actorPid: pid
+                actorPid: pid,
+                identity: tamperActorIdentity,
+                blocked: renameBlocked,
+                consoleUser: consoleUser
             )
-            esClient?.respond(to: message, allow: !renameBlocked)
             // Behaviour is recorded from NOTIFY_RENAME, which reflects only
             // renames that actually happened (recording both double-counted).
             fileScanner?.cache.invalidate(path: srcPath)
@@ -501,11 +629,27 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_UNLINK:
             let unlinkTarget = esString(msg.event.unlink.target.pointee.path)
-            let unlinkBlocked = tamperProtection?.shouldBlock(
-                targetPath: unlinkTarget, actorPath: processPath, actorPid: pid
-            ) ?? false
-            tamperProtection?.handleUnlinkEvent(targetPath: unlinkTarget, actorPath: processPath, actorPid: pid)
+            let unlinkBlocked: Bool
+            if tamperProtection?.protects(path: unlinkTarget) == true {
+                unlinkBlocked = tamperProtection?.shouldBlockUnlink(
+                    targetPath: unlinkTarget,
+                    identity: tamperActorIdentity,
+                    nickIdentityValidated: validatedNickTamperActor(
+                        auditToken: process.audit_token,
+                        identity: tamperActorIdentity
+                    )
+                ) ?? false
+            } else {
+                unlinkBlocked = false
+            }
             esClient?.respond(to: message, allow: !unlinkBlocked)
+            tamperProtection?.handleUnlinkEvent(
+                targetPath: unlinkTarget,
+                actorPath: processPath,
+                actorPid: pid,
+                identity: tamperActorIdentity,
+                blocked: unlinkBlocked
+            )
             if !unlinkBlocked {
                 fileScanner?.cache.invalidate(path: unlinkTarget)
             }
@@ -918,6 +1062,46 @@ final class ESEventHandler {
             codesigningFlags: process.codesigning_flags,
             isPlatformBinary: process.is_platform_binary,
             teamID: esOptionalString(process.team_id)
+        )
+    }
+
+    private func validatedNickTamperActor(
+        auditToken: audit_token_t,
+        identity: TamperActorIdentity
+    ) -> Bool {
+        TamperActorValidator.shared.validatesNickActor(
+            auditToken: auditToken,
+            identity: identity
+        )
+    }
+
+    private func handleProtectedWriteAuthorization(
+        message: UnsafePointer<es_message_t>,
+        targetPath: String,
+        process: es_process_t,
+        processPath: String,
+        pid: Int32,
+        identity: TamperActorIdentity
+    ) {
+        guard tamperProtection?.protects(path: targetPath) == true else {
+            esClient?.respond(to: message, allow: true)
+            return
+        }
+        let blocked = tamperProtection?.shouldBlockWrite(
+            targetPath: targetPath,
+            identity: identity,
+            nickIdentityValidated: validatedNickTamperActor(
+                auditToken: process.audit_token,
+                identity: identity
+            )
+        ) ?? false
+        esClient?.respond(to: message, allow: !blocked)
+        tamperProtection?.handleWriteEvent(
+            targetPath: targetPath,
+            actorPath: processPath,
+            actorPid: pid,
+            identity: identity,
+            blocked: blocked
         )
     }
 

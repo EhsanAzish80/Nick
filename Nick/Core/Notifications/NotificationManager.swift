@@ -124,7 +124,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     /// Silently returns when `alert.severity == .info` (trusted-app activity) or
     /// when the alert's severity is below the user-configured threshold.
     func send(for alert: ThreatAlert) async {
-        guard alert.severity != .info else { return }
+        let isDocumentedUninstall = IncidentStore.requiresVisibleNotification(alert)
+        guard alert.severity != .info || isDocumentedUninstall else { return }
 
         // macOS does not throw from add() when permission is denied — it silently
         // discards the notification. Check authorization first and bail early with
@@ -142,17 +143,21 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
 
         let threshold = notificationThreshold
-        guard alert.severity >= threshold else {
+        guard isDocumentedUninstall || alert.severity >= threshold else {
             Self.log.debug("Alert '\(alert.title)' below threshold (\(threshold.displayName)) — suppressed")
             return
         }
 
         let content = UNMutableNotificationContent()
-        content.title = "Nick — \(alert.severity.displayName) Alert"
-        content.body = alert.title
-        content.sound = .default
-        content.interruptionLevel = .timeSensitive   // breaks through Focus / DND
-        content.categoryIdentifier = "THREAT_ALERT"
+        content.title = isDocumentedUninstall
+            ? "Nick is being moved to the Trash"
+            : "Nick — \(alert.severity.displayName) Alert"
+        content.body = isDocumentedUninstall
+            ? "Use Nick Uninstaller later if you also want to remove protection components and generated data."
+            : alert.title
+        content.sound = isDocumentedUninstall ? nil : .default
+        content.interruptionLevel = isDocumentedUninstall ? .active : .timeSensitive
+        content.categoryIdentifier = isDocumentedUninstall ? "NICK_UNINSTALL" : "THREAT_ALERT"
         content.userInfo = ["alertID": alert.id.uuidString]
 
         let request = UNNotificationRequest(

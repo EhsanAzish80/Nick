@@ -452,25 +452,69 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertEqual(finding.signal.metadata["ruleTier"], "review")
     }
 
-    func test_tamperObservationIsAllowedProtectedEndpointEvidence() throws {
+    func test_blockedTamperIsCriticalProtectedEndpointEvidence() throws {
         let event = ESEvent(
             eventType: .notifyWrite,
             processPath: "/usr/bin/rm",
             pid: 45,
             parentPid: 1,
             filePath: "/Applications/Nick.app",
-            decision: .allow,
+            decision: .deny,
             threat: .init(
-                threatName: "Nick protected path deletion observed",
+                threatName: "Nick protected path change blocked",
                 threatFamily: "tamper"
             )
         )
         let finding = try XCTUnwrap(ExtensionFinding(event: event))
         XCTAssertEqual(finding.signal.source, .endpointSecurity)
-        XCTAssertEqual(finding.signal.severity, .high)
+        XCTAssertEqual(finding.signal.severity, .critical)
         XCTAssertEqual(finding.signal.metadata["class"], "integrity")
         XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
-        XCTAssertTrue(finding.signal.description.contains("operation was allowed"))
+        XCTAssertTrue(finding.signal.description.contains("refused"))
+    }
+
+    func test_validatedNickMaintenanceIsOneInformationalReviewRule() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/usr/libexec/installd",
+            pid: 46,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app/Contents/MacOS/Nick",
+            decision: .allow,
+            threat: .init(
+                threatName: "Nick maintenance updated protected files",
+                threatFamily: "nick-maintenance",
+                isCodeSigned: true,
+                signingID: "com.apple.installd"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.severity, .info)
+        XCTAssertEqual(finding.signal.metadata["class"], "audit")
+        XCTAssertEqual(finding.signal.metadata["rule"], "nick_protected_path_maintenance")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "review")
+    }
+
+    func test_documentedFinderUninstallIsVisibleInformationalReviewRule() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+            pid: 47,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app",
+            decision: .allow,
+            threat: .init(
+                threatName: "Nick is being moved to the Trash",
+                threatFamily: "nick-documented-uninstall",
+                isCodeSigned: true,
+                signingID: "com.apple.finder"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.severity, .info)
+        XCTAssertEqual(finding.signal.metadata["rule"], "nick_documented_uninstall")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "review")
+        XCTAssertTrue(finding.signal.description.contains("Nick Uninstaller"))
     }
 
     func test_persistedFindingEnvelopeRoundTrips() throws {
@@ -548,9 +592,15 @@ final class UnifiedSourceFindingTests: XCTestCase {
             ),
             encoding: .utf8
         )
-        XCTAssertTrue(tamperSource.contains(
-            "func shouldBlock(targetPath _: String, actorPath _: String, actorPid _: Int32) -> Bool {\n        false"
-        ))
+        XCTAssertTrue(tamperSource.contains("func shouldBlockRename("))
+        XCTAssertTrue(tamperSource.contains("func shouldBlockUnlink("))
+        XCTAssertTrue(tamperSource.contains("SecCodeCopyGuestWithAttributes"))
+        XCTAssertTrue(tamperSource.contains("SecCodeCheckValidity"))
+        XCTAssertTrue(tamperSource.contains("kSecCodeInfoUnique"))
+
+        XCTAssertTrue(source.contains("ES_EVENT_TYPE_AUTH_TRUNCATE"))
+        XCTAssertTrue(source.contains("ES_EVENT_TYPE_AUTH_LINK"))
+        XCTAssertTrue(source.contains("ES_EVENT_TYPE_AUTH_CLONE"))
     }
 
     func test_tamperProtectionDoesNotWatchItsMutableEventStore() throws {

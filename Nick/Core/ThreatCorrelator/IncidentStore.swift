@@ -85,17 +85,33 @@ struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
     var incidents: [SecurityIncident]
     var dismissalTombstones: [IncidentDismissalTombstone]
     var expectedCooldowns: [String: TimeInterval]
+    var evictedIncidentCount: Int
 
     init(
         schemaVersion: Int = Self.currentSchemaVersion,
         incidents: [SecurityIncident],
         dismissalTombstones: [IncidentDismissalTombstone],
-        expectedCooldowns: [String: TimeInterval]
+        expectedCooldowns: [String: TimeInterval],
+        evictedIncidentCount: Int = 0
     ) {
         self.schemaVersion = schemaVersion
         self.incidents = incidents
         self.dismissalTombstones = dismissalTombstones
         self.expectedCooldowns = expectedCooldowns
+        self.evictedIncidentCount = max(0, evictedIncidentCount)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, incidents, dismissalTombstones, expectedCooldowns, evictedIncidentCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        incidents = try container.decode([SecurityIncident].self, forKey: .incidents)
+        dismissalTombstones = try container.decode([IncidentDismissalTombstone].self, forKey: .dismissalTombstones)
+        expectedCooldowns = try container.decode([String: TimeInterval].self, forKey: .expectedCooldowns)
+        evictedIncidentCount = max(0, try container.decodeIfPresent(Int.self, forKey: .evictedIncidentCount) ?? 0)
     }
 }
 
@@ -151,6 +167,7 @@ final class IncidentStore {
     static let dismissalPersistenceKey = "nickDismissedIncidentKeysV1"
     static let maximumPersistedIncidents = 100
     static let maximumDismissalTombstones = 500
+    static let maximumIncidentsPerRule = 20
 
     private let legacyTestDefaults: UserDefaults?
     private(set) var incidents: [SecurityIncident]
@@ -158,6 +175,7 @@ final class IncidentStore {
     private var suppressionRules: [SuppressionRule]
     private var expectedCooldowns: [String: TimeInterval]
     private var dismissalTombstones: [IncidentDismissalTombstone]
+    private(set) var evictedIncidentCount = 0
     private var privilegedPersistence: ((Data) -> Void)?
     private var lastPrivilegedPayload: Data?
 
@@ -203,6 +221,7 @@ final class IncidentStore {
         incidents = snapshot.incidents
         dismissalTombstones = snapshot.dismissalTombstones
         expectedCooldowns = snapshot.expectedCooldowns
+        evictedIncidentCount = snapshot.evictedIncidentCount
         migrateLegacyDismissals()
         boundInMemory()
         privilegedPersistence = persistence
@@ -260,7 +279,9 @@ final class IncidentStore {
                 )
                 incident.actions.append(Self.action(.detected, actor: .automatic))
                 incidents.append(incident)
-                if candidate.severity != .info { newlyActionable.append(candidate) }
+                if candidate.severity != .info || Self.requiresVisibleNotification(candidate) {
+                    newlyActionable.append(candidate)
+                }
             }
         }
 
@@ -304,6 +325,7 @@ final class IncidentStore {
         incidents.removeAll()
         dismissalTombstones.removeAll()
         expectedCooldowns.removeAll()
+        evictedIncidentCount = 0
         legacyTestDefaults?.removeObject(forKey: Self.persistenceKey)
         legacyTestDefaults?.removeObject(forKey: Self.dismissalPersistenceKey)
         legacyTestDefaults?.removeObject(forKey: "nickPersistedAlerts")
@@ -341,7 +363,8 @@ final class IncidentStore {
         let snapshot = IncidentStoreSnapshot(
             incidents: incidents,
             dismissalTombstones: dismissalTombstones,
-            expectedCooldowns: expectedCooldowns
+            expectedCooldowns: expectedCooldowns,
+            evictedIncidentCount: evictedIncidentCount
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -374,17 +397,26 @@ final class IncidentStore {
         let subjects = Set(alert.contributingSignals.map { signal -> String in
             let rule = EvidenceRulePolicy.ruleID(for: signal).lowercased()
             if let hash = signal.fileInfo?.sha256Hash, !hash.isEmpty { return "\(rule)|hash:\(hash.lowercased())" }
-            if let file = signal.fileInfo?.path ?? signal.metadata["path"] { return "\(rule)|file:\(normalize(file))" }
             if let process = signal.processInfo {
                 let signing = EvidenceSigningIdentity(signal: signal)
-                return "\(rule)|process:\(signing.teamID ?? "-"):\(signing.signingIdentifier ?? normalize(process.path))"
+                let actor = signing.teamID.flatMap { team in
+                    signing.signingIdentifier.map { "signed:\(team.lowercased()):\($0.lowercased())" }
+                } ?? "path:\(normalize(process.path))"
+                return "\(rule)|actor:\(actor)"
             }
+            if let file = signal.fileInfo?.path ?? signal.metadata["path"] { return "\(rule)|file:\(normalize(file))" }
             if let network = signal.networkInfo {
                 return "\(rule)|network:\(network.remoteAddress ?? "local"):\(network.remotePort.map(String.init) ?? "-")"
             }
             return "\(rule)|subject:\(EvidenceSubjectIdentity(signal: signal).stableIdentifier)"
         }).sorted()
         return ([alert.title.lowercased()] + subjects).joined(separator: "||")
+    }
+
+    static func requiresVisibleNotification(_ alert: ThreatAlert) -> Bool {
+        alert.contributingSignals.contains {
+            $0.metadata["rule"] == "nick_documented_uninstall"
+        }
     }
 
     private func applyTrustedDowngrade(to alert: ThreatAlert) -> ThreatAlert {
@@ -501,12 +533,31 @@ final class IncidentStore {
     }
 
     private func boundInMemory() {
-        incidents = Array(incidents.sorted(by: Self.retentionPrecedes).prefix(Self.maximumPersistedIncidents))
+        let sorted = incidents.sorted(by: Self.retentionPrecedes)
+        var retained: [SecurityIncident] = []
+        var perRule: [String: Int] = [:]
+        for incident in sorted {
+            let rule = Self.primaryRuleID(for: incident)
+            guard perRule[rule, default: 0] < Self.maximumIncidentsPerRule,
+                  retained.count < Self.maximumPersistedIncidents else {
+                evictedIncidentCount += 1
+                continue
+            }
+            retained.append(incident)
+            perRule[rule, default: 0] += 1
+        }
+        incidents = retained
         dismissalTombstones = Array(
             dismissalTombstones
                 .sorted { $0.dismissedAt > $1.dismissedAt }
                 .prefix(Self.maximumDismissalTombstones)
         )
+    }
+
+    private static func primaryRuleID(for incident: SecurityIncident) -> String {
+        incident.evidence.first?.ruleID?.lowercased()
+            ?? incident.alert.contributingSignals.first.map { EvidenceRulePolicy.ruleID(for: $0).lowercased() }
+            ?? "unknown"
     }
 
     private static func retentionPrecedes(_ lhs: SecurityIncident, _ rhs: SecurityIncident) -> Bool {
