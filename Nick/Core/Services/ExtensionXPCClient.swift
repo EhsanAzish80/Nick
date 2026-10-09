@@ -767,11 +767,12 @@ struct ExtensionFinding: Sendable {
         guard event.decision == .deny || event.threatName != nil else { return nil }
         let filePath = event.filePath ?? event.processPath
         let isTamper = event.threatFamily == "tamper"
+        let isNickMaintenance = event.threatFamily == "nick-maintenance"
         let isManagementObservation = event.threatFamily == "endpoint-management"
         let severity: SignalSeverity
         if event.decision == .deny {
             severity = .critical
-        } else if isManagementObservation {
+        } else if isManagementObservation || isNickMaintenance {
             severity = .info
         } else {
             severity = .high
@@ -790,8 +791,8 @@ struct ExtensionFinding: Sendable {
             parentName: nil,
             signingStatus: signingStatus
         )
-        let ruleClass = isTamper ? "integrity" : (isManagementObservation ? "audit" : "signature")
-        let ruleTier = isManagementObservation ? "review" : "protected"
+        let ruleClass = isTamper ? "integrity" : ((isManagementObservation || isNickMaintenance) ? "audit" : "signature")
+        let ruleTier = (isManagementObservation || isNickMaintenance) ? "review" : "protected"
         signal = ThreatSignal(
             id: event.id,
             source: .endpointSecurity,
@@ -801,7 +802,8 @@ struct ExtensionFinding: Sendable {
             description: Self.description(
                 for: event,
                 isTamper: isTamper,
-                isManagementObservation: isManagementObservation
+                isManagementObservation: isManagementObservation,
+                isNickMaintenance: isNickMaintenance
             ),
             context: ThreatSignalContext(
                 processInfo: process,
@@ -815,16 +817,16 @@ struct ExtensionFinding: Sendable {
                 metadata: [
                     "reason": isTamper
                         ? "endpoint_tamper_observed"
-                        : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat"),
-                    "rule": event.threatName ?? "endpoint_known_threat",
+                        : (isNickMaintenance ? "nick_protected_path_maintenance" : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat")),
+                    "rule": isNickMaintenance ? "nick_protected_path_maintenance" : (event.threatName ?? "endpoint_known_threat"),
                     "class": ruleClass,
                     "ruleTier": ruleTier,
                     "threatFamily": event.threatFamily ?? "unknown"
                 ]
             )
         )
-        score = event.decision == .deny ? 0.98 : (isManagementObservation ? 0.1 : 0.9)
-        recommendedAction = isManagementObservation
+        score = event.decision == .deny ? 0.98 : ((isManagementObservation || isNickMaintenance) ? 0.1 : 0.9)
+        recommendedAction = (isManagementObservation || isNickMaintenance)
             ? "No action is needed if you ran this command."
             : "Review the event and investigate it if you do not recognise the activity."
     }
@@ -832,13 +834,19 @@ struct ExtensionFinding: Sendable {
     private static func description(
         for event: ESEvent,
         isTamper: Bool,
-        isManagementObservation: Bool
+        isManagementObservation: Bool,
+        isNickMaintenance: Bool
     ) -> String {
         if isManagementObservation {
             return "Nick observed routine use of Apple's system-extension management tool."
         }
         if isTamper {
-            return "Nick observed an attempt to change a protected Nick path. The operation was allowed."
+            return event.decision == .deny
+                ? "Nick refused an attempt to change a protected Nick path."
+                : "Nick observed an attempt to change a protected Nick path."
+        }
+        if isNickMaintenance {
+            return "A validated Nick update, reinstall, or uninstall changed protected Nick files."
         }
         return event.decision == .deny
             ? "Nick blocked access to a file previously identified as suspicious."

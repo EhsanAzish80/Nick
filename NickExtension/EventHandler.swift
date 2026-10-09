@@ -89,6 +89,12 @@ final class ESEventHandler {
         let pid         = audit_token_to_pid(process.audit_token)
         let parentPid   = audit_token_to_pid(process.parent_audit_token)
         let processIdentity = ProcessInstanceIdentity.capture(pid: pid)
+        let tamperActorIdentity = TamperActorIdentity(
+            teamID: esOptionalString(process.team_id),
+            signingID: esOptionalString(process.signing_id),
+            codesigningFlags: process.codesigning_flags,
+            isPlatformBinary: process.is_platform_binary
+        )
 
         switch msg.event_type {
 
@@ -439,16 +445,20 @@ final class ESEventHandler {
                 let directory = esString(msg.event.rename.destination.new_path.dir.pointee.path)
                 destinationPath = directory + "/" + esString(msg.event.rename.destination.new_path.filename)
             }
-            let renameBlocked = tamperProtection?.shouldBlock(
-                targetPath: srcPath, actorPath: processPath, actorPid: pid
+            let renameBlocked = tamperProtection?.shouldBlockRename(
+                sourcePath: srcPath,
+                destinationPath: destinationPath,
+                identity: tamperActorIdentity
             ) ?? false
+            esClient?.respond(to: message, allow: !renameBlocked)
             tamperProtection?.handleRenameEvent(
                 srcPath: srcPath,
                 destinationPath: destinationPath,
                 actorPath: processPath,
-                actorPid: pid
+                actorPid: pid,
+                identity: tamperActorIdentity,
+                blocked: renameBlocked
             )
-            esClient?.respond(to: message, allow: !renameBlocked)
             // Behaviour is recorded from NOTIFY_RENAME, which reflects only
             // renames that actually happened (recording both double-counted).
             fileScanner?.cache.invalidate(path: srcPath)
@@ -501,11 +511,18 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_UNLINK:
             let unlinkTarget = esString(msg.event.unlink.target.pointee.path)
-            let unlinkBlocked = tamperProtection?.shouldBlock(
-                targetPath: unlinkTarget, actorPath: processPath, actorPid: pid
+            let unlinkBlocked = tamperProtection?.shouldBlockUnlink(
+                targetPath: unlinkTarget,
+                identity: tamperActorIdentity
             ) ?? false
-            tamperProtection?.handleUnlinkEvent(targetPath: unlinkTarget, actorPath: processPath, actorPid: pid)
             esClient?.respond(to: message, allow: !unlinkBlocked)
+            tamperProtection?.handleUnlinkEvent(
+                targetPath: unlinkTarget,
+                actorPath: processPath,
+                actorPid: pid,
+                identity: tamperActorIdentity,
+                blocked: unlinkBlocked
+            )
             if !unlinkBlocked {
                 fileScanner?.cache.invalidate(path: unlinkTarget)
             }

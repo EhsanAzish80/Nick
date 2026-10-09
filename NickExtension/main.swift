@@ -181,25 +181,41 @@ eventHandler.tamperProtection        = tamperProtection
 tamperProtection.onTamperAttempt = { attempt in
     let event: ESEvent
     switch attempt {
-    case .deleteProtectedPath(let path, let pid, let actorPath):
+    case .deleteProtectedPath(let path, let pid, let actorPath, let identity, let disposition):
         event = ESEvent(
             eventType: .notifyWrite,
             processPath: actorPath,
             pid: pid,
             parentPid: 0,
             filePath: path,
-            decision: .allow,
-            threat: .init(threatName: "Nick protected path deletion observed", threatFamily: "tamper")
+            decision: disposition == .blocked ? .deny : .allow,
+            threat: .init(
+                threatName: disposition == .blocked
+                    ? "Nick protected path change blocked"
+                    : "Nick maintenance updated protected files",
+                threatFamily: disposition == .blocked ? "tamper" : "nick-maintenance",
+                isCodeSigned: identity.isValidIdentitySignature,
+                teamID: identity.teamID,
+                signingID: identity.signingID
+            )
         )
-    case .renameProtectedPath(let path, let pid, let actorPath):
+    case .renameProtectedPath(let path, let pid, let actorPath, let identity, let disposition):
         event = ESEvent(
             eventType: .notifyWrite,
             processPath: actorPath,
             pid: pid,
             parentPid: 0,
             filePath: path,
-            decision: .allow,
-            threat: .init(threatName: "Nick protected path replacement observed", threatFamily: "tamper")
+            decision: disposition == .blocked ? .deny : .allow,
+            threat: .init(
+                threatName: disposition == .blocked
+                    ? "Nick protected path change blocked"
+                    : "Nick maintenance updated protected files",
+                threatFamily: disposition == .blocked ? "tamper" : "nick-maintenance",
+                isCodeSigned: identity.isValidIdentitySignature,
+                teamID: identity.teamID,
+                signingID: identity.signingID
+            )
         )
     case .systemExtensionsCtlExec(let pid, let isSensitive):
         event = ESEvent(
