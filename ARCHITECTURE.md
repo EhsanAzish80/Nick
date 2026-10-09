@@ -134,6 +134,7 @@ deterministic correlation rules
         ▼
 ThreatAlert ──► on-device Apple Foundation Models explanation
         │                     (text only)
+        ├──► optional local verdict learning (review tier only; visible)
         ├──► app UI and local notification
         ├──► optional local file/stdout output
         └──► optional user-configured webhook
@@ -147,6 +148,15 @@ Apple Foundation Models runs only after deterministic code has created an
 alert. Generated text cannot alter severity, scoring, Endpoint Security
 authorization, quarantine, process termination, or network policy. If model
 generation is unavailable, Nick uses a deterministic template.
+
+Verdict learning is a separate deterministic, local feature and is off by
+default. After an authenticated user false-positive verdict, Nick may retain
+an expiring key made from the exact signing identity, rule ID, and bounded
+context. A later exact match in the explicitly reviewable tier is lowered to
+informational priority but remains visible. Protected, hash, signature, YARA,
+persistence, high-risk-path, unsigned, ad-hoc, interpreter, and command-tool
+evidence cannot create or use learned entries. The entries live with incidents
+in the root-owned store and can be inspected, exported, or reset in Settings.
 
 ## Major components
 
@@ -162,6 +172,7 @@ generation is unavailable, Nick uses a deterministic template.
 | `RuntimeCompare` | Local before-and-after snapshots, comparison, sanitization, and export. |
 | `AlertExplainer` | Human-readable explanation using Apple Foundation Models; untrusted context is bounded and delimited, and generated text has no detection or enforcement authority. |
 | `SignalTelemetry` | Optional, size-capped local JSONL export. It is off by default, user-writable, and never read as detection or learning input. |
+| `IncidentStore` verdict learning | Optional expiring review-tier priority adjustment from authenticated user verdicts. It is off by default, local, visible, capped per signing identity, and has no enforcement authority. |
 
 ## Apple frameworks and system APIs
 
@@ -234,7 +245,8 @@ is limited to explicit product functions:
 
 Nick has no active hosted detection service or automatic security-telemetry
 uploader. Optional training telemetry is disabled by default and stored locally
-until the user exports it.
+until the user exports it. Optional verdict learning is also entirely local;
+its export is a user-selected file operation.
 
 ## Enforcement boundaries
 
