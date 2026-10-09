@@ -22,6 +22,27 @@ for file in "${required_files[@]}"; do
   fi
 done
 
+# Keep backticked repository paths in the public external-review handoff
+# anchored to the live tree. Prose tokens and external fixture paths are not
+# selected; additions under the repository roots below are checked automatically.
+review_scope="Documentation/EXTERNAL_SECURITY_REVIEW_SCOPE.md"
+if [[ ! -s "$review_scope" ]]; then
+  echo "External security review scope is missing or empty: $review_scope" >&2
+  exit 1
+fi
+
+while IFS= read -r path; do
+  path="${path%/}"
+  if [[ ! -e "$path" ]]; then
+    echo "External security review path is missing: $path" >&2
+    exit 1
+  fi
+done < <(ruby -e '
+  File.read(ARGV.fetch(0)).scan(/`([^`]+)`/).flatten.each do |token|
+    puts token if token.match?(%r{\A(?:\.github/|Nick/|NickExtension/|NickNetFilter/|NickUninstaller/|Packaging/|Rules/|Shared/|SECURITY\.md\z)})
+  end
+' "$review_scope")
+
 while IFS= read -r file; do
   case "$file" in
     *.p12|*.p8|*.mobileprovision|*.provisionprofile|*.pkg|*.dmg|*.xcresult/*)

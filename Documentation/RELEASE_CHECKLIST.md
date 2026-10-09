@@ -16,6 +16,12 @@
       but durable pending evidence and acknowledgement-controlled rebaselining
       remain tracked for Nick 5.0.
 - [ ] The full test suite passes with coverage.
+- [ ] The measurement and consolidated physical-Mac gates in
+      `5_0_VALIDATION_PLAN.md` pass with evidence recorded for the exact build.
+- [ ] The benign-corpus result is reported as **~17k files (cap 120k)**; the cap
+      is not misreported as the number of files scanned.
+- [ ] The independent review scope in `EXTERNAL_SECURITY_REVIEW_SCOPE.md` was
+      reviewed at the exact candidate commit; blocking findings are resolved.
 - [ ] `git diff --check` passes.
 
 ## Runtime Compare (4.1)
