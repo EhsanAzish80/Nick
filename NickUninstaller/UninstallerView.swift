@@ -27,6 +27,7 @@ private final class UninstallModel: ObservableObject {
     @Published var progress = 0.0
     @Published var isRunning = false
     @Published var completed = false
+    @Published var awaitingRestart = false
     @Published var restartRequired = false
     @Published var failure: String?
 
@@ -59,6 +60,23 @@ private final class UninstallModel: ObservableObject {
             status = "Removing the Network Filter and background registrations…"
             try await prepareNickForRemoval(at: nickURL)
             trace("Nick returned a successful protection-removal result")
+
+            // A deactivation result of `willCompleteAfterReboot` means the
+            // system extensions may still be loaded and enforcing. Keep the
+            // containing app on disk so macOS can finish removal safely, then
+            // require the user to run the uninstaller again after restarting.
+            // The second run observes extensionNotFound/completed and only
+            // then proceeds to the destructive purge below.
+            if restartRequired {
+                phase = .summary
+                progress = 1
+                awaitingRestart = true
+                status = "Restart your Mac, then run Nick Uninstaller again to finish removal. Nick and its data have not been deleted."
+                isRunning = false
+                trace("Protection removal requires restart; preserving Nick.app and all data")
+                return
+            }
+
             try await terminateNick()
             trace("Confirmed Nick is no longer running")
 
@@ -101,10 +119,14 @@ private final class UninstallModel: ObservableObject {
         if Bundle(url: embeddedCandidate)?.bundleIdentifier == "com.ehsanazish.nick" {
             return embeddedCandidate
         }
-        if let installed = NSWorkspace.shared.urlForApplication(
-            withBundleIdentifier: "com.ehsanazish.nick"
-        ) {
-            return installed.standardizedFileURL
+
+        // Never let Launch Services select an Xcode archive, staging copy, or
+        // temporary app. System-extension removal must be submitted by the
+        // containing app at its supported installation location.
+        let installed = URL(fileURLWithPath: "/Applications/Nick.app", isDirectory: true)
+            .standardizedFileURL
+        if Bundle(url: installed)?.bundleIdentifier == "com.ehsanazish.nick" {
+            return installed
         }
         throw UninstallError.nickNotFound
     }
@@ -442,12 +464,21 @@ struct UninstallerView: View {
         VStack(spacing: 0) {
             Spacer()
             VStack(spacing: 12) {
-                Image(systemName: model.completed ? "checkmark.circle.fill" : "trash")
+                Image(systemName: model.completed
+                      ? "checkmark.circle.fill"
+                      : model.awaitingRestart ? "restart.circle.fill" : "trash")
                     .font(.system(size: 42))
-                    .foregroundStyle(model.completed ? .green : model.failure == nil ? Color.accentColor : .red)
+                    .foregroundStyle(model.completed
+                                     ? .green
+                                     : model.awaitingRestart ? .orange
+                                     : model.failure == nil ? Color.accentColor : .red)
                     .accessibilityHidden(true)
 
-                Text(model.completed ? "Uninstallation Complete" : model.isRunning ? model.phase.title : "Uninstall Nick")
+                Text(model.completed
+                     ? "Uninstallation Complete"
+                     : model.awaitingRestart
+                     ? "Restart Required"
+                     : model.isRunning ? model.phase.title : "Uninstall Nick")
                     .font(.title2.bold())
 
                 Text(model.status)
@@ -475,11 +506,16 @@ struct UninstallerView: View {
             HStack {
                 Text(model.completed
                      ? "Nick and its data were removed."
+                     : model.awaitingRestart
+                     ? "Protection removal will finish after restart."
                      : "Administrator approval is required.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Spacer()
                 if model.completed {
+                    Button("Close") { NSApp.terminate(nil) }
+                        .keyboardShortcut(.defaultAction)
+                } else if model.awaitingRestart {
                     Button("Close") { NSApp.terminate(nil) }
                         .keyboardShortcut(.defaultAction)
                 } else if !model.isRunning {
