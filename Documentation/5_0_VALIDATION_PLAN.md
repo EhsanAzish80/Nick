@@ -16,6 +16,14 @@ The YARA gate is reported consistently as the **~17k files (cap 120k)** benign
 corpus. YARA lint always runs. The full corpus runs under the repository's
 approved path policy and at the final release gate.
 
+## YARA dependency verification
+
+Nick's shipping engine vendors libyara 4.5.5. The official PyPI JSON index was
+rechecked on 2026-10-09: yara-python 4.5.4 remains the newest published release
+and no 4.5.5 release exists. CI therefore remains pinned to 4.5.4 as the closest
+published Python gate binding. Recheck the official index before changing the
+Python or vendored pin; do not request a nonexistent matching package.
+
 ## Alert-count comparison
 
 Measure four configurations:
