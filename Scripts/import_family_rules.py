@@ -16,7 +16,8 @@ Selection criteria (all must hold):
 Rules with a family/malware name and YARA Forge quality >= 70 become
 class = "signature" (HIGH); the rest become class = "behavior" (MEDIUM).
 Run `python3 Scripts/rules_gate.py lint` and the `fp` gate afterwards.
-Requires yara-python==4.5.4.
+Requires yara-python==4.5.4, the closest published Python binding to Nick's
+vendored libyara 4.5.5 (PyPI had no 4.5.5 release on 2026-10-09).
 """
 import collections, io, json, os, re, sys, urllib.request, zipfile
 import yara

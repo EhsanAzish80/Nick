@@ -23,5 +23,11 @@ python3 Scripts/rules_gate.py lint
 python3 Scripts/rules_gate.py fp          # on a clean Mac; CI runs it too
 ```
 
+Nick vendors libyara 4.5.5. The official PyPI index was rechecked on
+2026-10-09 and still lists yara-python 4.5.4 as the newest published release;
+there is no 4.5.5 wheel or source release. CI therefore keeps the closest
+published Python binding pinned at 4.5.4 while the shipping engine remains
+4.5.5. Recheck PyPI before changing either pin.
+
 Review the diff before committing. A `signature` rule that matches anything in
 the benign corpus must be fixed, demoted to `behavior`, or dropped.
