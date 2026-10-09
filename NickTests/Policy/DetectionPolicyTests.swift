@@ -85,9 +85,10 @@ final class DetectionPolicyTests: XCTestCase {
     func test_developmentBuildUnderRepositoryIsAlertOnly() {
         let root = "/Users/a/Projects/App"
         XCTAssertTrue(DevelopmentBuildRansomwarePolicy.isAlertOnly(
-            processPath: "/opt/homebrew/bin/cmake",
+            processPath: "/opt/homebrew/Cellar/cmake/4.2.0/bin/cmake",
             destination: root + "/.build/CMakeFiles/x.make",
-            repositoryRoot: root
+            repositoryRoot: root,
+            actorValidated: false
         ))
         XCTAssertFalse(RansomwareTerminationPolicy.shouldTerminate(
             isBlockRecommendation: true,
@@ -97,7 +98,30 @@ final class DetectionPolicyTests: XCTestCase {
         XCTAssertFalse(DevelopmentBuildRansomwarePolicy.isAlertOnly(
             processPath: "/tmp/unknown",
             destination: root + "/.build/x.locked",
-            repositoryRoot: root
+            repositoryRoot: root,
+            actorValidated: false
+        ))
+        XCTAssertFalse(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/Users/a/x/make",
+            destination: root + "/Sources/report.locked",
+            repositoryRoot: root,
+            actorValidated: false
+        ), "A renamed unvalidated actor must still be terminated for a non-build extension")
+        XCTAssertTrue(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: false,
+            isApprovedDevelopmentBuild: DevelopmentBuildRansomwarePolicy.isAlertOnly(
+                processPath: "/Users/a/x/make",
+                destination: root + "/Sources/report.locked",
+                repositoryRoot: root,
+                actorValidated: false
+            )
+        ))
+        XCTAssertTrue(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/Applications/Xcode.app/Contents/Developer/usr/bin/swiftc",
+            destination: root + "/.build/module.o",
+            repositoryRoot: root,
+            actorValidated: true
         ))
     }
 

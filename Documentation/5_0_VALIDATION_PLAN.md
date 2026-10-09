@@ -7,7 +7,8 @@ evidence is recorded.
 ## Evidence record
 
 For every run record the date, macOS and hardware, Nick version/build and
-commit, extension versions, settings that affect the result, exact workload,
+commit, extension versions, the complete `systemextensionsctl list` output,
+settings that affect the result, exact workload,
 start/end time, raw counts, severity counts, failures, and links or paths to
 the retained output. Use the same Mac and workload for comparisons. A failed
 or interrupted run is evidence, not a pass.
@@ -66,7 +67,9 @@ make the measurement pass.
 ## Consolidated real-Mac checklist
 
 Use signed, notarized Release packages. Capture app/extension build numbers
-before and after every installation.
+before and after every installation, including the unedited output of
+`systemextensionsctl list`. A gate without that active-version evidence is not
+a pass.
 
 ### Core monitoring and parked gates
 

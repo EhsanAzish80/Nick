@@ -115,6 +115,42 @@ final class ProcessMonitorTests: XCTestCase {
         XCTAssertTrue(signals.contains { $0.metadata["reason"] == "shell_without_validated_terminal" })
     }
 
+    func test_signals_shellFromValidatedThirdPartyTerminals_returnsNoShellSignal() {
+        let identities: [(String, String)] = [
+            ("H7V7XYVQ7D", "com.googlecode.iterm2"),
+            ("2BBY89MBSN", "dev.warp.Warp-Stable"),
+            ("24VZTF6M5V", "com.mitchellh.ghostty"),
+            ("UBF8T346G9", "com.microsoft.VSCode.helper.Plugin"),
+            ("VDXQ22DGB9", "com.github.Electron.helper"),
+        ]
+        for (index, identity) in identities.enumerated() {
+            let parent = makeProcess(
+                pid: Int32(600 + index * 2), name: "untrusted-name", path: "/Applications/vendor-terminal",
+                signing: .signed(teamID: identity.0, signingID: identity.1)
+            )
+            let shell = makeProcess(
+                pid: Int32(601 + index * 2), name: "zsh", path: "/bin/zsh",
+                signing: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh"), parentPID: parent.pid
+            )
+            XCTAssertFalse(
+                scanner.signals(from: [parent, shell]).contains { $0.metadata["reason"] == "shell_without_validated_terminal" },
+                "Expected validated terminal identity \(identity) to establish interactive ancestry"
+            )
+        }
+    }
+
+    func test_signals_shellThroughValidatedSshdSession_returnsNoShellSignal() {
+        let sshd = makeProcess(pid: 700, name: "sshd-session", path: "/usr/libexec/sshd-session", signing: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.sshd-session"))
+        let shell = makeProcess(pid: 701, name: "zsh", path: "/bin/zsh", signing: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh"), parentPID: 700)
+        XCTAssertFalse(scanner.signals(from: [sshd, shell]).contains { $0.metadata["reason"] == "shell_without_validated_terminal" })
+    }
+
+    func test_signals_terminalIdentifierWithWrongTeam_doesNotGrantInteractiveTrust() {
+        let fake = makeProcess(pid: 710, name: "Code Helper", path: "/tmp/fake", signing: .signed(teamID: "FAKE123456", signingID: "com.microsoft.VSCode.helper.Plugin"))
+        let shell = makeProcess(pid: 711, name: "zsh", path: "/bin/zsh", signing: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh"), parentPID: 710)
+        XCTAssertTrue(scanner.signals(from: [fake, shell]).contains { $0.metadata["reason"] == "shell_without_validated_terminal" })
+    }
+
     func test_signals_shellAndDownloaderSiblings_withoutExplicitPipe_returnsNoCriticalSignal() {
         let parent = makeProcess(pid: 450, name: "Code Helper", path: "/Applications/Visual Studio Code.app/Contents/MacOS/Electron", signing: .signed(teamID: "MICROSOFT"))
         let shell = makeProcess(pid: 451, name: "zsh", path: "/bin/zsh", signing: .signed(teamID: "APPLE"), parentPID: 450)

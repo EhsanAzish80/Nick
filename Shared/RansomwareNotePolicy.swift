@@ -58,16 +58,29 @@ enum BrowserDownloadRenamePolicy {
 }
 
 enum DevelopmentBuildRansomwarePolicy {
-    private static let buildTools: Set<String> = [
-        "cmake", "ninja", "make", "swift", "swiftc", "clang", "clang++", "ld"
+    private static let buildArtifactExtensions: Set<String> = [
+        "a", "cmake", "d", "dylib", "make", "ninja_deps", "ninja_log",
+        "o", "obj", "pch", "swiftdeps", "swiftmodule", "tmp"
     ]
 
-    static func isAlertOnly(processPath: String, destination: String, repositoryRoot: String?) -> Bool {
-        guard buildTools.contains((processPath as NSString).lastPathComponent.lowercased()),
-              let repositoryRoot else { return false }
+    static func isAlertOnly(
+        processPath: String,
+        destination: String,
+        repositoryRoot: String?,
+        actorValidated: Bool
+    ) -> Bool {
+        guard let repositoryRoot,
+              buildArtifactExtensions.contains((destination as NSString).pathExtension.lowercased()),
+              actorValidated || isHomebrewCellarExecutable(processPath) else { return false }
         let root = URL(fileURLWithPath: repositoryRoot).standardizedFileURL.path
         let path = URL(fileURLWithPath: destination).standardizedFileURL.path
         return path == root || path.hasPrefix(root + "/")
+    }
+
+    private static func isHomebrewCellarExecutable(_ path: String) -> Bool {
+        let normalized = URL(fileURLWithPath: path).standardizedFileURL.path
+        return normalized.hasPrefix("/opt/homebrew/Cellar/")
+            || normalized.hasPrefix("/usr/local/Cellar/")
     }
 }
 

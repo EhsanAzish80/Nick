@@ -517,7 +517,8 @@ struct ProcessScanner {
                   let raw = processesByPID[nextPID] else { return false }
             let ancestor = resolvingSigningStatus(raw)
             if case .signed(let teamID, let signingID) = ancestor.signingStatus {
-                if teamID == "APPLE_PLATFORM", signingID == "com.apple.Terminal" { return true }
+                if let signingID,
+                   isValidatedTerminalIdentity(teamID: teamID, signingID: signingID) { return true }
                 if TrustedProcessList.trustRejectionReason(for: ancestor) == nil,
                    trustedProcessList.isTrusted(ancestor) { return true }
             }
@@ -531,6 +532,30 @@ struct ProcessScanner {
             nextPID = ancestor.parentPID
         }
         return false
+    }
+
+    /// Exact identities observed on notarized vendor distributions. Matching
+    /// both dimensions prevents a renamed process or another product signed by
+    /// the same developer account from establishing interactive ancestry.
+    private static func isValidatedTerminalIdentity(teamID: String, signingID: String) -> Bool {
+        switch (teamID, signingID) {
+        case ("APPLE_PLATFORM", "com.apple.Terminal"),
+             ("APPLE_PLATFORM", "com.apple.sshd-session"),
+             ("H7V7XYVQ7D", "com.googlecode.iterm2"),
+             ("2BBY89MBSN", "dev.warp.Warp-Stable"),
+             ("24VZTF6M5V", "com.mitchellh.ghostty"),
+             ("UBF8T346G9", "com.microsoft.VSCode"),
+             ("UBF8T346G9", "com.microsoft.VSCode.helper"),
+             ("UBF8T346G9", "com.microsoft.VSCode.helper.GPU"),
+             ("UBF8T346G9", "com.microsoft.VSCode.helper.Plugin"),
+             ("UBF8T346G9", "com.microsoft.VSCode.helper.Renderer"),
+             ("VDXQ22DGB9", "com.todesktop.230313mzl4w4u92"),
+             ("VDXQ22DGB9", "com.todesktop.230313mzl4w4u92.helper"),
+             ("VDXQ22DGB9", "com.github.Electron.helper"):
+            return true
+        default:
+            return false
+        }
     }
 
     /// Produces a signing-status signal for a process whose status was just resolved

@@ -632,6 +632,7 @@ final class ESEventHandler {
                         processPath: processPath,
                         filePath: notifyDestPath,
                         processIdentity: processIdentity,
+                        actorIsPlatformBinary: renameActorIsPlatform,
                         teamID: renameTeamID,
                         signingID: renameSigningID
                     )
@@ -920,6 +921,7 @@ final class ESEventHandler {
         processPath: String,
         filePath: String,
         processIdentity: ProcessInstanceIdentity?,
+        actorIsPlatformBinary: Bool = false,
         teamID: String? = nil,
         signingID: String? = nil
     ) {
@@ -934,7 +936,8 @@ final class ESEventHandler {
         let developmentBuild = DevelopmentBuildRansomwarePolicy.isAlertOnly(
             processPath: processPath,
             destination: filePath,
-            repositoryRoot: repositoryRoot
+            repositoryRoot: repositoryRoot,
+            actorValidated: actorIsPlatformBinary || developerIDValidated
         )
         let shouldTerminate = RansomwareTerminationPolicy.shouldTerminate(
             isBlockRecommendation: isBlock,
