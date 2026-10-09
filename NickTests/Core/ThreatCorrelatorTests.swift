@@ -618,6 +618,9 @@ final class ThreatCorrelatorTests: XCTestCase {
 
         XCTAssertEqual(deniedEngine.incidentStore.visibleAlerts.count, 1)
         XCTAssertFalse(deniedEngine.incidentStore.incidents.flatMap(\.actions).contains { $0.actor == .user })
+        XCTAssertNotNil(deniedEngine.incidentActionRetryMessage)
+        deniedEngine.cancelPendingIncidentAction()
+        XCTAssertNil(deniedEngine.incidentActionRetryMessage)
 
         let allowedEngine = SecurityEngine()
         try allowedEngine.installPrivilegedIncidentStore(
@@ -639,6 +642,41 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertTrue(allowedEngine.incidentStore.incidents.flatMap(\.actions).contains {
             $0.action == .hidden && $0.actor == .user
         })
+        XCTAssertNil(allowedEngine.incidentActionRetryMessage)
+    }
+
+    func test_failedVerdictCanBeRetriedWithoutLosingRequestedAction() async throws {
+        let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [],
+            dismissalTombstones: [],
+            expectedCooldowns: [:]
+        ))
+        var attempts = 0
+        let engine = SecurityEngine()
+        try engine.installPrivilegedIncidentStore(
+            payload: payload,
+            persistence: { _, _ in },
+            authorizer: { _, _ in
+                attempts += 1
+                return attempts == 1 ? nil : IncidentActionApproval(authorizationExternalForm: nil)
+            },
+            removeLegacyState: false
+        )
+        let alert = makeAlert(signal: makeSignal(
+            metadata: ["reason": "retry_verdict", "path": "/Users/test/retry"]
+        ))
+        engine.addAlert(alert)
+
+        engine.hideAlert(alert.id)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNotNil(engine.incidentActionRetryMessage)
+        XCTAssertEqual(engine.incidentStore.visibleAlerts.count, 1)
+
+        engine.retryPendingIncidentAction()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertNil(engine.incidentActionRetryMessage)
+        XCTAssertTrue(engine.incidentStore.visibleAlerts.isEmpty)
+        XCTAssertEqual(attempts, 2)
     }
 
     // MARK: - ThreatAlert
@@ -703,9 +741,10 @@ final class ThreatCorrelatorTests: XCTestCase {
     func test_threatAlert_mergingOccurrence_preservesIncidentAndCountsRepeats() {
         let firstDate = Date(timeIntervalSince1970: 100)
         let secondDate = Date(timeIntervalSince1970: 200)
-        let signal = makeProcessSignal(reason: "developer_command")
-        let first = makeAlert(signal: signal, severity: .medium, timestamp: firstDate)
-        let second = makeAlert(signal: signal, severity: .high, timestamp: secondDate)
+        let firstSignal = makeProcessSignal(reason: "developer_command", timestamp: firstDate)
+        let secondSignal = makeProcessSignal(reason: "developer_command", timestamp: secondDate)
+        let first = makeAlert(signal: firstSignal, severity: .medium, timestamp: firstDate)
+        let second = makeAlert(signal: secondSignal, severity: .high, timestamp: secondDate)
 
         let merged = first.mergingOccurrence(second)
 
@@ -714,6 +753,23 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(merged.lastSeen, secondDate)
         XCTAssertEqual(merged.occurrenceCount, 2)
         XCTAssertEqual(merged.severity, .high)
+    }
+
+    func test_threatAlert_firstSeenIncludesEarlierContributingEvidence() {
+        let observed = Date(timeIntervalSince1970: 100)
+        let correlated = Date(timeIntervalSince1970: 200)
+        let signal = ThreatSignal(
+            source: .network,
+            severity: .medium,
+            timestamp: observed,
+            title: "Earlier signal",
+            description: "Test"
+        )
+
+        let alert = makeAlert(signal: signal, timestamp: correlated)
+
+        XCTAssertEqual(alert.firstSeen, observed)
+        XCTAssertEqual(alert.lastSeen, correlated)
     }
 
     func test_threatAlert_decodesPersistedAlertWithoutOccurrenceFields() throws {
@@ -866,7 +922,8 @@ final class ThreatCorrelatorTests: XCTestCase {
 
     private func makeProcessSignal(
         reason: String,
-        parentName: String = "Xcode"
+        parentName: String = "Xcode",
+        timestamp: Date = Date()
     ) -> ThreatSignal {
         let process = NickProcessInfo(
             pid: 42,
@@ -880,6 +937,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         return ThreatSignal(
             source: .process,
             severity: .medium,
+            timestamp: timestamp,
             title: "curl behavior",
             description: "Test process behavior",
             context: ThreatSignalContext(

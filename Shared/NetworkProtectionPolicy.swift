@@ -320,7 +320,7 @@ struct NetworkEventContext: Equatable, Sendable {
         return spaced.isEmpty ? identifier : spaced
     }
 
-    private static func destinationKind(for rawHost: String) -> DestinationKind {
+    static func destinationKind(for rawHost: String) -> DestinationKind {
         let host = rawHost.lowercased().split(separator: "%", maxSplits: 1)
             .first.map(String.init) ?? rawHost.lowercased()
         if host.contains(":") {
@@ -344,6 +344,13 @@ struct NetworkEventContext: Equatable, Sendable {
             return .internetAddress
         }
         return .website
+    }
+
+    static func isExpectedLocalDiscovery(host: String, port: Int) -> Bool {
+        guard [.localDevice, .localNetworkAddress].contains(destinationKind(for: host)) else {
+            return false
+        }
+        return [1900, 5353, 5355, 8009, 62078].contains(port)
     }
 
     private static func destinationLabel(for kind: DestinationKind) -> String {
@@ -376,6 +383,7 @@ enum NetworkProtectionSharedStore {
     )
     static let eventsFileName = "network-block-events.json"
     static let signedRulesFileName = "network-rules-v1.json"
+    static let signedRulesVersionFileName = "network-rules-version"
     static let healthFileName = "network-filter-health.json"
     static let maximumEventCount = 500
 
@@ -385,6 +393,10 @@ enum NetworkProtectionSharedStore {
 
     static func signedRulesURL(fileManager: FileManager = .default) -> URL? {
         systemSupportDirectory.appendingPathComponent(signedRulesFileName)
+    }
+
+    static func signedRulesVersionURL(fileManager: FileManager = .default) -> URL? {
+        systemSupportDirectory.appendingPathComponent(signedRulesVersionFileName)
     }
 
     static func healthURL(fileManager: FileManager = .default) -> URL? {
@@ -475,5 +487,13 @@ enum NetworkProtectionSharedStore {
             .appendingPathComponent("com.ehsanazish.nick.NickNetFilter.systemextension")
         return Bundle(url: extensionURL)?
             .object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
+    }
+}
+
+enum NetworkRuleVersionPolicy {
+    static func accepts(candidateVersion: Int, highestAcceptedVersion: Int?) -> Bool {
+        guard candidateVersion > 0 else { return false }
+        guard let highestAcceptedVersion else { return true }
+        return candidateVersion >= highestAcceptedVersion
     }
 }

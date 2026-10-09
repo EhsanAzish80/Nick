@@ -172,6 +172,15 @@ struct MainWindowView: View {
                 selectedSection = InterfaceModeRouting.advancedSection(for: simpleSelection)
             }
         }
+        .alert("Action not applied", isPresented: Binding(
+            get: { engine.incidentActionRetryMessage != nil },
+            set: { if !$0 { engine.cancelPendingIncidentAction() } }
+        )) {
+            Button("Retry") { engine.retryPendingIncidentAction() }
+            Button("Cancel", role: .cancel) { engine.cancelPendingIncidentAction() }
+        } message: {
+            Text(engine.incidentActionRetryMessage ?? "Retry when protection reconnects.")
+        }
     }
 
     private func chooseFileToScan() {
@@ -214,6 +223,7 @@ struct MainWindowView: View {
             }
 
             Section("DIAGNOSTICS") {
+                SidebarNavItem(section: .diagnostics, isSelected: selectedSection == .diagnostics).tag(SidebarSection.diagnostics)
                 SidebarNavItem(section: .runtimeCompare, isSelected: selectedSection == .runtimeCompare).tag(SidebarSection.runtimeCompare)
                 SidebarNavItem(section: .performance, isSelected: selectedSection == .performance).tag(SidebarSection.performance)
             }
@@ -237,6 +247,7 @@ struct MainWindowView: View {
         case .network:     NetworkConnectionsView()
         case .processes:   ProcessListView()
         case .persistence: PersistenceDetailView()
+        case .diagnostics: DiagnosticsView()
         case .runtimeCompare: RuntimeCompareView()
         case .performance: PerformanceView()
         case .settings:    SettingsView()
@@ -267,6 +278,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case network     = "Network"
     case processes   = "Processes"
     case persistence = "Persistence"
+    case diagnostics = "Diagnostics"
     case runtimeCompare = "Runtime Compare"
     case performance = "Performance"
     case settings    = "Settings"
@@ -286,6 +298,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .network:     return "network"
         case .processes:   return "cpu"
         case .persistence: return "arrow.triangle.2.circlepath"
+        case .diagnostics: return "stethoscope"
         case .runtimeCompare: return "square.split.2x1"
         case .performance: return "gauge.medium"
         case .settings:    return "gearshape.fill"
@@ -304,6 +317,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .network:     return .nickAccent
         case .processes:   return .purple
         case .persistence: return .orange
+        case .diagnostics: return .cyan
         case .runtimeCompare: return .indigo
         case .performance: return .mint
         case .settings:    return Color(NSColor.systemGray)

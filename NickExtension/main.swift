@@ -34,7 +34,7 @@ func writeExtensionHealth() {
         try? handle.close()
         return true
     }()
-    let health: [String: Any] = [
+    var health: [String: Any] = [
         "active": true,
         "xpcListener": xpcServer.listenerConfigurationStatus,
         "updatedAt": Date().timeIntervalSince1970,
@@ -53,6 +53,9 @@ func writeExtensionHealth() {
         "eventsPerSecond": esMetrics.eventsPerSecond,
         "deadlineMissCount": esMetrics.deadlineMisses
     ]
+    if let lastDeadlineMissAt = esMetrics.lastDeadlineMissAt {
+        health["lastDeadlineMissAt"] = lastDeadlineMissAt.timeIntervalSince1970
+    }
 
     do {
         try FileManager.default.createDirectory(

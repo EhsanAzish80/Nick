@@ -43,6 +43,13 @@ struct IncidentActionApproval: Sendable {
     let authorizationExternalForm: Data?
 }
 
+private struct PendingIncidentAction {
+    let id: UUID
+    let action: IncidentActionKind
+    let alertID: UUID
+    let mutation: (ThreatAlert) -> Void
+}
+
 extension ThreatAlert {
     /// Whether this alert still has evidence a user can act on. Keeping this in
     /// Core gives the sidebar badge, Alerts view, and menu-bar state one source
@@ -114,6 +121,17 @@ final class SecurityEngine {
 
     /// Whether the real-time pipeline is running, stopped, or degraded.
     var activePipelineStatus: PipelineStatus = .stopped
+
+    /// Paths discarded by the bounded app-side FSEvents scan queue.
+    private(set) var fileEventDroppedCount = 0
+
+    func recordFileEventDroppedCount(_ count: Int) {
+        fileEventDroppedCount = max(0, count)
+    }
+
+    /// Set when an incident action could not be authenticated against the active
+    /// extension. The request stays pending so the user can retry after upgrade.
+    private(set) var incidentActionRetryMessage: String?
 
     /// The date of the most recent scan completion.
     var lastScanDate: Date?
@@ -285,6 +303,7 @@ final class SecurityEngine {
     private(set) var incidentStore = IncidentStore()
     private var incidentActionAuthorizer: ((UUID, IncidentActionKind) async -> IncidentActionApproval?)?
     private var nextIncidentStoreAuthorization: Data?
+    private var pendingIncidentAction: PendingIncidentAction?
 
     /// Phase 7 — Performance / disk-cleanup engine.
     private(set) var performanceMonitor: PerformanceMonitor?
@@ -733,15 +752,47 @@ final class SecurityEngine {
         alertID: UUID,
         mutation: @escaping (ThreatAlert) -> Void
     ) {
-        guard let alert = alerts.first(where: { $0.id == alertID }),
-              let incidentActionAuthorizer else { return }
+        guard alerts.contains(where: { $0.id == alertID }) else { return }
+        pendingIncidentAction = PendingIncidentAction(
+            id: UUID(),
+            action: action,
+            alertID: alertID,
+            mutation: mutation
+        )
+        attemptPendingIncidentAction()
+    }
+
+    func retryPendingIncidentAction() {
+        attemptPendingIncidentAction()
+    }
+
+    func cancelPendingIncidentAction() {
+        pendingIncidentAction = nil
+        incidentActionRetryMessage = nil
+    }
+
+    private func attemptPendingIncidentAction() {
+        guard let request = pendingIncidentAction,
+              let incidentActionAuthorizer,
+              let alert = alerts.first(where: { $0.id == request.alertID }) else {
+            incidentActionRetryMessage = "Nick's security extension is not ready. Your action was not applied. Retry when protection reconnects."
+            return
+        }
+        incidentActionRetryMessage = nil
         Task { @MainActor [weak self] in
-            guard let approval = await incidentActionAuthorizer(alertID, action), let self else { return }
+            guard let approval = await incidentActionAuthorizer(request.alertID, request.action),
+                  let self else {
+                self?.incidentActionRetryMessage = "Nick's security extension may still be updating. Your action was not applied. Retry when protection reconnects."
+                return
+            }
+            guard self.pendingIncidentAction?.id == request.id else { return }
             self.nextIncidentStoreAuthorization = approval.authorizationExternalForm
-            mutation(alert)
+            request.mutation(alert)
             // A guarded mutation may decide it cannot safely change state.
             // Do not let that approval authorize a later, unrelated write.
             self.nextIncidentStoreAuthorization = nil
+            self.pendingIncidentAction = nil
+            self.incidentActionRetryMessage = nil
             self.syncAlertsFromStore()
         }
     }

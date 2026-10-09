@@ -157,6 +157,7 @@ final class MonitorCoordinator {
     // MARK: - Private Pipeline Tick
 
     private func tick() async {
+        engine.recordFileEventDroppedCount(fileSystemWatcher?.droppedEventsSnapshot() ?? 0)
         // Two-tier cadence: expensive OS sweeps only every deepScanInterval.
         // Correlation runs every tick against the already-buffered signal window.
         let now = Date()

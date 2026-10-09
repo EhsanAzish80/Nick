@@ -199,7 +199,8 @@ enum LOLBinDetector {
     static func evaluate(
         _ proc: NickProcessInfo,
         parentName: String?,
-        trustedProcessList: TrustedProcessList = TrustedProcessList()
+        trustedProcessList: TrustedProcessList = TrustedProcessList(),
+        signingResolver: (String) -> SigningStatus = { SignatureValidator.shared.evaluate(binaryPath: $0) }
     ) -> ThreatSignal? {
         // Inspect the actual argv captured from KERN_PROCARGS2. A parent process name alone is not evidence that a download was piped to a shell.
         let argv = ([proc.path, proc.name] + proc.arguments).joined(separator: " ")
@@ -209,13 +210,14 @@ enum LOLBinDetector {
             guard argv.lowercased().contains(sig.argumentPattern.lowercased()) else { continue }
             guard isSpecificMatch(reason: sig.reason, arguments: proc.arguments, command: argv) else { continue }
 
+            let evidenceProcess = resolvedSigningEvidence(for: proc, resolver: signingResolver)
             return ThreatSignal(
                 source: .process,
                 severity: sig.severity,
                 title: sig.title,
                 description: "'\(proc.name)' (PID \(proc.pid)) matches LOLBin pattern '\(sig.argumentPattern)'. Parent: '\(parentName ?? "unknown")'.",
                 context: ThreatSignalContext(
-                    processInfo: proc,
+                    processInfo: evidenceProcess,
                     metadata: [
                         "reason": sig.reason,
                         "detector": "LOLBinDetector",
@@ -226,6 +228,26 @@ enum LOLBinDetector {
         }
 
         return nil
+    }
+
+    private static func resolvedSigningEvidence(
+        for process: NickProcessInfo,
+        resolver: (String) -> SigningStatus
+    ) -> NickProcessInfo {
+        guard process.signingStatus == .pending, !process.path.isEmpty else { return process }
+        return NickProcessInfo(
+            pid: process.pid,
+            path: process.path,
+            name: process.name,
+            parentPID: process.parentPID,
+            parentName: process.parentName,
+            signingStatus: resolver(process.path),
+            metadata: ProcessMetadata(
+                user: process.user,
+                startTime: process.startTime,
+                arguments: process.arguments
+            )
+        )
     }
 
     /// Evaluates a list of processes for LOLBin patterns.

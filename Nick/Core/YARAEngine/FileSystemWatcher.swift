@@ -108,6 +108,12 @@ final class FileSystemWatcher: @unchecked Sendable {
         Self.log.info("FileSystemWatcher: stopped.")
     }
 
+    /// Number of paths discarded because the bounded real-time scan queue was full.
+    /// The lock makes this safe to read from the coordinator while callbacks enqueue.
+    func droppedEventsSnapshot() -> Int {
+        lock.withLock { droppedEventCount }
+    }
+
     // MARK: - Internal Helpers
 
     private func startStreamLocked() {

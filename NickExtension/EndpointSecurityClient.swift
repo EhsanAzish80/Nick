@@ -225,6 +225,7 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         var startedAt = Date()
         var eventCounts: [String: UInt64] = [:]
         var deadlineMisses: UInt64 = 0
+        var lastDeadlineMissAt: Date?
     }
     private let lock = NSLock()
     private var state = State()
@@ -233,13 +234,22 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         lock.withLock { state.eventCounts[Self.name(eventType), default: 0] += 1 }
     }
 
-    func recordDeadlineMiss() { lock.withLock { state.deadlineMisses += 1 } }
+    func recordDeadlineMiss() {
+        lock.withLock {
+            state.deadlineMisses += 1
+            state.lastDeadlineMissAt = Date()
+        }
+    }
 
-    func snapshot() -> (eventsPerSecond: [String: Double], deadlineMisses: UInt64) {
+    func snapshot() -> (
+        eventsPerSecond: [String: Double],
+        deadlineMisses: UInt64,
+        lastDeadlineMissAt: Date?
+    ) {
         lock.withLock {
             let elapsed = max(Date().timeIntervalSince(state.startedAt), 1)
             let rates = state.eventCounts.mapValues { Double($0) / elapsed }
-            return (rates, state.deadlineMisses)
+            return (rates, state.deadlineMisses, state.lastDeadlineMissAt)
         }
     }
 

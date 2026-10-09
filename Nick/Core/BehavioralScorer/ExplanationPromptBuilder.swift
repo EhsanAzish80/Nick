@@ -66,7 +66,9 @@ final class ExplanationPromptBuilder {
     /// - Returns: A plain-English 2-3 sentence explanation string.
     func buildTemplatedExplanation(for alert: ThreatAlert, topFeatures: [(name: String, contribution: Double)]) -> String {
         let topNames = Set(topFeatures.map { $0.name })
-        let processPath = alert.contributingSignals.compactMap { $0.processInfo?.path }.first ?? "an unknown process"
+        let processPath = alert.contributingSignals.compactMap { $0.processInfo?.path }.first
+            ?? alert.contributingSignals.compactMap { $0.metadata["appIdentifier"] }.first
+            ?? "an unidentified process"
         let remoteIP    = alert.contributingSignals.compactMap { $0.networkInfo?.remoteAddress }.first ?? "a remote address"
 
         // Reverse shell pattern
@@ -105,8 +107,11 @@ final class ExplanationPromptBuilder {
         }
 
         // Generic fallback
+        let evidenceSummary = alert.contributingSignals.count == 1
+            ? "One suspicious signal was observed from \(processPath). "
+            : "\(alert.contributingSignals.count) suspicious signals were observed together, including activity from \(processPath). "
         return "Nick detected \(alert.title.lowercased()) with a threat score of \(String(format: "%.2f", alert.score)) out of 1.0. " +
-               "Multiple suspicious signals were observed together, including activity from \(processPath). " +
+               evidenceSummary +
                "\(alert.recommendedAction)"
     }
 

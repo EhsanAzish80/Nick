@@ -32,6 +32,8 @@
 		E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000200 /* ExecutionTrustPolicy.swift */; };
 		E40000000000000000000301 /* ScanCandidatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000300 /* ScanCandidatePolicy.swift */; };
 		E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000300 /* ScanCandidatePolicy.swift */; };
+		E40000000000000000000401 /* BundledHashCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000400 /* BundledHashCatalog.swift */; };
+		E40000000000000000000402 /* BundledHashCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000400 /* BundledHashCatalog.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -128,6 +130,7 @@
 		E40000000000000000000100 /* YARAVerdictPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAVerdictPolicy.swift; path = Shared/YARAVerdictPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000200 /* ExecutionTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ExecutionTrustPolicy.swift; path = Shared/ExecutionTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000300 /* ScanCandidatePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScanCandidatePolicy.swift; path = Shared/ScanCandidatePolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000400 /* BundledHashCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BundledHashCatalog.swift; path = Shared/BundledHashCatalog.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -285,6 +288,7 @@
 				E40000000000000000000300 /* ScanCandidatePolicy.swift */,
 				E40000000000000000000200 /* ExecutionTrustPolicy.swift */,
 				E40000000000000000000100 /* YARAVerdictPolicy.swift */,
+				E40000000000000000000400 /* BundledHashCatalog.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -681,6 +685,7 @@
 				E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */,
 				E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */,
 				E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */,
+				E40000000000000000000402 /* BundledHashCatalog.swift in Sources */,
 				E40000000000000000000007 /* RansomwareNotePolicy.swift in Sources */,
 				AA11223344556677AABB0015 /* YARAEngine.swift in Sources */,
 				AA11223344556677AABB0016 /* YARAMatch.swift in Sources */,
@@ -716,6 +721,7 @@
 				E40000000000000000000301 /* ScanCandidatePolicy.swift in Sources */,
 				E40000000000000000000201 /* ExecutionTrustPolicy.swift in Sources */,
 				E40000000000000000000101 /* YARAVerdictPolicy.swift in Sources */,
+				E40000000000000000000401 /* BundledHashCatalog.swift in Sources */,
 				E40000000000000000000001 /* NetworkProtectionPolicy.swift in Sources */,
 				E40000000000000000000006 /* RansomwareNotePolicy.swift in Sources */,
 				E40000000000000000000004 /* ScamGuardian.swift in Sources */,

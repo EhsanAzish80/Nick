@@ -316,6 +316,12 @@ struct NetworkFinding: Sendable {
 
     init(event: NetworkBlockEvent) {
         let reason = NetworkObservationReason(rawValue: event.reason)
+        let destinationKind = NetworkEventContext.destinationKind(for: event.host)
+        let destinationClass: String = switch destinationKind {
+        case .localDevice, .localNetworkAddress: "local"
+        case .website, .internetAddress:
+            reason == .knownThreat || reason == .scamGuardian ? "suspicious" : "external"
+        }
         let severity: SignalSeverity
         let score: Double
         switch reason {
@@ -341,7 +347,7 @@ struct NetworkFinding: Sendable {
                 "reason": "network_extension_\(event.reason)",
                 "rule": "network_\(event.reason)",
                 "destination": event.host,
-                "destinationClass": reason == .knownThreat || reason == .scamGuardian ? "suspicious" : "external",
+                "destinationClass": destinationClass,
                 "appIdentifier": event.appIdentifier ?? "unknown",
                 "port": event.port.map(String.init) ?? "unknown"
             ])
