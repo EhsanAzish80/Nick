@@ -22,13 +22,52 @@ struct ProcessInstanceIdentity: Equatable, Sendable {
 enum RansomwareTerminationPolicy {
     /// Developer-ID validation is performed off the ES authorization path.
     /// A copied Team ID or self-signed certificate never reaches this exemption.
-    static func shouldTerminate(isBlockRecommendation: Bool, developerIDValidated: Bool) -> Bool {
-        isBlockRecommendation && !developerIDValidated
+    static func shouldTerminate(
+        isBlockRecommendation: Bool,
+        developerIDValidated: Bool,
+        isApprovedDevelopmentBuild: Bool = false
+    ) -> Bool {
+        isBlockRecommendation && !developerIDValidated && !isApprovedDevelopmentBuild
     }
 
     static func maySignalKill(expected: ProcessInstanceIdentity?, current: ProcessInstanceIdentity?) -> Bool {
         guard let expected, let current else { return false }
         return expected == current
+    }
+}
+
+enum BrowserDownloadRenamePolicy {
+    static func shouldIgnoreDestination(
+        destination: String,
+        developerIDValidated: Bool,
+        teamID: String?,
+        signingID: String?
+    ) -> Bool {
+        guard developerIDValidated,
+              let teamID, let signingID,
+              ["crdownload", "download", "part", "partial", "opdownload"]
+                .contains((destination as NSString).pathExtension.lowercased()) else { return false }
+        if teamID == "EQHXZ8M8AV" {
+            return signingID == "com.google.Chrome" || signingID.hasPrefix("com.google.Chrome.")
+        }
+        if teamID == "APPLE_PLATFORM" {
+            return signingID == "com.apple.Safari" || signingID.hasPrefix("com.apple.WebKit.")
+        }
+        return false
+    }
+}
+
+enum DevelopmentBuildRansomwarePolicy {
+    private static let buildTools: Set<String> = [
+        "cmake", "ninja", "make", "swift", "swiftc", "clang", "clang++", "ld"
+    ]
+
+    static func isAlertOnly(processPath: String, destination: String, repositoryRoot: String?) -> Bool {
+        guard buildTools.contains((processPath as NSString).lastPathComponent.lowercased()),
+              let repositoryRoot else { return false }
+        let root = URL(fileURLWithPath: repositoryRoot).standardizedFileURL.path
+        let path = URL(fileURLWithPath: destination).standardizedFileURL.path
+        return path == root || path.hasPrefix(root + "/")
     }
 }
 

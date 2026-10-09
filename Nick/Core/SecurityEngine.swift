@@ -16,10 +16,11 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
     var webhookURL: String?
     var notificationThresholdRaw: Int
     var verdictLearningEnabled: Bool
+    var approvedDevelopmentRoots: Set<String>
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, trustedNames, trustedEntries, suppressionRules, ignoredPaths
-        case webhookURL, notificationThresholdRaw, verdictLearningEnabled
+        case webhookURL, notificationThresholdRaw, verdictLearningEnabled, approvedDevelopmentRoots
     }
 
     init(
@@ -30,7 +31,8 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
         ignoredPaths: Set<String>,
         webhookURL: String?,
         notificationThresholdRaw: Int,
-        verdictLearningEnabled: Bool
+        verdictLearningEnabled: Bool,
+        approvedDevelopmentRoots: Set<String> = []
     ) {
         self.schemaVersion = schemaVersion
         self.trustedNames = trustedNames
@@ -40,6 +42,7 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
         self.webhookURL = webhookURL
         self.notificationThresholdRaw = notificationThresholdRaw
         self.verdictLearningEnabled = verdictLearningEnabled
+        self.approvedDevelopmentRoots = approvedDevelopmentRoots
     }
 
     init(from decoder: Decoder) throws {
@@ -55,6 +58,9 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
             Bool.self,
             forKey: .verdictLearningEnabled
         ) ?? false
+        approvedDevelopmentRoots = try container.decodeIfPresent(
+            Set<String>.self, forKey: .approvedDevelopmentRoots
+        ) ?? []
     }
 }
 
@@ -210,6 +216,7 @@ final class SecurityEngine {
     var webhookURLString: String? { didSet { persistSecuritySettingsIfReady() } }
     var notificationThreshold: SignalSeverity = .high { didSet { persistSecuritySettingsIfReady() } }
     private(set) var verdictLearningEnabled = false
+    var approvedDevelopmentRoots: Set<String> = [] { didSet { persistSecuritySettingsIfReady() } }
     private var securitySettingsPersistence: ((Data, Data?) -> Void)?
     private var nextSecuritySettingsAuthorization: Data?
     private var installingSecuritySettings = false
@@ -246,7 +253,8 @@ final class SecurityEngine {
             webhookURL: defaults.string(forKey: "webhookURL"),
             notificationThresholdRaw: defaults.object(forKey: "notificationThresholdRaw") as? Int
                 ?? SignalSeverity.high.rawValue,
-            verdictLearningEnabled: false
+            verdictLearningEnabled: false,
+            approvedDevelopmentRoots: []
         )
         return (try? JSONEncoder().encode(payload)) ?? Data("{}".utf8)
     }
@@ -269,6 +277,7 @@ final class SecurityEngine {
         webhookURLString = settings.webhookURL
         notificationThreshold = SignalSeverity(rawValue: settings.notificationThresholdRaw) ?? .high
         verdictLearningEnabled = settings.verdictLearningEnabled
+        approvedDevelopmentRoots = settings.approvedDevelopmentRoots
         installingSecuritySettings = false
         securitySettingsPersistence = persistence
         NotificationManager.shared.notificationThreshold = notificationThreshold
@@ -299,7 +308,8 @@ final class SecurityEngine {
             ignoredPaths: deepScanIgnoredPaths,
             webhookURL: webhookURLString,
             notificationThresholdRaw: notificationThreshold.rawValue,
-            verdictLearningEnabled: verdictLearningEnabled
+            verdictLearningEnabled: verdictLearningEnabled,
+            approvedDevelopmentRoots: approvedDevelopmentRoots
         )
         guard let data = try? JSONEncoder().encode(payload) else { return }
         NotificationManager.shared.notificationThreshold = notificationThreshold

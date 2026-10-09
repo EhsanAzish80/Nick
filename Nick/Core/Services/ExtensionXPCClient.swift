@@ -770,6 +770,7 @@ struct ExtensionFinding: Sendable {
         let isNickMaintenance = event.threatFamily == "nick-maintenance"
         let isDocumentedUninstall = event.threatFamily == "nick-documented-uninstall"
         let isManagementObservation = event.threatFamily == "endpoint-management"
+        let isRansomwareBehavior = event.metadata?["detectionKind"] == "ransomware-behavior"
         let severity: SignalSeverity
         if event.decision == .deny {
             severity = .critical
@@ -793,7 +794,7 @@ struct ExtensionFinding: Sendable {
             signingStatus: signingStatus
         )
         let isAuditEvent = isManagementObservation || isNickMaintenance || isDocumentedUninstall
-        let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : "signature")
+        let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : (isRansomwareBehavior ? "behavior" : "signature"))
         let ruleTier = isAuditEvent ? "review" : "protected"
         signal = ThreatSignal(
             id: event.id,
@@ -825,7 +826,7 @@ struct ExtensionFinding: Sendable {
                     "class": ruleClass,
                     "ruleTier": ruleTier,
                     "threatFamily": event.threatFamily ?? "unknown"
-                ]
+                ].merging(event.metadata ?? [:]) { current, _ in current }
             )
         )
         score = event.decision == .deny ? 0.98 : (isAuditEvent ? 0.1 : 0.9)
@@ -845,6 +846,11 @@ struct ExtensionFinding: Sendable {
             return "Nick observed routine use of Apple's system-extension management tool."
         }
         if isTamper {
+            if let observed = event.metadata?["observedRule"],
+               let expected = event.metadata?["expectedRule"],
+               event.metadata?["repairStatus"] == "restored" {
+                return "Nick found an unexpected authorization rule, restored it, and recorded the observed rule (\(observed)) and expected rule (\(expected))."
+            }
             return event.decision == .deny
                 ? "Nick refused an attempt to change a protected Nick path."
                 : "Nick observed an attempt to change a protected Nick path."
@@ -854,6 +860,16 @@ struct ExtensionFinding: Sendable {
         }
         if isDocumentedUninstall {
             return "Finder is moving Nick.app to the Trash. Protection components and generated data remain until you use Nick Uninstaller."
+        }
+        if event.metadata?["detectionKind"] == "ransomware-behavior" {
+            let actor = URL(fileURLWithPath: event.processPath).lastPathComponent
+            if let files = event.metadata?["renameFileCount"],
+               let folders = event.metadata?["renameDirectoryCount"],
+               let ext = event.metadata?["renameExtension"],
+               let seconds = event.metadata?["renameWindowSeconds"] {
+                return "\(files) files in \(folders) folders were renamed to .\(ext) within \(seconds) seconds by \(actor.isEmpty ? "an unknown process" : actor)."
+            }
+            return "Nick observed rapid file-renaming behavior by \(actor.isEmpty ? "an unknown process" : actor)."
         }
         return event.decision == .deny
             ? "Nick blocked access to a file previously identified as suspicious."

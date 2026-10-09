@@ -597,6 +597,8 @@ final class ESEventHandler {
             fileScanner?.cache.invalidate(path: notifyDestPath)
             let renameActorIsPlatform = process.is_platform_binary
             let renameActorTrusted = actorHasTrustedSigner(process)
+            let renameTeamID = esOptionalString(process.team_id)
+            let renameSigningID = esOptionalString(process.signing_id)
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
                 self.reportIntegrityViolation(at: notifySrcPath)
@@ -606,13 +608,22 @@ final class ESEventHandler {
                     source: notifySrcPath, destination: notifyDestPath
                 )
                 self.processTree?.recordFileAccess(pid: pid, path: notifySrcPath, operation: "rename")
+                let browserIdentityCandidate = BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+                    destination: notifyDestPath,
+                    developerIDValidated: true,
+                    teamID: renameTeamID,
+                    signingID: renameSigningID
+                )
+                let validatedBrowserDownload = browserIdentityCandidate
+                    && DeveloperIDTrustValidator.shared.isValidated(path: processPath)
                 if let alert = self.ransomwareDetector?.evaluateRename(
                     pid: pid,
                     processPath: processPath,
                     source: notifySrcPath,
                     destination: notifyDestPath,
                     actorIsPlatformBinary: renameActorIsPlatform,
-                    actorHasTrustedSigner: renameActorTrusted
+                    actorHasTrustedSigner: renameActorTrusted,
+                    ignoreBrowserDownloadDestination: validatedBrowserDownload
                 ) {
                     self.reportRansomware(
                         alert,
@@ -620,7 +631,9 @@ final class ESEventHandler {
                         parentPid: parentPid,
                         processPath: processPath,
                         filePath: notifyDestPath,
-                        processIdentity: processIdentity
+                        processIdentity: processIdentity,
+                        teamID: renameTeamID,
+                        signingID: renameSigningID
                     )
                 }
             }
@@ -906,16 +919,27 @@ final class ESEventHandler {
         parentPid: Int32,
         processPath: String,
         filePath: String,
-        processIdentity: ProcessInstanceIdentity?
+        processIdentity: ProcessInstanceIdentity?,
+        teamID: String? = nil,
+        signingID: String? = nil
     ) {
         // One burst produces an event for every file it touches. Report a
         // process once per minute unless the evidence escalates to a block.
         let isBlock = alert.recommendation == .block
-        let developerIDValidated = isBlock
-            && DeveloperIDTrustValidator.shared.isValidated(path: processPath)
+        let developerIDValidated = DeveloperIDTrustValidator.shared.isValidated(path: processPath)
+        let repositoryRoot = Self.approvedDevelopmentRepositoryRoot(
+            containing: filePath,
+            approvedRoots: xpcServer?.approvedDevelopmentRoots() ?? []
+        )
+        let developmentBuild = DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: processPath,
+            destination: filePath,
+            repositoryRoot: repositoryRoot
+        )
         let shouldTerminate = RansomwareTerminationPolicy.shouldTerminate(
             isBlockRecommendation: isBlock,
-            developerIDValidated: developerIDValidated
+            developerIDValidated: developerIDValidated,
+            isApprovedDevelopmentBuild: developmentBuild
         )
         let shouldReport = ransomwareReportLock.withLock { () -> Bool in
             let now = Date()
@@ -935,6 +959,19 @@ final class ESEventHandler {
         Self.logger.warning(
             "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) terminate=\(shouldTerminate)"
         )
+        var ransomwareMetadata: [String: String] = [
+            "detectionKind": "ransomware-behavior",
+            "actorValidation": developerIDValidated ? "developer-id" : "unvalidated",
+            "response": shouldTerminate ? "terminated" : "alert-only",
+            "indicators": alert.indicators.joined(separator: "; ")
+        ]
+        if developmentBuild { ransomwareMetadata["developmentContext"] = "repository-build" }
+        if let burst = alert.renameBurst {
+            ransomwareMetadata["renameExtension"] = burst.newExtension
+            ransomwareMetadata["renameFileCount"] = String(burst.fileCount)
+            ransomwareMetadata["renameDirectoryCount"] = String(burst.directoryCount)
+            ransomwareMetadata["renameWindowSeconds"] = String(burst.windowSeconds)
+        }
         let ransomwareEvent = ESEvent(
             eventType: .notifyWrite,
             processPath: processPath,
@@ -943,8 +980,14 @@ final class ESEventHandler {
             filePath: filePath,
             decision: .notApplicable,
             threat: ESEvent.ThreatContext(
-                threatName: "Possible ransomware activity",
-                threatFamily: alert.indicators.joined(separator: "; ")
+                threatName: alert.renameBurst == nil
+                    ? "Possible ransomware behavior"
+                    : "Rapid file-renaming behavior",
+                threatFamily: "ransomware-behavior",
+                isCodeSigned: developerIDValidated,
+                teamID: developerIDValidated ? teamID : nil,
+                signingID: developerIDValidated ? signingID : nil,
+                metadata: ransomwareMetadata
             )
         )
         pushEvent(ransomwareEvent)
@@ -965,6 +1008,29 @@ final class ESEventHandler {
         if let data = try? JSONEncoder().encode(report) {
             xpcServer?.sendRemediationToApp(data)
         }
+    }
+
+    /// Returns a repository boundary for developer build output. This is used
+    /// only to prevent heuristic process termination; the protected alert is
+    /// still emitted and cannot be suppressed.
+    private static func approvedDevelopmentRepositoryRoot(
+        containing path: String,
+        approvedRoots: Set<String>
+    ) -> String? {
+        guard path.contains("/.build/") || path.contains("/CMakeFiles/")
+                || path.contains("/DerivedData/") || path.contains("/Build/Products/") else {
+            return nil
+        }
+        let destination = URL(fileURLWithPath: path).standardizedFileURL.path
+        for rawRoot in approvedRoots {
+            let root = URL(fileURLWithPath: rawRoot).standardizedFileURL
+            let rootPath = root.path
+            guard destination == rootPath || destination.hasPrefix(rootPath + "/") else { continue }
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent(".git").path) {
+                return rootPath
+            }
+        }
+        return nil
     }
 
     /// Encodes and pushes an `ESEvent` to the container app via XPC.

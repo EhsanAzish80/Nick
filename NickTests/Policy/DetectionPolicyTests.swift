@@ -61,6 +61,46 @@ final class DetectionPolicyTests: XCTestCase {
         ), "A self-signed actor with a copied Team ID must not gain the exemption")
     }
 
+    func test_validatedChromeDownloadTemporaryDestinationIsIgnored() {
+        XCTAssertTrue(BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+            destination: "/private/var/folders/a/file.crdownload",
+            developerIDValidated: true,
+            teamID: "EQHXZ8M8AV",
+            signingID: "com.google.Chrome.helper"
+        ))
+        XCTAssertFalse(BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+            destination: "/private/var/folders/a/file.crdownload",
+            developerIDValidated: false,
+            teamID: "EQHXZ8M8AV",
+            signingID: "com.google.Chrome.helper"
+        ))
+        XCTAssertFalse(BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+            destination: "/Users/a/report.docx.locked",
+            developerIDValidated: true,
+            teamID: "EQHXZ8M8AV",
+            signingID: "com.google.Chrome"
+        ))
+    }
+
+    func test_developmentBuildUnderRepositoryIsAlertOnly() {
+        let root = "/Users/a/Projects/App"
+        XCTAssertTrue(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/opt/homebrew/bin/cmake",
+            destination: root + "/.build/CMakeFiles/x.make",
+            repositoryRoot: root
+        ))
+        XCTAssertFalse(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: false,
+            isApprovedDevelopmentBuild: true
+        ))
+        XCTAssertFalse(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/tmp/unknown",
+            destination: root + "/.build/x.locked",
+            repositoryRoot: root
+        ))
+    }
+
     func test_pidReuseCannotAuthoriseProcessTermination() {
         let reviewed = ProcessInstanceIdentity(pid: 42, startSeconds: 100, startMicroseconds: 1)
         let reused = ProcessInstanceIdentity(pid: 42, startSeconds: 101, startMicroseconds: 1)
