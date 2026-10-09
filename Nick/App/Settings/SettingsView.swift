@@ -309,13 +309,39 @@ struct SettingsView: View {
                 .labelsHidden()
                 .frame(width: 120)
             }
+            DisclosureGroup("Approved development repositories (\(engine.approvedDevelopmentRoots.count))") {
+                ForEach(engine.approvedDevelopmentRoots.sorted(), id: \.self) { path in
+                    HStack {
+                        Text(path).font(.caption).textSelection(.enabled)
+                        Spacer()
+                        Button("Remove", role: .destructive) {
+                            engine.approvedDevelopmentRoots.remove(path)
+                        }
+                    }
+                }
+                Button("Add Repository…", action: approveDevelopmentRepository)
+            }
         } header: {
             Text("Scanning")
         } footer: {
-            Text("How often Nick performs a background sweep. Scheduled Deep Scan runs a full YARA scan; results are notified if threats are found.")
+            Text("How often Nick performs a background sweep. Approved repositories keep unsigned build tools alert-only; protected detections remain visible and are never suppressed.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func approveDevelopmentRepository() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Approve Repository"
+        guard panel.runModal() == .OK, let selected = panel.url else { return }
+        let root = selected.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: root.appendingPathComponent(".git").path),
+              let authorization = xpcClient.requestProtectionModificationAuthorization() else { return }
+        engine.authorizeNextSecuritySettingsWrite(with: authorization)
+        engine.approvedDevelopmentRoots.insert(root.path)
     }
 
     private var networkProtectionSection: some View {

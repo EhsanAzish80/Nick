@@ -473,6 +473,60 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertTrue(finding.signal.description.contains("refused"))
     }
 
+    func test_authorizationTamperCarriesObservedExpectedAndRepairEvidence() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/Library/SystemExtensions/com.ehsanazish.nick.NickExtension",
+            pid: 0,
+            parentPid: 0,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: "Nick authorization policy tampering detected",
+                threatFamily: "tamper",
+                metadata: [
+                    "observedRule": "class=rule; rule=allow",
+                    "expectedRule": ProtectionAuthorizationRightPolicy.expectedSummary,
+                    "repairStatus": "restored"
+                ]
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertFalse(finding.signal.processInfo?.name.isEmpty ?? true)
+        XCTAssertEqual(finding.signal.metadata["repairStatus"], "restored")
+        XCTAssertTrue(finding.signal.description.contains("observed rule"))
+        XCTAssertTrue(finding.signal.description.contains("expected rule"))
+    }
+
+    func test_ransomwareRenameEventMapsToProtectedBehaviorWithValidatedActor() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/Applications/Example.app/Contents/MacOS/Example",
+            pid: 55,
+            parentPid: 1,
+            filePath: "/Users/a/Documents/report.locked",
+            decision: .notApplicable,
+            threat: .init(
+                threatName: "Rapid file-renaming behavior",
+                threatFamily: "ransomware-behavior",
+                isCodeSigned: true,
+                teamID: "ABCDE12345",
+                signingID: "com.example.app",
+                metadata: [
+                    "detectionKind": "ransomware-behavior",
+                    "renameExtension": "locked",
+                    "renameFileCount": "8",
+                    "renameDirectoryCount": "2",
+                    "renameWindowSeconds": "10"
+                ]
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.metadata["class"], "behavior")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
+        XCTAssertEqual(finding.signal.processInfo?.signingStatus, .signed(teamID: "ABCDE12345", signingID: "com.example.app"))
+        XCTAssertEqual(finding.signal.description, "8 files in 2 folders were renamed to .locked within 10 seconds by Example.")
+    }
+
     func test_validatedNickMaintenanceIsOneInformationalReviewRule() throws {
         let event = ESEvent(
             eventType: .notifyWrite,

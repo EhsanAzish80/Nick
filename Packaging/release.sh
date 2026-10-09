@@ -24,6 +24,8 @@ NOTARIZE=${NOTARIZE:-1}
 SPARKLE_ACCOUNT=${SPARKLE_ACCOUNT:-nick-legacy}
 SPARKLE_BIN=${SPARKLE_BIN:-"${DERIVED_DATA_PATH}/SourcePackages/artifacts/sparkle/Sparkle/bin"}
 
+"${PROJECT_DIR}/Scripts/validate-extension-build.sh" "${EXPECTED_BUILD}"
+
 mkdir -p "${BUILD_DIR}"
 
 # A release archive must never reuse products whose resource forks or Finder
@@ -69,6 +71,15 @@ BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${NICK_APP}/Content
   print -u2 "Expected Nick ${EXPECTED_VERSION} (${EXPECTED_BUILD}), found ${VERSION} (${BUILD})."
   exit 1
 }
+
+for extension in NickExtension NickNetFilter; do
+  extension_plist="${NICK_APP}/Contents/Library/SystemExtensions/com.ehsanazish.nick.${extension}.systemextension/Contents/Info.plist"
+  extension_build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${extension_plist}")
+  [[ "${extension_build}" == "${EXPECTED_BUILD}" ]] || {
+    print -u2 "Expected ${extension} build ${EXPECTED_BUILD}, found ${extension_build}."
+    exit 1
+  }
+done
 
 # Remove Finder metadata before signing and packaging. Otherwise productbuild
 # can emit AppleDouble `._*` entries and noisy "write: Permission denied"

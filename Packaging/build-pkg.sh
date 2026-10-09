@@ -8,6 +8,10 @@ CONFIGURATION=${CONFIGURATION:-Release}
 ARCHIVE_PATH=${ARCHIVE_PATH:-"${BUILD_DIR}/Nick.xcarchive"}
 OUTPUT_PATH=${OUTPUT_PATH:-"${BUILD_DIR}/Nick.pkg"}
 INSTALLER_SIGNING_IDENTITY=${INSTALLER_SIGNING_IDENTITY:-}
+EXTENSION_BUILD=$(xcodebuild -project "${PROJECT_DIR}/Nick.xcodeproj" -target NickExtension -configuration "${CONFIGURATION}" -showBuildSettings \
+  | /usr/bin/awk '/CURRENT_PROJECT_VERSION/ { print $3; exit }')
+
+"${PROJECT_DIR}/Scripts/validate-extension-build.sh" "${EXTENSION_BUILD}"
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
@@ -31,6 +35,15 @@ if [[ ! -d "${EMBEDDED_UNINSTALLER}" ]]; then
   print -u2 "Nick Uninstaller.app was not embedded in Nick.app."
   exit 1
 fi
+
+for extension in NickExtension NickNetFilter; do
+  extension_plist="${NICK_APP}/Contents/Library/SystemExtensions/com.ehsanazish.nick.${extension}.systemextension/Contents/Info.plist"
+  extension_build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${extension_plist}")
+  [[ "${extension_build}" == "${EXTENSION_BUILD}" ]] || {
+    print -u2 "Expected ${extension} build ${EXTENSION_BUILD}, found ${extension_build}."
+    exit 1
+  }
+done
 
 PKG_ARGS=(
   --component "${NICK_APP}" /Applications

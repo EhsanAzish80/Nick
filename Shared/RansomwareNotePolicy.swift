@@ -22,13 +22,65 @@ struct ProcessInstanceIdentity: Equatable, Sendable {
 enum RansomwareTerminationPolicy {
     /// Developer-ID validation is performed off the ES authorization path.
     /// A copied Team ID or self-signed certificate never reaches this exemption.
-    static func shouldTerminate(isBlockRecommendation: Bool, developerIDValidated: Bool) -> Bool {
-        isBlockRecommendation && !developerIDValidated
+    static func shouldTerminate(
+        isBlockRecommendation: Bool,
+        developerIDValidated: Bool,
+        isApprovedDevelopmentBuild: Bool = false
+    ) -> Bool {
+        isBlockRecommendation && !developerIDValidated && !isApprovedDevelopmentBuild
     }
 
     static func maySignalKill(expected: ProcessInstanceIdentity?, current: ProcessInstanceIdentity?) -> Bool {
         guard let expected, let current else { return false }
         return expected == current
+    }
+}
+
+enum BrowserDownloadRenamePolicy {
+    static func shouldIgnoreDestination(
+        destination: String,
+        developerIDValidated: Bool,
+        teamID: String?,
+        signingID: String?
+    ) -> Bool {
+        guard developerIDValidated,
+              let teamID, let signingID,
+              ["crdownload", "download", "part", "partial", "opdownload"]
+                .contains((destination as NSString).pathExtension.lowercased()) else { return false }
+        if teamID == "EQHXZ8M8AV" {
+            return signingID == "com.google.Chrome" || signingID.hasPrefix("com.google.Chrome.")
+        }
+        if teamID == "APPLE_PLATFORM" {
+            return signingID == "com.apple.Safari" || signingID.hasPrefix("com.apple.WebKit.")
+        }
+        return false
+    }
+}
+
+enum DevelopmentBuildRansomwarePolicy {
+    private static let buildArtifactExtensions: Set<String> = [
+        "a", "cmake", "d", "dylib", "make", "ninja_deps", "ninja_log",
+        "o", "obj", "pch", "swiftdeps", "swiftmodule", "tmp"
+    ]
+
+    static func isAlertOnly(
+        processPath: String,
+        destination: String,
+        repositoryRoot: String?,
+        actorValidated: Bool
+    ) -> Bool {
+        guard let repositoryRoot,
+              buildArtifactExtensions.contains((destination as NSString).pathExtension.lowercased()),
+              actorValidated || isHomebrewCellarExecutable(processPath) else { return false }
+        let root = URL(fileURLWithPath: repositoryRoot).standardizedFileURL.path
+        let path = URL(fileURLWithPath: destination).standardizedFileURL.path
+        return path == root || path.hasPrefix(root + "/")
+    }
+
+    private static func isHomebrewCellarExecutable(_ path: String) -> Bool {
+        let normalized = URL(fileURLWithPath: path).standardizedFileURL.path
+        return normalized.hasPrefix("/opt/homebrew/Cellar/")
+            || normalized.hasPrefix("/usr/local/Cellar/")
     }
 }
 

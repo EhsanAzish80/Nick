@@ -73,10 +73,29 @@ enum ProtectionAuthorizationRightPolicy {
     static func isExpected(_ dictionary: [String: Any]) -> Bool {
         let value = dictionary["rule"]
         let rules = (value as? [String]) ?? (value as? String).map { [$0] } ?? []
-        return dictionary["class"] as? String == "rule"
-            && rules == ["authenticate-session-owner-or-admin"]
-            && (dictionary["timeout"] as? NSNumber)?.intValue == 120
-            && (dictionary["shared"] as? NSNumber)?.boolValue == false
+        guard dictionary["class"] as? String == "rule",
+              rules == ["authenticate-session-owner-or-admin"] else { return false }
+
+        // Authorization Services normalises rules and omits these keys when it
+        // reads the rule back. Validate them when present, but do not mistake
+        // authd's canonical representation for tampering.
+        if let timeout = dictionary["timeout"] as? NSNumber, timeout.intValue != 120 {
+            return false
+        }
+        if let shared = dictionary["shared"] as? NSNumber, shared.boolValue {
+            return false
+        }
+        return true
+    }
+
+    static let expectedSummary = "class=rule; rule=authenticate-session-owner-or-admin; timeout=120; shared=false"
+
+    static func observedSummary(_ dictionary: [String: Any]) -> String {
+        let ruleValue = dictionary["rule"]
+        let rules = (ruleValue as? [String]) ?? (ruleValue as? String).map { [$0] } ?? []
+        let timeout = (dictionary["timeout"] as? NSNumber).map { String($0.intValue) } ?? "authd-default"
+        let shared = (dictionary["shared"] as? NSNumber).map { String($0.boolValue) } ?? "authd-default"
+        return "class=\(dictionary["class"] as? String ?? "missing"); rule=\(rules.joined(separator: ",")); timeout=\(timeout); shared=\(shared)"
     }
 }
 
@@ -106,6 +125,9 @@ enum SecuritySettingsWritePolicy {
         }
         if !strings("trustedNames", new).isSubset(of: strings("trustedNames", old)) { return true }
         if !strings("ignoredPaths", new).isSubset(of: strings("ignoredPaths", old)) { return true }
+        if !strings("approvedDevelopmentRoots", new).isSubset(of: strings("approvedDevelopmentRoots", old)) {
+            return true
+        }
         if !objectFingerprints("trustedEntries", new).isSubset(of: objectFingerprints("trustedEntries", old)) {
             return true
         }

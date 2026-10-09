@@ -17,6 +17,17 @@ struct DiagnosticsView: View {
 
                 diagnosticCard("Endpoint Security", systemImage: "shield.lefthalf.filled") {
                     row("XPC connection", xpcClient.isConnected ? "Connected" : "Disconnected")
+                    row("App build", appBuild)
+                    row("Active Endpoint Security build", activeEndpointExtensionBuild)
+                    row("Active Network Filter build", activeNetworkExtensionBuild)
+                    if endpointBuildStatus == .mismatch || networkBuildStatus == .mismatch {
+                        Label(
+                            "Nick is connected to a different extension build. Reinstall a package with a higher build number before relying on these diagnostics.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.red)
+                    }
                     row("Health updated", healthDate("updatedAt")?.formatted(date: .abbreviated, time: .standard) ?? "Unavailable")
                     row("YARA rules", healthBool("yaraRulesReady") ? "Ready" : "Not ready")
                     row("Bundled hash catalog", catalogSummary)
@@ -71,6 +82,26 @@ struct DiagnosticsView: View {
         }
     }
 
+    private var appBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String ?? "Unavailable"
+    }
+
+    private var activeEndpointExtensionBuild: String {
+        xpcClient.extensionHealth?["version"] as? String ?? "Unavailable"
+    }
+
+    private var activeNetworkExtensionBuild: String {
+        NetworkProtectionSharedStore.providerVersion() ?? "Unavailable"
+    }
+
+    private var endpointBuildStatus: ExtensionBuildVersionStatus {
+        ExtensionBuildVersionStatus(appBuild: appBuild, extensionBuild: activeEndpointExtensionBuild)
+    }
+
+    private var networkBuildStatus: ExtensionBuildVersionStatus {
+        ExtensionBuildVersionStatus(appBuild: appBuild, extensionBuild: activeNetworkExtensionBuild)
+    }
+
     private func healthBool(_ key: String) -> Bool {
         xpcClient.extensionHealth?[key] as? Bool ?? false
     }
@@ -115,5 +146,19 @@ struct DiagnosticsView: View {
             Text(value).multilineTextAlignment(.trailing).textSelection(.enabled)
         }
         .font(.callout)
+    }
+}
+
+enum ExtensionBuildVersionStatus: Equatable {
+    case matching
+    case mismatch
+    case unavailable
+
+    init(appBuild: String, extensionBuild: String) {
+        guard appBuild != "Unavailable", extensionBuild != "Unavailable" else {
+            self = .unavailable
+            return
+        }
+        self = appBuild == extensionBuild ? .matching : .mismatch
     }
 }

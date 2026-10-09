@@ -3,6 +3,9 @@
 ## Source and product
 
 - [ ] Marketing version and build number are consistent across all targets.
+- [ ] The installable build number is higher than every active Nick extension;
+      Diagnostics shows matching app and active-extension builds, and the gate
+      record includes the complete `systemextensionsctl list` output.
 - [ ] Release notes describe user-visible changes accurately.
 - [ ] `ARCHITECTURE.md`, `README.md`, `ROADMAP.md`, and the current-status table
       in `SECURITY_AUDIT.md` have been reviewed against the live code paths for

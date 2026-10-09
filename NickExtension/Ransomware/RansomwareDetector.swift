@@ -25,6 +25,12 @@ final class RansomwareDetector {
     // MARK: - Types
 
     struct RansomwareAlert {
+        struct RenameBurst {
+            let newExtension: String
+            let fileCount: Int
+            let directoryCount: Int
+            let windowSeconds: Int
+        }
         let pid: Int32
         let processPath: String
         let indicators: [String]
@@ -32,6 +38,7 @@ final class RansomwareDetector {
         /// True only when evidence is specific enough to justify terminating
         /// the writer without waiting for user review.
         let automaticBlockAllowed: Bool
+        let renameBurst: RenameBurst?
 
         enum Recommendation {
             case block      // high confidence — kill and quarantine now
@@ -161,7 +168,8 @@ final class RansomwareDetector {
             // and legitimately rewrite synced canaries; they get a prompt, not
             // an automatic kill.
             automaticBlockAllowed: !actorHasTrustedSigner && (canaryTouched
-                || (behavior.isSuspicious && (familyExtensionObserved || ransomNoteObserved)))
+                || (behavior.isSuspicious && (familyExtensionObserved || ransomNoteObserved))),
+            renameBurst: nil
         )
 
         Self.logger.notice(
@@ -183,9 +191,11 @@ final class RansomwareDetector {
         source: String,
         destination: String,
         actorIsPlatformBinary: Bool,
-        actorHasTrustedSigner: Bool = false
+        actorHasTrustedSigner: Bool = false,
+        ignoreBrowserDownloadDestination: Bool = false
     ) -> RansomwareAlert? {
         guard !actorIsPlatformBinary else { return nil }
+        guard !ignoreBrowserDownloadDestination else { return nil }
         var indicators: [String] = []
         var confidence = 0.0
         var canaryTouched = false
@@ -204,7 +214,8 @@ final class RansomwareDetector {
             strongEvidence = true
         }
 
-        if let burst = behaviorTracker.extensionChangeBurst(pid: pid),
+        let observedBurst = behaviorTracker.extensionChangeBurst(pid: pid)
+        if let burst = observedBurst,
            burst.fileCount >= Self.extensionBurstThreshold {
             indicators.append(
                 "Mass extension change to .\(burst.newExtension): \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
@@ -222,7 +233,11 @@ final class RansomwareDetector {
             // A rename burst alone prompts the user; combined with a canary or a
             // known family extension it justifies stopping the writer.
             automaticBlockAllowed: !actorHasTrustedSigner
-                && (canaryTouched || (strongEvidence && confidence >= 0.9))
+                && (canaryTouched || (strongEvidence && confidence >= 0.9)),
+            renameBurst: observedBurst.map {
+                .init(newExtension: $0.newExtension, fileCount: $0.fileCount,
+                      directoryCount: $0.directoryCount, windowSeconds: 10)
+            }
         )
         Self.logger.notice(
             "Ransomware rename alert pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) action=\(String(describing: alert.recommendation))"

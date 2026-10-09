@@ -61,6 +61,70 @@ final class DetectionPolicyTests: XCTestCase {
         ), "A self-signed actor with a copied Team ID must not gain the exemption")
     }
 
+    func test_validatedChromeDownloadTemporaryDestinationIsIgnored() {
+        XCTAssertTrue(BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+            destination: "/private/var/folders/a/file.crdownload",
+            developerIDValidated: true,
+            teamID: "EQHXZ8M8AV",
+            signingID: "com.google.Chrome.helper"
+        ))
+        XCTAssertFalse(BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+            destination: "/private/var/folders/a/file.crdownload",
+            developerIDValidated: false,
+            teamID: "EQHXZ8M8AV",
+            signingID: "com.google.Chrome.helper"
+        ))
+        XCTAssertFalse(BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+            destination: "/Users/a/report.docx.locked",
+            developerIDValidated: true,
+            teamID: "EQHXZ8M8AV",
+            signingID: "com.google.Chrome"
+        ))
+    }
+
+    func test_developmentBuildUnderRepositoryIsAlertOnly() {
+        let root = "/Users/a/Projects/App"
+        XCTAssertTrue(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/opt/homebrew/Cellar/cmake/4.2.0/bin/cmake",
+            destination: root + "/.build/CMakeFiles/x.make",
+            repositoryRoot: root,
+            actorValidated: false
+        ))
+        XCTAssertFalse(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: false,
+            isApprovedDevelopmentBuild: true
+        ))
+        XCTAssertFalse(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/tmp/unknown",
+            destination: root + "/.build/x.locked",
+            repositoryRoot: root,
+            actorValidated: false
+        ))
+        XCTAssertFalse(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/Users/a/x/make",
+            destination: root + "/Sources/report.locked",
+            repositoryRoot: root,
+            actorValidated: false
+        ), "A renamed unvalidated actor must still be terminated for a non-build extension")
+        XCTAssertTrue(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: false,
+            isApprovedDevelopmentBuild: DevelopmentBuildRansomwarePolicy.isAlertOnly(
+                processPath: "/Users/a/x/make",
+                destination: root + "/Sources/report.locked",
+                repositoryRoot: root,
+                actorValidated: false
+            )
+        ))
+        XCTAssertTrue(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/Applications/Xcode.app/Contents/Developer/usr/bin/swiftc",
+            destination: root + "/.build/module.o",
+            repositoryRoot: root,
+            actorValidated: true
+        ))
+    }
+
     func test_pidReuseCannotAuthoriseProcessTermination() {
         let reviewed = ProcessInstanceIdentity(pid: 42, startSeconds: 100, startMicroseconds: 1)
         let reused = ProcessInstanceIdentity(pid: 42, startSeconds: 101, startMicroseconds: 1)
