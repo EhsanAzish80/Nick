@@ -34,6 +34,30 @@ final class SimpleActivityFeedTests: XCTestCase {
               date: now.addingTimeInterval(-hoursAgo * 3_600), needsAction: needsAction)
     }
 
+    private func protectedPersistenceAlert() -> ThreatAlert {
+        let signal = ThreatSignal(
+            source: .persistence,
+            severity: .medium,
+            title: "Launch item with missing executable",
+            description: "A startup item references a missing executable.",
+            context: ThreatSignalContext(metadata: [
+                "reason": "persist_executable_missing",
+                "path": "/Users/test/Library/LaunchAgents/com.example.missing.plist",
+            ])
+        )
+        return ThreatAlert(
+            score: 0.45,
+            content: AlertContent(
+                title: "Startup item points to a missing file",
+                description: "A startup configuration references a file that no longer exists.",
+                severity: .medium,
+                recommendedAction: "Review the startup item."
+            ),
+            contributingSignals: [signal],
+            timestamp: now
+        )
+    }
+
     func test_mergesSourcesNewestFirst() {
         let items = SimpleActivityFeed.items(
             alerts: [alert("Unusual app behaviour", level: .warning, hoursAgo: 3, needsAction: false)],
@@ -56,6 +80,21 @@ final class SimpleActivityFeedTests: XCTestCase {
         )
         XCTAssertEqual(items.map(\.status), [.needsAction, .threat])
         XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
+    }
+
+    func test_mediumProtectedPersistenceFindingIsVisibleAndNeedsReview() {
+        let alert = protectedPersistenceAlert()
+        XCTAssertTrue(alert.hasProtectedEvidence)
+        XCTAssertTrue(alert.isUserVisibleFinding)
+
+        let inputs = SimpleActivityFeed.alertInputs(
+            from: [alert],
+            actionable: [alert.id]
+        )
+        XCTAssertEqual(inputs.count, 1)
+        XCTAssertEqual(inputs.first?.level, .warning)
+        XCTAssertEqual(inputs.first?.headline, "New startup item detected")
+        XCTAssertEqual(inputs.first?.needsAction, true)
     }
 
     func test_filters() {

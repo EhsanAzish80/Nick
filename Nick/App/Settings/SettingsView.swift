@@ -74,6 +74,7 @@ struct SettingsView: View {
     @State private var updateCheckStatus: String?
     @State private var showsAcknowledgements = false
     @State private var showsLearnedReviewEntries = false
+    @State private var showsLegacyDismissals = false
     @State private var verdictLearningStatus: String?
     @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
     @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
@@ -133,6 +134,10 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showsLearnedReviewEntries) {
             LearnedReviewEntriesView()
+                .environment(engine)
+        }
+        .sheet(isPresented: $showsLegacyDismissals) {
+            LegacyDismissalsView()
                 .environment(engine)
         }
     }
@@ -954,6 +959,16 @@ struct SettingsView: View {
                 Button("View…") { showsLearnedReviewEntries = true }
                     .controlSize(.small)
             }
+            if !engine.legacyDismissalTombstones.isEmpty {
+                LabeledTile(
+                    icon: "clock.arrow.circlepath", tint: .orange,
+                    title: "Dismissed in Nick 4.x",
+                    subtitle: "Review or reset dismissals imported during the upgrade."
+                ) {
+                    Button("View…") { showsLegacyDismissals = true }
+                        .controlSize(.small)
+                }
+            }
             LabeledTile(
                 icon: "brain", tint: .blue,
                 title: "Contribute to detection improvements",
@@ -1509,6 +1524,70 @@ private struct LearnedReviewEntriesView: View {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? data.write(to: url, options: .atomic)
+    }
+}
+
+private struct LegacyDismissalsView: View {
+    @Environment(SecurityEngine.self) private var engine
+    @Environment(\.dismiss) private var dismiss
+    @State private var entries: [IncidentDismissalTombstone] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Dismissed in Nick 4.x").font(.title2.weight(.semibold))
+                    Text("These review-only dismissals were imported during the upgrade. Protected detections are never hidden by them.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+
+            if entries.isEmpty {
+                ContentUnavailableView(
+                    "No imported dismissals",
+                    systemImage: "clock.arrow.circlepath",
+                    description: Text("All Nick 4.x dismissals have been reset.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(entries, id: \.incidentKey) { entry in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(displayTitle(for: entry)).font(.headline)
+                            Spacer()
+                            Button("Reset", role: .destructive) {
+                                engine.resetLegacyDismissal(incidentKey: entry.incidentKey)
+                                refresh()
+                            }
+                            .controlSize(.small)
+                        }
+                        Text(entry.alertDeduplicationKey)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Text("Imported \(entry.dismissedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 720, minHeight: 480)
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        entries = engine.legacyDismissalTombstones
+    }
+
+    private func displayTitle(for entry: IncidentDismissalTombstone) -> String {
+        let title = entry.alertDeduplicationKey.components(separatedBy: "||").first ?? "Imported dismissal"
+        return title.isEmpty ? "Imported dismissal" : title.localizedCapitalized
     }
 }
 

@@ -950,6 +950,79 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: "nickPersistedAlerts"))
     }
 
+    func test_privilegedMigrationPreservesLegacy463DismissalKeyAndSuppressesRepeat() throws {
+        let suite = "IncidentLegacy463DismissalMigrationTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let dismissed = makeAlert(signal: makeSignal(
+            metadata: ["reason": "system_hardening", "path": "/Users/test/review-only-item"]
+        ))
+        defaults.set([dismissed.deduplicationKey], forKey: "nickDismissedAlertKeys")
+        defaults.set(try JSONEncoder().encode([ThreatAlert]()), forKey: "nickPersistedAlerts")
+
+        let source = IncidentStore(defaults: defaults, persistOnInit: false)
+        let payload = try source.prepareLegacyMigration(defaults: defaults)
+        let restored = IncidentStore()
+        try restored.installPrivilegedSnapshot(payload) { _ in }
+
+        XCTAssertEqual(restored.dismissedAlertDeduplicationKeys, Set([dismissed.deduplicationKey]))
+        XCTAssertTrue(restored.ingest([dismissed]).newlyActionable.isEmpty)
+        XCTAssertTrue(restored.incidents.isEmpty)
+        XCTAssertNotNil(defaults.object(forKey: "nickDismissedAlertKeys"))
+
+        restored.removeLegacyPersistence(defaults: defaults)
+        XCTAssertNil(defaults.object(forKey: "nickDismissedAlertKeys"))
+        XCTAssertNil(defaults.data(forKey: "nickPersistedAlerts"))
+    }
+
+    func test_currentTombstoneDoesNotSuppressSamePathWithNewHash() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let original = makeFileAlert(
+            reason: "hash_match",
+            path: "/Users/test/download.bin",
+            hash: String(repeating: "a", count: 64)
+        )
+        _ = store.ingest([original])
+        store.performAuthenticatedUserAction(
+            .dismissed,
+            alertID: try XCTUnwrap(store.visibleAlerts.first?.id)
+        )
+
+        let replacement = makeFileAlert(
+            reason: "hash_match",
+            path: "/Users/test/download.bin",
+            hash: String(repeating: "b", count: 64)
+        )
+        let result = store.ingest([replacement])
+
+        XCTAssertEqual(result.newlyActionable.map(\.deduplicationKey), [replacement.deduplicationKey])
+        XCTAssertEqual(store.visibleAlerts.map(\.deduplicationKey), [replacement.deduplicationKey])
+    }
+
+    func test_legacyTombstoneNeverSuppressesProtectedCandidate() throws {
+        let suite = "IncidentLegacyProtectedDismissalTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let protected = makeFileAlert(
+            reason: "hash_match",
+            path: "/Users/test/protected.bin",
+            hash: String(repeating: "c", count: 64)
+        )
+        defaults.set([protected.deduplicationKey], forKey: "nickDismissedAlertKeys")
+
+        let source = IncidentStore(defaults: defaults, persistOnInit: false)
+        let payload = try source.prepareLegacyMigration(defaults: defaults)
+        let restored = IncidentStore()
+        try restored.installPrivilegedSnapshot(payload) { _ in }
+        let result = restored.ingest([protected])
+
+        XCTAssertEqual(result.newlyActionable.map(\.deduplicationKey), [protected.deduplicationKey])
+        XCTAssertEqual(restored.visibleAlerts.map(\.deduplicationKey), [protected.deduplicationKey])
+    }
+
     func test_userVerdictIsRecordedOnlyAfterExtensionAcceptsTarget() async throws {
         let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [],
@@ -1375,6 +1448,26 @@ final class ThreatCorrelatorTests: XCTestCase {
             contributingSignals: [signal],
             timestamp: timestamp
         )
+    }
+
+    private func makeFileAlert(reason: String, path: String, hash: String) -> ThreatAlert {
+        let signal = ThreatSignal(
+            source: .filesystem,
+            severity: .high,
+            title: "Suspicious file",
+            description: "Test file evidence",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: path,
+                    sha256Hash: hash,
+                    entropy: nil,
+                    signingStatus: nil,
+                    sizeBytes: nil
+                ),
+                metadata: ["reason": reason]
+            )
+        )
+        return makeAlert(signal: signal, severity: .high)
     }
 
     private func passthroughRule() -> CorrelationRule {

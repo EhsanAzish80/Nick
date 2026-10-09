@@ -121,6 +121,22 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         return nil
     }
 
+    /// Evidence protected by policy must remain visible even when consumer copy
+    /// would otherwise classify a familiar developer or system workflow as safe.
+    var hasProtectedEvidence: Bool {
+        contributingSignals.contains {
+            EvidenceRulePolicy.tier(for: $0, ruleClass: EvidenceRuleClass(signal: $0))
+                == .protectedDetection
+        }
+    }
+
+    /// One presentation boundary shared by Simple, Home and the menu-bar badge.
+    /// A protected finding is never hidden by plain-language severity mapping.
+    var isUserVisibleFinding: Bool {
+        hasProtectedEvidence
+            || UserFacingAlertBuilder.shared.build(from: self).severity != .safe
+    }
+
     /// Revalidates the evidence captured by this incident. The closures make
     /// lifecycle behavior deterministic in tests and avoid treating a snapshot
     /// from an earlier scan as proof that a process or file still exists.
