@@ -240,14 +240,20 @@ The repository contains code that is not part of the current live product path:
   correlator does not invoke the scorer.
 - `NickHelper`: the read-only helper target exists, but current builds do not
   embed its LaunchDaemon definition and the app has no live helper XPC client.
-- `CloudIntelService`: hash lookup and update code exists but is not constructed
-  or scheduled.
 - Production signed-rule delivery: verification structures exist, but no
   production key/feed, staged rollout, rollback, or last-known-good recovery is
   published.
 
 See [the roadmap](Documentation/ROADMAP.md) for planned work. Code presence is
 not treated as an implemented product capability.
+
+The 5.0 development build's exact-hash intelligence is an offline, signed-bundle
+snapshot: 25 entries retrieved on October 9, 2026. Twenty-four macOS hashes come
+from four family-specific ESET IOC lists under BSD-2-Clause; EICAR remains a
+low-severity Test-family entry. The catalog enforces a 5,000-entry maximum and
+rejects malformed or duplicate entries as a whole. Its provenance manifest is
+bundled beside the catalog. There is no network lookup or automatic hash-feed
+update in this version.
 
 ## Known product limits
 
