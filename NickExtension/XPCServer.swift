@@ -583,30 +583,10 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     }
 
     private func securitySettingsReduction(from encodedRecord: Data, to payload: Data) -> Bool {
-        guard let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: encodedRecord),
-              let old = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
-              let new = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
-            return true
-        }
-        func strings(_ key: String, _ object: [String: Any]) -> Set<String> {
-            Set((object[key] as? [String]) ?? [])
-        }
-        func objectFingerprints(_ key: String, _ object: [String: Any]) -> Set<String> {
-            guard let values = object[key] as? [Any] else { return [] }
-            return Set(values.compactMap { value in
-                guard JSONSerialization.isValidJSONObject(value),
-                      let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
-                else { return nil }
-                return String(decoding: data, as: UTF8.self)
-            })
-        }
-        if !strings("trustedNames", new).isSubset(of: strings("trustedNames", old)) { return true }
-        if !strings("ignoredPaths", new).isSubset(of: strings("ignoredPaths", old)) { return true }
-        if !objectFingerprints("trustedEntries", new).isSubset(of: objectFingerprints("trustedEntries", old)) { return true }
-        if !objectFingerprints("suppressionRules", new).isSubset(of: objectFingerprints("suppressionRules", old)) { return true }
-        let oldThreshold = old["notificationThresholdRaw"] as? Int ?? 3
-        let newThreshold = new["notificationThresholdRaw"] as? Int ?? 3
-        return newThreshold > oldThreshold
+        SecuritySettingsWritePolicy.requiresAuthorization(
+            previousRecord: encodedRecord,
+            proposedPayload: payload
+        )
     }
 
     private func incidentStoreReduction(from encodedRecord: Data, to payload: Data) -> Bool {

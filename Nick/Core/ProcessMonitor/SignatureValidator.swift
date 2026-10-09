@@ -37,6 +37,12 @@ final class SignatureValidator: @unchecked Sendable {
 
     private let lock = NSLock()
     private var cache: [String: CacheEntry] = [:]
+    private struct ValidatedIdentityCacheKey: Hashable {
+        let cdhash: Data
+        let teamID: String
+        let signingIdentifier: String
+    }
+    private var validatedIdentityCache: [ValidatedIdentityCacheKey: Bool] = [:]
 
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -105,7 +111,66 @@ final class SignatureValidator: @unchecked Sendable {
     func clearCache() {
         lock.lock()
         cache.removeAll()
+        validatedIdentityCache.removeAll()
         lock.unlock()
+    }
+
+    /// Validates an exact Developer ID identity against Apple's certificate
+    /// chain. Caller-supplied Team IDs are never sufficient for this decision.
+    /// Results are keyed by the signed code's cdhash plus the expected identity.
+    func validatesDeveloperIdentity(
+        binaryPath: String,
+        teamID: String,
+        signingIdentifier: String
+    ) -> Bool {
+        let teamCharacters = CharacterSet.uppercaseLetters.union(.decimalDigits)
+        let identifierCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-"))
+        guard !teamID.isEmpty,
+              !signingIdentifier.isEmpty,
+              teamID.rangeOfCharacter(from: teamCharacters.inverted) == nil,
+              signingIdentifier.rangeOfCharacter(from: identifierCharacters.inverted) == nil
+        else { return false }
+
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: binaryPath) as CFURL, [], &code) == errSecSuccess,
+              let code else { return false }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            code,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        ) == errSecSuccess,
+              let dictionary = information as? [String: Any],
+              let cdhash = dictionary[kSecCodeInfoUnique as String] as? Data
+        else { return false }
+
+        let key = ValidatedIdentityCacheKey(
+            cdhash: cdhash,
+            teamID: teamID,
+            signingIdentifier: signingIdentifier
+        )
+        lock.lock()
+        if let cached = validatedIdentityCache[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let requirementText = "identifier \"\(signingIdentifier)\" and anchor apple generic "
+            + "and certificate leaf[subject.OU] = \"\(teamID)\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            requirementText as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess,
+              let requirement else { return false }
+        let flags = SecCSFlags(rawValue: UInt32(kSecCSDoNotValidateResources))
+        let valid = SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess
+        lock.lock()
+        validatedIdentityCache[key] = valid
+        lock.unlock()
+        return valid
     }
 
     /// Returns the number of currently cached entries.

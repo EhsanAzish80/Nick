@@ -150,10 +150,13 @@ authorization, quarantine, process termination, or network policy. If model
 generation is unavailable, Nick uses a deterministic template.
 
 Verdict learning is a separate deterministic, local feature and is off by
-default. After an authenticated user false-positive verdict, Nick may retain
-an expiring key made from the exact signing identity, rule ID, and bounded
-context. A later exact match in the explicitly reviewable tier is lowered to
-informational priority but remains visible. Protected, hash, signature, YARA,
+default. Enabling it is stored in the root-owned settings store and requires
+user-presence authorization. After authenticated Dismiss or Always Allow
+verdicts on two different incidents, Nick may activate an expiring key made
+from the Security.framework-validated signing identity, rule ID, and bounded
+context. Until then the entry is visibly pending. A later exact match in the
+explicitly reviewable tier is lowered to informational priority but remains
+visible. Protected, hash, signature, YARA,
 persistence, high-risk-path, unsigned, ad-hoc, interpreter, and command-tool
 evidence cannot create or use learned entries. The entries live with incidents
 in the root-owned store and can be inspected, exported, or reset in Settings.

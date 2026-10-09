@@ -41,7 +41,6 @@ struct SettingsView: View {
     @AppStorage("allowInsecureLocalWebhook") private var allowInsecureLocalWebhook: Bool = false
     @AppStorage("scheduledDeepScanInterval") private var scheduledDeepScanInterval: Int = 0
     @AppStorage("telemetryEnabled") private var telemetryEnabled: Bool = false
-    @AppStorage("verdictLearningEnabled") private var verdictLearningEnabled: Bool = false
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
     /// Simple vs Advanced presentation for the whole app.
     @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
@@ -75,6 +74,7 @@ struct SettingsView: View {
     @State private var updateCheckStatus: String?
     @State private var showsAcknowledgements = false
     @State private var showsLearnedReviewEntries = false
+    @State private var verdictLearningStatus: String?
     @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
     @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
     @AppStorage("nickUpdateAvailable") private var updateAvailable = false
@@ -123,10 +123,6 @@ struct SettingsView: View {
         .onAppear {
             refreshLaunchAtLogin()
             webhookURLString = engine.webhookURLString ?? ""
-            engine.setVerdictLearningEnabled(verdictLearningEnabled)
-        }
-        .onChange(of: verdictLearningEnabled) { _, enabled in
-            engine.setVerdictLearningEnabled(enabled)
         }
         .task { await networkProtection.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -912,9 +908,17 @@ struct SettingsView: View {
                 title: "Learn from my review decisions",
                 subtitle: "Lower the priority of matching review-only findings on this Mac. Malware signatures and protected detections are never affected."
             ) {
-                Toggle("", isOn: $verdictLearningEnabled)
+                Toggle("", isOn: Binding(
+                    get: { engine.verdictLearningEnabled },
+                    set: { updateVerdictLearning($0) }
+                ))
                     .labelsHidden()
                     .toggleStyle(.switch)
+            }
+            if let verdictLearningStatus {
+                Text(verdictLearningStatus)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
             }
             LabeledTile(
                 icon: "list.bullet.rectangle", tint: .purple,
@@ -986,6 +990,20 @@ struct SettingsView: View {
                     // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
                 }
             }
+        }
+    }
+
+    private func updateVerdictLearning(_ enabled: Bool) {
+        if enabled {
+            guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
+                verdictLearningStatus = "Approval was cancelled. Learning remains off."
+                return
+            }
+            engine.setVerdictLearningEnabled(true, authorizationExternalForm: authorization)
+            verdictLearningStatus = "Enabled with user approval."
+        } else {
+            engine.setVerdictLearningEnabled(false)
+            verdictLearningStatus = "Learning is off. Existing entries remain available to review or reset."
         }
     }
 
@@ -1424,7 +1442,9 @@ private struct LearnedReviewEntriesView: View {
                         Text("Context: \(entry.contextKey)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("Expires \(entry.expiresAt.formatted(date: .abbreviated, time: .shortened)) · confirmed \(entry.confirmationCount) time\(entry.confirmationCount == 1 ? "" : "s")")
+                        Text(entry.confirmationCount < 2
+                             ? "Pending (\(entry.confirmationCount)/2) · expires \(entry.expiresAt.formatted(date: .abbreviated, time: .shortened))"
+                             : "Active · confirmed \(entry.confirmationCount) times · expires \(entry.expiresAt.formatted(date: .abbreviated, time: .shortened))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

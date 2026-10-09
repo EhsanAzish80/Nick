@@ -88,9 +88,71 @@ struct LearnedReviewEntry: Codable, Sendable, Equatable, Identifiable {
     let createdAt: Date
     var lastConfirmedAt: Date
     var expiresAt: Date
-    var confirmationCount: Int
+    var confirmedIncidentIDs: Set<UUID>
 
     var identityKey: String { "\(teamID.lowercased())|\(signingIdentifier.lowercased())" }
+    var confirmationCount: Int { confirmedIncidentIDs.count }
+
+    init(
+        id: UUID,
+        teamID: String,
+        signingIdentifier: String,
+        ruleID: String,
+        contextKey: String,
+        reason: String,
+        createdAt: Date,
+        lastConfirmedAt: Date,
+        expiresAt: Date,
+        confirmedIncidentIDs: Set<UUID>
+    ) {
+        self.id = id
+        self.teamID = teamID
+        self.signingIdentifier = signingIdentifier
+        self.ruleID = ruleID
+        self.contextKey = contextKey
+        self.reason = reason
+        self.createdAt = createdAt
+        self.lastConfirmedAt = lastConfirmedAt
+        self.expiresAt = expiresAt
+        self.confirmedIncidentIDs = confirmedIncidentIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, teamID, signingIdentifier, ruleID, contextKey, reason
+        case createdAt, lastConfirmedAt, expiresAt, confirmedIncidentIDs, confirmationCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        teamID = try container.decode(String.self, forKey: .teamID)
+        signingIdentifier = try container.decode(String.self, forKey: .signingIdentifier)
+        ruleID = try container.decode(String.self, forKey: .ruleID)
+        contextKey = try container.decode(String.self, forKey: .contextKey)
+        reason = try container.decode(String.self, forKey: .reason)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        lastConfirmedAt = try container.decode(Date.self, forKey: .lastConfirmedAt)
+        expiresAt = try container.decode(Date.self, forKey: .expiresAt)
+        confirmedIncidentIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .confirmedIncidentIDs) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(teamID, forKey: .teamID)
+        try container.encode(signingIdentifier, forKey: .signingIdentifier)
+        try container.encode(ruleID, forKey: .ruleID)
+        try container.encode(contextKey, forKey: .contextKey)
+        try container.encode(reason, forKey: .reason)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(lastConfirmedAt, forKey: .lastConfirmedAt)
+        try container.encode(expiresAt, forKey: .expiresAt)
+        try container.encode(
+            confirmedIncidentIDs.sorted { $0.uuidString < $1.uuidString },
+            forKey: .confirmedIncidentIDs
+        )
+        try container.encode(confirmationCount, forKey: .confirmationCount)
+    }
 }
 
 struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
@@ -201,6 +263,7 @@ final class IncidentStore {
     private(set) var learnedReviewEntries: [LearnedReviewEntry] = []
     private var verdictLearningEnabled = false
     private let now: () -> Date
+    private let identityValidator: (String, String, String) -> Bool
     private var privilegedPersistence: ((Data) -> Void)?
     private var lastPrivilegedPayload: Data?
 
@@ -209,12 +272,20 @@ final class IncidentStore {
         trustedProcessList: TrustedProcessList = TrustedProcessList(),
         suppressionRules: [SuppressionRule] = [],
         persistOnInit: Bool = true,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        identityValidator: @escaping (String, String, String) -> Bool = {
+            SignatureValidator.shared.validatesDeveloperIdentity(
+                binaryPath: $0,
+                teamID: $1,
+                signingIdentifier: $2
+            )
+        }
     ) {
         self.legacyTestDefaults = defaults
         self.trustedProcessList = trustedProcessList
         self.suppressionRules = suppressionRules
         self.now = now
+        self.identityValidator = identityValidator
         self.expectedCooldowns = defaults?.dictionary(forKey: "nickExpectedAlertCooldowns") as? [String: TimeInterval] ?? [:]
         self.dismissalTombstones = defaults?.data(forKey: Self.dismissalPersistenceKey)
             .flatMap { try? JSONDecoder().decode([IncidentDismissalTombstone].self, from: $0) } ?? []
@@ -262,7 +333,8 @@ final class IncidentStore {
             trustedProcessList: trustedProcessList,
             suppressionRules: suppressionRules,
             persistOnInit: false,
-            now: now
+            now: now,
+            identityValidator: identityValidator
         )
         return try legacy.encodedSnapshot()
     }
@@ -326,7 +398,7 @@ final class IncidentStore {
 
     func performAuthenticatedUserAction(_ kind: IncidentActionKind, alertID: UUID) {
         guard let index = incidents.firstIndex(where: { $0.alert.id == alertID }) else { return }
-        if verdictLearningEnabled, [.dismissed, .allowedOnce, .alwaysAllowed].contains(kind) {
+        if verdictLearningEnabled, [.dismissed, .alwaysAllowed].contains(kind) {
             recordLearning(from: incidents[index], action: kind)
         }
         recordAction(kind, actor: .user, at: index)
@@ -581,6 +653,7 @@ final class IncidentStore {
                       && $0.identityKey == key.identityKey
                       && $0.ruleID == key.ruleID
                       && $0.contextKey == key.contextKey
+                      && $0.confirmationCount >= 2
               }) else { return alert }
         return alert.with(severity: .info)
     }
@@ -591,9 +664,10 @@ final class IncidentStore {
         if let index = learnedReviewEntries.firstIndex(where: {
             $0.identityKey == key.identityKey && $0.ruleID == key.ruleID && $0.contextKey == key.contextKey
         }) {
+            let inserted = learnedReviewEntries[index].confirmedIncidentIDs.insert(incident.id).inserted
+            guard inserted else { return }
             learnedReviewEntries[index].lastConfirmedAt = timestamp
             learnedReviewEntries[index].expiresAt = timestamp.addingTimeInterval(Self.learnedEntryLifetime)
-            learnedReviewEntries[index].confirmationCount += 1
         } else {
             learnedReviewEntries.append(LearnedReviewEntry(
                 id: UUID(),
@@ -605,7 +679,7 @@ final class IncidentStore {
                 createdAt: timestamp,
                 lastConfirmedAt: timestamp,
                 expiresAt: timestamp.addingTimeInterval(Self.learnedEntryLifetime),
-                confirmationCount: 1
+                confirmedIncidentIDs: [incident.id]
             ))
         }
         enforceLearnedEntryCap(for: key.identityKey)
@@ -630,6 +704,9 @@ final class IncidentStore {
                       && item.signingIdentity?.signingIdentifier == signingIdentifier
                       && item.ruleID == first.ruleID
                       && item.ruleTier == .review
+                      && item.processInfo.map {
+                          identityValidator($0.path, teamID, signingIdentifier)
+                      } == true
               }),
               let ruleID = first.ruleID else { return nil }
         let parents = (first.parentChain ?? []).prefix(8).map { ancestor in

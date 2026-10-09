@@ -86,9 +86,12 @@ Exports remain local until the user chooses where to save or share them.
 ### Optional verdict learning
 
 Settings → Data includes **Learn from my review decisions**, which is off by
-default. When enabled, an authenticated false-positive decision can lower the
-priority of a later exact match for the same signed app, review rule, and
-bounded context. The finding remains visible. Hash, signature, YARA,
+default and requires password or Touch ID approval to enable. Dismiss or
+Always Allow decisions from two different incidents are required before an
+entry becomes active. Until then it is shown as pending. A later exact match
+for the same validated signed app, review rule, and bounded context can be
+lowered to informational priority, but the finding remains visible. Hash,
+signature, YARA,
 persistence, high-risk-path, unsigned, ad-hoc, interpreter, and command-tool
 findings are never affected.
 
