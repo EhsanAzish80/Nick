@@ -120,7 +120,20 @@ enum IncidentStoreWritePolicy {
                 return incidentKey + "|" + (value["alertDeduplicationKey"] as? String ?? "")
             })
         }
-        return !tombstoneKeys(new).isSubset(of: tombstoneKeys(old))
+        if !tombstoneKeys(new).isSubset(of: tombstoneKeys(old)) { return true }
+        func learnedEntries(_ object: [String: Any]) -> Set<String> {
+            let values = (object["learnedReviewEntries"] as? [[String: Any]]) ?? []
+            return Set(values.compactMap { value in
+                guard let id = value["id"] as? String,
+                      let teamID = value["teamID"] as? String,
+                      let signingID = value["signingIdentifier"] as? String,
+                      let ruleID = value["ruleID"] as? String,
+                      let context = value["contextKey"] as? String,
+                      let expiry = value["expiresAt"] as? Double else { return nil }
+                return [id, teamID, signingID, ruleID, context, String(expiry)].joined(separator: "|")
+            })
+        }
+        return !learnedEntries(new).isSubset(of: learnedEntries(old))
     }
 }
 

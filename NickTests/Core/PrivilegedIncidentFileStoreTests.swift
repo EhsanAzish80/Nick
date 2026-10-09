@@ -226,15 +226,38 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         ))
     }
 
+    func test_incidentStoreRequiresAuthorizationForNewOrRenewedLearningEntry() throws {
+        let original = try payload(incidents: [])
+        let learned: [[String: Any]] = [[
+            "id": UUID().uuidString,
+            "teamID": "TEAM123",
+            "signingIdentifier": "com.example.editor",
+            "ruleID": "system_hardening",
+            "contextKey": "parents=;path=application;destination=unknown",
+            "expiresAt": 1234.0
+        ]]
+        let proposed = try payload(incidents: [], learnedEntries: learned)
+        XCTAssertTrue(IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: original,
+            proposedPayload: proposed
+        ))
+        XCTAssertFalse(IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: proposed,
+            proposedPayload: original
+        ), "Resetting learned state is security-strengthening")
+    }
+
     private func payload(
         incidents: [[String: Any]],
-        tombstones: [[String: Any]] = []
+        tombstones: [[String: Any]] = [],
+        learnedEntries: [[String: Any]] = []
     ) throws -> Data {
         try JSONSerialization.data(withJSONObject: [
             "schemaVersion": 1,
             "incidents": incidents,
             "dismissalTombstones": tombstones,
-            "expectedCooldowns": [:]
+            "expectedCooldowns": [:],
+            "learnedReviewEntries": learnedEntries
         ])
     }
 }

@@ -334,7 +334,8 @@ final class SecurityEngine {
     init() {
         incidentStore.configure(
             trustedProcessList: trustedProcessList,
-            suppressionRules: suppressionRules
+            suppressionRules: suppressionRules,
+            verdictLearningEnabled: UserDefaults.standard.bool(forKey: "verdictLearningEnabled")
         )
         deepScanner.engine = self
         procMon.processDidUpdate = { [weak self] updated in
@@ -450,7 +451,7 @@ final class SecurityEngine {
         // Propagate the current trusted process configuration to monitors and
         // the one post-correlation policy boundary.
         procMon.trustedProcessList = trustedProcessList
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
 
         var genuinelyNew: [ThreatAlert] = []
 
@@ -601,7 +602,7 @@ final class SecurityEngine {
                 topFeatures: topFeatures
             )
         }
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
         let result = incidentStore.ingest(candidates)
         alerts = result.visibleAlerts
         rebuildUserFacingAlerts()
@@ -633,7 +634,7 @@ final class SecurityEngine {
             alert: alert,
             topFeatures: [(signal.title, Double(signal.severity.rawValue) / 4.0)]
         )
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
         let result = incidentStore.ingest([alert])
         alerts = result.visibleAlerts
         rebuildUserFacingAlerts()
@@ -649,7 +650,7 @@ final class SecurityEngine {
     /// the existing incident rather than creating another card.
     @MainActor
     func addAlert(_ alert: ThreatAlert) {
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
         let result = incidentStore.ingest([alert])
         alerts = result.visibleAlerts
         rebuildUserFacingAlerts()
@@ -658,7 +659,7 @@ final class SecurityEngine {
     /// Merges new alerts from the real-time pipeline by stable incident identity.
     /// Alerts whose `deduplicationKey` has been previously dismissed are silently dropped.
     func mergeAlerts(_ newAlerts: [ThreatAlert]) {
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
         alerts = incidentStore.ingest(newAlerts).visibleAlerts
         rebuildUserFacingAlerts()
     }
@@ -672,6 +673,35 @@ final class SecurityEngine {
         alerts = incidentStore.visibleAlerts
         dismissedAlertKeys = incidentStore.dismissedAlertDeduplicationKeys
         rebuildUserFacingAlerts()
+    }
+
+    var learnedReviewEntries: [LearnedReviewEntry] {
+        incidentStore.learnedReviewEntries.sorted { $0.lastConfirmedAt > $1.lastConfirmedAt }
+    }
+
+    func setVerdictLearningEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "verdictLearningEnabled")
+        configureIncidentStore()
+    }
+
+    func resetLearnedEntry(id: UUID) {
+        incidentStore.resetLearnedEntry(id: id)
+    }
+
+    func resetAllLearnedEntries() {
+        incidentStore.resetAllLearnedEntries()
+    }
+
+    func exportLearnedEntries() throws -> Data {
+        try incidentStore.exportLearnedEntries()
+    }
+
+    private func configureIncidentStore() {
+        incidentStore.configure(
+            trustedProcessList: trustedProcessList,
+            suppressionRules: suppressionRules,
+            verdictLearningEnabled: UserDefaults.standard.bool(forKey: "verdictLearningEnabled")
+        )
     }
 
     /// Removes a single alert by ID and persists its `deduplicationKey` so it
@@ -731,7 +761,7 @@ final class SecurityEngine {
             SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
             // Remove only repeats of this same behavior. Different activity from
             // the same app remains visible and reviewable.
-            incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+            configureIncidentStore()
             incidentStore.performAuthenticatedUserAction(.alwaysAllowed, alertID: alertID)
             syncAlertsFromStore()
         }

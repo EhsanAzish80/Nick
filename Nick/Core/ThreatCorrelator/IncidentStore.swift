@@ -78,6 +78,21 @@ struct IncidentDismissalTombstone: Codable, Sendable, Equatable {
     let dismissedAt: Date
 }
 
+struct LearnedReviewEntry: Codable, Sendable, Equatable, Identifiable {
+    let id: UUID
+    let teamID: String
+    let signingIdentifier: String
+    let ruleID: String
+    let contextKey: String
+    let reason: String
+    let createdAt: Date
+    var lastConfirmedAt: Date
+    var expiresAt: Date
+    var confirmationCount: Int
+
+    var identityKey: String { "\(teamID.lowercased())|\(signingIdentifier.lowercased())" }
+}
+
 struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
     static let currentSchemaVersion = 1
 
@@ -86,23 +101,27 @@ struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
     var dismissalTombstones: [IncidentDismissalTombstone]
     var expectedCooldowns: [String: TimeInterval]
     var evictedIncidentCount: Int
+    var learnedReviewEntries: [LearnedReviewEntry]
 
     init(
         schemaVersion: Int = Self.currentSchemaVersion,
         incidents: [SecurityIncident],
         dismissalTombstones: [IncidentDismissalTombstone],
         expectedCooldowns: [String: TimeInterval],
-        evictedIncidentCount: Int = 0
+        evictedIncidentCount: Int = 0,
+        learnedReviewEntries: [LearnedReviewEntry] = []
     ) {
         self.schemaVersion = schemaVersion
         self.incidents = incidents
         self.dismissalTombstones = dismissalTombstones
         self.expectedCooldowns = expectedCooldowns
         self.evictedIncidentCount = max(0, evictedIncidentCount)
+        self.learnedReviewEntries = learnedReviewEntries
     }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, incidents, dismissalTombstones, expectedCooldowns, evictedIncidentCount
+        case learnedReviewEntries
     }
 
     init(from decoder: Decoder) throws {
@@ -112,6 +131,7 @@ struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
         dismissalTombstones = try container.decode([IncidentDismissalTombstone].self, forKey: .dismissalTombstones)
         expectedCooldowns = try container.decode([String: TimeInterval].self, forKey: .expectedCooldowns)
         evictedIncidentCount = max(0, try container.decodeIfPresent(Int.self, forKey: .evictedIncidentCount) ?? 0)
+        learnedReviewEntries = try container.decodeIfPresent([LearnedReviewEntry].self, forKey: .learnedReviewEntries) ?? []
     }
 }
 
@@ -168,6 +188,8 @@ final class IncidentStore {
     static let maximumPersistedIncidents = 100
     static let maximumDismissalTombstones = 500
     static let maximumIncidentsPerRule = 20
+    static let maximumLearnedEntriesPerIdentity = 20
+    static let learnedEntryLifetime: TimeInterval = 30 * 86_400
 
     private let legacyTestDefaults: UserDefaults?
     private(set) var incidents: [SecurityIncident]
@@ -176,6 +198,9 @@ final class IncidentStore {
     private var expectedCooldowns: [String: TimeInterval]
     private var dismissalTombstones: [IncidentDismissalTombstone]
     private(set) var evictedIncidentCount = 0
+    private(set) var learnedReviewEntries: [LearnedReviewEntry] = []
+    private var verdictLearningEnabled = false
+    private let now: () -> Date
     private var privilegedPersistence: ((Data) -> Void)?
     private var lastPrivilegedPayload: Data?
 
@@ -183,11 +208,13 @@ final class IncidentStore {
         defaults: UserDefaults? = nil,
         trustedProcessList: TrustedProcessList = TrustedProcessList(),
         suppressionRules: [SuppressionRule] = [],
-        persistOnInit: Bool = true
+        persistOnInit: Bool = true,
+        now: @escaping () -> Date = Date.init
     ) {
         self.legacyTestDefaults = defaults
         self.trustedProcessList = trustedProcessList
         self.suppressionRules = suppressionRules
+        self.now = now
         self.expectedCooldowns = defaults?.dictionary(forKey: "nickExpectedAlertCooldowns") as? [String: TimeInterval] ?? [:]
         self.dismissalTombstones = defaults?.data(forKey: Self.dismissalPersistenceKey)
             .flatMap { try? JSONDecoder().decode([IncidentDismissalTombstone].self, from: $0) } ?? []
@@ -222,6 +249,7 @@ final class IncidentStore {
         dismissalTombstones = snapshot.dismissalTombstones
         expectedCooldowns = snapshot.expectedCooldowns
         evictedIncidentCount = snapshot.evictedIncidentCount
+        learnedReviewEntries = snapshot.learnedReviewEntries
         migrateLegacyDismissals()
         boundInMemory()
         privilegedPersistence = persistence
@@ -233,7 +261,8 @@ final class IncidentStore {
             defaults: defaults,
             trustedProcessList: trustedProcessList,
             suppressionRules: suppressionRules,
-            persistOnInit: false
+            persistOnInit: false,
+            now: now
         )
         return try legacy.encodedSnapshot()
     }
@@ -245,17 +274,23 @@ final class IncidentStore {
         defaults.removeObject(forKey: "nickExpectedAlertCooldowns")
     }
 
-    func configure(trustedProcessList: TrustedProcessList, suppressionRules: [SuppressionRule]) {
+    func configure(
+        trustedProcessList: TrustedProcessList,
+        suppressionRules: [SuppressionRule],
+        verdictLearningEnabled: Bool = false
+    ) {
         self.trustedProcessList = trustedProcessList
         self.suppressionRules = suppressionRules
+        self.verdictLearningEnabled = verdictLearningEnabled
     }
 
     func ingest(_ candidates: [ThreatAlert]) -> IncidentIngestResult {
         pruneExpiredCooldowns()
+        pruneExpiredLearnedEntries()
         var newlyActionable: [ThreatAlert] = []
 
         for rawCandidate in candidates {
-            let candidate = applyTrustedDowngrade(to: rawCandidate)
+            let candidate = applyLearnedPriority(to: applyTrustedDowngrade(to: rawCandidate))
             guard !isSuppressed(candidate), !isCoolingDown(candidate) else { continue }
             let key = Self.incidentKey(for: candidate)
             guard !dismissalTombstones.contains(where: { $0.incidentKey == key }) else { continue }
@@ -291,6 +326,9 @@ final class IncidentStore {
 
     func performAuthenticatedUserAction(_ kind: IncidentActionKind, alertID: UUID) {
         guard let index = incidents.firstIndex(where: { $0.alert.id == alertID }) else { return }
+        if verdictLearningEnabled, [.dismissed, .allowedOnce, .alwaysAllowed].contains(kind) {
+            recordLearning(from: incidents[index], action: kind)
+        }
         recordAction(kind, actor: .user, at: index)
         switch kind {
         case .reviewed:
@@ -326,6 +364,7 @@ final class IncidentStore {
         dismissalTombstones.removeAll()
         expectedCooldowns.removeAll()
         evictedIncidentCount = 0
+        learnedReviewEntries.removeAll()
         legacyTestDefaults?.removeObject(forKey: Self.persistenceKey)
         legacyTestDefaults?.removeObject(forKey: Self.dismissalPersistenceKey)
         legacyTestDefaults?.removeObject(forKey: "nickPersistedAlerts")
@@ -336,6 +375,23 @@ final class IncidentStore {
     func removeIncidents(where shouldRemove: (SecurityIncident) -> Bool) {
         incidents.removeAll(where: shouldRemove)
         persist()
+    }
+
+    func resetLearnedEntry(id: UUID) {
+        learnedReviewEntries.removeAll { $0.id == id }
+        persist()
+    }
+
+    func resetAllLearnedEntries() {
+        learnedReviewEntries.removeAll()
+        persist()
+    }
+
+    func exportLearnedEntries() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(learnedReviewEntries.sorted { $0.lastConfirmedAt > $1.lastConfirmedAt })
     }
 
     private func persist() {
@@ -364,7 +420,8 @@ final class IncidentStore {
             incidents: incidents,
             dismissalTombstones: dismissalTombstones,
             expectedCooldowns: expectedCooldowns,
-            evictedIncidentCount: evictedIncidentCount
+            evictedIncidentCount: evictedIncidentCount,
+            learnedReviewEntries: learnedReviewEntries
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -516,6 +573,95 @@ final class IncidentStore {
         }
     }
 
+    private func applyLearnedPriority(to alert: ThreatAlert) -> ThreatAlert {
+        guard verdictLearningEnabled, !isProtected(alert),
+              let key = learningKey(for: alert),
+              learnedReviewEntries.contains(where: {
+                  $0.expiresAt > now()
+                      && $0.identityKey == key.identityKey
+                      && $0.ruleID == key.ruleID
+                      && $0.contextKey == key.contextKey
+              }) else { return alert }
+        return alert.with(severity: .info)
+    }
+
+    private func recordLearning(from incident: SecurityIncident, action: IncidentActionKind) {
+        guard let key = learningKey(for: incident.alert) else { return }
+        let timestamp = now()
+        if let index = learnedReviewEntries.firstIndex(where: {
+            $0.identityKey == key.identityKey && $0.ruleID == key.ruleID && $0.contextKey == key.contextKey
+        }) {
+            learnedReviewEntries[index].lastConfirmedAt = timestamp
+            learnedReviewEntries[index].expiresAt = timestamp.addingTimeInterval(Self.learnedEntryLifetime)
+            learnedReviewEntries[index].confirmationCount += 1
+        } else {
+            learnedReviewEntries.append(LearnedReviewEntry(
+                id: UUID(),
+                teamID: key.teamID,
+                signingIdentifier: key.signingIdentifier,
+                ruleID: key.ruleID,
+                contextKey: key.contextKey,
+                reason: "User marked a matching review finding as \(action.rawValue).",
+                createdAt: timestamp,
+                lastConfirmedAt: timestamp,
+                expiresAt: timestamp.addingTimeInterval(Self.learnedEntryLifetime),
+                confirmationCount: 1
+            ))
+        }
+        enforceLearnedEntryCap(for: key.identityKey)
+    }
+
+    private func learningKey(for alert: ThreatAlert) -> (
+        teamID: String, signingIdentifier: String, identityKey: String, ruleID: String, contextKey: String
+    )? {
+        let evidence = alert.contributingSignals.map(Evidence.init(signal:))
+        guard !evidence.isEmpty,
+              evidence.allSatisfy({ $0.ruleTier == .review }),
+              let first = evidence.first,
+              let identity = first.signingIdentity,
+              identity.kind == .signed,
+              let teamID = identity.teamID, !teamID.isEmpty,
+              let signingIdentifier = identity.signingIdentifier, !signingIdentifier.isEmpty,
+              let process = first.processInfo,
+              TrustedProcessList.trustRejectionReason(for: process) == nil,
+              evidence.allSatisfy({ item in
+                  item.signingIdentity?.kind == .signed
+                      && item.signingIdentity?.teamID == teamID
+                      && item.signingIdentity?.signingIdentifier == signingIdentifier
+                      && item.ruleID == first.ruleID
+                      && item.ruleTier == .review
+              }),
+              let ruleID = first.ruleID else { return nil }
+        let parents = (first.parentChain ?? []).prefix(8).map { ancestor in
+            if let team = ancestor.teamID, let signing = ancestor.signingIdentifier {
+                return "signed:\(team.lowercased())|\(signing.lowercased())"
+            }
+            if let path = ancestor.executablePath {
+                return "name:\(URL(fileURLWithPath: path).lastPathComponent.lowercased())"
+            }
+            return "unknown"
+        }.joined(separator: ">")
+        let context = [
+            "parents=\(parents)",
+            "path=\(first.pathClass?.rawValue ?? "none")",
+            "destination=\(first.destinationClass?.rawValue ?? "none")"
+        ].joined(separator: ";")
+        return (teamID, signingIdentifier, "\(teamID.lowercased())|\(signingIdentifier.lowercased())", ruleID, context)
+    }
+
+    private func pruneExpiredLearnedEntries() {
+        let timestamp = now()
+        learnedReviewEntries.removeAll { $0.expiresAt <= timestamp }
+    }
+
+    private func enforceLearnedEntryCap(for identityKey: String) {
+        let matching = learnedReviewEntries
+            .filter { $0.identityKey == identityKey }
+            .sorted { $0.lastConfirmedAt > $1.lastConfirmedAt }
+        let retained = Set(matching.prefix(Self.maximumLearnedEntriesPerIdentity).map(\.id))
+        learnedReviewEntries.removeAll { $0.identityKey == identityKey && !retained.contains($0.id) }
+    }
+
     private func migrateLegacyDismissals() {
         for incident in incidents where incident.permanentlyDismissed {
             recordDismissal(for: incident)
@@ -552,6 +698,9 @@ final class IncidentStore {
                 .sorted { $0.dismissedAt > $1.dismissedAt }
                 .prefix(Self.maximumDismissalTombstones)
         )
+        for identityKey in Set(learnedReviewEntries.map(\.identityKey)) {
+            enforceLearnedEntryCap(for: identityKey)
+        }
     }
 
     private static func primaryRuleID(for incident: SecurityIncident) -> String {
