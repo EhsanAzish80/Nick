@@ -137,6 +137,14 @@ final class DetectionPolicyTests: XCTestCase {
             ("/a/doc.pages", "/a/doc.sb-4c1a-abc"),
             ("/a/notes.txt", "/a/notes.txt"),
             ("/a/report.docx", "/a/report.docx.bak"),
+            (
+                "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/CMakeScratch/TryCompile-test/CMakeFiles/cmTC.dir/build",
+                "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/CMakeScratch/TryCompile-test/CMakeFiles/cmTC.dir/build.make"
+            ),
+            (
+                "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/ContinuousStart.dir/progress",
+                "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/ContinuousStart.dir/progress.make"
+            ),
         ]
         for (source, destination) in routine {
             XCTAssertNil(RansomwareRenamePolicy.introducedExtension(source: source, destination: destination), destination)
