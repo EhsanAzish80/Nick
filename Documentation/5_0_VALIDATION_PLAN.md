@@ -25,113 +25,108 @@ and no 4.5.5 release exists. CI therefore remains pinned to 4.5.4 as the closest
 published Python gate binding. Recheck the official index before changing the
 Python or vendored pin; do not request a nonexistent matching package.
 
-## Alert-count comparison
+## One ordered Phase 7b session
 
-Measure four configurations:
+Run this table from top to bottom on one Mac. Start with one fresh signed and
+notarized candidate whose build is at least 5015. Use that exact candidate for
+steps 1–11, then update it through Sparkle to the next numbered build. Do not
+substitute a rebuilt package without restarting the session record. Every
+row's result is written as **Pass**, **Fail**, or **Blocked**, with readings or
+an evidence path; a checkmark without evidence is not a result.
 
-1. Nick 4.6.3, the released baseline.
-2. Nick 5.0 with verdict learning off.
-3. Nick 5.0 with verdict learning on but no active learned entry.
-4. Nick 5.0 with one eligible review-tier pattern activated by two separate,
-   authenticated incident decisions.
+| Step | Gate and required evidence | Result |
+|---:|---|---|
+| 1 | **Freeze candidate.** Record commit, marketing/build versions, PKG/DMG SHA-256, notarization and stapling results, macOS/hardware, settings, and start time. | Pending |
+| 2 | **Install and prove active versions.** Install over the existing accepted build. Record Diagnostics' app, Endpoint Security and Network Filter builds plus the complete unedited `systemextensionsctl list` output. All three must equal the candidate build. | Pending |
+| 3 | **Phase 4 soak re-run.** Use Safari/Finder for ten minutes, download/open a harmless file, clean-build Nick in Xcode, run the bounded Spotlight import, and continue to 30 minutes. Capture extension PID and health at 0/10/20/30 minutes, event rates, deadline misses, CPU, responsiveness and the final 35-minute extension log. PID must remain stable; deadline misses must not increase; health must stay fresh; no event type may exceed 10,000/s twice; extension CPU must remain below 15% outside the build. | Pending |
+| 4 | **Phase 5a store re-run.** Before restart, record incident and dismissal counts and root-store hashes. Restart the app and both extensions. Confirm no incident/tombstone loss, no replay notifications, root ownership/modes, and app-only reads with writes occurring only through authenticated XPC. | Pending |
+| 5 | **Phase 5b durable-evidence re-run.** Create a harmless monitored-file change, restart app and extension, confirm the pending FIM record survives, acknowledge only that record, and confirm settings survive. The previously tombstoned Nick protected-path incident must not return. | Pending |
+| 6 | **Phase 5c authorization re-run.** For trusted process, allow-once, quarantine restore, Dismiss and Always Allow: cancel once and verify no mutation, then approve and verify only the selected action. Re-run the refused-form harness and authorization-right tamper/repair check. Record prompts, root-store hashes and final right definition. | Pending |
+| 7 | **Phase 6b self-protection re-run, excluding uninstall.** Verify Nick/Sparkle/Apple-installer identities; test protected-file `rm`, rename destination, and in-bundle write/create denial with visible incidents; preserve a red incident while flooding over 100 low-value events and confirm the per-rule cap plus visible eviction count; verify the ESET acknowledgement. Keep Finder uninstall for step 14. | Pending |
+| 8 | **Writer matrix.** Safari, Finder, Mail and `curl` each write the safe EICAR fixture. Each writer produces one incident and notification, survives restart, and does not duplicate on reload. | Pending |
+| 9 | **Phishing.** Navigate to the reserved test destination. Record one network incident and notification without blocking unrelated traffic. | Pending |
+| 10 | **Camera/microphone.** Activate each device with a known app. Each state transition appears once within the documented interval; do not claim per-app attribution unless evidence contains it. | Pending |
+| 11 | **Detection, performance and F1–F8.** Run the safe regression fixtures: local-address/port classification, honest one-signal text/timestamps/signing, protected LOLBin evidence, update-event coalescing, mixed-version retry message, retention resistance, AUTH p50/p99/deadlines, event loss, CPU/memory/energy/log volume, CMake `.make`, sync/backup/database/editor workloads, symlink/file swaps, burst writes, renamed binary, fake Team ID, settings tampering, extension deactivation and quarantine restore boundaries. Never use live malware or credentials. | Pending |
+| 12 | **Sparkle update to next build.** From the candidate, discover and install the next higher signed/notarized staging build. Verify notification, in-app state and menu-bar badge; genuine update interaction clears the badge. Record one coalesced maintenance incident, no red self-protection incident, Diagnostics builds, and complete `systemextensionsctl list` output after update. | Pending |
+| 13 | **End-of-candidate version proof.** Record end time, app and both active extension builds in Diagnostics, complete `systemextensionsctl list`, extension health/deadlines, incident/severity totals, evictions and retained logs. Versions must match the updated build. | Pending |
+| 14 | **Finder uninstall last.** Move Nick.app to the current user's real Trash and verify the visible notice and documented partial-uninstall behavior. Reinstall only as required for the measurements below; use the complete uninstaller after all measurements finish. | Pending |
+| 15 | **4.6.3 alert-count baseline.** Install released 4.6.3 and run the fixed workload below. Export counts and severities. | Pending |
+| 16 | **5.0 learning off.** Install the accepted updated 5.0 candidate, prove active versions again, keep learning off, and repeat the identical workload. | Pending |
+| 17 | **5.0 learning on, pending.** Enable learning with authorization but with no active learned entry; repeat the workload. Protected evidence must be unchanged. | Pending |
+| 18 | **5.0 learning active.** Activate one eligible review-tier pattern using two authenticated decisions from different incidents; repeat the workload. Only that review-tier pattern may be de-prioritized, never hidden. | Pending |
+| 19 | **Automated final gate and closeout.** On the exact final candidate run unit/detection tests, repository validation, YARA lint, documentation drift and the **~17k files (cap 120k)** benign corpus. Record final checksums and every failure. | Pending |
+
+## Active-enforcement upgrade matrix
+
+Run every supported channel from the same installed lower build while its
+Endpoint Security extension is active. The destination must be a higher build
+containing both higher-build extensions. Record the old and new complete
+`systemextensionsctl list`, installer/update logs, UI result, incident changes,
+and whether protection was ever disabled.
+
+| Channel | Supported for 5.0 | Required result | Result |
+|---|---|---|---|
+| Installer.app GUI | Yes | Higher build installs atomically; both extensions replace and activate; no blocked self-update incident. | Pending |
+| `/usr/sbin/installer -pkg … -target /` | Yes | Same result from the command-line PackageKit path while the old extension enforces. | Pending |
+| Sparkle package update | Yes | Signed staging appcast installs the higher package, clears the update badge after genuine interaction, and produces at most one informational maintenance incident. | Pending (ordered-session step 12) |
+| MDM/Intune package deployment | Conditional | Required only if Nick documents the channel as supported. Test with the documented deployment profile and tool; otherwise mark **Not supported**, remove deployment claims/assets, and do not call it passed. | Pending product decision |
+
+The successful same-build 5016 Installer.app reinstall proves the immediate
+`com.apple.shove` correction, but it does not replace this lower-to-higher
+matrix.
+
+## Upgrade safety-valve proposal
+
+An update must not depend solely on a permanent list of installer executable
+identifiers compiled into the already-installed extension. Before 5.0 ships,
+implement and threat-model a short-lived update lease with these properties:
+
+1. Nick.app requests the existing protection Authorization Services right and
+   sends the external form over authenticated XPC.
+2. The root-owned settings store records a single-use lease with a monotonic
+   expiry (maximum ten minutes), current console UID, expected Nick Team ID,
+   current build, and strictly higher destination build.
+3. While the lease is valid, tamper protection permits replacement only of the
+   exact Nick application and bundled-extension destinations. The responsible
+   process must still validate to Apple's PackageKit/installd chain or Nick's
+   validated Sparkle chain; arbitrary writes, deletes and renames remain
+   blocked.
+4. The lease is consumed by the first successful replacement, cleared on
+   timeout/restart, and cannot be extended without fresh authorization. Every
+   creation, use, expiry and rejection becomes durable audit evidence.
+5. A failed update leaves the old app runnable. Package layout and preflight
+   must not remove `/Applications/Nick.app` before the replacement is ready.
+
+The install-channel matrix must pass both with ordinary validated maintenance
+identity and with a deliberately omitted nonessential allow-list identity while
+the authorized lease is active. That second test proves the safety valve is
+independent of the stale allow-list rather than merely widening it.
+
+## Fixed alert-count workload for steps 15–18
 
 Start each run from the same documented alert state. Do not clear or dismiss
 items during the workload. Keep notification severity, network protection,
 scan roots and exclusions identical. Reboot when changing installed builds,
-verify the expected app and extension build numbers, and allow five idle
-minutes before starting.
+prove the app and extension versions, and allow five idle minutes before the
+measurement.
 
-Run this fixed 20-minute workload in the same order:
+Run the same 20-minute sequence each time:
 
 1. Five idle minutes with Safari and Finder open.
-2. In Terminal: run `git pull` in the same recorded Git fixture, `brew update`,
-   and `swift build` in the same separate Swift-package fixture (which must
-   contain its own `Package.swift`). These are workload fixtures, not commands
-   to run from Nick's repository root.
+2. In Terminal, run `git pull` in the same Git fixture, `brew update`, and
+   `swift build` in the same separate Swift-package fixture. Do not use Nick's
+   repository as the Swift-package fixture.
 3. Perform a clean Xcode Release build of Nick.
 4. Deep Scan the same projects fixture.
-5. Use Finder to copy and rename ordinary documents; save one file atomically
-   from an editor.
-6. Run the safe F1-F8 regression fixtures described below. Never use live
-   malware or real credentials.
+5. Use Finder to copy and rename ordinary documents and save one file
+   atomically from the same editor.
+6. Run the same safe F1–F8 fixtures.
 
 Export incidents immediately after each run. Record total new incidents,
 counts by severity and rule, occurrence counts, notifications, protected
-findings, dismissed/suppressed results, evicted-count changes, and duplicate
-incidents. Compare the 5.0 runs against 4.6.3 and against one another. Learning
-may lower only eligible review-tier results after two different incidents; it
-must not hide them or change protected evidence. Any new high or critical
-developer-workload alert is investigated before release. Do not widen trust to
-make the measurement pass.
-
-## Consolidated real-Mac checklist
-
-Use signed, notarized Release packages. Capture app/extension build numbers
-before and after every installation, including the unedited output of
-`systemextensionsctl list`. A gate without that active-version evidence is not
-a pass.
-
-### Core monitoring and parked gates
-
-- [ ] **Writer matrix:** Safari, Finder, Mail and `curl` each write the safe
-      EICAR fixture. Each writer produces one incident and one notification,
-      remains present after restart, and does not duplicate on reload.
-- [ ] **Phishing:** navigate to the reserved test destination. It produces one
-      network incident and one notification without blocking unrelated traffic.
-- [ ] **Camera/microphone:** activate each device with a known app. Each state
-      transition appears as one incident within the documented interval; no
-      per-app attribution is claimed unless the evidence contains it.
-- [ ] **Sparkle 5.0 to later 5.0:** install the first staging build manually,
-      update to a higher signed/notarized staging build through Sparkle, verify
-      app and both extension build numbers, one coalesced informational
-      maintenance incident, and no red self-protection incident.
-- [ ] **Update reminder:** background discovery shows the notification, visible
-      in-app update state and menu-bar badge. Opening the genuine update UI
-      clears the badge; merely relaunching or dismissing unrelated UI does not.
-
-### F1-F8 regression set
-
-- [ ] F1: RFC1918 and link-local destinations are classified as local, not
-      external.
-- [ ] F2: mDNS 5353 and the maintained local-discovery ports are not described
-      as uncommon; an `adb` connection to a LAN device does not create an
-      occurrence flood.
-- [ ] F3: a one-signal incident for a known app never claims multiple signals
-      or an unknown process.
-- [ ] F4: every contributing signal timestamp is within the incident lifecycle;
-      none precedes `firstSeen` after merge or persistence reload.
-- [ ] F5: LOLBin evidence reaches a final signing state rather than remaining
-      `pending`; the high-value `osascript … with administrator privileges` plus
-      `/tmp` installer pattern remains visible.
-- [ ] F6: a validated Nick/Sparkle/Apple-installer upgrade collapses to one
-      informational maintenance incident.
-- [ ] F7: during a deliberately created mixed app/extension version window,
-      protected actions show a clear retry message rather than failing silently.
-- [ ] F8: more than 100 low-value findings do not evict an unresolved red
-      incident; coalescing is by rule plus actor identity, one rule occupies at
-      most its configured share, and Diagnostics shows the evicted count.
-
-### Performance, resilience and adversarial gates
-
-- [ ] Endpoint Security AUTH latency p50/p99 and timeouts meet the documented
-      budget under idle and build/sync load.
-- [ ] Deadline misses do not increase; queue-overflow and event-loss counters
-      remain zero in the normal workload and are visible under a stress fixture.
-- [ ] CPU, memory, energy and log volume are recorded idle and during Xcode,
-      sync and Deep Scan workloads.
-- [ ] Ransomware heuristics remain quiet for sync, backup, database, editor and
-      build workloads, including CMake `.make` generation.
-- [ ] Symlink swap, file replacement, burst writes, renamed binary, fake Team
-      ID, settings tampering and extension-deactivation fixtures fail closed or
-      raise the expected protected incident.
-- [ ] Quarantine restore preserves safe ownership/mode, refuses symlinked
-      parents and never restores setuid/setgid bits.
-- [ ] Finder uninstall, the documented in-app uninstaller, protected-file `rm`,
-      rename destination and in-bundle write checks match the accepted Phase 6
-      behavior.
-- [ ] The ~17k files (cap 120k) benign corpus, detection fixtures, unit tests,
-      repository validation, YARA lint and documentation drift gate pass on the
-      final candidate.
+findings, dismissed/suppressed results, evicted-count changes and duplicates.
+Any new high or critical developer-workload alert is investigated; trust is
+never widened merely to make the comparison pass.
 
 ## Pass rule
 

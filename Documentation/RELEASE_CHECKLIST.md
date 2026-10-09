@@ -81,10 +81,17 @@
 - [ ] Idle CPU, memory, and log volume remain acceptable for ten minutes.
 - [ ] Update from the previous public build succeeds through Sparkle, for
       both a manual Check for Updates and a scheduled check.
+- [ ] With the previous public release's Endpoint Security extension active,
+      upgrades to this exact candidate succeed through Installer.app, the
+      command-line `installer` tool, Sparkle, and every documented MDM/Intune
+      deployment path; protection is never disabled merely to make the test
+      pass.
 - [ ] The live appcast at `https://3nsofts.com/nick/appcast.xml` is fetched
       after upload and matches `Packaging/Release/<version>/appcast.xml`.
-- [ ] Uninstall restores normal networking and removes both applications,
-      system extensions, configuration, and generated files.
+- [ ] Uninstall deactivates both system extensions before deleting Nick.app or
+      user data. If macOS requires a restart, the app and data remain until the
+      post-restart retry; final `systemextensionsctl list` contains no Nick
+      extension entries.
 
 ## Publication
 

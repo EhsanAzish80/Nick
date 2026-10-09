@@ -261,4 +261,23 @@ final class SmartScanStatusTests: XCTestCase {
         XCTAssertTrue(AppDelegate.isIgnorableLaunchAtLoginRemovalError(inaccessible))
         XCTAssertFalse(AppDelegate.isIgnorableLaunchAtLoginRemovalError(unrelated))
     }
+
+    func test_uninstallerPreservesContainingAppUntilExtensionsAreGone() throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: projectRoot.appendingPathComponent("NickUninstaller/UninstallerView.swift"),
+            encoding: .utf8
+        )
+
+        let prepare = try XCTUnwrap(source.range(of: "try await prepareNickForRemoval(at: nickURL)"))
+        let restartGate = try XCTUnwrap(source.range(of: "if restartRequired", range: prepare.upperBound..<source.endIndex))
+        let purge = try XCTUnwrap(source.range(of: "try await performAuthorizedPurge(nickURL: nickURL)"))
+
+        XCTAssertLessThan(restartGate.lowerBound, purge.lowerBound)
+        XCTAssertTrue(source.contains("preserving Nick.app and all data"))
+        XCTAssertTrue(source.contains("/Applications/Nick.app"))
+        XCTAssertFalse(source.contains("NSWorkspace.shared.urlForApplication"))
+    }
 }

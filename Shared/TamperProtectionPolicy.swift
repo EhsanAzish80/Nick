@@ -81,5 +81,8 @@ enum TamperProtectionPolicy {
         "com.apple.installer",
         "com.apple.installd",
         "com.apple.package_script_service",
+        // PackageKit performs the final atomic replacement through this
+        // platform binary rather than installd itself.
+        "com.apple.shove",
     ]
 }
