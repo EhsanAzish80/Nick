@@ -24,8 +24,16 @@ final class TamperProtectionPolicyTests: XCTestCase {
             signing: "com.apple.installd",
             platform: true
         ), nickIdentityValidated: false))
+        XCTAssertTrue(TamperProtectionPolicy.isTrustedMaintenanceActor(identity(
+            signing: "com.apple.shove",
+            platform: true
+        ), nickIdentityValidated: false))
         XCTAssertFalse(TamperProtectionPolicy.isTrustedMaintenanceActor(identity(
             signing: "com.apple.installd",
+            platform: false
+        ), nickIdentityValidated: false))
+        XCTAssertFalse(TamperProtectionPolicy.isTrustedMaintenanceActor(identity(
+            signing: "com.apple.shove",
             platform: false
         ), nickIdentityValidated: false))
     }
