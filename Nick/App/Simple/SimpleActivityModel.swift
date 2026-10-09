@@ -105,12 +105,16 @@ enum SimpleActivityFeed {
             let user = builder.build(from: alert)
             let level: AlertInput.Level
             switch user.severity {
-            case .safe:     return nil
+            case .safe:
+                guard alert.hasProtectedEvidence else { return nil }
+                level = .warning
             case .warning:  level = .warning
             case .critical: level = .critical
             }
             return AlertInput(
-                id: alert.id, headline: user.headline, level: level,
+                id: alert.id,
+                headline: user.severity == .safe ? "Security finding needs review" : user.headline,
+                level: level,
                 date: alert.lastSeen, needsAction: actionable.contains(alert.id)
             )
         }

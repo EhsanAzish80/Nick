@@ -353,7 +353,7 @@ final class SecurityEngine {
     var activeActionableAlerts: [ThreatAlert] {
         alerts.filter { alert in
             alert.hasActionableEvidence
-                && UserFacingAlertBuilder.shared.build(from: alert).severity != .safe
+                && alert.isUserVisibleFinding
         }
     }
 

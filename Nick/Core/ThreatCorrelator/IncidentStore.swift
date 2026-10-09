@@ -655,9 +655,7 @@ final class IncidentStore {
     }
 
     private func isProtected(_ alert: ThreatAlert) -> Bool {
-        alert.contributingSignals.contains {
-            EvidenceRulePolicy.tier(for: $0, ruleClass: EvidenceRuleClass(signal: $0)) == .protectedDetection
-        }
+        alert.hasProtectedEvidence
     }
 
     private func isDismissed(_ alert: ThreatAlert, incidentKey: String) -> Bool {
