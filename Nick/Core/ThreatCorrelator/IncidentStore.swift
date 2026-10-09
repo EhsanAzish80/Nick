@@ -299,6 +299,7 @@ final class IncidentStore {
             incidents = []
         }
         migrateLegacyDismissals()
+        migrateLegacyDismissedAlertKeys(from: defaults)
         boundInMemory()
         if persistOnInit { persist() }
     }
@@ -343,6 +344,7 @@ final class IncidentStore {
         defaults.removeObject(forKey: Self.persistenceKey)
         defaults.removeObject(forKey: Self.dismissalPersistenceKey)
         defaults.removeObject(forKey: "nickPersistedAlerts")
+        defaults.removeObject(forKey: "nickDismissedAlertKeys")
         defaults.removeObject(forKey: "nickExpectedAlertCooldowns")
     }
 
@@ -365,7 +367,9 @@ final class IncidentStore {
             let candidate = applyLearnedPriority(to: applyTrustedDowngrade(to: rawCandidate))
             guard !isSuppressed(candidate), !isCoolingDown(candidate) else { continue }
             let key = Self.incidentKey(for: candidate)
-            guard !dismissalTombstones.contains(where: { $0.incidentKey == key }) else { continue }
+            guard !dismissalTombstones.contains(where: {
+                $0.incidentKey == key || $0.alertDeduplicationKey == candidate.deduplicationKey
+            }) else { continue }
             if let index = incidents.firstIndex(where: { $0.key == key }) {
                 let prior = incidents[index]
                 let escalated = candidate.severity > prior.alert.severity
@@ -744,6 +748,24 @@ final class IncidentStore {
             recordDismissal(for: incident)
         }
         incidents.removeAll(where: \.permanentlyDismissed)
+    }
+
+    /// Nick 4.6.x stored permanent dismissals only as alert deduplication keys.
+    /// Preserve those keys even though the dismissed alert itself is no longer
+    /// available to reconstruct the newer incident identity.
+    private func migrateLegacyDismissedAlertKeys(from defaults: UserDefaults?) {
+        guard let defaults else { return }
+        for deduplicationKey in defaults.stringArray(forKey: "nickDismissedAlertKeys") ?? [] {
+            guard !deduplicationKey.isEmpty,
+                  !dismissalTombstones.contains(where: {
+                      $0.alertDeduplicationKey == deduplicationKey
+                  }) else { continue }
+            dismissalTombstones.append(IncidentDismissalTombstone(
+                incidentKey: "legacy-alert-dedup:\(deduplicationKey)",
+                alertDeduplicationKey: deduplicationKey,
+                dismissedAt: now()
+            ))
+        }
     }
 
     private func recordDismissal(for incident: SecurityIncident) {

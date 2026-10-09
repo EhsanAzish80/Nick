@@ -950,6 +950,33 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: "nickPersistedAlerts"))
     }
 
+    func test_privilegedMigrationPreservesLegacy463DismissalKeyAndSuppressesRepeat() throws {
+        let suite = "IncidentLegacy463DismissalMigrationTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let dismissed = makeAlert(signal: makeSignal(
+            metadata: ["reason": "persist_executable_missing", "path": "/Users/test/LaunchAgents/example.plist"]
+        ))
+        defaults.set([dismissed.deduplicationKey], forKey: "nickDismissedAlertKeys")
+        defaults.set(try JSONEncoder().encode([ThreatAlert]()), forKey: "nickPersistedAlerts")
+
+        let source = IncidentStore(defaults: defaults, persistOnInit: false)
+        let payload = try source.prepareLegacyMigration(defaults: defaults)
+        let restored = IncidentStore()
+        try restored.installPrivilegedSnapshot(payload) { _ in }
+
+        XCTAssertEqual(restored.dismissedAlertDeduplicationKeys, Set([dismissed.deduplicationKey]))
+        XCTAssertTrue(restored.ingest([dismissed]).newlyActionable.isEmpty)
+        XCTAssertTrue(restored.incidents.isEmpty)
+        XCTAssertNotNil(defaults.object(forKey: "nickDismissedAlertKeys"))
+
+        restored.removeLegacyPersistence(defaults: defaults)
+        XCTAssertNil(defaults.object(forKey: "nickDismissedAlertKeys"))
+        XCTAssertNil(defaults.data(forKey: "nickPersistedAlerts"))
+    }
+
     func test_userVerdictIsRecordedOnlyAfterExtensionAcceptsTarget() async throws {
         let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [],
