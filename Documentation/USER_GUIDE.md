@@ -157,7 +157,8 @@ Use Settings → Uninstall Nick, or open Nick Uninstaller from `/Applications`,
 for a complete removal. The uninstaller disables protection, removes generated
 data and settings, and deletes Nick and itself. Finder can move Nick.app to the
 Trash, but that removes only the app bundle; it does not clean up protection
-components or generated data.
+components or generated data. Nick shows an informational notification when
+this Finder-only removal starts.
 
 After removal, macOS may retain a disabled Full Disk Access entry with no
 executable behind it. That privacy-list row is maintained by macOS and can be

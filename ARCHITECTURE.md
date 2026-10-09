@@ -78,10 +78,15 @@ incident slots, and Diagnostics reports how many incidents retention evicted.
 
 The Endpoint Security extension denies deletion or replacement of Nick's
 protected installation paths unless the actor has one of the exact validated
-Nick/Sparkle or Apple-installer signing identities. Rename authorization checks
-both source and destination. The bundled uninstaller is the complete removal
+Nick/Sparkle or Apple-installer signing identities. Nick/Sparkle actors are
+resolved from the Endpoint Security audit token and checked dynamically against
+an Apple-anchored Team ID plus identifier requirement; results are cached by
+cdhash. Rename authorization checks both source and destination, and untrusted
+opens, truncates, creates, links and clones into the app bundle are denied. The bundled uninstaller is the complete removal
 path; Finder's narrow move of `/Applications/Nick.app` into the user's Trash is
-also allowed, but does not remove Nick's generated data or system components.
+also allowed only for the console user's real Trash or a mounted volume's
+`.Trashes/<uid>` directory. It creates a visible informational notice but does
+not remove Nick's generated data or system components.
 Validated update/reinstall activity is collapsed into one informational
 maintenance incident instead of a protected-path alert burst.
 
