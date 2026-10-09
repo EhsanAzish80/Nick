@@ -1,6 +1,8 @@
 import Foundation
 
 struct BundledHashCatalog: Codable, Sendable {
+    static let maximumEntryCount = 5_000
+
     struct Entry: Codable, Sendable, Equatable {
         let hash: String
         let name: String
@@ -9,11 +11,32 @@ struct BundledHashCatalog: Codable, Sendable {
     }
 
     let version: Int
+    let retrievedAt: String
     let entries: [Entry]
 
-    var validatedEntries: [Entry] {
+    enum ValidationError: Error, Equatable {
+        case invalidVersion
+        case invalidRetrievalDate
+        case tooManyEntries(actual: Int, maximum: Int)
+        case malformedEntry(index: Int)
+        case duplicateHash(String)
+    }
+
+    func validatedEntries() throws -> [Entry] {
+        guard version > 0 else { throw ValidationError.invalidVersion }
+        guard ISO8601DateFormatter().date(from: retrievedAt) != nil else {
+            throw ValidationError.invalidRetrievalDate
+        }
+        guard entries.count <= Self.maximumEntryCount else {
+            throw ValidationError.tooManyEntries(
+                actual: entries.count,
+                maximum: Self.maximumEntryCount
+            )
+        }
+
         let allowedSeverities: Set<String> = ["low", "medium", "high", "critical"]
-        return entries.compactMap { entry in
+        var seenHashes = Set<String>()
+        return try entries.enumerated().map { index, entry in
             let normalized = Entry(
                 hash: entry.hash.lowercased(),
                 name: entry.name.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -25,8 +48,16 @@ struct BundledHashCatalog: Codable, Sendable {
                   !normalized.name.isEmpty,
                   !normalized.family.isEmpty,
                   allowedSeverities.contains(normalized.severity)
-            else { return nil }
+            else { throw ValidationError.malformedEntry(index: index) }
+            guard seenHashes.insert(normalized.hash).inserted else {
+                throw ValidationError.duplicateHash(normalized.hash)
+            }
             return normalized
         }
+    }
+
+    func entry(matchingSHA256 hash: String) throws -> Entry? {
+        let normalizedHash = hash.lowercased()
+        return try validatedEntries().first { $0.hash == normalizedHash }
     }
 }

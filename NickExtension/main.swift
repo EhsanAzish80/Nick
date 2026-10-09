@@ -46,6 +46,8 @@ func writeExtensionHealth() {
         "emailScannerReady": yaraRulesReady,
         "yaraRulesReady": yaraRulesReady,
         "signatureCount": signatureDB.count,
+        "signatureCatalogEntries": signatureDB.bundledCatalogEntryCount,
+        "signatureCatalogDate": signatureDB.bundledCatalogRetrievedAt ?? "unavailable",
         "fullDiskAccessReady": fullDiskAccessReady,
         "fimBaselineCount": fileIntegrityMonitor.baselineCount,
         "fimPendingViolationCount": fileIntegrityMonitor.pendingViolationCount,

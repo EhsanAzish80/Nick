@@ -44,6 +44,12 @@ pre-launch check. New YARA findings are normally reported after the launch or
 file operation has already been allowed, so a YARA alert is evidence to review,
 not a claim that execution was prevented.
 
+Nick 5.0 development builds ship a 25-entry offline hash catalog dated October
+9, 2026: 24 macOS malware indicators curated from ESET's BSD-licensed research
+repository and one low-severity EICAR test entry. This small snapshot provides
+day-one exact matches but does not replace current platform protections or a
+maintained antivirus feed. Diagnostics shows the bundled entry count and date.
+
 Expected behavior can be accepted for the specific app and behavior so repeated
 benign events do not create alerts. This is a local trust decision, not a global
 malware exclusion.

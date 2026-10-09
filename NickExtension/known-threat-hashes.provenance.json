@@ -1,0 +1,39 @@
+{
+  "catalogVersion": 2,
+  "retrievedAt": "2026-10-09T00:00:00Z",
+  "entryCount": 25,
+  "maximumEntries": 5000,
+  "sources": [
+    {
+      "name": "ESET malware-ioc",
+      "repository": "https://github.com/eset/malware-ioc",
+      "commit": "17baf44964a77368e9149f4f593eb098beddf1c5",
+      "sourceCommitDate": "2026-09-17T12:26:24-04:00",
+      "licence": "BSD-2-Clause",
+      "licenceFile": "Rules/families/LICENSES/eset.txt",
+      "query": "Read the complete samples.sha256 files at the pinned commit for ESET research folders whose accompanying README explicitly identifies a macOS malware family.",
+      "selection": [
+        "dazzlespy/samples.sha256",
+        "gmera/samples.sha256",
+        "keydnap/samples.sha256",
+        "cloudmensis/samples.sha256"
+      ],
+      "criteria": "All SHA-256 entries in the four ESET research folders whose accompanying reports explicitly identify macOS malware families."
+    },
+    {
+      "name": "EICAR Anti-Malware Test File",
+      "repository": "https://www.eicar.org/download-anti-malware-testfile/",
+      "licence": "Not applicable to the factual hash value; no EICAR file content is bundled",
+      "selection": ["SHA-256 of the standard 68-byte EICAR test file"],
+      "criteria": "Kept only as a low-severity Test-family verification entry."
+    }
+  ],
+  "severityPolicy": {
+    "Test": "low",
+    "DazzleSpy": "high",
+    "GMERA": "high",
+    "Keydnap": "high",
+    "CloudMensis": "high"
+  },
+  "notes": "This is a small offline snapshot, not a comprehensive malware database. Nick 5.1 is planned to replace static snapshots with signed catalog updates."
+}

@@ -102,6 +102,10 @@ review rather than silently blocked.
 
 - Vendored libyara 4.5.5 with Nick's macOS behaviour heuristics and family
   signatures from vetted, redistributable sources (`Rules/families`).
+- The 5.0 development build includes a deliberately small offline exact-hash
+  catalog: 25 entries retrieved on October 9, 2026 (24 macOS malware IOCs from
+  ESET's BSD-licensed research repository plus the low-severity EICAR test
+  hash). It is a curated snapshot, not a comprehensive malware database.
 - On-demand, real-time, email attachment, and external-volume scanning.
 - Confidence-aware results: heuristic matches are shown for review; only
   actionable matches can be blocked or quarantined.

@@ -19,7 +19,8 @@ struct DiagnosticsView: View {
                     row("XPC connection", xpcClient.isConnected ? "Connected" : "Disconnected")
                     row("Health updated", healthDate("updatedAt")?.formatted(date: .abbreviated, time: .standard) ?? "Unavailable")
                     row("YARA rules", healthBool("yaraRulesReady") ? "Ready" : "Not ready")
-                    row("Exact-hash signatures", healthNumber("signatureCount"))
+                    row("Bundled hash catalog", catalogSummary)
+                    row("Loaded exact-hash signatures", healthNumber("signatureCount"))
                     row("FIM monitored paths", healthNumber("fimBaselineCount"))
                 }
 
@@ -81,6 +82,14 @@ struct DiagnosticsView: View {
     private func healthDate(_ key: String) -> Date? {
         guard let value = xpcClient.extensionHealth?[key] as? TimeInterval else { return nil }
         return Date(timeIntervalSince1970: value)
+    }
+
+    private var catalogSummary: String {
+        guard let count = xpcClient.extensionHealth?["signatureCatalogEntries"] as? NSNumber,
+              let date = xpcClient.extensionHealth?["signatureCatalogDate"] as? String,
+              date != "unavailable"
+        else { return "Unavailable" }
+        return "\(count.intValue) entries · \(date)"
     }
 
     @ViewBuilder
