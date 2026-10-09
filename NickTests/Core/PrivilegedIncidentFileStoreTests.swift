@@ -114,36 +114,107 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
 
     func test_incidentVerdictRequiresAnExistingIncident() {
         let existing = UUID()
-        XCTAssertTrue(IncidentVerdictValidationPolicy.accepts(
-            incidentID: existing.uuidString,
+        XCTAssertEqual(IncidentVerdictValidationPolicy.result(
+            alertID: existing.uuidString,
             action: "reviewed",
-            existingIncidentIDs: [existing.uuidString],
+            existingAlertIDs: [existing.uuidString],
             hasProtectionAuthorization: false
-        ))
-        XCTAssertFalse(IncidentVerdictValidationPolicy.accepts(
-            incidentID: UUID().uuidString,
+        ), .accepted)
+        XCTAssertEqual(IncidentVerdictValidationPolicy.result(
+            alertID: UUID().uuidString,
             action: "reviewed",
-            existingIncidentIDs: [existing.uuidString],
+            existingAlertIDs: [existing.uuidString],
             hasProtectionAuthorization: true
-        ))
+        ), .targetMissing)
     }
 
     func test_securityReducingVerdictRequiresProtectionAuthorization() {
         let existing = UUID()
         for action in ["dismissed", "allowedOnce", "alwaysAllowed"] {
-            XCTAssertFalse(IncidentVerdictValidationPolicy.accepts(
-                incidentID: existing.uuidString,
+            XCTAssertEqual(IncidentVerdictValidationPolicy.result(
+                alertID: existing.uuidString,
                 action: action,
-                existingIncidentIDs: [existing.uuidString],
+                existingAlertIDs: [existing.uuidString],
                 hasProtectionAuthorization: false
-            ))
-            XCTAssertTrue(IncidentVerdictValidationPolicy.accepts(
-                incidentID: existing.uuidString,
+            ), .authorizationRequired)
+            XCTAssertEqual(IncidentVerdictValidationPolicy.result(
+                alertID: existing.uuidString,
                 action: action,
-                existingIncidentIDs: [existing.uuidString],
+                existingAlertIDs: [existing.uuidString],
                 hasProtectionAuthorization: true
-            ))
+            ), .accepted)
         }
+    }
+
+    @MainActor
+    func test_missingVerdictTargetIsRejectedBeforeAuthorizationPrompt() async {
+        var promptCount = 0
+        var submitCount = 0
+        let result = await IncidentVerdictAuthorizationFlow.complete(
+            preflight: .targetMissing,
+            requiresAuthorization: true,
+            requestAuthorization: {
+                promptCount += 1
+                return Data([1])
+            },
+            submitAuthorized: { _ in
+                submitCount += 1
+                return .accepted
+            }
+        )
+
+        if case .targetMissing = result { } else {
+            XCTFail("Expected the stale target to be rejected")
+        }
+        XCTAssertEqual(promptCount, 0)
+        XCTAssertEqual(submitCount, 0)
+    }
+
+    @MainActor
+    func test_persistedStoreValidatesCanonicalAlertIDEndToEnd() throws {
+        let alertID = UUID()
+        let internalIncidentID = UUID()
+        let alert = ThreatAlert(
+            id: alertID,
+            score: 0.9,
+            content: AlertContent(
+                title: "Persisted finding",
+                description: "Test evidence",
+                severity: .high,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: []
+        )
+        let snapshot = IncidentStoreSnapshot(
+            incidents: [SecurityIncident(
+                id: internalIncidentID,
+                key: "persisted-test",
+                alert: alert,
+                evidence: []
+            )],
+            dismissalTombstones: [],
+            expectedCooldowns: [:]
+        )
+        let payload = try JSONEncoder().encode(snapshot)
+        let fileURL = temporaryDirectory.appendingPathComponent("state/canonical-incidents.json")
+        let store = PrivilegedIncidentFileStore(fileURL: fileURL)
+        let persisted = store.migrate(payload: payload)
+        let alertIDs = IncidentStoreAlertIDPolicy.alertIDs(from: persisted.record)
+
+        XCTAssertNotEqual(alertID, internalIncidentID)
+        XCTAssertEqual(alertIDs, [alertID.uuidString])
+        XCTAssertEqual(IncidentVerdictValidationPolicy.result(
+            alertID: alertID.uuidString,
+            action: "resolved",
+            existingAlertIDs: alertIDs,
+            hasProtectionAuthorization: false
+        ), .accepted)
+        XCTAssertEqual(IncidentVerdictValidationPolicy.result(
+            alertID: UUID().uuidString,
+            action: "resolved",
+            existingAlertIDs: alertIDs,
+            hasProtectionAuthorization: false
+        ), .targetMissing)
     }
 
     func test_enablingVerdictLearningRequiresProtectionAuthorizationButDisablingDoesNot() throws {

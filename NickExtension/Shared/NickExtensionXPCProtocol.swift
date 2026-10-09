@@ -55,17 +55,39 @@ enum IncidentVerdictValidationPolicy {
         "reviewed", "hidden", "dismissed", "resolved", "allowedOnce", "alwaysAllowed"
     ]
 
-    static func accepts(
-        incidentID: String,
+    static func result(
+        alertID: String,
         action: String,
-        existingIncidentIDs: Set<String>,
+        existingAlertIDs: Set<String>,
         hasProtectionAuthorization: Bool
-    ) -> Bool {
-        guard UUID(uuidString: incidentID) != nil,
-              allowedActions.contains(action),
-              existingIncidentIDs.contains(incidentID) else { return false }
+    ) -> IncidentVerdictValidationResult {
+        guard UUID(uuidString: alertID) != nil,
+              allowedActions.contains(action) else { return .invalidRequest }
+        guard existingAlertIDs.contains(alertID) else { return .targetMissing }
         let protectionReducingActions: Set<String> = ["dismissed", "allowedOnce", "alwaysAllowed"]
-        return !protectionReducingActions.contains(action) || hasProtectionAuthorization
+        guard protectionReducingActions.contains(action) else { return .accepted }
+        return hasProtectionAuthorization ? .accepted : .authorizationRequired
+    }
+}
+
+enum IncidentVerdictValidationResult: String, Equatable {
+    case accepted
+    case authorizationRequired
+    case targetMissing
+    case invalidRequest
+}
+
+enum IncidentStoreAlertIDPolicy {
+    static func alertIDs(from encodedRecord: Data) -> Set<String> {
+        guard let record = try? JSONDecoder().decode(
+            PrivilegedIncidentStoreRecord.self,
+            from: encodedRecord
+        ),
+        let object = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
+        let incidents = object["incidents"] as? [[String: Any]] else { return [] }
+        return Set(incidents.compactMap { incident in
+            (incident["alert"] as? [String: Any])?["id"] as? String
+        })
     }
 }
 
@@ -271,13 +293,14 @@ enum IncidentStoreWritePolicy {
         reply: @escaping (Bool, Data) -> Void
     )
 
-    /// Validates that a verdict targets an incident in the privileged store.
-    /// Security-reducing verdicts additionally require a user-authorized right.
+    /// Validates the canonical alert ID in the privileged incident store.
+    /// Security-reducing verdicts return `authorizationRequired` before the app
+    /// prompts, then require a verified right on the second call.
     func validateIncidentVerdictTarget(
-        incidentID: String,
+        alertID: String,
         action: String,
         authorizationExternalForm: Data?,
-        reply: @escaping (Bool) -> Void
+        reply: @escaping (String) -> Void
     )
 
     /// Instructs the extension to rebuild the FIM baseline from the current

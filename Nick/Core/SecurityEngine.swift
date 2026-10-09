@@ -90,6 +90,15 @@ struct IncidentActionApproval: Sendable {
     let authorizationExternalForm: Data?
 }
 
+enum IncidentActionAuthorizationResult: Sendable {
+    case approved(IncidentActionApproval)
+    case approvalCancelled
+    case targetMissing
+    case protectionDisconnected
+    case versionMismatch(appBuild: String, extensionBuild: String)
+    case rejected
+}
+
 private struct PendingIncidentAction {
     let id: UUID
     let action: IncidentActionKind
@@ -357,7 +366,7 @@ final class SecurityEngine {
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
     private(set) var incidentStore = IncidentStore()
-    private var incidentActionAuthorizer: ((UUID, IncidentActionKind) async -> IncidentActionApproval?)?
+    private var incidentActionAuthorizer: ((UUID, IncidentActionKind) async -> IncidentActionAuthorizationResult)?
     private var nextIncidentStoreAuthorization: Data?
     private var pendingIncidentAction: PendingIncidentAction?
 
@@ -453,7 +462,7 @@ final class SecurityEngine {
     func installPrivilegedIncidentStore(
         payload: Data,
         persistence: @escaping (Data, Data?) -> Void,
-        authorizer: @escaping (UUID, IncidentActionKind) async -> IncidentActionApproval?,
+        authorizer: @escaping (UUID, IncidentActionKind) async -> IncidentActionAuthorizationResult,
         removeLegacyState: Bool
     ) throws {
         try incidentStore.installPrivilegedSnapshot(payload) { [weak self] payload in
@@ -868,12 +877,26 @@ final class SecurityEngine {
         }
         incidentActionRetryMessage = nil
         Task { @MainActor [weak self] in
-            guard let approval = await incidentActionAuthorizer(request.alertID, request.action),
-                  let self else {
-                self?.incidentActionRetryMessage = "Nick's security extension may still be updating. Your action was not applied. Retry when protection reconnects."
+            let result = await incidentActionAuthorizer(request.alertID, request.action)
+            guard let self else { return }
+            guard self.pendingIncidentAction?.id == request.id else { return }
+            guard case .approved(let approval) = result else {
+                switch result {
+                case .approvalCancelled:
+                    self.incidentActionRetryMessage = "Approval was cancelled. Your action was not applied."
+                case .targetMissing:
+                    self.incidentActionRetryMessage = "This item is no longer in Nick's protected record. Refresh Activity and try again."
+                case .protectionDisconnected:
+                    self.incidentActionRetryMessage = "Protection is not connected. Your action was not applied."
+                case .versionMismatch(let appBuild, let extensionBuild):
+                    self.incidentActionRetryMessage = "App and protection versions differ (app \(appBuild), protection \(extensionBuild)). Nick may still be updating; reopen Nick after the update completes."
+                case .rejected:
+                    self.incidentActionRetryMessage = "Protection refused this action. Refresh Activity and try again."
+                case .approved:
+                    break
+                }
                 return
             }
-            guard self.pendingIncidentAction?.id == request.id else { return }
             self.nextIncidentStoreAuthorization = approval.authorizationExternalForm
             request.mutation(alert)
             // A guarded mutation may decide it cannot safely change state.

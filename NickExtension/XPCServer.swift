@@ -422,17 +422,17 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     }
 
     func validateIncidentVerdictTarget(
-        incidentID: String,
+        alertID: String,
         action: String,
         authorizationExternalForm: Data?,
-        reply: @escaping (Bool) -> Void
+        reply: @escaping (String) -> Void
     ) {
-        reply(IncidentVerdictValidationPolicy.accepts(
-            incidentID: incidentID,
+        reply(IncidentVerdictValidationPolicy.result(
+            alertID: alertID,
             action: action,
-            existingIncidentIDs: incidentIDs(),
+            existingAlertIDs: incidentAlertIDs(),
             hasProtectionAuthorization: verifyProtectionAuthorization(authorizationExternalForm)
-        ))
+        ).rawValue)
     }
 
     func requestQuarantineFile(
@@ -588,14 +588,10 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         }
     }
 
-    private func incidentIDs() -> Set<String> {
-        guard let record = try? JSONDecoder().decode(
-            PrivilegedIncidentStoreRecord.self,
-            from: incidentStore.load()
-        ),
-        let object = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
-        let incidents = object["incidents"] as? [[String: Any]] else { return [] }
-        return Set(incidents.compactMap { $0["id"] as? String })
+    /// Alert IDs are the canonical user-action target. `SecurityIncident.id`
+    /// remains an internal persistence identity and must never cross this API.
+    private func incidentAlertIDs() -> Set<String> {
+        IncidentStoreAlertIDPolicy.alertIDs(from: incidentStore.load())
     }
 
     private func securitySettingsReduction(from encodedRecord: Data, to payload: Data) -> Bool {
