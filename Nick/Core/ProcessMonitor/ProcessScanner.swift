@@ -251,7 +251,7 @@ struct ProcessScanner {
     func signals(from processes: [NickProcessInfo],
                  trustedProcessList: TrustedProcessList = TrustedProcessList()) -> [ThreatSignal] {
         var signals: [ThreatSignal] = []
-        let pidToName = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0.name) })
+        let pidToProcess = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0) })
 
         for proc in processes {
             // An invalid signature is strong evidence of tampering. An absent
@@ -296,14 +296,12 @@ struct ProcessScanner {
 
             // Shell spawned without a terminal (LOLBin pattern)
             if Self.shellProcessNames.contains(proc.name.lowercased()) {
-                let rawParentName = pidToName[proc.parentPID] ?? ""
-                let parentName = rawParentName.lowercased()
-                let hasTerminalParent = parentName.contains("terminal")
-                    || parentName.contains("iterm")
-                    || parentName.contains("warp")
-                    || parentName.contains("ssh")
-                    || parentName.contains("bash")
-                    || parentName.contains("zsh")
+                let rawParentName = pidToProcess[proc.parentPID]?.name ?? ""
+                let hasTerminalParent = Self.hasValidatedInteractiveAncestry(
+                    process: proc,
+                    processesByPID: pidToProcess,
+                    trustedProcessList: trustedProcessList
+                )
                 let hasPipeAttack = Self.hasExplicitPipeDownloadExecution(
                     commandLine: Self.parentCommandLine(for: proc.parentPID) ?? "",
                     parentName: rawParentName
@@ -322,9 +320,9 @@ struct ProcessScanner {
                     signals.append(ThreatSignal(
                         source: .process,
                         severity: .medium,
-                        title: "Shell spawned from non-terminal parent",
-                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)' (PID \(proc.parentPID)), which is not a recognized terminal.",
-                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "lolbin", "parent": rawParentName])
+                        title: "Shell started without a validated terminal",
+                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)' (PID \(proc.parentPID)) without a validated interactive terminal in its ancestry.",
+                        context: ThreatSignalContext(processInfo: Self.resolvingSigningStatus(proc), metadata: ["reason": "shell_without_validated_terminal", "parent": rawParentName])
                     ))
                 }
             }
@@ -432,7 +430,7 @@ struct ProcessScanner {
     ) -> [ThreatSignal] {
         guard !newPIDs.isEmpty else { return [] }
         var results: [ThreatSignal] = []
-        let pidToName = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0.name) })
+        let pidToProcess = Dictionary(uniqueKeysWithValues: processes.map { ($0.pid, $0) })
 
         for proc in processes where newPIDs.contains(proc.pid) {
             // Only an invalid signature is strong enough for an immediate high signal.
@@ -461,14 +459,12 @@ struct ProcessScanner {
 
             // LOLBin and pipe-download detection.
             if Self.shellProcessNames.contains(proc.name.lowercased()) {
-                let rawParentName = pidToName[proc.parentPID] ?? ""
-                let parentName = rawParentName.lowercased()
-                let hasTerminalParent = parentName.contains("terminal")
-                    || parentName.contains("iterm")
-                    || parentName.contains("warp")
-                    || parentName.contains("ssh")
-                    || parentName.contains("bash")
-                    || parentName.contains("zsh")
+                let rawParentName = pidToProcess[proc.parentPID]?.name ?? ""
+                let hasTerminalParent = Self.hasValidatedInteractiveAncestry(
+                    process: proc,
+                    processesByPID: pidToProcess,
+                    trustedProcessList: trustedProcessList
+                )
                 let hasPipeAttack = Self.hasExplicitPipeDownloadExecution(
                     commandLine: Self.parentCommandLine(for: proc.parentPID) ?? "",
                     parentName: rawParentName
@@ -485,15 +481,56 @@ struct ProcessScanner {
                     results.append(ThreatSignal(
                         source: .process,
                         severity: .medium,
-                        title: "Shell spawned from non-terminal parent",
-                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)', which is not a recognized terminal.",
-                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "lolbin", "parent": rawParentName])
+                        title: "Shell started without a validated terminal",
+                        description: "'\(proc.name)' (PID \(proc.pid)) was spawned by '\(rawParentName.isEmpty ? "unknown" : rawParentName)' without a validated interactive terminal in its ancestry.",
+                        context: ThreatSignalContext(processInfo: Self.resolvingSigningStatus(proc), metadata: ["reason": "shell_without_validated_terminal", "parent": rawParentName])
                     ))
                 }
             }
         }
 
         return results
+    }
+
+    private static func resolvingSigningStatus(_ process: NickProcessInfo) -> NickProcessInfo {
+        guard process.signingStatus == .pending, !process.path.isEmpty else { return process }
+        return NickProcessInfo(
+            pid: process.pid, path: process.path, name: process.name,
+            parentPID: process.parentPID, parentName: process.parentName,
+            signingStatus: SignatureValidator.shared.evaluate(binaryPath: process.path),
+            metadata: ProcessMetadata(user: process.user, startTime: process.startTime, arguments: process.arguments)
+        )
+    }
+
+    /// Walks through shell and platform login intermediaries until it reaches
+    /// an exact, cryptographically resolved terminal identity. Process names
+    /// alone never establish interactive context.
+    private static func hasValidatedInteractiveAncestry(
+        process: NickProcessInfo,
+        processesByPID: [Int32: NickProcessInfo],
+        trustedProcessList: TrustedProcessList
+    ) -> Bool {
+        var nextPID = process.parentPID
+        var visited: Set<Int32> = []
+        for _ in 0..<12 {
+            guard nextPID > 1, visited.insert(nextPID).inserted,
+                  let raw = processesByPID[nextPID] else { return false }
+            let ancestor = resolvingSigningStatus(raw)
+            if case .signed(let teamID, let signingID) = ancestor.signingStatus {
+                if teamID == "APPLE_PLATFORM", signingID == "com.apple.Terminal" { return true }
+                if TrustedProcessList.trustRejectionReason(for: ancestor) == nil,
+                   trustedProcessList.isTrusted(ancestor) { return true }
+            }
+            let isPermittedIntermediary = shellProcessNames.contains(ancestor.name.lowercased())
+                || (ancestor.path == "/usr/bin/login" && ancestor.signingStatus == .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.login"))
+                || (ancestor.path == "/usr/libexec/sshd-session" && {
+                    if case .signed(let teamID, _) = ancestor.signingStatus { return teamID == "APPLE_PLATFORM" }
+                    return false
+                }())
+            guard isPermittedIntermediary else { return false }
+            nextPID = ancestor.parentPID
+        }
+        return false
     }
 
     /// Produces a signing-status signal for a process whose status was just resolved

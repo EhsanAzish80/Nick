@@ -87,17 +87,32 @@ final class ProcessMonitorTests: XCTestCase {
                                    signing: .signed(teamID: "APPLE"),
                                    parentPID: 499)
         let signals = scanner.signals(from: [osascriptProc, bashProc])
-        let lolbinSignals = signals.filter { $0.metadata["reason"] == "lolbin" }
+        let lolbinSignals = signals.filter { $0.metadata["reason"] == "shell_without_validated_terminal" }
         XCTAssertEqual(lolbinSignals.count, 1)
         XCTAssertEqual(lolbinSignals[0].severity, .medium)
     }
 
     func test_signals_zshSpawnedByTerminal_returnsNoLolbinSignal() {
-        let terminalProc = makeProcess(pid: 400, name: "Terminal", path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", signing: .signed(teamID: "APPLE"))
+        let terminalProc = makeProcess(pid: 400, name: "Terminal", path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", signing: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal"))
         let zshProc = makeProcess(pid: 401, name: "zsh", path: "/bin/zsh", signing: .signed(teamID: "APPLE"), parentPID: 400)
         let signals = scanner.signals(from: [terminalProc, zshProc])
-        let lolbinSignals = signals.filter { $0.metadata["reason"] == "lolbin" }
+        let lolbinSignals = signals.filter { $0.metadata["reason"] == "shell_without_validated_terminal" }
         XCTAssertTrue(lolbinSignals.isEmpty)
+    }
+
+    func test_signals_zshThroughValidatedLoginAndTerminal_returnsNoShellSignal() {
+        let terminal = makeProcess(pid: 410, name: "Not-A-Terminal-Name", path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", signing: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal"))
+        let login = makeProcess(pid: 411, name: "login", path: "/usr/bin/login", signing: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.login"), parentPID: 410)
+        let zsh = makeProcess(pid: 412, name: "zsh", path: "/bin/zsh", signing: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh"), parentPID: 411)
+        let signals = scanner.signals(from: [terminal, login, zsh])
+        XCTAssertFalse(signals.contains { $0.metadata["reason"] == "shell_without_validated_terminal" })
+    }
+
+    func test_signals_spoofedTerminalName_doesNotGrantInteractiveTrust() {
+        let fake = makeProcess(pid: 420, name: "Terminal-helper", path: "/tmp/fake", signing: .unsigned)
+        let zsh = makeProcess(pid: 421, name: "zsh", path: "/bin/zsh", signing: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh"), parentPID: 420)
+        let signals = scanner.signals(from: [fake, zsh])
+        XCTAssertTrue(signals.contains { $0.metadata["reason"] == "shell_without_validated_terminal" })
     }
 
     func test_signals_shellAndDownloaderSiblings_withoutExplicitPipe_returnsNoCriticalSignal() {
