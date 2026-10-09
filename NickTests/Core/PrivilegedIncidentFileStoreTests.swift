@@ -146,6 +146,37 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         }
     }
 
+    func test_enablingVerdictLearningRequiresProtectionAuthorizationButDisablingDoesNot() throws {
+        func settings(_ enabled: Bool) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1,
+                "trustedNames": [],
+                "trustedEntries": [],
+                "suppressionRules": [],
+                "ignoredPaths": [],
+                "notificationThresholdRaw": 3,
+                "verdictLearningEnabled": enabled
+            ])
+        }
+        let disabled = try settings(false)
+        let enabled = try settings(true)
+        let disabledRecord = try JSONEncoder().encode(
+            PrivilegedIncidentStoreRecord(revision: 1, payload: disabled)
+        )
+        let enabledRecord = try JSONEncoder().encode(
+            PrivilegedIncidentStoreRecord(revision: 2, payload: enabled)
+        )
+
+        XCTAssertTrue(SecuritySettingsWritePolicy.requiresAuthorization(
+            previousRecord: disabledRecord,
+            proposedPayload: enabled
+        ))
+        XCTAssertFalse(SecuritySettingsWritePolicy.requiresAuthorization(
+            previousRecord: enabledRecord,
+            proposedPayload: disabled
+        ))
+    }
+
     func test_authorizationRightPolicyRejectsWeakerDefinitions() {
         let expected: [String: Any] = [
             "class": "rule",
@@ -226,15 +257,39 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         ))
     }
 
+    func test_incidentStoreRequiresAuthorizationForNewOrRenewedLearningEntry() throws {
+        let original = try payload(incidents: [])
+        let learned: [[String: Any]] = [[
+            "id": UUID().uuidString,
+            "teamID": "TEAM123",
+            "signingIdentifier": "com.example.editor",
+            "ruleID": "system_hardening",
+            "contextKey": "parents=;path=application;destination=unknown",
+            "expiresAt": 1234.0,
+            "confirmedIncidentIDs": [UUID().uuidString]
+        ]]
+        let proposed = try payload(incidents: [], learnedEntries: learned)
+        XCTAssertTrue(IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: original,
+            proposedPayload: proposed
+        ))
+        XCTAssertFalse(IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: proposed,
+            proposedPayload: original
+        ), "Resetting learned state is security-strengthening")
+    }
+
     private func payload(
         incidents: [[String: Any]],
-        tombstones: [[String: Any]] = []
+        tombstones: [[String: Any]] = [],
+        learnedEntries: [[String: Any]] = []
     ) throws -> Data {
         try JSONSerialization.data(withJSONObject: [
             "schemaVersion": 1,
             "incidents": incidents,
             "dismissalTombstones": tombstones,
-            "expectedCooldowns": [:]
+            "expectedCooldowns": [:],
+            "learnedReviewEntries": learnedEntries
         ])
     }
 }

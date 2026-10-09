@@ -73,6 +73,8 @@ struct SettingsView: View {
     @State private var showRemoveHelperConfirmation = false
     @State private var updateCheckStatus: String?
     @State private var showsAcknowledgements = false
+    @State private var showsLearnedReviewEntries = false
+    @State private var verdictLearningStatus: String?
     @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
     @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
     @AppStorage("nickUpdateAvailable") private var updateAvailable = false
@@ -128,6 +130,10 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showsAcknowledgements) {
             AcknowledgementsView()
+        }
+        .sheet(isPresented: $showsLearnedReviewEntries) {
+            LearnedReviewEntriesView()
+                .environment(engine)
         }
     }
 
@@ -898,6 +904,31 @@ struct SettingsView: View {
     private var dataSection: some View {
         Section("Data") {
             LabeledTile(
+                icon: "brain.head.profile", tint: .purple,
+                title: "Learn from my review decisions",
+                subtitle: "Lower the priority of matching review-only findings on this Mac. Malware signatures and protected detections are never affected."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { engine.verdictLearningEnabled },
+                    set: { updateVerdictLearning($0) }
+                ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            if let verdictLearningStatus {
+                Text(verdictLearningStatus)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            LabeledTile(
+                icon: "list.bullet.rectangle", tint: .purple,
+                title: "What Nick learned",
+                subtitle: "Review, export, or reset local verdict-learning entries."
+            ) {
+                Button("View…") { showsLearnedReviewEntries = true }
+                    .controlSize(.small)
+            }
+            LabeledTile(
                 icon: "brain", tint: .blue,
                 title: "Contribute to detection improvements",
                 subtitle: "Locally records dismissed/confirmed alerts as training data. Never transmitted — export manually to contribute."
@@ -959,6 +990,20 @@ struct SettingsView: View {
                     // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
                 }
             }
+        }
+    }
+
+    private func updateVerdictLearning(_ enabled: Bool) {
+        if enabled {
+            guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
+                verdictLearningStatus = "Approval was cancelled. Learning remains off."
+                return
+            }
+            engine.setVerdictLearningEnabled(true, authorizationExternalForm: authorization)
+            verdictLearningStatus = "Enabled with user approval."
+        } else {
+            engine.setVerdictLearningEnabled(false)
+            verdictLearningStatus = "Learning is off. Existing entries remain available to review or reset."
         }
     }
 
@@ -1350,6 +1395,94 @@ private struct AcknowledgementsView: View {
         }
         .padding(24)
         .frame(minWidth: 640, minHeight: 520)
+    }
+}
+
+private struct LearnedReviewEntriesView: View {
+    @Environment(SecurityEngine.self) private var engine
+    @Environment(\.dismiss) private var dismiss
+    @State private var entries: [LearnedReviewEntry] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("What Nick learned").font(.title2.weight(.semibold))
+                    Text("Local review decisions only. Entries lower priority; they never hide detections.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+
+            if entries.isEmpty {
+                ContentUnavailableView(
+                    "Nothing learned yet",
+                    systemImage: "brain.head.profile",
+                    description: Text("When learning is enabled, authenticated false-positive decisions can create expiring review-only entries.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(entries) { entry in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(entry.ruleID).font(.headline)
+                            Spacer()
+                            Button("Reset", role: .destructive) {
+                                engine.resetLearnedEntry(id: entry.id)
+                                refresh()
+                            }
+                            .controlSize(.small)
+                        }
+                        Text("\(entry.teamID) · \(entry.signingIdentifier)")
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                        Text(entry.reason).font(.callout)
+                        Text("Context: \(entry.contextKey)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(entry.confirmationCount < 2
+                             ? "Pending (\(entry.confirmationCount)/2) · expires \(entry.expiresAt.formatted(date: .abbreviated, time: .shortened))"
+                             : "Active · confirmed \(entry.confirmationCount) times · expires \(entry.expiresAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            HStack {
+                Button("Export…") { exportEntries() }
+                    .disabled(entries.isEmpty)
+                Button("Reset All", role: .destructive) {
+                    engine.resetAllLearnedEntries()
+                    refresh()
+                }
+                .disabled(entries.isEmpty)
+                Spacer()
+                Text("Stored in Nick's root-owned incident store")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 720, minHeight: 540)
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        entries = engine.learnedReviewEntries
+    }
+
+    private func exportEntries() {
+        guard let data = try? engine.exportLearnedEntries() else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export What Nick Learned"
+        panel.nameFieldStringValue = "nick-learned-review-entries.json"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? data.write(to: url, options: .atomic)
     }
 }
 

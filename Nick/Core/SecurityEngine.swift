@@ -15,6 +15,47 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
     var ignoredPaths: Set<String>
     var webhookURL: String?
     var notificationThresholdRaw: Int
+    var verdictLearningEnabled: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, trustedNames, trustedEntries, suppressionRules, ignoredPaths
+        case webhookURL, notificationThresholdRaw, verdictLearningEnabled
+    }
+
+    init(
+        schemaVersion: Int,
+        trustedNames: Set<String>,
+        trustedEntries: Set<TrustedProcessList.UserEntry>,
+        suppressionRules: [SuppressionRule],
+        ignoredPaths: Set<String>,
+        webhookURL: String?,
+        notificationThresholdRaw: Int,
+        verdictLearningEnabled: Bool
+    ) {
+        self.schemaVersion = schemaVersion
+        self.trustedNames = trustedNames
+        self.trustedEntries = trustedEntries
+        self.suppressionRules = suppressionRules
+        self.ignoredPaths = ignoredPaths
+        self.webhookURL = webhookURL
+        self.notificationThresholdRaw = notificationThresholdRaw
+        self.verdictLearningEnabled = verdictLearningEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        trustedNames = try container.decode(Set<String>.self, forKey: .trustedNames)
+        trustedEntries = try container.decode(Set<TrustedProcessList.UserEntry>.self, forKey: .trustedEntries)
+        suppressionRules = try container.decode([SuppressionRule].self, forKey: .suppressionRules)
+        ignoredPaths = try container.decode(Set<String>.self, forKey: .ignoredPaths)
+        webhookURL = try container.decodeIfPresent(String.self, forKey: .webhookURL)
+        notificationThresholdRaw = try container.decode(Int.self, forKey: .notificationThresholdRaw)
+        verdictLearningEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .verdictLearningEnabled
+        ) ?? false
+    }
 }
 
 enum MenuBarAttentionState: Int, Comparable, Sendable {
@@ -168,6 +209,7 @@ final class SecurityEngine {
     var deepScanIgnoredPaths: Set<String> = [] { didSet { persistSecuritySettingsIfReady() } }
     var webhookURLString: String? { didSet { persistSecuritySettingsIfReady() } }
     var notificationThreshold: SignalSeverity = .high { didSet { persistSecuritySettingsIfReady() } }
+    private(set) var verdictLearningEnabled = false
     private var securitySettingsPersistence: ((Data, Data?) -> Void)?
     private var nextSecuritySettingsAuthorization: Data?
     private var installingSecuritySettings = false
@@ -203,7 +245,8 @@ final class SecurityEngine {
             ignoredPaths: ignored,
             webhookURL: defaults.string(forKey: "webhookURL"),
             notificationThresholdRaw: defaults.object(forKey: "notificationThresholdRaw") as? Int
-                ?? SignalSeverity.high.rawValue
+                ?? SignalSeverity.high.rawValue,
+            verdictLearningEnabled: false
         )
         return (try? JSONEncoder().encode(payload)) ?? Data("{}".utf8)
     }
@@ -225,6 +268,7 @@ final class SecurityEngine {
         deepScanIgnoredPaths = settings.ignoredPaths
         webhookURLString = settings.webhookURL
         notificationThreshold = SignalSeverity(rawValue: settings.notificationThresholdRaw) ?? .high
+        verdictLearningEnabled = settings.verdictLearningEnabled
         installingSecuritySettings = false
         securitySettingsPersistence = persistence
         NotificationManager.shared.notificationThreshold = notificationThreshold
@@ -232,7 +276,8 @@ final class SecurityEngine {
 
         let defaults = UserDefaults.standard
         ["userTrustedProcesses", "userTrustedProcessIdentities", "suppressionRulesData",
-         "deepScanIgnoredPaths", "webhookURL", "notificationThresholdRaw"].forEach {
+         "deepScanIgnoredPaths", "webhookURL", "notificationThresholdRaw",
+         "verdictLearningEnabled"].forEach {
             defaults.removeObject(forKey: $0)
         }
     }
@@ -253,7 +298,8 @@ final class SecurityEngine {
             suppressionRules: suppressionRules,
             ignoredPaths: deepScanIgnoredPaths,
             webhookURL: webhookURLString,
-            notificationThresholdRaw: notificationThreshold.rawValue
+            notificationThresholdRaw: notificationThreshold.rawValue,
+            verdictLearningEnabled: verdictLearningEnabled
         )
         guard let data = try? JSONEncoder().encode(payload) else { return }
         NotificationManager.shared.notificationThreshold = notificationThreshold
@@ -334,7 +380,8 @@ final class SecurityEngine {
     init() {
         incidentStore.configure(
             trustedProcessList: trustedProcessList,
-            suppressionRules: suppressionRules
+            suppressionRules: suppressionRules,
+            verdictLearningEnabled: verdictLearningEnabled
         )
         deepScanner.engine = self
         procMon.processDidUpdate = { [weak self] updated in
@@ -450,7 +497,7 @@ final class SecurityEngine {
         // Propagate the current trusted process configuration to monitors and
         // the one post-correlation policy boundary.
         procMon.trustedProcessList = trustedProcessList
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
 
         var genuinelyNew: [ThreatAlert] = []
 
@@ -601,7 +648,7 @@ final class SecurityEngine {
                 topFeatures: topFeatures
             )
         }
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
         let result = incidentStore.ingest(candidates)
         alerts = result.visibleAlerts
         rebuildUserFacingAlerts()
@@ -633,7 +680,7 @@ final class SecurityEngine {
             alert: alert,
             topFeatures: [(signal.title, Double(signal.severity.rawValue) / 4.0)]
         )
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
         let result = incidentStore.ingest([alert])
         alerts = result.visibleAlerts
         rebuildUserFacingAlerts()
@@ -649,7 +696,7 @@ final class SecurityEngine {
     /// the existing incident rather than creating another card.
     @MainActor
     func addAlert(_ alert: ThreatAlert) {
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
         let result = incidentStore.ingest([alert])
         alerts = result.visibleAlerts
         rebuildUserFacingAlerts()
@@ -658,7 +705,7 @@ final class SecurityEngine {
     /// Merges new alerts from the real-time pipeline by stable incident identity.
     /// Alerts whose `deduplicationKey` has been previously dismissed are silently dropped.
     func mergeAlerts(_ newAlerts: [ThreatAlert]) {
-        incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+        configureIncidentStore()
         alerts = incidentStore.ingest(newAlerts).visibleAlerts
         rebuildUserFacingAlerts()
     }
@@ -672,6 +719,37 @@ final class SecurityEngine {
         alerts = incidentStore.visibleAlerts
         dismissedAlertKeys = incidentStore.dismissedAlertDeduplicationKeys
         rebuildUserFacingAlerts()
+    }
+
+    var learnedReviewEntries: [LearnedReviewEntry] {
+        incidentStore.learnedReviewEntries.sorted { $0.lastConfirmedAt > $1.lastConfirmedAt }
+    }
+
+    func setVerdictLearningEnabled(_ enabled: Bool, authorizationExternalForm: Data? = nil) {
+        if enabled { nextSecuritySettingsAuthorization = authorizationExternalForm }
+        verdictLearningEnabled = enabled
+        persistSecuritySettingsIfReady()
+        configureIncidentStore()
+    }
+
+    func resetLearnedEntry(id: UUID) {
+        incidentStore.resetLearnedEntry(id: id)
+    }
+
+    func resetAllLearnedEntries() {
+        incidentStore.resetAllLearnedEntries()
+    }
+
+    func exportLearnedEntries() throws -> Data {
+        try incidentStore.exportLearnedEntries()
+    }
+
+    private func configureIncidentStore() {
+        incidentStore.configure(
+            trustedProcessList: trustedProcessList,
+            suppressionRules: suppressionRules,
+            verdictLearningEnabled: verdictLearningEnabled
+        )
     }
 
     /// Removes a single alert by ID and persists its `deduplicationKey` so it
@@ -731,7 +809,7 @@ final class SecurityEngine {
             SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
             // Remove only repeats of this same behavior. Different activity from
             // the same app remains visible and reviewable.
-            incidentStore.configure(trustedProcessList: trustedProcessList, suppressionRules: suppressionRules)
+            configureIncidentStore()
             incidentStore.performAuthenticatedUserAction(.alwaysAllowed, alertID: alertID)
             syncAlertsFromStore()
         }

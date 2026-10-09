@@ -83,6 +83,23 @@ Nick still uses the network for explicit product functions: Sparkle update
 checks, an optional webhook configured in Settings, and links the user opens.
 Exports remain local until the user chooses where to save or share them.
 
+### Optional verdict learning
+
+Settings → Data includes **Learn from my review decisions**, which is off by
+default and requires password or Touch ID approval to enable. Dismiss or
+Always Allow decisions from two different incidents are required before an
+entry becomes active. Until then it is shown as pending. A later exact match
+for the same validated signed app, review rule, and bounded context can be
+lowered to informational priority, but the finding remains visible. Hash,
+signature, YARA,
+persistence, high-risk-path, unsigned, ad-hoc, interpreter, and command-tool
+findings are never affected.
+
+Use **What Nick learned** to see each local entry, why it exists, when it
+expires, and how often it was confirmed. Entries can be reset individually,
+reset together, or exported to a file you choose. They are stored locally in
+Nick's root-owned incident store and are not uploaded.
+
 ## Email Guard
 
 Email Guard requires NickExtension to be running and to have Full Disk Access.

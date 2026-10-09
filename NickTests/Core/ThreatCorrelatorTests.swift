@@ -636,6 +636,243 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(result.newlyActionable.count, 1)
     }
 
+    func test_verdictLearningIsOffByDefaultAndDeprioritisesOnlyExactReviewMatch() throws {
+        let alert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        let store = IncidentStore(defaults: isolatedDefaults(), identityValidator: { _, _, _ in true })
+        _ = store.ingest([alert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
+        XCTAssertTrue(store.learnedReviewEntries.isEmpty)
+
+        store.configure(
+            trustedProcessList: TrustedProcessList(),
+            suppressionRules: [],
+            verdictLearningEnabled: true
+        )
+        store.removeIncidents { _ in true }
+        _ = store.ingest([alert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
+        XCTAssertEqual(store.learnedReviewEntries.count, 1)
+        XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 1)
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: alert.id)
+        XCTAssertEqual(
+            store.learnedReviewEntries.first?.confirmationCount,
+            1,
+            "Repeated actions on one incident must not activate learning"
+        )
+
+        store.removeIncidents { _ in true }
+        XCTAssertEqual(store.ingest([alert]).visibleAlerts.first?.severity, .medium)
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
+        XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
+
+        store.removeIncidents { _ in true }
+        let result = store.ingest([alert])
+        XCTAssertEqual(result.visibleAlerts.first?.severity, .info)
+        XCTAssertEqual(result.visibleAlerts.count, 1, "Learning must remain visible, never suppress")
+    }
+
+    func test_verdictLearningRefusesAllowOnceProtectedUnsignedAndInterpreterEvidence() throws {
+        let store = IncidentStore(defaults: isolatedDefaults(), identityValidator: { _, _, _ in true })
+        store.configure(
+            trustedProcessList: TrustedProcessList(),
+            suppressionRules: [],
+            verdictLearningEnabled: true
+        )
+
+        let allowOnce = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([allowOnce])
+        store.performAuthenticatedUserAction(.allowedOnce, alertID: allowOnce.id)
+
+        let protected = makeAlert(signal: makeSignedSignal(reason: "unknown_rule"))
+        _ = store.ingest([protected])
+        store.performAuthenticatedUserAction(.dismissed, alertID: protected.id)
+
+        let unsignedProcess = NickProcessInfo(
+            pid: 51, path: "/Applications/Tool.app/Contents/MacOS/Tool", name: "Tool",
+            parentPID: 1, parentName: "launchd", signingStatus: .unsigned
+        )
+        let unsigned = ThreatSignal(
+            source: .process, severity: .medium, title: "Unsigned review", description: "Test",
+            context: ThreatSignalContext(processInfo: unsignedProcess, metadata: ["reason": "system_hardening"])
+        )
+        let unsignedAlert = makeAlert(signal: unsigned)
+        _ = store.ingest([unsignedAlert])
+        store.performAuthenticatedUserAction(.dismissed, alertID: unsignedAlert.id)
+
+        let shellProcess = NickProcessInfo(
+            pid: 52, path: "/bin/zsh", name: "zsh", parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+        let shell = ThreatSignal(
+            source: .process, severity: .medium, title: "Shell review", description: "Test",
+            context: ThreatSignalContext(processInfo: shellProcess, metadata: ["reason": "system_hardening"])
+        )
+        let shellAlert = makeAlert(signal: shell)
+        _ = store.ingest([shellAlert])
+        store.performAuthenticatedUserAction(.dismissed, alertID: shellAlert.id)
+
+        XCTAssertTrue(store.learnedReviewEntries.isEmpty)
+    }
+
+    func test_verdictLearningNeverDeprioritisesProtectedEvidence() throws {
+        let store = IncidentStore(defaults: isolatedDefaults(), identityValidator: { _, _, _ in true })
+        store.configure(
+            trustedProcessList: TrustedProcessList(),
+            suppressionRules: [],
+            verdictLearningEnabled: true
+        )
+
+        let reviewAlert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([reviewAlert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: reviewAlert.id)
+        store.removeIncidents { _ in true }
+        _ = store.ingest([reviewAlert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: reviewAlert.id)
+        XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
+
+        store.removeIncidents { _ in true }
+        let protectedSignal = makeSignedSignal(
+            source: .yara,
+            severity: .high,
+            reason: "system_hardening"
+        )
+        let protectedAlert = makeAlert(signal: protectedSignal, severity: .high)
+        let result = store.ingest([protectedAlert])
+
+        XCTAssertEqual(result.visibleAlerts.first?.severity, .high)
+        XCTAssertEqual(result.visibleAlerts.count, 1)
+    }
+
+    func test_verdictLearningRequiresExactContextMatch() throws {
+        let store = IncidentStore(defaults: isolatedDefaults(), identityValidator: { _, _, _ in true })
+        store.configure(
+            trustedProcessList: TrustedProcessList(),
+            suppressionRules: [],
+            verdictLearningEnabled: true
+        )
+
+        let applicationAlert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([applicationAlert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: applicationAlert.id)
+        store.removeIncidents { _ in true }
+        _ = store.ingest([applicationAlert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: applicationAlert.id)
+        XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
+
+        store.removeIncidents { _ in true }
+        let temporarySignal = makeSignedSignal(
+            reason: "system_hardening",
+            path: "/private/tmp/Editor"
+        )
+        let result = store.ingest([makeAlert(signal: temporarySignal)])
+
+        XCTAssertEqual(result.visibleAlerts.first?.severity, .medium)
+    }
+
+    func test_verdictLearningExpiresResetsAndCapsPerIdentity() throws {
+        var clock = Date(timeIntervalSince1970: 1_000)
+        let store = IncidentStore(
+            defaults: isolatedDefaults(),
+            now: { clock },
+            identityValidator: { _, _, _ in true }
+        )
+        store.configure(
+            trustedProcessList: TrustedProcessList(), suppressionRules: [], verdictLearningEnabled: true
+        )
+        let alert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([alert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: alert.id)
+        let entryID = try XCTUnwrap(store.learnedReviewEntries.first?.id)
+        store.resetLearnedEntry(id: entryID)
+        XCTAssertTrue(store.learnedReviewEntries.isEmpty)
+
+        _ = store.ingest([alert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: alert.id)
+        store.removeIncidents { _ in true }
+        _ = store.ingest([alert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: alert.id)
+        XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
+        clock.addTimeInterval(IncidentStore.learnedEntryLifetime + 1)
+        store.removeIncidents { _ in true }
+        XCTAssertEqual(store.ingest([alert]).visibleAlerts.first?.severity, .medium)
+        XCTAssertTrue(store.learnedReviewEntries.isEmpty)
+
+        let entries = (0..<(IncidentStore.maximumLearnedEntriesPerIdentity + 5)).map { index in
+            LearnedReviewEntry(
+                id: UUID(), teamID: "TEAM123", signingIdentifier: "com.example.editor",
+                ruleID: "system_hardening", contextKey: "context-\(index)", reason: "Test",
+                createdAt: Date(timeIntervalSince1970: Double(index)),
+                lastConfirmedAt: Date(timeIntervalSince1970: Double(index)),
+                expiresAt: Date.distantFuture, confirmedIncidentIDs: [UUID()]
+            )
+        }
+        let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [], dismissalTombstones: [], expectedCooldowns: [:], learnedReviewEntries: entries
+        ))
+        try store.installPrivilegedSnapshot(payload) { _ in }
+        XCTAssertEqual(store.learnedReviewEntries.count, IncidentStore.maximumLearnedEntriesPerIdentity)
+        store.resetAllLearnedEntries()
+        XCTAssertTrue(store.learnedReviewEntries.isEmpty)
+    }
+
+    func test_verdictLearningRequiresValidatedIdentityWhenRecordingAndApplying() throws {
+        let alert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        let rejectingStore = IncidentStore(
+            defaults: isolatedDefaults(),
+            identityValidator: { _, _, _ in false }
+        )
+        rejectingStore.configure(
+            trustedProcessList: TrustedProcessList(),
+            suppressionRules: [],
+            verdictLearningEnabled: true
+        )
+        _ = rejectingStore.ingest([alert])
+        rejectingStore.performAuthenticatedUserAction(.alwaysAllowed, alertID: alert.id)
+        XCTAssertTrue(rejectingStore.learnedReviewEntries.isEmpty)
+
+        let evidence = Evidence(signal: alert.contributingSignals[0])
+        let activeEntry = LearnedReviewEntry(
+            id: UUID(),
+            teamID: "TEAM123",
+            signingIdentifier: "com.example.editor",
+            ruleID: "system_hardening",
+            contextKey: "parents=name:launchd;path=application;destination=unknown",
+            reason: "Test",
+            createdAt: .distantPast,
+            lastConfirmedAt: .distantPast,
+            expiresAt: .distantFuture,
+            confirmedIncidentIDs: [UUID(), UUID()]
+        )
+        XCTAssertEqual(evidence.pathClass, .application)
+        let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [],
+            dismissalTombstones: [],
+            expectedCooldowns: [:],
+            learnedReviewEntries: [activeEntry]
+        ))
+        try rejectingStore.installPrivilegedSnapshot(payload) { _ in }
+        XCTAssertEqual(rejectingStore.ingest([alert]).visibleAlerts.first?.severity, .medium)
+    }
+
+    func test_userDefaultsCannotEnableVerdictLearning() throws {
+        UserDefaults.standard.set(true, forKey: "verdictLearningEnabled")
+        defer { UserDefaults.standard.removeObject(forKey: "verdictLearningEnabled") }
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1,
+            "trustedNames": [],
+            "trustedEntries": [],
+            "suppressionRules": [],
+            "ignoredPaths": [],
+            "notificationThresholdRaw": SignalSeverity.high.rawValue,
+            "verdictLearningEnabled": false
+        ])
+        let engine = SecurityEngine()
+        try engine.installPrivilegedSecuritySettings(payload: payload) { _, _ in }
+
+        XCTAssertFalse(engine.verdictLearningEnabled)
+        XCTAssertNil(UserDefaults.standard.object(forKey: "verdictLearningEnabled"))
+    }
+
     func test_incidentStoreDeduplicatesSameEvidenceRegardlessOfSource() {
         let store = IncidentStore(defaults: isolatedDefaults())
         let processSignal = makeSignal(
@@ -720,6 +957,8 @@ final class ThreatCorrelatorTests: XCTestCase {
             expectedCooldowns: [:]
         ))
         let deniedEngine = SecurityEngine()
+        deniedEngine.setVerdictLearningEnabled(true)
+        defer { deniedEngine.setVerdictLearningEnabled(false) }
         try deniedEngine.installPrivilegedIncidentStore(
             payload: payload,
             persistence: { _, _ in },
@@ -735,6 +974,7 @@ final class ThreatCorrelatorTests: XCTestCase {
 
         XCTAssertEqual(deniedEngine.incidentStore.visibleAlerts.count, 1)
         XCTAssertFalse(deniedEngine.incidentStore.incidents.flatMap(\.actions).contains { $0.actor == .user })
+        XCTAssertTrue(deniedEngine.learnedReviewEntries.isEmpty)
         XCTAssertNotNil(deniedEngine.incidentActionRetryMessage)
         deniedEngine.cancelPendingIncidentAction()
         XCTAssertNil(deniedEngine.incidentActionRetryMessage)
@@ -1015,11 +1255,12 @@ final class ThreatCorrelatorTests: XCTestCase {
     private func makeSignedSignal(
         source: MonitorType = .process,
         severity: SignalSeverity = .medium,
-        reason: String
+        reason: String,
+        path: String = "/Applications/Editor.app/Contents/MacOS/Editor"
     ) -> ThreatSignal {
         let process = NickProcessInfo(
             pid: 42,
-            path: "/Applications/Editor.app/Contents/MacOS/Editor",
+            path: path,
             name: "Editor",
             parentPID: 1,
             parentName: "launchd",

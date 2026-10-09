@@ -80,6 +80,47 @@ enum ProtectionAuthorizationRightPolicy {
     }
 }
 
+enum SecuritySettingsWritePolicy {
+    static func requiresAuthorization(previousRecord: Data, proposedPayload: Data) -> Bool {
+        guard let record = try? JSONDecoder().decode(
+            PrivilegedIncidentStoreRecord.self,
+            from: previousRecord
+        ),
+              let old = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
+              let new = try? JSONSerialization.jsonObject(with: proposedPayload) as? [String: Any]
+        else { return true }
+
+        func strings(_ key: String, _ object: [String: Any]) -> Set<String> {
+            Set((object[key] as? [String]) ?? [])
+        }
+        func objectFingerprints(_ key: String, _ object: [String: Any]) -> Set<String> {
+            guard let values = object[key] as? [Any] else { return [] }
+            return Set(values.compactMap { value in
+                guard JSONSerialization.isValidJSONObject(value),
+                      let data = try? JSONSerialization.data(
+                          withJSONObject: value,
+                          options: [.sortedKeys]
+                      ) else { return nil }
+                return String(decoding: data, as: UTF8.self)
+            })
+        }
+        if !strings("trustedNames", new).isSubset(of: strings("trustedNames", old)) { return true }
+        if !strings("ignoredPaths", new).isSubset(of: strings("ignoredPaths", old)) { return true }
+        if !objectFingerprints("trustedEntries", new).isSubset(of: objectFingerprints("trustedEntries", old)) {
+            return true
+        }
+        if !objectFingerprints("suppressionRules", new).isSubset(of: objectFingerprints("suppressionRules", old)) {
+            return true
+        }
+        let oldThreshold = old["notificationThresholdRaw"] as? Int ?? 3
+        let newThreshold = new["notificationThresholdRaw"] as? Int ?? 3
+        if newThreshold > oldThreshold { return true }
+        let oldLearning = old["verdictLearningEnabled"] as? Bool ?? false
+        let newLearning = new["verdictLearningEnabled"] as? Bool ?? false
+        return !oldLearning && newLearning
+    }
+}
+
 enum IncidentStoreWritePolicy {
     static func requiresAuthorization(previousPayload: Data, proposedPayload: Data) -> Bool {
         guard let old = try? JSONSerialization.jsonObject(with: previousPayload) as? [String: Any],
@@ -120,7 +161,22 @@ enum IncidentStoreWritePolicy {
                 return incidentKey + "|" + (value["alertDeduplicationKey"] as? String ?? "")
             })
         }
-        return !tombstoneKeys(new).isSubset(of: tombstoneKeys(old))
+        if !tombstoneKeys(new).isSubset(of: tombstoneKeys(old)) { return true }
+        func learnedEntries(_ object: [String: Any]) -> Set<String> {
+            let values = (object["learnedReviewEntries"] as? [[String: Any]]) ?? []
+            return Set(values.compactMap { value in
+                guard let id = value["id"] as? String,
+                      let teamID = value["teamID"] as? String,
+                      let signingID = value["signingIdentifier"] as? String,
+                      let ruleID = value["ruleID"] as? String,
+                      let context = value["contextKey"] as? String,
+                      let expiry = value["expiresAt"] as? Double,
+                      let incidentIDs = value["confirmedIncidentIDs"] as? [String] else { return nil }
+                return ([id, teamID, signingID, ruleID, context, String(expiry)]
+                    + incidentIDs.sorted()).joined(separator: "|")
+            })
+        }
+        return !learnedEntries(new).isSubset(of: learnedEntries(old))
     }
 }
 
