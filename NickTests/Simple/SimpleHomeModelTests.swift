@@ -106,6 +106,50 @@ final class SimpleHomeModelTests: XCTestCase {
         XCTAssertEqual(hero.primaryTitle, "Fix It")
     }
 
+    func test_protectedFindingCannotProduceProtectedHomeState() {
+        let signal = ThreatSignal(
+            source: .persistence,
+            severity: .medium,
+            title: "Launch item with missing executable",
+            description: "A startup item references a missing executable.",
+            context: ThreatSignalContext(metadata: [
+                "reason": "persist_executable_missing",
+                "path": "/Users/test/Library/LaunchAgents/com.example.missing.plist",
+            ])
+        )
+        let alert = ThreatAlert(
+            score: 0.45,
+            content: AlertContent(
+                title: "Startup item points to a missing file",
+                description: "A startup configuration references a missing file.",
+                severity: .medium,
+                recommendedAction: "Review the startup item."
+            ),
+            contributingSignals: [signal],
+            timestamp: now
+        )
+        XCTAssertTrue(alert.isUserVisibleFinding)
+
+        let issues = AttentionIssue.issues(
+            endpointProtectionActive: true,
+            auditIssues: 0,
+            persistenceIssues: 0,
+            processIssues: 0,
+            networkIssues: 0,
+            unreviewedFindings: alert.isUserVisibleFinding ? 1 : 0
+        )
+        let hero = HomeHero.make(
+            incident: nil,
+            issues: issues,
+            websitesProtected: true,
+            lastCheck: now,
+            hadRecentWarnings: true,
+            now: now
+        )
+        XCTAssertEqual(hero.state, .attention)
+        XCTAssertEqual(hero.title, "Something needs your review")
+    }
+
     func test_advancedCopyIsUnchanged() {
         let issue = AttentionIssue(kind: .systemAudit, count: 1)
         XCTAssertEqual(issue.advancedTitle, "System Security needs attention")
