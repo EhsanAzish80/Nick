@@ -170,7 +170,9 @@ final class FilterDataProvider: NEFilterDataProvider {
         }
 
         // ── Layer 2: Suspicious port ──────────────────────────────────────
-        if port > 1024 && !allowlistedPorts.contains(port) {
+        if port > 1024,
+           !allowlistedPorts.contains(port),
+           !NetworkEventContext.isExpectedLocalDiscovery(host: host, port: port) {
             recordObservation(
                 reason: .unusualPort,
                 host: host,

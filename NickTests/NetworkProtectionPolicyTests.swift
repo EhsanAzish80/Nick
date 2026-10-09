@@ -46,6 +46,18 @@ final class NetworkProtectionPolicyTests: XCTestCase {
             NetworkProtectionSharedStore.signedRulesURL()?.path,
             "/Library/Application Support/com.ehsanazish.nick/network-rules-v1.json"
         )
+        XCTAssertEqual(
+            NetworkProtectionSharedStore.signedRulesVersionURL()?.path,
+            "/Library/Application Support/com.ehsanazish.nick/network-rules-version"
+        )
+    }
+
+    func test_signedRuleVersionsRejectRollback() {
+        XCTAssertTrue(NetworkRuleVersionPolicy.accepts(candidateVersion: 1, highestAcceptedVersion: nil))
+        XCTAssertTrue(NetworkRuleVersionPolicy.accepts(candidateVersion: 7, highestAcceptedVersion: 7))
+        XCTAssertTrue(NetworkRuleVersionPolicy.accepts(candidateVersion: 8, highestAcceptedVersion: 7))
+        XCTAssertFalse(NetworkRuleVersionPolicy.accepts(candidateVersion: 6, highestAcceptedVersion: 7))
+        XCTAssertFalse(NetworkRuleVersionPolicy.accepts(candidateVersion: 0, highestAcceptedVersion: nil))
     }
 
     func test_networkExtensionEntitlementsMatchReleaseProfile() throws {
@@ -320,6 +332,38 @@ final class NetworkProtectionPolicyTests: XCTestCase {
         XCTAssertEqual(context.appName, "Codex")
         XCTAssertEqual(context.destinationKind, .localNetworkAddress)
         XCTAssertTrue(context.explanation.contains("local device discovery"))
+    }
+
+    func test_localDiscoveryPortsAreExpectedOnlyForLocalDestinations() {
+        XCTAssertTrue(NetworkEventContext.isExpectedLocalDiscovery(
+            host: "192.168.1.20",
+            port: 5353
+        ))
+        XCTAssertTrue(NetworkEventContext.isExpectedLocalDiscovery(
+            host: "fe80::1%en0",
+            port: 62078
+        ))
+        XCTAssertFalse(NetworkEventContext.isExpectedLocalDiscovery(
+            host: "203.0.113.20",
+            port: 5353
+        ))
+        XCTAssertFalse(NetworkEventContext.isExpectedLocalDiscovery(
+            host: "192.168.1.20",
+            port: 4444
+        ))
+    }
+
+    func test_privateDestinationEvidenceIsClassifiedLocal() {
+        let event = NetworkBlockEvent(
+            host: "10.0.0.42",
+            appIdentifier: "com.example.tool",
+            decision: .observed,
+            reason: NetworkObservationReason.connectionRate.rawValue,
+            reasonTitle: NetworkObservationReason.connectionRate.userTitle,
+            port: 443
+        )
+
+        XCTAssertEqual(NetworkFinding(event: event).signal.metadata["destinationClass"], "local")
     }
 }
 

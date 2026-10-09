@@ -66,6 +66,33 @@ final class LOLBinDetectorTests: XCTestCase {
         XCTAssertEqual(signal?.severity, .high)
     }
 
+    func test_evaluate_resolvesPendingSigningStatusBeforeEmittingEvidence() {
+        let proc = NickProcessInfo(
+            pid: 102,
+            path: "/usr/bin/osascript",
+            name: "osascript",
+            parentPID: 1,
+            parentName: "",
+            signingStatus: .pending,
+            metadata: ProcessMetadata(
+                user: "root",
+                startTime: Date(),
+                arguments: ["-e", "do shell script \"id\""]
+            )
+        )
+
+        let signal = LOLBinDetector.evaluate(
+            proc,
+            parentName: nil,
+            signingResolver: { _ in .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.osascript") }
+        )
+
+        XCTAssertEqual(
+            signal?.processInfo?.signingStatus,
+            .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.osascript")
+        )
+    }
+
     // MARK: - xattr quarantine removal
 
     func test_evaluate_xattrRemovingQuarantine_returnsHighSignal() {

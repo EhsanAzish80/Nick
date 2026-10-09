@@ -70,8 +70,11 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         self.timestamp = timestamp
         self.recommendedAction = content.recommendedAction
         self.explanation = content.explanation
-        self.firstSeen = firstSeen ?? timestamp
-        self.lastSeen = lastSeen ?? timestamp
+        let evidenceDates = contributingSignals.map(\.timestamp)
+        let earliestEvidence = evidenceDates.min() ?? timestamp
+        let latestEvidence = evidenceDates.max() ?? timestamp
+        self.firstSeen = min(firstSeen ?? timestamp, earliestEvidence)
+        self.lastSeen = max(lastSeen ?? timestamp, latestEvidence)
         self.occurrenceCount = max(1, occurrenceCount)
     }
 
@@ -162,7 +165,7 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
             ),
             contributingSignals: newer.contributingSignals,
             timestamp: firstSeen,
-            firstSeen: firstSeen,
+            firstSeen: min(firstSeen, newer.firstSeen),
             lastSeen: max(lastSeen, newer.lastSeen),
             occurrenceCount: occurrenceCount + max(1, newer.occurrenceCount)
         )
