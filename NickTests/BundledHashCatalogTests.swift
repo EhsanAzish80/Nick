@@ -93,4 +93,15 @@ final class BundledHashCatalogTests: XCTestCase {
             "17baf44964a77368e9149f4f593eb098beddf1c5"
         )
     }
+
+    func test_esetBSDNoticeShipsInsideHostAppResources() throws {
+        let noticeURL = try XCTUnwrap(Bundle.main.url(
+            forResource: "eset",
+            withExtension: "txt",
+            subdirectory: "Rules/families/LICENSES"
+        ))
+        let notice = try String(contentsOf: noticeURL, encoding: .utf8)
+        XCTAssertTrue(notice.contains("Redistribution and use in source and binary forms"))
+        XCTAssertTrue(notice.contains("Copyright (c) 2014-2018 ESET"))
+    }
 }

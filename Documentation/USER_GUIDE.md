@@ -49,6 +49,7 @@ Nick 5.0 development builds ship a 25-entry offline hash catalog dated October
 repository and one low-severity EICAR test entry. This small snapshot provides
 day-one exact matches but does not replace current platform protections or a
 maintained antivirus feed. Diagnostics shows the bundled entry count and date.
+Settings → Acknowledgements shows the bundled ESET BSD-2-Clause notice.
 
 Expected behavior can be accepted for the specific app and behavior so repeated
 benign events do not create alerts. This is a local trust decision, not a global
@@ -152,9 +153,11 @@ network traffic, or send fleet telemetry.
 
 ## Uninstall
 
-Use Nick Uninstaller from `/Applications`. Do not drag Nick to the Trash while
-its system extensions or network filter are active. The uninstaller disables
-protection, removes generated data and settings, and deletes Nick and itself.
+Use Settings → Uninstall Nick, or open Nick Uninstaller from `/Applications`,
+for a complete removal. The uninstaller disables protection, removes generated
+data and settings, and deletes Nick and itself. Finder can move Nick.app to the
+Trash, but that removes only the app bundle; it does not clean up protection
+components or generated data.
 
 After removal, macOS may retain a disabled Full Disk Access entry with no
 executable behind it. That privacy-list row is maintained by macOS and can be
