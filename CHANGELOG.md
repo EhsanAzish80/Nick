@@ -8,6 +8,11 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+### Fixed
+
+- System Audit now treats a custom System Integrity Protection configuration
+  as partially disabled instead of potentially reporting SIP as fully enabled.
+
 ## [4.6.3] - 2026-10-05
 
 ### Changed
