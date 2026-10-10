@@ -102,6 +102,17 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
+        if signals.contains(where: { $0.metadata["remediationStatus"] == "quarantine-failed" }) {
+            return AlertPattern(
+                headline: "Quarantine failed — needs attention",
+                explanation: "Nick detected the file but could not move it into quarantine. The file may still be present and should be reviewed before you open it.",
+                assessment: "Needs your attention",
+                recommendedAction: "Review the file and retry quarantine. If the failure continues, leave it unopened and check its permissions.",
+                severity: .critical,
+                actions: [.quarantine, .showDetails]
+            )
+        }
+
         // --- Camera / microphone ---
         if hasCapture {
             let mediaType = signals.compactMap { $0.metadata["mediaType"] }.first ?? "camera or microphone"

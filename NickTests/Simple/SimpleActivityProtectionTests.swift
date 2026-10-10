@@ -222,6 +222,45 @@ final class SimpleActivityFeedTests: XCTestCase {
         }
     }
 
+    func test_failedQuarantineIsNeedsActionInAdvancedAndSimpleModes() {
+        let report = RemediationReport(
+            timestamp: now,
+            threatPath: "/private/tmp",
+            threatName: "EICAR",
+            quarantineRecord: nil,
+            actions: [.init(
+                type: .quarantineFile,
+                target: "/private/tmp",
+                success: false,
+                detail: "Permission denied"
+            )]
+        )
+        let finding = ExtensionFinding(report: report)
+        let alert = ThreatAlert(
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: finding.signal.timestamp
+        )
+
+        let advancedActionable = [alert].filter(\.isActionableUserFinding)
+        XCTAssertEqual(advancedActionable.map(\.id), [alert.id])
+
+        let inputs = SimpleActivityFeed.alertInputs(
+            from: [alert], actionable: Set(advancedActionable.map(\.id))
+        )
+        let items = SimpleActivityFeed.items(
+            alerts: inputs, quarantine: [], blocked: [], calendar: calendar
+        )
+        XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
+        XCTAssertEqual(items.first?.title, "Quarantine failed — needs attention")
+    }
+
     func test_protectedFindingHasAdvancedSimpleBadgeAndHomeParity() {
         let protected = protectedPersistenceAlert()
         XCTAssertTrue(protected.isActionableUserFinding)
