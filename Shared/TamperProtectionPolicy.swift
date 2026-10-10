@@ -5,6 +5,18 @@
 import Darwin
 import Foundation
 
+enum TamperProtectedOperation: String, Codable, CaseIterable, Sendable {
+    case unlink
+    case renameSource = "rename-source"
+    case renameDestination = "rename-destination"
+    case openWrite = "open-for-write"
+    case create
+    case truncate
+    case link
+    case clone
+    case copyfile
+}
+
 struct TamperActorIdentity: Sendable, Equatable {
     let teamID: String?
     let signingID: String?

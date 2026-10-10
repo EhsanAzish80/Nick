@@ -265,6 +265,10 @@ enum IncidentStoreWritePolicy {
     /// container app was closed.
     func getPersistedEvents(reply: @escaping (Data) -> Void)
 
+    /// Removes threat events only after the app has durably ingested them.
+    /// Event UUIDs make retries idempotent across XPC interruptions.
+    func acknowledgePersistedThreats(eventIDs: [String])
+
     /// Returns the root-owned incident/evidence snapshot. An empty Data value
     /// means no privileged store has been created yet.
     func getIncidentStore(reply: @escaping (Data) -> Void)

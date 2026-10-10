@@ -2,6 +2,161 @@ import XCTest
 @testable import Nick
 
 final class NetworkProtectionPolicyTests: XCTestCase {
+
+    @MainActor
+    func test_allDeniedTamperOperationsMapThroughXPCFindingAndIncidentStore() throws {
+        let store = IncidentStore(persistOnInit: false)
+        let target = "/Applications/Nick.app/Contents/Resources/test.txt"
+
+        for (index, operation) in TamperProtectedOperation.allCases.enumerated() {
+            let event = tamperEvent(operation: operation, target: target)
+            let payload = try JSONEncoder().encode(event)
+            let decoded = try JSONDecoder().decode(ESEvent.self, from: payload)
+            let finding = try XCTUnwrap(ExtensionFinding(event: decoded))
+            let result = store.ingest([tamperAlert(from: finding)])
+
+            XCTAssertEqual(result.newlyActionable.count, 1, operation.rawValue)
+            XCTAssertEqual(store.incidents.count, index + 1, operation.rawValue)
+            XCTAssertTrue(store.incidents.contains { incident in
+                incident.alert.contributingSignals.contains {
+                    $0.metadata["tamperOperation"] == operation.rawValue
+                }
+            }, operation.rawValue)
+        }
+    }
+
+    @MainActor
+    func test_identicalDeniedTamperAttemptsIncrementOccurrenceWithoutDropping() throws {
+        let store = IncidentStore(persistOnInit: false)
+        let target = "/Applications/Nick.app/Contents/Resources/test.txt"
+
+        for _ in 0..<50 {
+            let finding = try XCTUnwrap(ExtensionFinding(
+                event: tamperEvent(operation: .openWrite, target: target)
+            ))
+            _ = store.ingest([tamperAlert(from: finding)])
+        }
+
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 50)
+    }
+
+    @MainActor
+    func test_replayedDeniedTamperEventIsIdempotent() throws {
+        let store = IncidentStore(persistOnInit: false)
+        let event = tamperEvent(
+            operation: .renameDestination,
+            target: "/Applications/Nick.app/Contents/Resources/test.txt"
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        let alert = tamperAlert(from: finding)
+
+        _ = store.ingest([alert])
+        _ = store.ingest([alert])
+
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 1)
+    }
+
+    @MainActor
+    func test_tamperIncidentIdentityIncludesOperationAndTarget() throws {
+        let store = IncidentStore(persistOnInit: false)
+        let firstTarget = "/Applications/Nick.app/Contents/Resources/one.txt"
+        let secondTarget = "/Applications/Nick.app/Contents/Resources/two.txt"
+        let attempts: [(TamperProtectedOperation, String)] = [
+            (.create, firstTarget),
+            (.truncate, firstTarget),
+            (.create, secondTarget),
+        ]
+
+        for attempt in attempts {
+            let finding = try XCTUnwrap(ExtensionFinding(
+                event: tamperEvent(operation: attempt.0, target: attempt.1)
+            ))
+            _ = store.ingest([tamperAlert(from: finding)])
+        }
+
+        XCTAssertEqual(store.incidents.count, 3)
+        XCTAssertEqual(Set(store.incidents.map(\.alert.occurrenceCount)), [1])
+    }
+
+    func test_eventHandlerLabelsEveryProtectedAuthorizationOperation() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("NickExtension/EventHandler.swift"),
+            encoding: .utf8
+        )
+        let requiredMappings = [
+            "operation: .openWrite",
+            "operation: .create",
+            "operation: .truncate",
+            "operation: .link",
+            "operation: .clone",
+            "operation: .copyfile",
+            "handleRenameEvent(",
+            "handleUnlinkEvent(",
+        ]
+        for mapping in requiredMappings {
+            XCTAssertTrue(source.contains(mapping), mapping)
+        }
+    }
+
+    func test_persistedThreatReplayIngestsBeforeAcknowledgement() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let clientSource = try String(
+            contentsOf: root.appendingPathComponent("Nick/Core/Services/ExtensionXPCClient.swift"),
+            encoding: .utf8
+        )
+        let serverSource = try String(
+            contentsOf: root.appendingPathComponent("NickExtension/XPCServer.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(clientSource.contains("return await receiveThreat(event) ? event.id : nil"))
+        XCTAssertTrue(clientSource.contains("proxy.acknowledgePersistedThreats"))
+        XCTAssertTrue(serverSource.contains("func removeThreats(eventIDs: Set<UUID>)"))
+    }
+
+    private func tamperEvent(
+        operation: TamperProtectedOperation,
+        target: String
+    ) -> ESEvent {
+        ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/usr/bin/test-actor",
+            pid: 123,
+            parentPid: 1,
+            filePath: target,
+            decision: .deny,
+            threat: .init(
+                threatName: "Nick protected path change blocked",
+                threatFamily: "tamper",
+                metadata: [
+                    "tamperOperation": operation.rawValue,
+                    "tamperTarget": target,
+                ]
+            )
+        )
+    }
+
+    private func tamperAlert(from finding: ExtensionFinding) -> ThreatAlert {
+        ThreatAlert(
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: finding.signal.timestamp
+        )
+    }
+
     func test_systemExtensionDeclaresFilterDataProvider() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -591,7 +746,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertEqual(decoded.payload, payload)
     }
 
-    func test_persistedEndpointReplayRestoresUIStateWithoutRedeliveringAlert() async throws {
+    func test_persistedThreatReplayRestoresUIStateAndDeliversEvidence() async throws {
         let event = ESEvent(
             eventType: .authExec,
             processPath: "/usr/bin/open",
@@ -608,12 +763,68 @@ final class UnifiedSourceFindingTests: XCTestCase {
         )
         let client = ExtensionXPCClient()
         var deliveredCount = 0
-        client.findingHandler = { _ in deliveredCount += 1 }
+        client.findingHandler = { _ in
+            deliveredCount += 1
+            return true
+        }
 
-        await client.receivePersisted(envelope)
+        let acknowledgedID = await client.receivePersisted(envelope)
 
         XCTAssertEqual(client.events.map(\.id), [event.id])
-        XCTAssertEqual(deliveredCount, 0)
+        XCTAssertEqual(deliveredCount, 1)
+        XCTAssertEqual(acknowledgedID, event.id)
+    }
+
+    func test_failedRootStoreWriteLeavesThreatUnacknowledgedForRedelivery() async throws {
+        let event = ESEvent(
+            eventType: .authOpen,
+            processPath: "/bin/mv",
+            pid: 42,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app/Contents/Resources/test.txt",
+            decision: .deny,
+            threat: .init(threatName: "Protected path change", threatFamily: "tamper")
+        )
+        let envelope = PersistedExtensionFinding(
+            kind: .threat,
+            timestamp: event.timestamp,
+            payload: try JSONEncoder().encode(event)
+        )
+        var journal = [envelope]
+        let client = ExtensionXPCClient()
+        let incidentStore = IncidentStore(persistOnInit: false)
+        var deliveries = 0
+        client.findingHandler = { finding in
+            deliveries += 1
+            let alert = ThreatAlert(
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+            _ = incidentStore.ingest([alert])
+            return false // privileged root-store write rejected
+        }
+
+        let firstAcknowledgement = await client.receivePersisted(journal[0])
+        if let firstAcknowledgement {
+            journal.removeAll { $0.id == firstAcknowledgement }
+        }
+        XCTAssertNil(firstAcknowledgement)
+        XCTAssertEqual(journal.count, 1)
+        XCTAssertEqual(incidentStore.incidents.count, 1)
+
+        let redeliveryAcknowledgement = await client.receivePersisted(journal[0])
+        XCTAssertNil(redeliveryAcknowledgement)
+        XCTAssertEqual(journal.count, 1)
+        XCTAssertEqual(deliveries, 2)
+        XCTAssertEqual(incidentStore.incidents.count, 1)
+        XCTAssertEqual(incidentStore.incidents.first?.alert.occurrenceCount, 1)
     }
 
     func test_remediationReplayKeepsStableEvidenceID() {

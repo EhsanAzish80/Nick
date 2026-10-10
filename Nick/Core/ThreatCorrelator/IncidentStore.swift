@@ -376,6 +376,11 @@ final class IncidentStore {
             guard !isDismissed(candidate, incidentKey: key) else { continue }
             if let index = incidents.firstIndex(where: { $0.key == key }) {
                 let prior = incidents[index]
+                let priorSignalIDs = Set(prior.alert.contributingSignals.map(\.id))
+                let candidateSignalIDs = Set(candidate.contributingSignals.map(\.id))
+                if !candidateSignalIDs.isEmpty, candidateSignalIDs.isSubset(of: priorSignalIDs) {
+                    continue
+                }
                 let escalated = candidate.severity > prior.alert.severity
                 let incomingEvidence = candidate.contributingSignals.map(Evidence.init(signal:))
                 incidents[index].alert = prior.alert.mergingOccurrence(candidate)
@@ -540,6 +545,16 @@ final class IncidentStore {
     static func incidentKey(for alert: ThreatAlert) -> String {
         let subjects = Set(alert.contributingSignals.map { signal -> String in
             let rule = EvidenceRulePolicy.ruleID(for: signal).lowercased()
+            if signal.metadata["reason"] == "endpoint_tamper_observed",
+               let operation = signal.metadata["tamperOperation"],
+               let target = signal.metadata["tamperTarget"] ?? signal.fileInfo?.path,
+               let process = signal.processInfo {
+                let signing = EvidenceSigningIdentity(signal: signal)
+                let actor = signing.teamID.flatMap { team in
+                    signing.signingIdentifier.map { "signed:\(team.lowercased()):\($0.lowercased())" }
+                } ?? "path:\(normalize(process.path))"
+                return "\(rule)|actor:\(actor)|operation:\(operation.lowercased())|target:\(normalize(target))"
+            }
             if let hash = signal.fileInfo?.sha256Hash, !hash.isEmpty { return "\(rule)|hash:\(hash.lowercased())" }
             if let process = signal.processInfo {
                 let signing = EvidenceSigningIdentity(signal: signal)

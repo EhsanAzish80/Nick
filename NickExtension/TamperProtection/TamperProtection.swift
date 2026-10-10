@@ -317,12 +317,14 @@ final class TamperProtection: @unchecked Sendable {
         /// Attempt to delete a protected file/directory.
         case deleteProtectedPath(
             path: String, actorPID: Int32, actorPath: String,
-            identity: TamperActorIdentity, disposition: Disposition
+            identity: TamperActorIdentity, disposition: Disposition,
+            operation: TamperProtectedOperation
         )
         /// Attempt to rename/replace a protected file/directory.
         case renameProtectedPath(
             path: String, actorPID: Int32, actorPath: String,
-            identity: TamperActorIdentity, disposition: Disposition
+            identity: TamperActorIdentity, disposition: Disposition,
+            operation: TamperProtectedOperation
         )
         /// `systemextensionsctl` was executed.
         case systemExtensionsCtlExec(pid: Int32, isSensitive: Bool)
@@ -433,7 +435,8 @@ final class TamperProtection: @unchecked Sendable {
             actorPID: actorPid,
             actorPath: actorPath,
             identity: identity,
-            disposition: blocked ? .blocked : .maintenance
+            disposition: blocked ? .blocked : .maintenance,
+            operation: .unlink
         ))
     }
 
@@ -448,10 +451,13 @@ final class TamperProtection: @unchecked Sendable {
         consoleUser: TamperConsoleUser?
     ) {
         let observedPath: String
+        let operation: TamperProtectedOperation
         if isProtected(path: srcPath) {
             observedPath = srcPath
+            operation = .renameSource
         } else if isProtected(path: destinationPath) {
             observedPath = destinationPath
+            operation = .renameDestination
         } else {
             return
         }
@@ -473,7 +479,8 @@ final class TamperProtection: @unchecked Sendable {
             actorPID: actorPid,
             actorPath: actorPath,
             identity: identity,
-            disposition: disposition
+            disposition: disposition,
+            operation: operation
         ))
     }
 
@@ -482,7 +489,8 @@ final class TamperProtection: @unchecked Sendable {
         actorPath: String,
         actorPid: Int32,
         identity: TamperActorIdentity,
-        blocked: Bool
+        blocked: Bool,
+        operation: TamperProtectedOperation
     ) {
         guard isProtected(path: targetPath) else { return }
         onTamperAttempt?(.renameProtectedPath(
@@ -490,7 +498,8 @@ final class TamperProtection: @unchecked Sendable {
             actorPID: actorPid,
             actorPath: actorPath,
             identity: identity,
-            disposition: blocked ? .blocked : .maintenance
+            disposition: blocked ? .blocked : .maintenance,
+            operation: operation
         ))
     }
 

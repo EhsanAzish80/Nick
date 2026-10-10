@@ -130,12 +130,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             endpointExtensionManager = endpointManager
             await endpointManager.ensureBundledVersionIsActive()
             xpcClient.findingHandler = { [weak self] finding in
-                guard let self else { return }
+                guard let self else { return false }
                 _ = await self.engine.ingestLiveFinding(
                     finding.signal,
                     score: finding.score,
                     recommendedAction: finding.recommendedAction
                 )
+                return await self.xpcClient.awaitIncidentStorePersistence()
             }
             networkProtection.findingHandler = { [weak self] finding in
                 guard let self else { return }

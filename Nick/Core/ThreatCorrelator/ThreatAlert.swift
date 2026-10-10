@@ -211,6 +211,12 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         } else if let path = signal.metadata["script_path"] ?? signal.metadata["path"] {
             parts += [normalizedPath(path)]
         }
+        if let operation = signal.metadata["tamperOperation"] {
+            parts += [operation.lowercased()]
+        }
+        if let target = signal.metadata["tamperTarget"] {
+            parts += [normalizedPath(target)]
+        }
         if let network = signal.networkInfo {
             parts += [
                 network.remoteAddress?.lowercased() ?? "local",

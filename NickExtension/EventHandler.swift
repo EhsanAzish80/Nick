@@ -201,7 +201,8 @@ final class ESEventHandler {
                     actorPath: processPath,
                     actorPid: pid,
                     identity: tamperActorIdentity,
-                    blocked: writeBlocked
+                    blocked: writeBlocked,
+                    operation: .openWrite
                 )
                 if writeBlocked {
                     esClient?.respond(to: message, allow: false)
@@ -280,7 +281,8 @@ final class ESEventHandler {
                     actorPath: processPath,
                     actorPid: pid,
                     identity: tamperActorIdentity,
-                    blocked: true
+                    blocked: true,
+                    operation: .create
                 )
                 break
             }
@@ -290,7 +292,8 @@ final class ESEventHandler {
                     actorPath: processPath,
                     actorPid: pid,
                     identity: tamperActorIdentity,
-                    blocked: false
+                    blocked: false,
+                    operation: .create
                 )
             }
 
@@ -323,7 +326,8 @@ final class ESEventHandler {
                 process: process,
                 processPath: processPath,
                 pid: pid,
-                identity: tamperActorIdentity
+                identity: tamperActorIdentity,
+                operation: .truncate
             )
 
         case ES_EVENT_TYPE_AUTH_LINK:
@@ -334,7 +338,8 @@ final class ESEventHandler {
                 process: process,
                 processPath: processPath,
                 pid: pid,
-                identity: tamperActorIdentity
+                identity: tamperActorIdentity,
+                operation: .link
             )
 
         case ES_EVENT_TYPE_AUTH_CLONE:
@@ -345,7 +350,8 @@ final class ESEventHandler {
                 process: process,
                 processPath: processPath,
                 pid: pid,
-                identity: tamperActorIdentity
+                identity: tamperActorIdentity,
+                operation: .clone
             )
 
         // MARK: AUTH_MMAP — block mapping of cached-threat files
@@ -373,7 +379,8 @@ final class ESEventHandler {
                     process: process,
                     processPath: processPath,
                     pid: pid,
-                    identity: tamperActorIdentity
+                    identity: tamperActorIdentity,
+                    operation: .copyfile
                 )
                 break
             }
@@ -1205,7 +1212,8 @@ final class ESEventHandler {
         process: es_process_t,
         processPath: String,
         pid: Int32,
-        identity: TamperActorIdentity
+        identity: TamperActorIdentity,
+        operation: TamperProtectedOperation
     ) {
         guard tamperProtection?.protects(path: targetPath) == true else {
             esClient?.respond(to: message, allow: true)
@@ -1233,7 +1241,8 @@ final class ESEventHandler {
             actorPath: processPath,
             actorPid: pid,
             identity: identity,
-            blocked: blocked
+            blocked: blocked,
+            operation: operation
         )
     }
 
