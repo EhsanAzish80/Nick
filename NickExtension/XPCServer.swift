@@ -374,6 +374,10 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         reply(eventStore.snapshot())
     }
 
+    func acknowledgePersistedThreats(eventIDs: [String]) {
+        eventStore.removeThreats(eventIDs: Set(eventIDs.compactMap(UUID.init(uuidString:))))
+    }
+
     func getIncidentStore(reply: @escaping (Data) -> Void) {
         reply(incidentStore.load())
     }
@@ -791,6 +795,31 @@ private final class EndpointEventStore {
     func snapshot() -> Data {
         queue.sync {
             (try? JSONEncoder().encode(load())) ?? Data("[]".utf8)
+        }
+    }
+
+    func removeThreats(eventIDs: Set<UUID>) {
+        guard !eventIDs.isEmpty else { return }
+        queue.async {
+            var events = self.load()
+            events.removeAll { finding in
+                guard finding.kind == .threat,
+                      let event = try? JSONDecoder().decode(ESEvent.self, from: finding.payload)
+                else { return false }
+                return eventIDs.contains(event.id)
+            }
+            do {
+                let encoded = try JSONEncoder().encode(events)
+                try encoded.write(to: self.url, options: .atomic)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600],
+                    ofItemAtPath: self.url.path
+                )
+            } catch {
+                ESXPCServer.logger.error(
+                    "Could not acknowledge persisted threats: \(error.localizedDescription, privacy: .public)"
+                )
+            }
         }
     }
 

@@ -606,31 +606,58 @@ public final class ExtensionXPCClient: NSObject {
             }
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                var acknowledgedThreatIDs: [String] = []
                 for finding in replay.sorted(by: { $0.timestamp < $1.timestamp }) {
-                    await self.receivePersisted(finding)
+                    if let eventID = await self.receivePersisted(finding) {
+                        acknowledgedThreatIDs.append(eventID.uuidString)
+                    }
+                }
+                if !acknowledgedThreatIDs.isEmpty {
+                    proxy.acknowledgePersistedThreats(eventIDs: acknowledgedThreatIDs)
                 }
             }
         }
     }
 
-    func receivePersisted(_ finding: PersistedExtensionFinding) async {
+    func receivePersisted(_ finding: PersistedExtensionFinding) async -> UUID? {
         switch finding.kind {
-        case .endpointEvent, .threat:
-            guard let event = try? decoder.decode(ESEvent.self, from: finding.payload) else { return }
+        case .endpointEvent:
+            guard let event = try? decoder.decode(ESEvent.self, from: finding.payload) else { return nil }
             receive(event, deliverToEngine: false)
+            return nil
+        case .threat:
+            guard let event = try? decoder.decode(ESEvent.self, from: finding.payload) else { return nil }
+            return await receiveThreat(event) ? event.id : nil
         case .remediation:
-            guard let report = try? decoder.decode(RemediationReport.self, from: finding.payload) else { return }
+            guard let report = try? decoder.decode(RemediationReport.self, from: finding.payload) else { return nil }
             receive(report, deliverToEngine: false)
+            return nil
         case .integrityViolation:
-            guard let violation = try? decoder.decode(IntegrityViolation.self, from: finding.payload) else { return }
+            guard let violation = try? decoder.decode(IntegrityViolation.self, from: finding.payload) else { return nil }
             receive(violation, deliverToEngine: false)
+            return nil
         case .privacyAlert:
-            guard let alert = try? decoder.decode(PrivacyAlert.self, from: finding.payload) else { return }
+            guard let alert = try? decoder.decode(PrivacyAlert.self, from: finding.payload) else { return nil }
             receive(alert, deliverToEngine: false)
+            return nil
         case .usbThreat:
-            guard let threat = try? decoder.decode(USBThreat.self, from: finding.payload) else { return }
+            guard let threat = try? decoder.decode(USBThreat.self, from: finding.payload) else { return nil }
             receive(threat, deliverToEngine: false)
+            return nil
         }
+    }
+
+    private func receiveThreat(_ event: ESEvent) async -> Bool {
+        if !events.contains(where: { $0.id == event.id }) { events.insert(event, at: 0) }
+        trim(&events)
+        guard let finding = ExtensionFinding(event: event), let findingHandler else { return false }
+        await findingHandler(finding)
+        return true
+    }
+
+    private func acknowledgeThreat(_ eventID: UUID) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        proxy.acknowledgePersistedThreats(eventIDs: [eventID.uuidString])
     }
 
     private func receive(_ event: ESEvent, deliverToEngine: Bool = true) {
@@ -1150,7 +1177,10 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             Self.logger.error("Failed to decode threat report from extension")
             return
         }
-        Task { @MainActor [weak self] in self?.receive(event) }
+        Task { @MainActor [weak self] in
+            guard let self, await self.receiveThreat(event) else { return }
+            self.acknowledgeThreat(event.id)
+        }
     }
 
     public nonisolated func reportRemediationAction(_ reportData: Data) {

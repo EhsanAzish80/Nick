@@ -42,6 +42,23 @@ final class NetworkProtectionPolicyTests: XCTestCase {
     }
 
     @MainActor
+    func test_replayedDeniedTamperEventIsIdempotent() throws {
+        let store = IncidentStore(persistOnInit: false)
+        let event = tamperEvent(
+            operation: .renameDestination,
+            target: "/Applications/Nick.app/Contents/Resources/test.txt"
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        let alert = tamperAlert(from: finding)
+
+        _ = store.ingest([alert])
+        _ = store.ingest([alert])
+
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 1)
+    }
+
+    @MainActor
     func test_tamperIncidentIdentityIncludesOperationAndTarget() throws {
         let store = IncidentStore(persistOnInit: false)
         let firstTarget = "/Applications/Nick.app/Contents/Resources/one.txt"
@@ -84,6 +101,24 @@ final class NetworkProtectionPolicyTests: XCTestCase {
         for mapping in requiredMappings {
             XCTAssertTrue(source.contains(mapping), mapping)
         }
+    }
+
+    func test_persistedThreatReplayIngestsBeforeAcknowledgement() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let clientSource = try String(
+            contentsOf: root.appendingPathComponent("Nick/Core/Services/ExtensionXPCClient.swift"),
+            encoding: .utf8
+        )
+        let serverSource = try String(
+            contentsOf: root.appendingPathComponent("NickExtension/XPCServer.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(clientSource.contains("return await receiveThreat(event) ? event.id : nil"))
+        XCTAssertTrue(clientSource.contains("proxy.acknowledgePersistedThreats"))
+        XCTAssertTrue(serverSource.contains("func removeThreats(eventIDs: Set<UUID>)"))
     }
 
     private func tamperEvent(

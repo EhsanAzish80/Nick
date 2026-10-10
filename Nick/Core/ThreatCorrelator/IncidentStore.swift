@@ -376,6 +376,11 @@ final class IncidentStore {
             guard !isDismissed(candidate, incidentKey: key) else { continue }
             if let index = incidents.firstIndex(where: { $0.key == key }) {
                 let prior = incidents[index]
+                let priorSignalIDs = Set(prior.alert.contributingSignals.map(\.id))
+                let candidateSignalIDs = Set(candidate.contributingSignals.map(\.id))
+                if !candidateSignalIDs.isEmpty, candidateSignalIDs.isSubset(of: priorSignalIDs) {
+                    continue
+                }
                 let escalated = candidate.severity > prior.alert.severity
                 let incomingEvidence = candidate.contributingSignals.map(Evidence.init(signal:))
                 incidents[index].alert = prior.alert.mergingOccurrence(candidate)
