@@ -746,7 +746,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertEqual(decoded.payload, payload)
     }
 
-    func test_persistedEndpointReplayRestoresUIStateWithoutRedeliveringAlert() async throws {
+    func test_persistedThreatReplayRestoresUIStateAndDeliversEvidence() async throws {
         let event = ESEvent(
             eventType: .authExec,
             processPath: "/usr/bin/open",
@@ -765,10 +765,11 @@ final class UnifiedSourceFindingTests: XCTestCase {
         var deliveredCount = 0
         client.findingHandler = { _ in deliveredCount += 1 }
 
-        await client.receivePersisted(envelope)
+        let acknowledgedID = await client.receivePersisted(envelope)
 
         XCTAssertEqual(client.events.map(\.id), [event.id])
-        XCTAssertEqual(deliveredCount, 0)
+        XCTAssertEqual(deliveredCount, 1)
+        XCTAssertEqual(acknowledgedID, event.id)
     }
 
     func test_remediationReplayKeepsStableEvidenceID() {
