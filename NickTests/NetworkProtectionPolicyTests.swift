@@ -629,6 +629,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
         let store = IncidentStore(persistOnInit: false)
         var delivered = 0
         var newlyActionable: [ThreatAlert] = []
+        let delivery = expectation(description: "Failed quarantine reaches incident ingestion")
         client.findingHandler = { finding in
             delivered += 1
             let alert = ThreatAlert(
@@ -643,6 +644,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
                 timestamp: finding.signal.timestamp
             )
             newlyActionable = store.ingest([alert]).newlyActionable
+            delivery.fulfill()
             return true
         }
         let report = RemediationReport(
@@ -662,8 +664,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
         )
 
         client.reportRemediationAction(try JSONEncoder().encode(report))
-        await Task.yield()
-        await Task.yield()
+        await fulfillment(of: [delivery], timeout: 2)
 
         XCTAssertEqual(delivered, 1)
         let alert = try XCTUnwrap(store.incidents.first?.alert)
