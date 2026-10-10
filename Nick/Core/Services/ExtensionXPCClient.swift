@@ -103,6 +103,7 @@ public final class ExtensionXPCClient: NSObject {
     /// Returns true only after the finding's incident snapshot is durably
     /// accepted by the privileged root-owned store.
     var findingHandler: ((ExtensionFinding) async -> Bool)?
+    var integrityAcknowledgementHandler: ((UUID) -> Void)?
 
     // MARK: - Private
 
@@ -842,6 +843,7 @@ public final class ExtensionXPCClient: NSObject {
                 self?.finishProtectionAuthorization(authorization)
                 if accepted {
                     self?.integrityViolations.removeAll { $0.id == id }
+                    self?.integrityAcknowledgementHandler?(id)
                 }
                 completion(accepted)
             }
@@ -978,6 +980,24 @@ struct ExtensionFinding: Sendable {
         let isAuditEvent = isManagementObservation || isNickMaintenance || isDocumentedUninstall
         let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : (isRansomwareBehavior ? "behavior" : "signature"))
         let ruleTier = isAuditEvent ? "review" : "protected"
+        var metadata = [
+            "reason": isTamper
+                ? "endpoint_tamper_observed"
+                : (isDocumentedUninstall ? "nick_documented_uninstall" : (isNickMaintenance ? "nick_protected_path_maintenance" : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat"))),
+            "rule": isDocumentedUninstall
+                ? "nick_documented_uninstall"
+                : (isNickMaintenance
+                    ? "nick_protected_path_maintenance"
+                    : (isManagementObservation
+                        ? "endpoint_management_observed"
+                        : (event.threatName ?? "endpoint_known_threat"))),
+            "class": ruleClass,
+            "ruleTier": ruleTier,
+            "threatFamily": event.threatFamily ?? "unknown"
+        ].merging(event.metadata ?? [:]) { current, _ in current }
+        if isTamper {
+            metadata["tamperDisposition"] = event.decision == .deny ? "blocked" : "observed"
+        }
         signal = ThreatSignal(
             id: event.id,
             source: .endpointSecurity,
@@ -1004,21 +1024,7 @@ struct ExtensionFinding: Sendable {
                     signingStatus: nil,
                     sizeBytes: nil
                 ),
-                metadata: [
-                    "reason": isTamper
-                        ? "endpoint_tamper_observed"
-                        : (isDocumentedUninstall ? "nick_documented_uninstall" : (isNickMaintenance ? "nick_protected_path_maintenance" : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat"))),
-                    "rule": isDocumentedUninstall
-                        ? "nick_documented_uninstall"
-                        : (isNickMaintenance
-                            ? "nick_protected_path_maintenance"
-                            : (isManagementObservation
-                                ? "endpoint_management_observed"
-                                : (event.threatName ?? "endpoint_known_threat"))),
-                    "class": ruleClass,
-                    "ruleTier": ruleTier,
-                    "threatFamily": event.threatFamily ?? "unknown"
-                ].merging(event.metadata ?? [:]) { current, _ in current }
+                metadata: metadata
             )
         )
         score = event.decision == .deny ? 0.98 : (isAuditEvent ? 0.1 : 0.9)
@@ -1073,15 +1079,21 @@ struct ExtensionFinding: Sendable {
             "\(report.timestamp.timeIntervalSince1970)|\(report.threatPath)|\(report.threatName)"
         )
         let succeeded = report.quarantineSucceeded
+        let quarantineFailureReason = report.actions.first {
+            $0.type == .quarantineFile && !$0.success
+        }?.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let failureReason = quarantineFailureReason.flatMap { detail in
+            detail.isEmpty ? nil : detail
+        } ?? "The quarantine operation did not complete."
         signal = ThreatSignal(
             id: stableID,
             source: .filesystem,
             severity: succeeded ? .high : .critical,
             timestamp: report.timestamp,
-            title: succeeded ? "Threat remediation completed" : "Threat remediation needs attention",
+            title: succeeded ? "Threat remediation completed" : "Quarantine failed — needs attention",
             description: succeeded
                 ? "Nick completed a response action for \(report.threatName)."
-                : "Nick detected \(report.threatName), but quarantine failed and the file may remain in place.",
+                : "Nick detected \(report.threatName), but quarantine failed. The file is still present at its original location. Reason: \(failureReason)",
             context: ThreatSignalContext(
                 fileInfo: FileInfo(
                     path: report.threatPath,
@@ -1094,7 +1106,8 @@ struct ExtensionFinding: Sendable {
                     "reason": "endpoint_remediation",
                     "rule": "endpoint_remediation",
                     "ruleTier": "protected",
-                    "remediationStatus": succeeded ? "quarantined" : "quarantine-failed"
+                    "remediationStatus": succeeded ? "quarantined" : "quarantine-failed",
+                    "remediationFailureReason": succeeded ? "" : failureReason
                 ]
             )
         )
@@ -1143,6 +1156,7 @@ struct ExtensionFinding: Sendable {
                     "reason": "file_integrity_\(violation.violationType.rawValue)",
                     "rule": "file_integrity_monitor",
                     "ruleTier": "protected",
+                    "fimStatus": "pending",
                     "expectedHash": violation.expectedHash ?? "unavailable"
                 ]
             )

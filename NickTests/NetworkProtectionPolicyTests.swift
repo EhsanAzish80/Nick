@@ -668,9 +668,15 @@ final class UnifiedSourceFindingTests: XCTestCase {
 
         XCTAssertEqual(delivered, 1)
         let alert = try XCTUnwrap(store.incidents.first?.alert)
-        XCTAssertEqual(alert.title, "Threat remediation needs attention")
+        XCTAssertEqual(alert.title, "Quarantine failed — needs attention")
         XCTAssertEqual(alert.severity, .critical)
         XCTAssertEqual(alert.contributingSignals.first?.metadata["remediationStatus"], "quarantine-failed")
+        XCTAssertEqual(
+            alert.contributingSignals.first?.metadata["remediationFailureReason"],
+            "Permission denied"
+        )
+        XCTAssertTrue(alert.description.contains("still present at its original location"))
+        XCTAssertTrue(alert.description.contains("Permission denied"))
         XCTAssertEqual(newlyActionable.map(\.id), [alert.id], "Newly actionable findings trigger notification delivery")
     }
 

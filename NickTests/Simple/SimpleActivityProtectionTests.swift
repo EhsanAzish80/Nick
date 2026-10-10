@@ -259,6 +259,127 @@ final class SimpleActivityFeedTests: XCTestCase {
         )
         XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
         XCTAssertEqual(items.first?.title, "Quarantine failed — needs attention")
+        let presented = UserFacingAlertBuilder.shared.build(from: alert)
+        XCTAssertTrue(presented.explanation.contains("signature match"))
+        XCTAssertTrue(presented.explanation.contains("still present"))
+        XCTAssertTrue(presented.explanation.contains("Permission denied"))
+    }
+
+    func test_blockedTamperIsProtectedAndListedAsBlockedInSimple() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/bin/mv",
+            pid: 42,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app/Contents/Resources/test.txt",
+            decision: .deny,
+            threat: .init(
+                threatName: "Nick protected path change blocked",
+                threatFamily: "tamper",
+                metadata: [
+                    "tamperOperation": "rename-destination",
+                    "tamperTarget": "/Applications/Nick.app/Contents/Resources/test.txt",
+                ]
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        let alert = ThreatAlert(
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: finding.signal.timestamp
+        )
+
+        XCTAssertTrue(alert.hasProtectedEvidence)
+        XCTAssertTrue(alert.isVisibleInActiveAlerts(showInformational: false))
+        let presented = UserFacingAlertBuilder.shared.build(from: alert)
+        XCTAssertEqual(
+            presented.headline,
+            "Nick blocked an attempt to modify its files (rename-destination by mv)"
+        )
+        let inputs = SimpleActivityFeed.alertInputs(from: [alert], actionable: [alert.id])
+        let items = SimpleActivityFeed.items(
+            alerts: inputs, quarantine: [], blocked: [], calendar: calendar
+        )
+        XCTAssertEqual(items.first?.status, .blocked)
+        XCTAssertEqual(SimpleActivityFeed.count(items, .blocked), 1)
+    }
+
+    func test_pendingFIMViolationIsNeedsActionInBothModes() {
+        let violation = IntegrityViolation(
+            path: "/Users/test/.zprofile",
+            violationType: .modified,
+            expectedHash: "expected",
+            actualHash: "actual",
+            timestamp: now
+        )
+        let finding = ExtensionFinding(violation: violation)
+        let alert = ThreatAlert(
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: finding.signal.timestamp
+        )
+
+        XCTAssertEqual(finding.signal.metadata["fimStatus"], "pending")
+        XCTAssertTrue(alert.isVisibleInActiveAlerts(showInformational: false))
+        let inputs = SimpleActivityFeed.alertInputs(from: [alert], actionable: [alert.id])
+        let items = SimpleActivityFeed.items(
+            alerts: inputs, quarantine: [], blocked: [], calendar: calendar
+        )
+        XCTAssertEqual(items.first?.title, "File integrity change needs review")
+        XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
+    }
+
+    func test_informationalRowsNeverSayNeedsYourReview() {
+        let input = SimpleActivityFeed.AlertInput(
+            id: UUID(),
+            headline: "mv needs your review",
+            level: .informational,
+            date: now,
+            needsAction: false
+        )
+        // Direct inputs already carry final copy. Verify the production
+        // projection normalises contradictory generic copy.
+        let signal = ThreatSignal(
+            source: .process,
+            severity: .info,
+            title: "mv",
+            description: "Observed activity.",
+            context: ThreatSignalContext(processInfo: NickProcessInfo(
+                pid: 42,
+                path: "/bin/mv",
+                name: "mv",
+                parentPID: 1,
+                parentName: nil,
+                signingStatus: .unknown
+            ))
+        )
+        let alert = ThreatAlert(
+            score: 0.1,
+            content: AlertContent(
+                title: "mv",
+                description: "Observed activity.",
+                severity: .info,
+                recommendedAction: "No action needed."
+            ),
+            contributingSignals: [signal],
+            timestamp: now
+        )
+        let projected = SimpleActivityFeed.alertInputs(from: [alert], actionable: [])
+        XCTAssertEqual(projected.first?.headline, "mv activity observed")
+        XCTAssertFalse(projected.first?.headline.contains("needs your review") ?? true)
+        XCTAssertEqual(input.level, .informational)
     }
 
     func test_protectedFindingHasAdvancedSimpleBadgeAndHomeParity() {

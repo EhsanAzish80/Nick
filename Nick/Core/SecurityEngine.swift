@@ -870,6 +870,14 @@ final class SecurityEngine {
         }
     }
 
+    /// The extension has already validated the protection right and advanced
+    /// the FIM baseline. Retire the matching actionable incident without a
+    /// second prompt while retaining it in the persisted audit history.
+    func resolveAcknowledgedFIMIncident(_ id: UUID) {
+        incidentStore.performAuthenticatedUserAction(.resolved, alertID: id)
+        syncAlertsFromStore()
+    }
+
     private func performAuthenticatedIncidentAction(
         _ action: IncidentActionKind,
         alertID: UUID,
