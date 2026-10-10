@@ -19,6 +19,7 @@ struct SimpleActivityItem: Identifiable, Equatable {
     }
 
     enum Status: String, Equatable {
+        case informational = "Observed"
         case needsAction = "Needs action"
         case threat = "Threat"
         case warning = "Warning"
@@ -35,6 +36,7 @@ struct SimpleActivityItem: Identifiable, Equatable {
 
     var icon: String {
         switch status {
+        case .informational: "info.circle"
         case .needsAction: "exclamationmark.circle"
         case .threat:      "xmark.shield"
         case .warning:     "exclamationmark.triangle"
@@ -75,7 +77,7 @@ enum SimpleActivityFeed {
 
     /// An alert reduced to what Simple mode may show.
     struct AlertInput: Equatable {
-        enum Level: Equatable { case warning, critical }
+        enum Level: Equatable { case informational, warning, critical }
         let id: UUID
         let headline: String
         let level: Level
@@ -104,18 +106,24 @@ enum SimpleActivityFeed {
         alerts.compactMap { alert in
             let user = builder.build(from: alert)
             let level: AlertInput.Level
-            switch user.severity {
-            case .safe:
-                guard alert.hasProtectedEvidence else { return nil }
-                level = .warning
-            case .warning:  level = .warning
-            case .critical: level = .critical
+            if !alert.isActionableUserFinding {
+                level = .informational
+            } else {
+                switch user.severity {
+                case .safe:
+                    // The only actionable safe-mapped case is protected evidence.
+                    level = .warning
+                case .warning:  level = .warning
+                case .critical: level = .critical
+                }
             }
             return AlertInput(
                 id: alert.id,
-                headline: user.severity == .safe ? "Security finding needs review" : user.headline,
+                headline: level == .informational ? user.headline
+                    : (user.severity == .safe ? "Security finding needs review" : user.headline),
                 level: level,
-                date: alert.lastSeen, needsAction: actionable.contains(alert.id)
+                date: alert.lastSeen,
+                needsAction: alert.isActionableUserFinding && actionable.contains(alert.id)
             )
         }
     }
@@ -141,12 +149,14 @@ enum SimpleActivityFeed {
         for alert in alerts {
             let status: SimpleActivityItem.Status = alert.needsAction
                 ? .needsAction
-                : (alert.level == .critical ? .threat : .warning)
+                : (alert.level == .critical ? .threat
+                    : (alert.level == .warning ? .warning : .informational))
             items.append(SimpleActivityItem(
                 id: "a-\(alert.id.uuidString)",
                 source: .alert(alert.id),
                 title: alert.headline,
-                detail: alert.level == .critical ? "Nick found a threat" : "Nick warned you",
+                detail: alert.level == .critical ? "Nick found a threat"
+                    : (alert.level == .warning ? "Nick warned you" : "Nick observed activity"),
                 date: alert.date,
                 status: status
             ))

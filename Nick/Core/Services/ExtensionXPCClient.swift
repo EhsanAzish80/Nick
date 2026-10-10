@@ -917,7 +917,11 @@ struct ExtensionFinding: Sendable {
             ),
             context: ThreatSignalContext(
                 processInfo: process,
-                fileInfo: FileInfo(
+                // Audit-only process observations are about the actor, not
+                // suspicious content at its executable path. Treating the
+                // platform-binary path as file evidence would incorrectly
+                // promote an explicitly allow-listed review rule to protected.
+                fileInfo: isAuditEvent ? nil : FileInfo(
                     path: filePath,
                     sha256Hash: event.sha256,
                     entropy: nil,
@@ -928,7 +932,13 @@ struct ExtensionFinding: Sendable {
                     "reason": isTamper
                         ? "endpoint_tamper_observed"
                         : (isDocumentedUninstall ? "nick_documented_uninstall" : (isNickMaintenance ? "nick_protected_path_maintenance" : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat"))),
-                    "rule": isDocumentedUninstall ? "nick_documented_uninstall" : (isNickMaintenance ? "nick_protected_path_maintenance" : (event.threatName ?? "endpoint_known_threat")),
+                    "rule": isDocumentedUninstall
+                        ? "nick_documented_uninstall"
+                        : (isNickMaintenance
+                            ? "nick_protected_path_maintenance"
+                            : (isManagementObservation
+                                ? "endpoint_management_observed"
+                                : (event.threatName ?? "endpoint_known_threat"))),
                     "class": ruleClass,
                     "ruleTier": ruleTier,
                     "threatFamily": event.threatFamily ?? "unknown"

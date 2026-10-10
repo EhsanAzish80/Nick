@@ -42,7 +42,6 @@ final class SimpleActivityFeedTests: XCTestCase {
             description: "A startup item references a missing executable.",
             context: ThreatSignalContext(metadata: [
                 "reason": "persist_executable_missing",
-                "path": "/Users/test/Library/LaunchAgents/com.example.missing.plist",
             ])
         )
         return ThreatAlert(
@@ -52,6 +51,35 @@ final class SimpleActivityFeedTests: XCTestCase {
                 description: "A startup configuration references a file that no longer exists.",
                 severity: .medium,
                 recommendedAction: "Review the startup item."
+            ),
+            contributingSignals: [signal],
+            timestamp: now
+        )
+    }
+
+    private func informationalManagementAlert() -> ThreatAlert {
+        let signal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .info,
+            title: "System extension management observed",
+            description: "Nick observed routine use of Apple's system-extension management tool.",
+            context: ThreatSignalContext(
+                metadata: [
+                    "class": "audit",
+                    "reason": "endpoint_management_observed",
+                    "rule": "endpoint_management_observed",
+                    "ruleTier": "review",
+                    "threatFamily": "endpoint-management",
+                ]
+            )
+        )
+        return ThreatAlert(
+            score: 0.1,
+            content: AlertContent(
+                title: signal.title,
+                description: signal.description,
+                severity: .info,
+                recommendedAction: "No action is needed if you ran this command."
             ),
             contributingSignals: [signal],
             timestamp: now
@@ -95,6 +123,88 @@ final class SimpleActivityFeedTests: XCTestCase {
         XCTAssertEqual(inputs.first?.level, .warning)
         XCTAssertEqual(inputs.first?.headline, "New startup item detected")
         XCTAssertEqual(inputs.first?.needsAction, true)
+    }
+
+    func test_informationalObservationHasAdvancedSimpleBadgeAndHomeParity() {
+        let info = informationalManagementAlert()
+        XCTAssertFalse(info.hasProtectedEvidence)
+        XCTAssertFalse(info.isActionableUserFinding)
+        XCTAssertFalse(info.isVisibleInActiveAlerts(showInformational: false))
+        XCTAssertTrue(info.isVisibleInActiveAlerts(showInformational: true))
+
+        // Even a stale caller-provided actionable ID cannot turn information
+        // into a decision request in Simple mode.
+        let inputs = SimpleActivityFeed.alertInputs(from: [info], actionable: [info.id])
+        XCTAssertEqual(inputs.count, 1)
+        XCTAssertEqual(inputs.first?.level, .informational)
+        XCTAssertEqual(inputs.first?.needsAction, false)
+
+        let items = SimpleActivityFeed.items(
+            alerts: inputs, quarantine: [], blocked: [], calendar: calendar
+        )
+        XCTAssertEqual(items.map(\.status), [.informational])
+        XCTAssertEqual(SimpleActivityFeed.count(items, .all), 1)
+        XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 0)
+
+        let advancedActionable = [info].filter {
+            $0.isVisibleInActiveAlerts(showInformational: false)
+        }
+        XCTAssertEqual(advancedActionable.count, 0)
+        XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), advancedActionable.count)
+
+        let issues = AttentionIssue.issues(
+            endpointProtectionActive: true,
+            auditIssues: 0,
+            persistenceIssues: 0,
+            processIssues: 0,
+            networkIssues: 0,
+            unreviewedFindings: advancedActionable.count
+        )
+        let hero = HomeHero.make(
+            incident: nil,
+            issues: issues,
+            websitesProtected: true,
+            lastCheck: now,
+            hadRecentWarnings: true,
+            now: now
+        )
+        XCTAssertEqual(hero.state, .protected)
+        XCTAssertEqual(hero.title, "Your Mac is protected")
+    }
+
+    func test_protectedFindingHasAdvancedSimpleBadgeAndHomeParity() {
+        let protected = protectedPersistenceAlert()
+        XCTAssertTrue(protected.isActionableUserFinding)
+
+        let advancedActionable = [protected].filter {
+            $0.isVisibleInActiveAlerts(showInformational: false)
+        }
+        let inputs = SimpleActivityFeed.alertInputs(
+            from: [protected], actionable: Set(advancedActionable.map(\.id))
+        )
+        let items = SimpleActivityFeed.items(
+            alerts: inputs, quarantine: [], blocked: [], calendar: calendar
+        )
+        XCTAssertEqual(advancedActionable.count, 1)
+        XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), advancedActionable.count)
+
+        let issues = AttentionIssue.issues(
+            endpointProtectionActive: true,
+            auditIssues: 0,
+            persistenceIssues: 0,
+            processIssues: 0,
+            networkIssues: 0,
+            unreviewedFindings: advancedActionable.count
+        )
+        let hero = HomeHero.make(
+            incident: nil,
+            issues: issues,
+            websitesProtected: true,
+            lastCheck: now,
+            hadRecentWarnings: true,
+            now: now
+        )
+        XCTAssertEqual(hero.state, .attention)
     }
 
     func test_filters() {

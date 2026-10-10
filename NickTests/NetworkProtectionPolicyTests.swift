@@ -450,6 +450,9 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertEqual(finding.signal.severity, .info)
         XCTAssertEqual(finding.signal.metadata["class"], "audit")
         XCTAssertEqual(finding.signal.metadata["ruleTier"], "review")
+        XCTAssertEqual(finding.signal.metadata["rule"], "endpoint_management_observed")
+        XCTAssertNil(finding.signal.fileInfo)
+        XCTAssertEqual(Evidence(signal: finding.signal).ruleTier, .review)
     }
 
     func test_blockedTamperIsCriticalProtectedEndpointEvidence() throws {

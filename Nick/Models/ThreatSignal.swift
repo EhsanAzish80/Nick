@@ -338,6 +338,10 @@ enum EvidenceRuleTier: String, Sendable, Codable {
 enum EvidenceRulePolicy {
     private static let reviewRuleIDs: Set<String> = [
         "system_hardening",
+        "endpoint_management_observed",
+        // Compatibility with incidents created before management observations
+        // used their stable reason as the rule identifier.
+        "System extension management observed",
     ]
 
     static func ruleID(for signal: ThreatSignal) -> String {
