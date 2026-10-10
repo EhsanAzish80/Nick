@@ -499,8 +499,9 @@ final class TamperProtection: @unchecked Sendable {
     /// Flags attempts to run `systemextensionsctl` (uninstall vector).
     func handleExecEvent(execPath: String, pid: Int32, args: [String] = []) {
         guard execPath.hasSuffix("systemextensionsctl") else { return }
-        let commands = Set(args.dropFirst().map { $0.lowercased() })
-        let isSensitive = !commands.isDisjoint(with: ["uninstall", "reset"])
+        let isSensitive = TamperProtectionPolicy.isSensitiveSystemExtensionCommand(
+            arguments: args
+        )
         Self.logger.info("TamperProtection: system extension management observed pid=\(pid)")
         onTamperAttempt?(.systemExtensionsCtlExec(pid: pid, isSensitive: isSensitive))
     }

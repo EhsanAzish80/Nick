@@ -134,6 +134,13 @@ enum NickUpdateLeasePolicy {
 enum TamperProtectionPolicy {
     static let nickTeamID = "UXGW5V3BY6"
 
+    /// Commands that can remove Nick's system extensions must remain
+    /// actionable. Read-only inventory commands are audit history only.
+    static func isSensitiveSystemExtensionCommand(arguments: [String]) -> Bool {
+        let commands = Set(arguments.dropFirst().map { $0.lowercased() })
+        return !commands.isDisjoint(with: ["uninstall", "reset"])
+    }
+
     static func isTrustedMaintenanceActor(
         _ identity: TamperActorIdentity,
         nickIdentityValidated: Bool

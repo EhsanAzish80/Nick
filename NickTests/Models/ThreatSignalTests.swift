@@ -177,6 +177,31 @@ final class ThreatSignalTests: XCTestCase {
         XCTAssertTrue(evidence.ruleID?.contains("unclassified") == true)
     }
 
+    func test_unknownAuditRuleWithOnlyAPlatformActorPathRemainsProtected() {
+        let signal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .info,
+            title: "Unknown audit observation",
+            description: "Unknown audit observation",
+            context: ThreatSignalContext(
+                processInfo: NickProcessInfo(
+                    pid: 42,
+                    path: "/usr/bin/exampletool",
+                    name: "exampletool",
+                    parentPID: 1,
+                    parentName: "launchd",
+                    signingStatus: .unknown
+                ),
+                metadata: [
+                    "class": "audit",
+                    "rule": "unlisted_audit_rule",
+                ]
+            )
+        )
+
+        XCTAssertEqual(Evidence(signal: signal).ruleTier, .protectedDetection)
+    }
+
     func test_yaraPersistenceHashAndHighRiskPathsAreAlwaysProtected() {
         let fixtures: [ThreatSignal] = [
             ThreatSignal(source: .yara, severity: .medium, title: "YARA", description: "match"),

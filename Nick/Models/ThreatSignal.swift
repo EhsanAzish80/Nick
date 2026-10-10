@@ -338,6 +338,10 @@ enum EvidenceRuleTier: String, Sendable, Codable {
 enum EvidenceRulePolicy {
     private static let reviewRuleIDs: Set<String> = [
         "system_hardening",
+        "endpoint_management_observed",
+        // Compatibility with incidents created before management observations
+        // used their stable reason as the rule identifier.
+        "System extension management observed",
     ]
 
     static func ruleID(for signal: ThreatSignal) -> String {
@@ -355,7 +359,15 @@ enum EvidenceRulePolicy {
         let hasHash = !(signal.fileInfo?.sha256Hash ?? signal.metadata["sha256"] ?? "").isEmpty
         let protectedSource = signal.source == .yara || signal.source == .persistence
         let protectedClass = ruleClass == .signature || ruleClass == .persistence || ruleClass == .integrity
-        let highRiskPath = pathClass == .temporary || pathClass == .system
+        // A process path identifies the actor. It is not detected-file evidence
+        // by itself; otherwise every explicit audit observation of an Apple tool
+        // under /usr would be promoted to protected. File and script paths keep
+        // the fail-closed high-risk treatment.
+        let hasPathEvidence = signal.fileInfo != nil
+            || signal.metadata["path"] != nil
+            || signal.metadata["script_path"] != nil
+        let highRiskPath = hasPathEvidence
+            && (pathClass == .temporary || pathClass == .system)
         guard !hasHash, !protectedSource, !protectedClass, !highRiskPath,
               reviewRuleIDs.contains(ruleID) else {
             return .protectedDetection

@@ -228,6 +228,18 @@ final class TamperProtectionPolicyTests: XCTestCase {
         ))
     }
 
+    func test_systemExtensionCommandClassificationKeepsRemovalSensitive() {
+        XCTAssertFalse(TamperProtectionPolicy.isSensitiveSystemExtensionCommand(
+            arguments: ["systemextensionsctl", "list"]
+        ))
+        XCTAssertTrue(TamperProtectionPolicy.isSensitiveSystemExtensionCommand(
+            arguments: ["systemextensionsctl", "uninstall", "UXGW5V3BY6", "com.example.Extension"]
+        ))
+        XCTAssertTrue(TamperProtectionPolicy.isSensitiveSystemExtensionCommand(
+            arguments: ["systemextensionsctl", "reset"]
+        ))
+    }
+
     private func identity(
         team: String? = nil,
         signing: String,

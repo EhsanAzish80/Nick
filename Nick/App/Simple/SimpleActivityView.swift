@@ -193,6 +193,8 @@ struct SimpleActivityRow: View {
 
     private var colors: (Color, Color) {
         switch item.status {
+        case .informational:
+            (.nickSecondaryText, Color.nickSecondaryText.opacity(0.12))
         case .needsAction, .threat, .quarantined, .blocked:
             (.nickDangerText, .nickDangerBackground)
         case .warning:

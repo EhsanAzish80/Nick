@@ -118,6 +118,21 @@ extension ThreatAlert {
             return true
         }
     }
+
+    /// Whether this incident should ask the user for a decision. Informational
+    /// observations remain in Activity history, but do not make Home or badges
+    /// look unsafe. Protected evidence stays actionable even if consumer copy
+    /// maps it to a calm presentation.
+    var isActionableUserFinding: Bool {
+        guard hasActionableEvidence else { return false }
+        if hasProtectedEvidence { return true }
+        guard severity != .info else { return false }
+        return UserFacingAlertBuilder.shared.build(from: self).severity != .safe
+    }
+
+    func isVisibleInActiveAlerts(showInformational: Bool) -> Bool {
+        hasActionableEvidence && (isActionableUserFinding || showInformational)
+    }
 }
 
 // MARK: - SecurityEngine
@@ -351,10 +366,7 @@ final class SecurityEngine {
 
     /// Consumer-facing alerts that still have actionable evidence.
     var activeActionableAlerts: [ThreatAlert] {
-        alerts.filter { alert in
-            alert.hasActionableEvidence
-                && alert.isUserVisibleFinding
-        }
+        alerts.filter(\.isActionableUserFinding)
     }
 
     // MARK: - Private
