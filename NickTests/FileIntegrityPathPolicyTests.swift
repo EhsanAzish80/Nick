@@ -39,4 +39,21 @@ final class FileIntegrityPathPolicyTests: XCTestCase {
             directoryPaths: [root]
         ))
     }
+
+    func test_systemAuditExposesBaselineRebuildAndExplainsPendingRefusal() throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = projectRoot
+            .appendingPathComponent("Nick/App/Dashboard/SystemAuditView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("Button(\"Rebuild Baseline\")"))
+        XCTAssertTrue(source.contains("rebuildFIMBaseline()"))
+        XCTAssertTrue(source.contains("xpcClient.requestRebuildFIMBaseline"))
+        XCTAssertTrue(source.contains(
+            "Review and acknowledge pending changes before rebuilding."
+        ))
+        XCTAssertTrue(source.contains(".disabled(isRebuildingFIM)"))
+    }
 }

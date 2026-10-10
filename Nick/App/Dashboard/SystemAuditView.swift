@@ -24,6 +24,7 @@ struct SystemAuditView: View {
     @State private var exportMessage: String?
     @State private var fimActionMessage: String?
     @State private var acknowledgingFIM: Set<UUID> = []
+    @State private var isRebuildingFIM = false
 
     // Separate XProtect result from the rest so it gets its own section.
     private var xprotectResult: SystemCheckResult? {
@@ -455,11 +456,21 @@ struct SystemAuditView: View {
     @ViewBuilder
     private var integritySection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("FILE INTEGRITY")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.textTertiary)
-                .tracking(0.5)
-                .padding(.horizontal, 20)
+            HStack {
+                Text("FILE INTEGRITY")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.textTertiary)
+                    .tracking(0.5)
+                Spacer()
+                Button("Rebuild Baseline") {
+                    rebuildFIMBaseline()
+                }
+                .buttonStyle(.link)
+                .disabled(isRebuildingFIM)
+                .help("Rebuilds the baseline only when all pending integrity changes have been reviewed.")
+                .accessibilityLabel("Rebuild file integrity baseline")
+            }
+            .padding(.horizontal, 20)
 
             if xpcClient.integrityViolations.isEmpty {
                 Text("No integrity violations — all monitored paths are unchanged.")
@@ -522,13 +533,26 @@ struct SystemAuditView: View {
                         .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
                 )
                 .padding(.horizontal, 20)
-                if let fimActionMessage {
-                    Text(fimActionMessage)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.textSecondary)
-                        .padding(.horizontal, 20)
-                }
-                Spacer().frame(height: 24)
+            }
+            if let fimActionMessage {
+                Text(fimActionMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.textSecondary)
+                    .padding(.horizontal, 20)
+            }
+            Spacer().frame(height: 24)
+        }
+    }
+
+    private func rebuildFIMBaseline() {
+        isRebuildingFIM = true
+        fimActionMessage = nil
+        xpcClient.requestRebuildFIMBaseline { accepted in
+            Task { @MainActor in
+                isRebuildingFIM = false
+                fimActionMessage = accepted
+                    ? "Baseline rebuilt from the current files."
+                    : "Review and acknowledge pending changes before rebuilding."
             }
         }
     }
