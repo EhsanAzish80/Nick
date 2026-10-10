@@ -100,7 +100,9 @@ public final class ExtensionXPCClient: NSObject {
     /// Installed by AppDelegate so privileged findings enter SecurityEngine's
     /// single incident pipeline. Kept as a closure to avoid a Core service
     /// owning UI/application lifetime state.
-    var findingHandler: ((ExtensionFinding) async -> Void)?
+    /// Returns true only after the finding's incident snapshot is durably
+    /// accepted by the privileged root-owned store.
+    var findingHandler: ((ExtensionFinding) async -> Bool)?
 
     // MARK: - Private
 
@@ -117,8 +119,12 @@ public final class ExtensionXPCClient: NSObject {
     private var pendingSecuritySettingsAuthorization: Data?
     private var securitySettingsWriteInFlight = false
     private var pendingIncidentPayload: Data?
+    private var pendingIncidentGeneration: UInt64?
     private var pendingIncidentAuthorization: Data?
     private var incidentWriteInFlight = false
+    private var incidentWriteGeneration: UInt64 = 0
+    private var incidentWriteResults: [UInt64: Bool] = [:]
+    private var incidentWriteWaiters: [(UInt64, CheckedContinuation<Bool, Never>)] = []
     private var activeProtectionAuthorizations: [Data: AuthorizationRef] = [:]
     private var incidentBootstrapCompleted = false
     private var bootstrapLegacyPayload: Data?
@@ -409,7 +415,9 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     func persistIncidentStore(_ payload: Data, authorizationExternalForm: Data? = nil) {
+        incidentWriteGeneration &+= 1
         pendingIncidentPayload = payload
+        pendingIncidentGeneration = incidentWriteGeneration
         if let authorizationExternalForm {
             finishProtectionAuthorization(pendingIncidentAuthorization)
             pendingIncidentAuthorization = authorizationExternalForm
@@ -420,9 +428,11 @@ public final class ExtensionXPCClient: NSObject {
     private func drainIncidentStoreWrites() {
         guard !incidentWriteInFlight,
               let payload = pendingIncidentPayload,
+              let generation = pendingIncidentGeneration,
               let revision = incidentRevision,
               let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
         pendingIncidentPayload = nil
+        pendingIncidentGeneration = nil
         let authorization = pendingIncidentAuthorization
         pendingIncidentAuthorization = nil
         incidentWriteInFlight = true
@@ -435,19 +445,51 @@ public final class ExtensionXPCClient: NSObject {
                 guard let self else { return }
                 self.finishProtectionAuthorization(authorization)
                 self.incidentWriteInFlight = false
-                if let record = try? JSONDecoder().decode(
+                let record = try? JSONDecoder().decode(
                     PrivilegedIncidentStoreRecord.self,
                     from: recordData
-                ) {
+                )
+                if let record {
                     self.incidentRevision = record.revision
                 }
                 if !accepted, authorization == nil {
                     self.pendingIncidentPayload = self.pendingIncidentPayload ?? payload
+                    self.pendingIncidentGeneration = self.pendingIncidentGeneration ?? generation
                 } else if !accepted {
                     Self.logger.error("Authorized incident-store write was rejected; authoritative state retained")
                 }
+                self.completeIncidentWrite(
+                    through: generation,
+                    succeeded: accepted && record != nil
+                )
                 self.drainIncidentStoreWrites()
             }
+        }
+    }
+
+    /// Waits for the root-owned store reply corresponding to the newest
+    /// snapshot queued by the caller. A rejection is not durable success and
+    /// must keep any extension journal event eligible for redelivery.
+    func awaitIncidentStorePersistence() async -> Bool {
+        let generation = incidentWriteGeneration
+        guard generation > 0 else { return true }
+        if let result = incidentWriteResults[generation] { return result }
+        guard connection != nil, incidentRevision != nil else { return false }
+        return await withCheckedContinuation { continuation in
+            incidentWriteWaiters.append((generation, continuation))
+        }
+    }
+
+    private func completeIncidentWrite(through generation: UInt64, succeeded: Bool) {
+        incidentWriteResults[generation] = succeeded
+        if incidentWriteResults.count > 32 {
+            let floor = incidentWriteGeneration > 32 ? incidentWriteGeneration - 32 : 0
+            incidentWriteResults = incidentWriteResults.filter { $0.key >= floor }
+        }
+        let ready = incidentWriteWaiters.filter { $0.0 <= generation }
+        incidentWriteWaiters.removeAll { $0.0 <= generation }
+        for (_, continuation) in ready {
+            continuation.resume(returning: succeeded)
         }
     }
 
@@ -651,8 +693,7 @@ public final class ExtensionXPCClient: NSObject {
         if !events.contains(where: { $0.id == event.id }) { events.insert(event, at: 0) }
         trim(&events)
         guard let finding = ExtensionFinding(event: event), let findingHandler else { return false }
-        await findingHandler(finding)
-        return true
+        return await findingHandler(finding)
     }
 
     private func acknowledgeThreat(_ eventID: UUID) {

@@ -763,13 +763,68 @@ final class UnifiedSourceFindingTests: XCTestCase {
         )
         let client = ExtensionXPCClient()
         var deliveredCount = 0
-        client.findingHandler = { _ in deliveredCount += 1 }
+        client.findingHandler = { _ in
+            deliveredCount += 1
+            return true
+        }
 
         let acknowledgedID = await client.receivePersisted(envelope)
 
         XCTAssertEqual(client.events.map(\.id), [event.id])
         XCTAssertEqual(deliveredCount, 1)
         XCTAssertEqual(acknowledgedID, event.id)
+    }
+
+    func test_failedRootStoreWriteLeavesThreatUnacknowledgedForRedelivery() async throws {
+        let event = ESEvent(
+            eventType: .authOpen,
+            processPath: "/bin/mv",
+            pid: 42,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app/Contents/Resources/test.txt",
+            decision: .deny,
+            threat: .init(threatName: "Protected path change", threatFamily: "tamper")
+        )
+        let envelope = PersistedExtensionFinding(
+            kind: .threat,
+            timestamp: event.timestamp,
+            payload: try JSONEncoder().encode(event)
+        )
+        var journal = [envelope]
+        let client = ExtensionXPCClient()
+        let incidentStore = IncidentStore(persistOnInit: false)
+        var deliveries = 0
+        client.findingHandler = { finding in
+            deliveries += 1
+            let alert = ThreatAlert(
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+            _ = incidentStore.ingest([alert])
+            return false // privileged root-store write rejected
+        }
+
+        let firstAcknowledgement = await client.receivePersisted(journal[0])
+        if let firstAcknowledgement {
+            journal.removeAll { $0.id == firstAcknowledgement }
+        }
+        XCTAssertNil(firstAcknowledgement)
+        XCTAssertEqual(journal.count, 1)
+        XCTAssertEqual(incidentStore.incidents.count, 1)
+
+        let redeliveryAcknowledgement = await client.receivePersisted(journal[0])
+        XCTAssertNil(redeliveryAcknowledgement)
+        XCTAssertEqual(journal.count, 1)
+        XCTAssertEqual(deliveries, 2)
+        XCTAssertEqual(incidentStore.incidents.count, 1)
+        XCTAssertEqual(incidentStore.incidents.first?.alert.occurrenceCount, 1)
     }
 
     func test_remediationReplayKeepsStableEvidenceID() {
