@@ -206,7 +206,7 @@ updateLeaseManager.onAudit = { audit in
 tamperProtection.onTamperAttempt = { attempt in
     let event: ESEvent
     switch attempt {
-    case .deleteProtectedPath(let path, let pid, let actorPath, let identity, let disposition):
+    case .deleteProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
         event = ESEvent(
             eventType: .notifyWrite,
             processPath: actorPath,
@@ -221,10 +221,14 @@ tamperProtection.onTamperAttempt = { attempt in
                 threatFamily: disposition == .blocked ? "tamper" : "nick-maintenance",
                 isCodeSigned: identity.isValidIdentitySignature,
                 teamID: identity.teamID,
-                signingID: identity.signingID
+                signingID: identity.signingID,
+                metadata: [
+                    "tamperOperation": operation.rawValue,
+                    "tamperTarget": path
+                ]
             )
         )
-    case .renameProtectedPath(let path, let pid, let actorPath, let identity, let disposition):
+    case .renameProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
         let isDocumentedUninstall = disposition == .documentedUninstall
         event = ESEvent(
             eventType: .notifyWrite,
@@ -244,7 +248,11 @@ tamperProtection.onTamperAttempt = { attempt in
                     : (isDocumentedUninstall ? "nick-documented-uninstall" : "nick-maintenance"),
                 isCodeSigned: identity.isValidIdentitySignature,
                 teamID: identity.teamID,
-                signingID: identity.signingID
+                signingID: identity.signingID,
+                metadata: [
+                    "tamperOperation": operation.rawValue,
+                    "tamperTarget": path
+                ]
             )
         )
     case .systemExtensionsCtlExec(let pid, let isSensitive):

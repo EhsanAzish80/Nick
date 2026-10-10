@@ -540,6 +540,16 @@ final class IncidentStore {
     static func incidentKey(for alert: ThreatAlert) -> String {
         let subjects = Set(alert.contributingSignals.map { signal -> String in
             let rule = EvidenceRulePolicy.ruleID(for: signal).lowercased()
+            if signal.metadata["reason"] == "endpoint_tamper_observed",
+               let operation = signal.metadata["tamperOperation"],
+               let target = signal.metadata["tamperTarget"] ?? signal.fileInfo?.path,
+               let process = signal.processInfo {
+                let signing = EvidenceSigningIdentity(signal: signal)
+                let actor = signing.teamID.flatMap { team in
+                    signing.signingIdentifier.map { "signed:\(team.lowercased()):\($0.lowercased())" }
+                } ?? "path:\(normalize(process.path))"
+                return "\(rule)|actor:\(actor)|operation:\(operation.lowercased())|target:\(normalize(target))"
+            }
             if let hash = signal.fileInfo?.sha256Hash, !hash.isEmpty { return "\(rule)|hash:\(hash.lowercased())" }
             if let process = signal.processInfo {
                 let signing = EvidenceSigningIdentity(signal: signal)
