@@ -86,6 +86,35 @@ final class SimpleActivityFeedTests: XCTestCase {
         )
     }
 
+    private func sensitiveManagementAlert(command: String) throws -> ThreatAlert {
+        XCTAssertTrue(TamperProtectionPolicy.isSensitiveSystemExtensionCommand(
+            arguments: ["systemextensionsctl", command]
+        ))
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/systemextensionsctl",
+            pid: 44,
+            parentPid: 1,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: "System extension removal command observed",
+                threatFamily: "tamper"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        return ThreatAlert(
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: .high,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: now
+        )
+    }
+
     func test_mergesSourcesNewestFirst() {
         let items = SimpleActivityFeed.items(
             alerts: [alert("Unusual app behaviour", level: .warning, hoursAgo: 3, needsAction: false)],
@@ -170,6 +199,27 @@ final class SimpleActivityFeedTests: XCTestCase {
         )
         XCTAssertEqual(hero.state, .protected)
         XCTAssertEqual(hero.title, "Your Mac is protected")
+    }
+
+    func test_sensitiveSystemExtensionCommandsRemainNeedsActionInBothModes() throws {
+        for command in ["uninstall", "reset"] {
+            let alert = try sensitiveManagementAlert(command: command)
+            XCTAssertTrue(alert.hasProtectedEvidence, command)
+            XCTAssertTrue(alert.isActionableUserFinding, command)
+
+            let advancedActive = [alert].filter {
+                $0.isVisibleInActiveAlerts(showInformational: false)
+            }
+            XCTAssertEqual(advancedActive.map(\.id), [alert.id], command)
+
+            let inputs = SimpleActivityFeed.alertInputs(
+                from: [alert], actionable: Set(advancedActive.map(\.id))
+            )
+            let items = SimpleActivityFeed.items(
+                alerts: inputs, quarantine: [], blocked: [], calendar: calendar
+            )
+            XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1, command)
+        }
     }
 
     func test_protectedFindingHasAdvancedSimpleBadgeAndHomeParity() {
