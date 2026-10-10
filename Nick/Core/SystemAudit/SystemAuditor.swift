@@ -126,29 +126,69 @@ final class SystemAuditor: MonitorProtocol {
 
     // MARK: - Individual Checks
 
+    enum ParsedSIPState: Equatable {
+        case enabled
+        case disabled
+        case partiallyDisabled
+    }
+
+    /// Parses only the documented first-line states emitted by `csrutil status`.
+    /// A custom configuration is not equivalent to fully enabled SIP, even when
+    /// individual component lines contain the word "enabled".
+    nonisolated static func parseSIPState(from output: String) -> ParsedSIPState? {
+        let firstLine = output.split(whereSeparator: \.isNewline).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch firstLine {
+        case "system integrity protection status: enabled.": return .enabled
+        case "system integrity protection status: disabled.": return .disabled
+        case "system integrity protection status: unknown (custom configuration).",
+             "system integrity protection status: enabled (custom configuration).":
+            return .partiallyDisabled
+        default: return nil
+        }
+    }
+
+    nonisolated static func sipStatus(from output: String) -> (status: CheckStatus, currentValue: String) {
+        switch parseSIPState(from: output) {
+        case .enabled: return (.pass, "Enabled")
+        case .disabled: return (.fail, "Disabled")
+        case .partiallyDisabled: return (.fail, "Partially disabled (custom configuration)")
+        case nil: return (.unknown, "Unknown")
+        }
+    }
+
+    /// Parses the exact state sentence emitted by `socketfilterfw --getglobalstate`.
+    nonisolated static func parseFirewallState(from output: String) -> Bool? {
+        let normalized = output.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.hasPrefix("firewall is enabled. (state = ") { return true }
+        if normalized == "firewall is disabled. (state = 0)" { return false }
+        return nil
+    }
+
+    /// Parses the exact state sentence emitted by `socketfilterfw --getstealthmode`.
+    nonisolated static func parseFirewallStealthState(from output: String) -> Bool? {
+        switch output.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "firewall stealth mode is on": return true
+        case "firewall stealth mode is off": return false
+        default: return nil
+        }
+    }
+
     private func checkSIP() async -> SystemCheckResult {
         let output = (try? await runCommand("/usr/bin/csrutil", args: ["status"])) ?? ""
-        let enabled = output.lowercased().contains("enabled")
-        let disabled = output.lowercased().contains("disabled")
-
-        let status: CheckStatus
-        if enabled { status = .pass }
-        else if disabled { status = .fail }
-        else { status = .unknown }
-
-        let sipCurrentValue: String
-        if enabled { sipCurrentValue = "Enabled" }
-        else if disabled { sipCurrentValue = "Disabled" }
-        else { sipCurrentValue = "Unknown" }
+        let parsed = Self.sipStatus(from: output)
 
         return SystemCheckResult(
             id: UUID(),
             check: .sip,
-            status: status,
-            currentValue: sipCurrentValue,
+            status: parsed.status,
+            currentValue: parsed.currentValue,
             expectedValue: "Enabled",
             description: "System Integrity Protection prevents modifications to system files, even by root.",
-            recommendation: status == .fail ? "Re-enable SIP by booting to Recovery Mode and running `csrutil enable`." : nil
+            recommendation: parsed.status == .fail
+                ? "Re-enable SIP by booting to Recovery Mode and running `csrutil enable`."
+                : nil
         )
     }
 
@@ -207,18 +247,21 @@ final class SystemAuditor: MonitorProtocol {
     private func checkFirewall() async -> SystemCheckResult {
         let fwPath = "/usr/libexec/ApplicationFirewall/socketfilterfw"
         let output = (try? await runCommand(fwPath, args: ["--getglobalstate"])) ?? ""
-        let enabled = output.lowercased().contains("enabled")
-        let disabled = output.lowercased().contains("disabled")
+        let enabledState = Self.parseFirewallState(from: output)
 
         let status: CheckStatus
-        if enabled { status = .pass }
-        else if disabled { status = .fail }
-        else { status = .unknown }
+        switch enabledState {
+        case true: status = .pass
+        case false: status = .fail
+        case nil: status = .unknown
+        }
 
         let fwCurrentValue: String
-        if enabled { fwCurrentValue = "Enabled" }
-        else if disabled { fwCurrentValue = "Disabled" }
-        else { fwCurrentValue = "Unknown" }
+        switch enabledState {
+        case true: fwCurrentValue = "Enabled"
+        case false: fwCurrentValue = "Disabled"
+        case nil: fwCurrentValue = "Unknown"
+        }
 
         return SystemCheckResult(
             id: UUID(),
@@ -234,17 +277,18 @@ final class SystemAuditor: MonitorProtocol {
     private func checkFirewallStealth() async -> SystemCheckResult {
         let fwPath = "/usr/libexec/ApplicationFirewall/socketfilterfw"
         let output = (try? await runCommand(fwPath, args: ["--getstealthmode"])) ?? ""
-        let lower   = output.lowercased()
-        let enabled = lower.contains("enabled") || lower.contains("is on")
+        let enabledState = Self.parseFirewallStealthState(from: output)
 
         return SystemCheckResult(
             id: UUID(),
             check: .firewallStealth,
-            status: enabled ? .pass : .fail,
-            currentValue: enabled ? "Enabled" : "Disabled",
+            status: enabledState.map { $0 ? .pass : .fail } ?? .unknown,
+            currentValue: enabledState.map { $0 ? "Enabled" : "Disabled" } ?? "Unknown",
             expectedValue: "Enabled",
             description: "Stealth mode causes your Mac to ignore unsolicited probe packets, reducing network visibility.",
-            recommendation: enabled ? nil : "Enable stealth mode in System Settings → Network → Firewall → Options."
+            recommendation: enabledState == false
+                ? "Enable stealth mode in System Settings → Network → Firewall → Options."
+                : nil
         )
     }
 
