@@ -452,10 +452,7 @@ final class ESEventHandler {
                                     threatFamily: result.threatFamily ?? "EmailThreat"
                                 )
                             )
-                            self.pushEvent(threat)
-                            if let data = try? self.encoder.encode(threat) {
-                                self.xpcServer?.sendThreatToApp(data)
-                            }
+                            self.reportThreat(threat)
                         }
                     }
                 }
@@ -533,10 +530,7 @@ final class ESEventHandler {
                         threatFamily: result.threatFamily
                     )
                 )
-                self.pushEvent(threat)
-                if let data = try? self.encoder.encode(threat) {
-                    self.xpcServer?.sendThreatToApp(data)
-                }
+                self.reportThreat(threat)
                 // Phase 6: mark the writing process as a threat in the process tree
                 self.processTree?.markAsThreat(pid: pid)
                 // Heuristic/YARA matches are user-review findings. Automated
@@ -1034,10 +1028,7 @@ final class ESEventHandler {
                 metadata: ransomwareMetadata
             )
         )
-        pushEvent(ransomwareEvent)
-        if let data = try? encoder.encode(ransomwareEvent) {
-            xpcServer?.sendThreatToApp(data)
-        }
+        reportThreat(ransomwareEvent)
         guard shouldTerminate, let engine = remediationEngine else { return }
         // A deleted canary cannot be hashed; the writer is still stopped.
         let hash = fileScanner?.scan(filePath: filePath).hash ?? ""
@@ -1084,6 +1075,15 @@ final class ESEventHandler {
             guard let self, let data = try? self.encoder.encode(event) else { return }
             self.xpcServer?.sendEventToApp(data)
         }
+    }
+
+    /// Sends detector-confirmed evidence only through the acknowledged threat
+    /// channel. Sending the same event through `reportEvent` first allowed a
+    /// notification to race ahead of durable incident persistence and also
+    /// made one detection appear twice in the app.
+    private func reportThreat(_ event: ESEvent) {
+        guard let data = try? encoder.encode(event) else { return }
+        xpcServer?.sendThreatToApp(data)
     }
 
     /// Limits real-time deep scanning to files that can reasonably carry

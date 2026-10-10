@@ -1230,7 +1230,10 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             return
         }
         Task { @MainActor [weak self] in
-            self?.receive(report)
+            // The detector-confirmed threat is the canonical user-facing
+            // incident. Remediation augments Quarantine state; it must not
+            // create a second alert and notification for the same file.
+            self?.receive(report, deliverToEngine: false)
         }
     }
 

@@ -163,6 +163,12 @@ struct MainWindowView: View {
             selectedSection = .scan
             simpleSelection = .scan
         }
+        .onReceive(NotificationCenter.default.publisher(for: .nickNavigateToAlert)) { note in
+            guard let alertID = note.userInfo?["alertID"] as? UUID else { return }
+            engine.pendingNotificationAlertID = alertID
+            selectedSection = .alerts
+            simpleSelection = .activity
+        }
         // Switching modes keeps the user on the equivalent page.
         .onChange(of: interfaceMode) { _, newMode in
             switch newMode {
