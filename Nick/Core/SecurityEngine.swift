@@ -187,6 +187,11 @@ final class SecurityEngine {
     /// `.nickScanFileRequest` notification handler in `MainWindowView`.
     var pendingFinderScanURL: URL?
 
+    /// Alert selected from a system notification. The main window routes to
+    /// Activity/Alerts and the simple activity view consumes this identifier
+    /// to present the matching incident.
+    var pendingNotificationAlertID: UUID?
+
     /// The most recent threat score from the real-time ML pipeline (0.0–1.0).
     var currentThreatScore: Double = 0.0
 

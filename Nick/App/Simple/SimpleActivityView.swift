@@ -74,6 +74,10 @@ struct SimpleActivityView: View {
             }
             .environment(xpcClient)
         }
+        .onAppear(perform: presentPendingNotificationAlert)
+        .onChange(of: engine.pendingNotificationAlertID) { _, _ in
+            presentPendingNotificationAlert()
+        }
     }
 
     // MARK: Pieces
@@ -182,6 +186,13 @@ struct SimpleActivityView: View {
         case .blocked:
             break
         }
+    }
+
+    private func presentPendingNotificationAlert() {
+        guard let id = engine.pendingNotificationAlertID,
+              let alert = engine.alerts.first(where: { $0.id == id }) else { return }
+        presentedAlert = alert
+        engine.pendingNotificationAlertID = nil
     }
 }
 

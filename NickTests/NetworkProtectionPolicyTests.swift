@@ -524,6 +524,175 @@ final class NetworkProtectionPolicyTests: XCTestCase {
 
 @MainActor
 final class UnifiedSourceFindingTests: XCTestCase {
+    func test_detectorThreatsUseOnlyAcknowledgedThreatChannel() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("NickExtension/EventHandler.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("private func reportThreat(_ event: ESEvent)"))
+        XCTAssertFalse(source.contains("self.pushEvent(threat)"))
+        XCTAssertFalse(source.contains("pushEvent(ransomwareEvent)"))
+    }
+
+    @MainActor
+    func test_eicarThreatPersistsAsOneCanonicalIncident() async throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/usr/bin/curl",
+            pid: 4242,
+            parentPid: 1,
+            filePath: "/private/tmp/nick-7b-eicar.exe",
+            decision: .notApplicable,
+            threat: .init(
+                sha256: "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+                threatName: "EICAR Anti-Malware Test File",
+                threatFamily: "Test"
+            )
+        )
+        let envelope = PersistedExtensionFinding(
+            kind: .threat,
+            timestamp: event.timestamp,
+            payload: try JSONEncoder().encode(event)
+        )
+        let client = ExtensionXPCClient()
+        let store = IncidentStore(persistOnInit: false)
+        client.findingHandler = { finding in
+            let alert = ThreatAlert(
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+            _ = store.ingest([alert])
+            return true
+        }
+
+        let acknowledgement = await client.receivePersisted(envelope)
+        XCTAssertEqual(acknowledgement, event.id)
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(store.incidents.first?.alert.contributingSignals.first?.id, event.id)
+        XCTAssertEqual(store.incidents.first?.alert.detectedFilePath, event.filePath)
+    }
+
+    @MainActor
+    func test_successfulQuarantineUpdatesQuarantineWithoutCreatingSecondFinding() async throws {
+        let client = ExtensionXPCClient()
+        var delivered = 0
+        client.findingHandler = { _ in
+            delivered += 1
+            return true
+        }
+        let record = QuarantineRecord(
+            id: UUID(),
+            originalPath: "/private/tmp/eicar.exe",
+            quarantinedPath: "/Library/Application Support/com.ehsanazish.nick/quarantine/eicar.exe",
+            hash: "abc",
+            threatName: "EICAR",
+            severity: "critical",
+            quarantinedAt: Date(timeIntervalSince1970: 456),
+            processPath: "/usr/bin/curl",
+            pid: 42
+        )
+        let report = RemediationReport(
+            timestamp: Date(timeIntervalSince1970: 456),
+            threatPath: "/private/tmp/eicar.exe",
+            threatName: "EICAR",
+            quarantineRecord: record,
+            actions: [.init(
+                type: .quarantineFile,
+                target: "/private/tmp/eicar.exe",
+                success: true,
+                detail: "Moved to quarantine"
+            )]
+        )
+
+        client.reportRemediationAction(try JSONEncoder().encode(report))
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(delivered, 0)
+        XCTAssertEqual(client.quarantineRecords.map(\.id), [record.id])
+    }
+
+    @MainActor
+    func test_failedQuarantineRemainsActionableAndIsDeliveredForNotification() async throws {
+        let client = ExtensionXPCClient()
+        let store = IncidentStore(persistOnInit: false)
+        var delivered = 0
+        var newlyActionable: [ThreatAlert] = []
+        let delivery = expectation(description: "Failed quarantine reaches incident ingestion")
+        client.findingHandler = { finding in
+            delivered += 1
+            let alert = ThreatAlert(
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+            newlyActionable = store.ingest([alert]).newlyActionable
+            delivery.fulfill()
+            return true
+        }
+        let report = RemediationReport(
+            timestamp: Date(timeIntervalSince1970: 789),
+            threatPath: "/private/tmp/eicar.exe",
+            threatName: "EICAR",
+            quarantineRecord: nil,
+            actions: [
+                .init(type: .killProcess, target: "42", success: true, detail: "Stopped"),
+                .init(
+                    type: .quarantineFile,
+                    target: "/private/tmp/eicar.exe",
+                    success: false,
+                    detail: "Permission denied"
+                ),
+            ]
+        )
+
+        client.reportRemediationAction(try JSONEncoder().encode(report))
+        await fulfillment(of: [delivery], timeout: 2)
+
+        XCTAssertEqual(delivered, 1)
+        let alert = try XCTUnwrap(store.incidents.first?.alert)
+        XCTAssertEqual(alert.title, "Threat remediation needs attention")
+        XCTAssertEqual(alert.severity, .critical)
+        XCTAssertEqual(alert.contributingSignals.first?.metadata["remediationStatus"], "quarantine-failed")
+        XCTAssertEqual(newlyActionable.map(\.id), [alert.id], "Newly actionable findings trigger notification delivery")
+    }
+
+    func test_notificationTapHasMainWindowNavigationReceiver() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let mainWindow = try String(
+            contentsOf: root.appendingPathComponent("Nick/App/MainWindowView.swift"),
+            encoding: .utf8
+        )
+        let simpleActivity = try String(
+            contentsOf: root.appendingPathComponent("Nick/App/Simple/SimpleActivityView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(mainWindow.contains("publisher(for: .nickNavigateToAlert)"))
+        XCTAssertTrue(mainWindow.contains("simpleSelection = .activity"))
+        XCTAssertTrue(mainWindow.contains("selectedSection = .alerts"))
+        XCTAssertTrue(simpleActivity.contains("presentPendingNotificationAlert"))
+    }
+
     func test_phishingObservationBecomesReviewableNetworkEvidence() {
         let event = NetworkBlockEvent(
             id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,

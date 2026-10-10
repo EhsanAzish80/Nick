@@ -672,7 +672,7 @@ public final class ExtensionXPCClient: NSObject {
             return await receiveThreat(event) ? event.id : nil
         case .remediation:
             guard let report = try? decoder.decode(RemediationReport.self, from: finding.payload) else { return nil }
-            receive(report, deliverToEngine: false)
+            receive(report, deliverToEngine: !report.quarantineSucceeded)
             return nil
         case .integrityViolation:
             guard let violation = try? decoder.decode(IntegrityViolation.self, from: finding.payload) else { return nil }
@@ -932,6 +932,14 @@ public final class ExtensionXPCClient: NSObject {
 
 // MARK: - Unified extension evidence
 
+private extension RemediationReport {
+    var quarantineSucceeded: Bool {
+        quarantineRecord != nil && actions.contains {
+            $0.type == .quarantineFile && $0.success
+        }
+    }
+}
+
 struct ExtensionFinding: Sendable {
     let signal: ThreatSignal
     let score: Double
@@ -1064,7 +1072,7 @@ struct ExtensionFinding: Sendable {
         let stableID = Self.stableUUID(
             "\(report.timestamp.timeIntervalSince1970)|\(report.threatPath)|\(report.threatName)"
         )
-        let succeeded = report.actions.contains(where: { $0.success })
+        let succeeded = report.quarantineSucceeded
         signal = ThreatSignal(
             id: stableID,
             source: .filesystem,
@@ -1073,7 +1081,7 @@ struct ExtensionFinding: Sendable {
             title: succeeded ? "Threat remediation completed" : "Threat remediation needs attention",
             description: succeeded
                 ? "Nick completed a response action for \(report.threatName)."
-                : "Nick detected \(report.threatName), but the requested response did not complete.",
+                : "Nick detected \(report.threatName), but quarantine failed and the file may remain in place.",
             context: ThreatSignalContext(
                 fileInfo: FileInfo(
                     path: report.threatPath,
@@ -1085,7 +1093,8 @@ struct ExtensionFinding: Sendable {
                 metadata: [
                     "reason": "endpoint_remediation",
                     "rule": "endpoint_remediation",
-                    "ruleTier": "protected"
+                    "ruleTier": "protected",
+                    "remediationStatus": succeeded ? "quarantined" : "quarantine-failed"
                 ]
             )
         )
@@ -1230,7 +1239,10 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             return
         }
         Task { @MainActor [weak self] in
-            self?.receive(report)
+            // Successful quarantine augments Quarantine state without creating
+            // a duplicate alert. A failed quarantine remains actionable and
+            // travels through the normal incident + notification boundary.
+            self?.receive(report, deliverToEngine: !report.quarantineSucceeded)
         }
     }
 
