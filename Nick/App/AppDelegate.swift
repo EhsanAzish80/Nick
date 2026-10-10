@@ -138,6 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 return await self.xpcClient.awaitIncidentStorePersistence()
             }
+            xpcClient.integrityAcknowledgementHandler = { [weak self] id in
+                self?.engine.resolveAcknowledgedFIMIncident(id)
+            }
             networkProtection.findingHandler = { [weak self] finding in
                 guard let self else { return }
                 _ = await self.engine.ingestLiveFinding(

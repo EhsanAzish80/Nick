@@ -83,6 +83,23 @@ enum SimpleActivityFeed {
         let level: Level
         let date: Date
         let needsAction: Bool
+        let isBlocked: Bool
+
+        init(
+            id: UUID,
+            headline: String,
+            level: Level,
+            date: Date,
+            needsAction: Bool,
+            isBlocked: Bool = false
+        ) {
+            self.id = id
+            self.headline = headline
+            self.level = level
+            self.date = date
+            self.needsAction = needsAction
+            self.isBlocked = isBlocked
+        }
     }
 
     /// A launch or open that real-time protection denied.
@@ -119,13 +136,23 @@ enum SimpleActivityFeed {
             }
             return AlertInput(
                 id: alert.id,
-                headline: level == .informational ? user.headline
+                headline: level == .informational ? informationalHeadline(user.headline)
                     : (user.severity == .safe ? "Security finding needs review" : user.headline),
                 level: level,
                 date: alert.lastSeen,
-                needsAction: alert.isActionableUserFinding && actionable.contains(alert.id)
+                needsAction: alert.isActionableUserFinding && actionable.contains(alert.id),
+                isBlocked: alert.contributingSignals.contains {
+                    $0.metadata["reason"] == "endpoint_tamper_observed"
+                        && $0.metadata["tamperDisposition"] == "blocked"
+                }
             )
         }
+    }
+
+    private static func informationalHeadline(_ headline: String) -> String {
+        let suffix = " needs your review"
+        guard headline.lowercased().hasSuffix(suffix) else { return headline }
+        return String(headline.dropLast(suffix.count)) + " activity observed"
     }
 
     static func blockedInputs(from events: [ESEvent]) -> [BlockedInput] {
@@ -147,10 +174,12 @@ enum SimpleActivityFeed {
         var items: [SimpleActivityItem] = []
 
         for alert in alerts {
-            let status: SimpleActivityItem.Status = alert.needsAction
+            let status: SimpleActivityItem.Status = alert.isBlocked
+                ? .blocked
+                : (alert.needsAction
                 ? .needsAction
                 : (alert.level == .critical ? .threat
-                    : (alert.level == .warning ? .warning : .informational))
+                    : (alert.level == .warning ? .warning : .informational)))
             items.append(SimpleActivityItem(
                 id: "a-\(alert.id.uuidString)",
                 source: .alert(alert.id),

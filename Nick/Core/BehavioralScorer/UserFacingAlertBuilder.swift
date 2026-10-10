@@ -103,13 +103,31 @@ final class UserFacingAlertBuilder: Sendable {
         }
 
         if signals.contains(where: { $0.metadata["remediationStatus"] == "quarantine-failed" }) {
+            let reason = signals.compactMap { $0.metadata["remediationFailureReason"] }
+                .first(where: { !$0.isEmpty }) ?? "The quarantine operation did not complete."
             return AlertPattern(
                 headline: "Quarantine failed — needs attention",
-                explanation: "Nick detected the file but could not move it into quarantine. The file may still be present and should be reviewed before you open it.",
+                explanation: "Nick detected the signature match but could not move the file into quarantine. The file is still present at its original location. Reason: \(reason)",
                 assessment: "Needs your attention",
                 recommendedAction: "Review the file and retry quarantine. If the failure continues, leave it unopened and check its permissions.",
                 severity: .critical,
                 actions: [.quarantine, .showDetails]
+            )
+        }
+
+        if let tamper = signals.first(where: {
+            $0.metadata["reason"] == "endpoint_tamper_observed"
+                && $0.metadata["tamperDisposition"] == "blocked"
+        }) {
+            let operation = tamper.metadata["tamperOperation"] ?? "modify"
+            let actor = userReadableProcessName(tamper.processInfo?.name) ?? "an unknown process"
+            return AlertPattern(
+                headline: "Nick blocked an attempt to modify its files (\(operation) by \(actor))",
+                explanation: "Nick refused the \(operation) operation by \(actor) before it could change the protected target.",
+                assessment: "Blocked",
+                recommendedAction: "No file change was allowed. Review the actor and operation if you did not run them.",
+                severity: .critical,
+                actions: [.showDetails]
             )
         }
 
@@ -264,8 +282,9 @@ final class UserFacingAlertBuilder: Sendable {
 
         // --- File integrity violation ---
         if hasFilesystem {
+            let pendingFIM = signals.contains { $0.metadata["fimStatus"] == "pending" }
             return AlertPattern(
-                headline: "System file change detected",
+                headline: pendingFIM ? "File integrity change needs review" : "System file change detected",
                 explanation: "A file that controls how your Mac operates was modified. "
                     + "This can happen after a legitimate update, but it's also how malware hides. "
                     + "Review the change to make sure it's expected.",

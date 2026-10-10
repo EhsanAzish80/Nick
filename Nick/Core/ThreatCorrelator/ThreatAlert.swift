@@ -154,6 +154,20 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
             return samePath && sameName && sameStart
         }
     ) -> AlertEvidenceState {
+        // Pending FIM records require an explicit authenticated acknowledgement,
+        // including deletion violations whose pathname no longer exists.
+        if contributingSignals.contains(where: { $0.metadata["fimStatus"] == "pending" }) {
+            return .historical
+        }
+        // A denied tamper operation is durable evidence of a completed block.
+        // The protected destination may intentionally not exist, so path
+        // revalidation must not demote the incident to non-actionable history.
+        if contributingSignals.contains(where: {
+            $0.metadata["reason"] == "endpoint_tamper_observed"
+                && $0.metadata["tamperDisposition"] == "blocked"
+        }) {
+            return .historical
+        }
         if let path = detectedFilePath {
             return fileExists(path) ? .fileAvailable(path) : .fileNoLongerExists(path)
         }
