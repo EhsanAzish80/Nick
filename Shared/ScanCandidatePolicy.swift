@@ -12,6 +12,11 @@ import Foundation
 /// that can execute, while skipping caches, media, and databases.
 enum ScanCandidatePolicy {
 
+    /// Maximum completed-write size considered for an exact signature lookup.
+    /// This path is intentionally hash-only and limited to user intake folders,
+    /// so ordinary high-churn text, database and cache writes remain excluded.
+    static let completedWriteSignatureSizeLimit: Int64 = 100 * 1_024 * 1_024
+
     enum Kind: String, Sendable {
         case machO
         case script
@@ -77,5 +82,25 @@ enum ScanCandidatePolicy {
         case .propertyList, .archive, .other:
             return false
         }
+    }
+
+    /// Exact curated hashes must not depend on a filename extension. Browsers,
+    /// Finder, Mail and command-line downloaders routinely write known samples
+    /// as `.txt`, extensionless files or names chosen by the user.
+    static func shouldCheckExactSignatureAfterCompletedWrite(
+        path: String,
+        fileSize: Int64
+    ) -> Bool {
+        guard fileSize > 0, fileSize <= completedWriteSignatureSizeLimit else { return false }
+        let normalized = URL(fileURLWithPath: path).standardizedFileURL.path
+        let temporaryExtensions: Set<String> = [
+            "crdownload", "download", "opdownload", "part", "partial"
+        ]
+        guard !temporaryExtensions.contains(
+            URL(fileURLWithPath: normalized).pathExtension.lowercased()
+        ) else { return false }
+        return normalized.contains("/Downloads/")
+            || normalized.contains("/Desktop/")
+            || normalized.contains("/Mail Downloads/")
     }
 }

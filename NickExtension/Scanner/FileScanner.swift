@@ -214,6 +214,33 @@ final class FileScanner {
         return match
     }
 
+    /// Performs only the curated SHA-256 lookup, without running YARA. Used
+    /// after completed writes in bounded user intake folders where extension-
+    /// based scheduling would miss a known sample saved as text or without an
+    /// executable suffix.
+    func exactSignatureMatch(path: String, identity: FileIdentity) -> ScanResult? {
+        guard let hash = computeSHA256Streaming(path: path),
+              let match = signatureDB.lookup(hash: hash) else { return nil }
+        cache.store(
+            path: path,
+            identity: identity,
+            hash: hash,
+            isThreat: true,
+            mayBlock: true,
+            threatName: match.name,
+            threatFamily: match.family
+        )
+        return ScanResult(
+            filePath: path,
+            identity: identity,
+            hash: hash,
+            isThreat: true,
+            mayBlock: true,
+            threatName: match.name,
+            threatFamily: match.family
+        )
+    }
+
     /// Whether any curated hashes are loaded. Refreshed at most once a minute
     /// so the AUTH path never runs a COUNT query.
     var hasSignatures: Bool {

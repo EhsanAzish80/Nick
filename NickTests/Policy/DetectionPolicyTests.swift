@@ -185,6 +185,27 @@ final class DetectionPolicyTests: XCTestCase {
         XCTAssertTrue(ScanCandidatePolicy.isExecutableContent(.machO))
     }
 
+    func test_completedWriteExactSignatureCandidatesCoverWriterMatrixWithoutBroadTextScanning() {
+        let size: Int64 = 68
+        XCTAssertTrue(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Downloads/eicar-safari.com.txt", fileSize: size))
+        XCTAssertTrue(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Desktop/eicar-finder", fileSize: size))
+        XCTAssertTrue(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/eicar-mail.txt",
+            fileSize: size))
+
+        XCTAssertFalse(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Documents/ordinary.txt", fileSize: size))
+        XCTAssertFalse(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Downloads/eicar-safari.com.txt.download", fileSize: size))
+        XCTAssertFalse(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Downloads/empty.txt", fileSize: 0))
+        XCTAssertFalse(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Downloads/oversized.txt",
+            fileSize: ScanCandidatePolicy.completedWriteSignatureSizeLimit + 1))
+    }
+
     // MARK: - RansomwareRenamePolicy
 
     func test_introducedExtensionIgnoresRoutineRenames() {
