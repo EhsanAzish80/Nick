@@ -119,6 +119,7 @@ public final class ExtensionXPCClient: NSObject {
     /// single incident pipeline. Kept as a closure to avoid a Core service
     /// owning UI/application lifetime state.
     var findingHandler: ((ExtensionFinding) async -> IncidentIngestOutcome)?
+    var incidentPersistenceConfirmationHandler: ((UInt64) -> Void)?
     var integrityAcknowledgementHandler: ((UUID) -> Void)?
 
     // MARK: - Private
@@ -434,10 +435,14 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    func persistIncidentStore(_ payload: Data, authorizationExternalForm: Data? = nil) {
-        incidentWriteGeneration &+= 1
+    func persistIncidentStore(
+        _ payload: Data,
+        generation: UInt64,
+        authorizationExternalForm: Data? = nil
+    ) {
+        incidentWriteGeneration = max(incidentWriteGeneration, generation)
         pendingIncidentPayload = payload
-        pendingIncidentGeneration = incidentWriteGeneration
+        pendingIncidentGeneration = generation
         if let authorizationExternalForm {
             finishProtectionAuthorization(pendingIncidentAuthorization)
             pendingIncidentAuthorization = authorizationExternalForm
@@ -482,6 +487,9 @@ public final class ExtensionXPCClient: NSObject {
                     through: generation,
                     succeeded: accepted && record != nil
                 )
+                if accepted && record != nil {
+                    self.incidentPersistenceConfirmationHandler?(generation)
+                }
                 self.drainIncidentStoreWrites()
             }
         }
@@ -490,9 +498,8 @@ public final class ExtensionXPCClient: NSObject {
     /// Waits for the root-owned store reply corresponding to the newest
     /// snapshot queued by the caller. A rejection is not durable success and
     /// must keep any extension journal event eligible for redelivery.
-    func awaitIncidentStorePersistence(after priorGeneration: UInt64) async -> (UInt64, Bool)? {
-        let generation = incidentWriteGeneration
-        guard generation > priorGeneration else {
+    func awaitIncidentStorePersistence(generation: UInt64) async -> (UInt64, Bool)? {
+        guard generation > 0, generation <= incidentWriteGeneration else {
             ackWithoutPersistenceCount += 1
             return nil
         }
@@ -510,8 +517,11 @@ public final class ExtensionXPCClient: NSObject {
             let floor = incidentWriteGeneration > 32 ? incidentWriteGeneration - 32 : 0
             incidentWriteResults = incidentWriteResults.filter { $0.key >= floor }
         }
-        let ready = incidentWriteWaiters.filter { $0.0 <= generation }
-        incidentWriteWaiters.removeAll { $0.0 <= generation }
+        // A later successful write must never satisfy a waiter for an earlier
+        // generation that failed. Each ingest is acknowledged only from the
+        // root-store reply for the exact snapshot generation it queued.
+        let ready = incidentWriteWaiters.filter { $0.0 == generation }
+        incidentWriteWaiters.removeAll { $0.0 == generation }
         for (_, continuation) in ready {
             continuation.resume(returning: succeeded)
         }
@@ -717,22 +727,25 @@ public final class ExtensionXPCClient: NSObject {
         if !events.contains(where: { $0.id == event.id }) { events.insert(event, at: 0) }
         trim(&events)
         guard let finding = ExtensionFinding(event: event), let findingHandler else { return .failed }
-        let priorGeneration = incidentWriteGeneration
         let outcome = await findingHandler(finding)
         switch outcome {
-        case .persisted, .coalesced:
+        case .persisted(let requiredGeneration), .coalesced(let requiredGeneration):
             let persistence = if let incidentPersistenceOverride {
-                await incidentPersistenceOverride(priorGeneration)
+                await incidentPersistenceOverride(requiredGeneration)
             } else {
-                await awaitIncidentStorePersistence(after: priorGeneration)
+                await awaitIncidentStorePersistence(generation: requiredGeneration)
             }
             guard let (generation, succeeded) = persistence,
-                  succeeded else {
+                  generation == requiredGeneration, succeeded else {
                 failedThreatEventIDs.insert(event.id)
                 return .failed
             }
             failedThreatEventIDs.remove(event.id)
-            return outcome == .persisted ? .persisted(generation) : .coalesced(generation)
+            switch outcome {
+            case .persisted: return .persisted(generation)
+            case .coalesced: return .coalesced(generation)
+            default: return .failed
+            }
         case .suppressedByPolicy(let reason):
             if reason == "dismissal" { suppressedByDismissalCount += 1 }
             failedThreatEventIDs.remove(event.id)

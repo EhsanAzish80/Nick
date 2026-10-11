@@ -812,7 +812,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [], dismissalTombstones: [], expectedCooldowns: [:], learnedReviewEntries: entries
         ))
-        try store.installPrivilegedSnapshot(payload) { _ in }
+        try store.installPrivilegedSnapshot(payload) { _, _ in }
         XCTAssertEqual(store.learnedReviewEntries.count, IncidentStore.maximumLearnedEntriesPerIdentity)
         store.resetAllLearnedEntries()
         XCTAssertTrue(store.learnedReviewEntries.isEmpty)
@@ -853,7 +853,7 @@ final class ThreatCorrelatorTests: XCTestCase {
             expectedCooldowns: [:],
             learnedReviewEntries: [activeEntry]
         ))
-        try rejectingStore.installPrivilegedSnapshot(payload) { _ in }
+        try rejectingStore.installPrivilegedSnapshot(payload) { _, _ in }
         XCTAssertEqual(rejectingStore.ingest([alert]).visibleAlerts.first?.severity, .medium)
     }
 
@@ -940,7 +940,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         let payload = try legacy.prepareLegacyMigration(defaults: defaults)
         let restored = IncidentStore()
         var writes: [Data] = []
-        try restored.installPrivilegedSnapshot(payload) { writes.append($0) }
+        try restored.installPrivilegedSnapshot(payload) { payload, _ in writes.append(payload) }
 
         XCTAssertEqual(restored.incidents.count, 1)
         XCTAssertEqual(restored.incidents.first?.alert.deduplicationKey, kept.deduplicationKey)
@@ -968,7 +968,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         let source = IncidentStore(defaults: defaults, persistOnInit: false)
         let payload = try source.prepareLegacyMigration(defaults: defaults)
         let restored = IncidentStore()
-        try restored.installPrivilegedSnapshot(payload) { _ in }
+        try restored.installPrivilegedSnapshot(payload) { _, _ in }
 
         XCTAssertEqual(restored.dismissedAlertDeduplicationKeys, Set([dismissed.deduplicationKey]))
         XCTAssertTrue(restored.ingest([dismissed]).newlyActionable.isEmpty)
@@ -1019,7 +1019,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         let source = IncidentStore(defaults: defaults, persistOnInit: false)
         let payload = try source.prepareLegacyMigration(defaults: defaults)
         let restored = IncidentStore()
-        try restored.installPrivilegedSnapshot(payload) { _ in }
+        try restored.installPrivilegedSnapshot(payload) { _, _ in }
         let result = restored.ingest([protected])
 
         XCTAssertEqual(result.newlyActionable.map(\.deduplicationKey), [protected.deduplicationKey])
@@ -1037,7 +1037,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         defer { deniedEngine.setVerdictLearningEnabled(false) }
         try deniedEngine.installPrivilegedIncidentStore(
             payload: payload,
-            persistence: { _, _ in },
+            persistence: { _, _, _ in },
             authorizer: { _, _ in .targetMissing },
             removeLegacyState: false
         )
@@ -1061,7 +1061,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         let allowedEngine = SecurityEngine()
         try allowedEngine.installPrivilegedIncidentStore(
             payload: payload,
-            persistence: { _, _ in },
+            persistence: { _, _, _ in },
             authorizer: { _, action in
                 action == .hidden
                     ? .approved(IncidentActionApproval(authorizationExternalForm: nil))
@@ -1093,7 +1093,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         let engine = SecurityEngine()
         try engine.installPrivilegedIncidentStore(
             payload: payload,
-            persistence: { _, _ in },
+            persistence: { _, _, _ in },
             authorizer: { _, _ in
                 attempts += 1
                 return attempts == 1
@@ -1137,7 +1137,7 @@ final class ThreatCorrelatorTests: XCTestCase {
             let engine = SecurityEngine()
             try engine.installPrivilegedIncidentStore(
                 payload: payload,
-                persistence: { _, _ in },
+                persistence: { _, _, _ in },
                 authorizer: { _, _ in result },
                 removeLegacyState: false
             )

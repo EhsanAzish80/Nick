@@ -270,8 +270,8 @@ struct SecurityIncident: Identifiable, Codable, Sendable, Equatable {
 }
 
 enum IncidentIngestOutcome: Equatable {
-    case persisted
-    case coalesced
+    case persisted(UInt64)
+    case coalesced(UInt64)
     case suppressedByPolicy(String)
     case failed
 }
@@ -306,8 +306,14 @@ final class IncidentStore {
     private var verdictLearningEnabled = false
     private let now: () -> Date
     private let identityValidator: (String, String, String) -> Bool
-    private var privilegedPersistence: ((Data) -> Void)?
+    private var privilegedPersistence: ((Data, UInt64) -> Void)?
     private var lastPrivilegedPayload: Data?
+    private(set) var lastQueuedGeneration: UInt64 = 0
+    private(set) var lastDurablyConfirmedGeneration: UInt64 = 0
+
+    var hasUnconfirmedChanges: Bool {
+        lastQueuedGeneration > lastDurablyConfirmedGeneration
+    }
 
     init(
         defaults: UserDefaults? = nil,
@@ -362,7 +368,7 @@ final class IncidentStore {
 
     func installPrivilegedSnapshot(
         _ payload: Data,
-        persistence: @escaping (Data) -> Void
+        persistence: @escaping (Data, UInt64) -> Void
     ) throws {
         let snapshot = try Self.decodeSnapshot(payload)
         incidents = snapshot.incidents
@@ -374,6 +380,11 @@ final class IncidentStore {
         boundInMemory()
         privilegedPersistence = persistence
         lastPrivilegedPayload = try encodedSnapshot()
+    }
+
+    func confirmDurablePersistence(generation: UInt64) {
+        guard generation <= lastQueuedGeneration else { return }
+        lastDurablyConfirmedGeneration = max(lastDurablyConfirmedGeneration, generation)
     }
 
     func prepareLegacyMigration(defaults: UserDefaults = .standard) throws -> Data {
@@ -411,6 +422,7 @@ final class IncidentStore {
         pruneExpiredLearnedEntries()
         var newlyActionable: [ThreatAlert] = []
         var outcomes: [IncidentIngestOutcome] = []
+        var forcePersistence = false
 
         for rawCandidate in candidates {
             let candidate = applyLearnedPriority(to: applyTrustedDowngrade(to: rawCandidate))
@@ -441,7 +453,7 @@ final class IncidentStore {
                     incidents.append(incident)
                     dismissalTombstones.removeAll { $0.incidentKey == tombstone.incidentKey }
                     newlyActionable.append(reopened)
-                    outcomes.append(.persisted)
+                    outcomes.append(.persisted(0))
                     continue
                 }
                 outcomes.append(.suppressedByPolicy("dismissal"))
@@ -452,14 +464,19 @@ final class IncidentStore {
                 let priorSignalIDs = Set(prior.alert.contributingSignals.map(\.id))
                 let candidateSignalIDs = Set(candidate.contributingSignals.map(\.id))
                 if !candidateSignalIDs.isEmpty, candidateSignalIDs.isSubset(of: priorSignalIDs) {
-                    outcomes.append(.suppressedByPolicy("duplicate event identifier"))
+                    if hasUnconfirmedChanges {
+                        outcomes.append(.coalesced(0))
+                        forcePersistence = true
+                    } else {
+                        outcomes.append(.suppressedByPolicy("duplicate event identifier"))
+                    }
                     continue
                 }
                 let escalated = candidate.severity > prior.alert.severity
                 let incomingEvidence = candidate.contributingSignals.map(Evidence.init(signal:))
                 incidents[index].alert = prior.alert.mergingOccurrence(candidate)
                 incidents[index].evidence = incomingEvidence
-                outcomes.append(.coalesced)
+                outcomes.append(.coalesced(0))
                 if escalated {
                     incidents[index].state = .new
                     incidents[index].isVisible = true
@@ -474,14 +491,21 @@ final class IncidentStore {
                 )
                 incident.actions.append(Self.action(.detected, actor: .automatic))
                 incidents.append(incident)
-                outcomes.append(.persisted)
+                outcomes.append(.persisted(0))
                 if candidate.severity != .info || Self.requiresVisibleNotification(candidate) {
                     newlyActionable.append(candidate)
                 }
             }
         }
 
-        persist()
+        let generation = persist(force: forcePersistence)
+        outcomes = outcomes.map { outcome in
+            switch outcome {
+            case .persisted: .persisted(generation)
+            case .coalesced: .coalesced(generation)
+            case .suppressedByPolicy, .failed: outcome
+            }
+        }
         return IncidentIngestResult(
             visibleAlerts: visibleAlerts,
             newlyActionable: newlyActionable,
@@ -508,7 +532,9 @@ final class IncidentStore {
             return
         case .resolved:
             incidents[index].state = .resolved
-            incidents[index].isVisible = false
+            // Resolution changes actionability, not protected-evidence
+            // retention. Keep it available to both projections as history.
+            incidents[index].isVisible = isProtected(incidents[index].alert)
         case .allowedOnce:
             incidents[index].state = .allowed
             incidents[index].isVisible = false
@@ -566,7 +592,8 @@ final class IncidentStore {
         return try encoder.encode(learnedReviewEntries.sorted { $0.lastConfirmedAt > $1.lastConfirmedAt })
     }
 
-    private func persist() {
+    @discardableResult
+    private func persist(force: Bool = false) -> UInt64 {
         boundInMemory()
         if let defaults = legacyTestDefaults {
             if let data = try? JSONEncoder().encode(incidents) {
@@ -580,11 +607,18 @@ final class IncidentStore {
                 defaults.set(data, forKey: "nickPersistedAlerts")
             }
         }
-        guard let privilegedPersistence,
-              let payload = try? encodedSnapshot(),
-              payload != lastPrivilegedPayload else { return }
+        guard let payload = try? encodedSnapshot() else { return lastQueuedGeneration }
+        guard let privilegedPersistence else {
+            lastQueuedGeneration &+= 1
+            lastDurablyConfirmedGeneration = lastQueuedGeneration
+            lastPrivilegedPayload = payload
+            return lastQueuedGeneration
+        }
+        guard force || payload != lastPrivilegedPayload else { return lastQueuedGeneration }
+        lastQueuedGeneration &+= 1
         lastPrivilegedPayload = payload
-        privilegedPersistence(payload)
+        privilegedPersistence(payload, lastQueuedGeneration)
+        return lastQueuedGeneration
     }
 
     private func encodedSnapshot() throws -> Data {

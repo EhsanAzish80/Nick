@@ -493,14 +493,14 @@ final class SecurityEngine {
 
     func installPrivilegedIncidentStore(
         payload: Data,
-        persistence: @escaping (Data, Data?) -> Void,
+        persistence: @escaping (Data, UInt64, Data?) -> Void,
         authorizer: @escaping (UUID, IncidentActionKind) async -> IncidentActionAuthorizationResult,
         removeLegacyState: Bool
     ) throws {
-        try incidentStore.installPrivilegedSnapshot(payload) { [weak self] payload in
+        try incidentStore.installPrivilegedSnapshot(payload) { [weak self] payload, generation in
             let authorization = self?.nextIncidentStoreAuthorization
             self?.nextIncidentStoreAuthorization = nil
-            persistence(payload, authorization)
+            persistence(payload, generation, authorization)
         }
         incidentActionAuthorizer = authorizer
         if removeLegacyState {
@@ -508,6 +508,10 @@ final class SecurityEngine {
         }
         syncAlertsFromStore()
         logger.info("Restored \(self.alerts.count) root-owned incident(s)")
+    }
+
+    func confirmIncidentStorePersistence(generation: UInt64) {
+        incidentStore.confirmDurablePersistence(generation: generation)
     }
 
     /// Clears all stored threat alerts, resets threat counters, and removes all
@@ -740,7 +744,11 @@ final class SecurityEngine {
             let (formatter, outputs) = buildPipeline()
             await emitAlert(newAlert, formatter: formatter, outputs: outputs)
         }
-        return result.outcomes.first ?? .failed
+#if DEBUG
+        precondition(result.outcomes.count == 1, "A live finding must produce exactly one ingest outcome")
+#endif
+        guard result.outcomes.count == 1 else { return .failed }
+        return result.outcomes[0]
     }
 
     /// Adds a single alert from the real-time pipeline. Repeat evidence updates

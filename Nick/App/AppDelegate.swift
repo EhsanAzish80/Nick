@@ -155,9 +155,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     do {
                         try self.engine.installPrivilegedIncidentStore(
                             payload: record.payload,
-                            persistence: { [weak self] payload, authorization in
+                            persistence: { [weak self] payload, generation, authorization in
                                 self?.xpcClient.persistIncidentStore(
                                     payload,
+                                    generation: generation,
                                     authorizationExternalForm: authorization
                                 )
                             },
@@ -167,6 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             },
                             removeLegacyState: true
                         )
+                        self.xpcClient.incidentPersistenceConfirmationHandler = { [weak self] generation in
+                            self?.engine.confirmIncidentStorePersistence(generation: generation)
+                        }
                     } catch {
                         self.incidentStoreLogger.error(
                             "Could not load root-owned incident store: \(error.localizedDescription)"
