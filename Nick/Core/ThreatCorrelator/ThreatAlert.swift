@@ -217,6 +217,75 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         )
     }
 
+    func withQuarantineFailure(_ failure: QuarantineFailure) -> ThreatAlert {
+        let updatedSignals = contributingSignals.map { signal -> ThreatSignal in
+            var metadata = signal.metadata
+            metadata["remediationStatus"] = failure.reason == .fileGone ? "file-gone" : "quarantine-failed"
+            metadata["remediationFailureReason"] = failure.reason.rawValue
+            metadata["remediationStatusLine"] = failure.statusLine
+            metadata["remediationGuidance"] = failure.guidance
+            metadata["remediationErrorDomain"] = failure.errorDomain
+            metadata["remediationErrorCode"] = String(failure.errorCode)
+            if let volumeName = failure.volumeName { metadata["remediationVolumeName"] = volumeName }
+            if let diskImagePath = failure.diskImagePath { metadata["remediationDiskImagePath"] = diskImagePath }
+            return ThreatSignal(
+                id: signal.id,
+                source: signal.source,
+                severity: signal.severity,
+                timestamp: signal.timestamp,
+                title: signal.title,
+                description: signal.description,
+                context: ThreatSignalContext(
+                    processInfo: signal.processInfo,
+                    networkInfo: signal.networkInfo,
+                    fileInfo: signal.fileInfo,
+                    metadata: metadata
+                )
+            )
+        }
+        return ThreatAlert(
+            id: id,
+            score: score,
+            content: AlertContent(
+                title: title,
+                description: description,
+                severity: severity,
+                recommendedAction: failure.guidance,
+                explanation: "\(failure.statusLine). \(failure.guidance)"
+            ),
+            contributingSignals: updatedSignals,
+            timestamp: timestamp,
+            firstSeen: firstSeen,
+            lastSeen: lastSeen,
+            occurrenceCount: occurrenceCount
+        )
+    }
+
+    func clearingQuarantineFailure() -> ThreatAlert {
+        let cleanedSignals = contributingSignals.map { signal -> ThreatSignal in
+            let keys = signal.metadata.keys.filter { $0.hasPrefix("remediation") }
+            var metadata = signal.metadata
+            keys.forEach { metadata.removeValue(forKey: $0) }
+            return ThreatSignal(
+                id: signal.id, source: signal.source, severity: signal.severity,
+                timestamp: signal.timestamp, title: signal.title, description: signal.description,
+                context: ThreatSignalContext(
+                    processInfo: signal.processInfo, networkInfo: signal.networkInfo,
+                    fileInfo: signal.fileInfo, metadata: metadata
+                )
+            )
+        }
+        return ThreatAlert(
+            id: id, score: score,
+            content: AlertContent(
+                title: title, description: description, severity: severity,
+                recommendedAction: "The file was moved to quarantine.", explanation: explanation
+            ),
+            contributingSignals: cleanedSignals, timestamp: timestamp,
+            firstSeen: firstSeen, lastSeen: lastSeen, occurrenceCount: occurrenceCount
+        )
+    }
+
     private static func signalFingerprint(_ signal: ThreatSignal) -> String {
         var parts = [
             signal.source.rawValue.lowercased(),

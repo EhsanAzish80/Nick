@@ -103,13 +103,17 @@ final class UserFacingAlertBuilder: Sendable {
         }
 
         if signals.contains(where: { $0.metadata["remediationStatus"] == "quarantine-failed" }) {
-            let reason = signals.compactMap { $0.metadata["remediationFailureReason"] }
-                .first(where: { !$0.isEmpty }) ?? "The quarantine operation did not complete."
+            let legacyReason = signals.compactMap { $0.metadata["remediationFailureReason"] }
+                .first(where: { !$0.isEmpty })
+            let status = signals.compactMap { $0.metadata["remediationStatusLine"] }
+                .first(where: { !$0.isEmpty }) ?? legacyReason.map { "Quarantine failed — \($0)" } ?? "Quarantine failed"
+            let guidance = signals.compactMap { $0.metadata["remediationGuidance"] }
+                .first(where: { !$0.isEmpty }) ?? alert.recommendedAction
             return AlertPattern(
-                headline: "Quarantine failed — needs attention",
-                explanation: "Nick detected the signature match but could not move the file into quarantine. The file is still present at its original location. Reason: \(reason)",
+                headline: alert.title,
+                explanation: "\(status). The file is still present at its original location.",
                 assessment: "Needs your attention",
-                recommendedAction: "Review the file and retry quarantine. If the failure continues, leave it unopened and check its permissions.",
+                recommendedAction: guidance,
                 severity: .critical,
                 actions: [.quarantine, .showDetails]
             )

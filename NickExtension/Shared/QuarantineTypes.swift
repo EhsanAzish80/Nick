@@ -4,6 +4,61 @@
 
 import Foundation
 
+public enum QuarantineFailureReason: String, Codable, Sendable, Equatable {
+    case readOnlyVolume
+    case permissionDenied
+    case fileGone
+    case inUse
+    case other
+}
+
+public struct QuarantineFailure: Codable, Sendable, Equatable, Error {
+    public let reason: QuarantineFailureReason
+    public let errorDomain: String
+    public let errorCode: Int
+    public let volumeName: String?
+    public let diskImagePath: String?
+
+    public init(
+        reason: QuarantineFailureReason,
+        errorDomain: String,
+        errorCode: Int,
+        volumeName: String? = nil,
+        diskImagePath: String? = nil
+    ) {
+        self.reason = reason
+        self.errorDomain = errorDomain
+        self.errorCode = errorCode
+        self.volumeName = volumeName
+        self.diskImagePath = diskImagePath
+    }
+
+    public var statusLine: String {
+        switch reason {
+        case .readOnlyVolume: "Quarantine failed — the file is on a read-only disk image"
+        case .permissionDenied: "Quarantine failed — macOS denied permission to move the file"
+        case .fileGone: "The file is no longer present"
+        case .inUse: "Quarantine failed — the file is currently in use"
+        case .other: "Quarantine failed — error \(errorDomain) \(errorCode)"
+        }
+    }
+
+    public var guidance: String {
+        switch reason {
+        case .readOnlyVolume:
+            "Eject the disk image and delete the .dmg file it came from; Nick cannot move files off a read-only volume."
+        case .permissionDenied:
+            "Leave the file unopened and review its permissions or System Integrity Protection status before retrying."
+        case .fileGone:
+            "No further quarantine action is needed because the file is no longer present."
+        case .inUse:
+            "Quit the app using the file, then retry quarantine."
+        case .other:
+            "Leave the file unopened and retry quarantine. If it fails again, review the recorded error code."
+        }
+    }
+}
+
 // MARK: - File identity
 
 /// The on-disk identity of file content at a specific point in time.
@@ -202,6 +257,21 @@ public struct RemediationAction: Codable, Sendable {
     public let target: String
     public let success: Bool
     public let detail: String
+    public let quarantineFailure: QuarantineFailure?
+
+    public init(
+        type: ActionType,
+        target: String,
+        success: Bool,
+        detail: String,
+        quarantineFailure: QuarantineFailure? = nil
+    ) {
+        self.type = type
+        self.target = target
+        self.success = success
+        self.detail = detail
+        self.quarantineFailure = quarantineFailure
+    }
 }
 
 // MARK: - IntegrityViolation

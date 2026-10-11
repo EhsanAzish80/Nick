@@ -258,9 +258,9 @@ final class SimpleActivityFeedTests: XCTestCase {
             alerts: inputs, quarantine: [], blocked: [], calendar: calendar
         )
         XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
-        XCTAssertEqual(items.first?.title, "Quarantine failed — needs attention")
+        XCTAssertEqual(items.first?.title, "EICAR")
         let presented = UserFacingAlertBuilder.shared.build(from: alert)
-        XCTAssertTrue(presented.explanation.contains("signature match"))
+        XCTAssertTrue(presented.explanation.contains("Quarantine failed"))
         XCTAssertTrue(presented.explanation.contains("still present"))
         XCTAssertTrue(presented.explanation.contains("Permission denied"))
     }

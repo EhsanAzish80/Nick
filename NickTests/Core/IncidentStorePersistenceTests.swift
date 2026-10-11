@@ -3,6 +3,83 @@ import XCTest
 
 final class IncidentStorePersistenceTests: XCTestCase {
     @MainActor
+    func test_manualEROFSQuarantineFailurePersistsNeedsActionWithoutNotification() throws {
+        let store = try privilegedStore()
+        let alert = Self.malwareAlert()
+        let ingest = store.ingest([alert])
+        let queue = DurableIncidentNotificationQueue()
+        queue.stage(ingest.newlyActionable, for: try XCTUnwrap(ingest.outcomes.first?.generation))
+        _ = queue.confirm(generation: store.lastQueuedGeneration)
+
+        let failure = QuarantineFailure(
+            reason: .readOnlyVolume,
+            errorDomain: NSPOSIXErrorDomain,
+            errorCode: Int(EROFS),
+            volumeName: "NickReadOnly"
+        )
+        store.recordQuarantineFailure(alertID: alert.id, failure: failure)
+
+        let incident = try XCTUnwrap(store.incidents.first)
+        XCTAssertEqual(incident.state, .new)
+        XCTAssertTrue(incident.isVisible)
+        XCTAssertEqual(incident.alert.title, "EICAR Anti-Malware Test File")
+        XCTAssertEqual(incident.alert.recommendedAction, failure.guidance)
+        XCTAssertEqual(incident.actions.last?.action, .quarantineFailed)
+        XCTAssertTrue(incident.actions.last?.detail?.contains("NSPOSIXErrorDomain:30") == true)
+        XCTAssertTrue(queue.confirm(generation: store.lastQueuedGeneration).isEmpty)
+
+        let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: store.incidents, dismissalTombstones: [], expectedCooldowns: [:]
+        ))
+        let restored = IncidentStore(persistOnInit: false)
+        try restored.installPrivilegedSnapshot(payload) { _, _ in }
+        XCTAssertEqual(restored.incidents.first?.actions.last?.action, .quarantineFailed)
+        XCTAssertEqual(restored.incidents.first?.alert.recommendedAction, failure.guidance)
+    }
+
+    @MainActor
+    func test_quarantineENOENTResolvesWithNote() throws {
+        let store = IncidentStore(persistOnInit: false)
+        let alert = Self.malwareAlert()
+        _ = store.ingest([alert])
+        store.recordQuarantineFailure(
+            alertID: alert.id,
+            failure: QuarantineFailure(reason: .fileGone, errorDomain: NSPOSIXErrorDomain, errorCode: Int(ENOENT))
+        )
+        XCTAssertEqual(store.incidents.first?.state, .resolved)
+        XCTAssertEqual(store.incidents.first?.actions.last?.action, .quarantineFailed)
+    }
+
+    @MainActor
+    func test_quarantineRetrySuccessClearsFailureAndRecordsSuccess() throws {
+        let store = IncidentStore(persistOnInit: false)
+        let alert = Self.malwareAlert()
+        _ = store.ingest([alert])
+        store.recordQuarantineFailure(
+            alertID: alert.id,
+            failure: QuarantineFailure(reason: .readOnlyVolume, errorDomain: NSPOSIXErrorDomain, errorCode: Int(EROFS))
+        )
+        store.recordQuarantineSuccess(alertID: alert.id)
+        XCTAssertEqual(store.incidents.first?.state, .resolved)
+        XCTAssertEqual(store.incidents.first?.actions.last?.action, .quarantined)
+        XCTAssertNil(store.incidents.first?.alert.contributingSignals.first?.metadata["remediationStatus"])
+    }
+
+    @MainActor
+    func test_quarantineFailureSimpleAdvancedParity() throws {
+        let store = IncidentStore(persistOnInit: false)
+        let alert = Self.malwareAlert()
+        _ = store.ingest([alert])
+        store.recordQuarantineFailure(
+            alertID: alert.id,
+            failure: QuarantineFailure(reason: .readOnlyVolume, errorDomain: NSPOSIXErrorDomain, errorCode: Int(EROFS))
+        )
+        let advancedIDs = Set(store.visibleAlerts.map(\.id))
+        let simpleIDs = Set(store.visibleAlerts.filter(\.isUserVisibleFinding).map(\.id))
+        XCTAssertEqual(simpleIDs, advancedIDs)
+    }
+
+    @MainActor
     func test_duplicateEventWithUnconfirmedStateQueuesNewGeneration() throws {
         let store = IncidentStore(persistOnInit: false)
         var writes: [UInt64] = []
@@ -429,6 +506,32 @@ final class IncidentStorePersistenceTests: XCTestCase {
                 threatName: "Nick protected path change blocked", threatFamily: "tamper",
                 metadata: ["tamperOperation": operation.rawValue, "tamperTarget": target]
             )
+        )
+    }
+}
+
+private extension IncidentStorePersistenceTests {
+    static func malwareAlert() -> ThreatAlert {
+        let signal = ThreatSignal(
+            source: .yara,
+            severity: .high,
+            title: "EICAR Anti-Malware Test File",
+            description: "Nick found suspicious content on an external volume.",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(
+                    path: "/Volumes/NickReadOnly/eicar.com", sha256Hash: "275a",
+                    entropy: nil, signingStatus: nil, sizeBytes: 68
+                ),
+                metadata: ["reason": "usb_threat", "rule": "EICAR Anti-Malware Test File", "ruleTier": "protected"]
+            )
+        )
+        return ThreatAlert(
+            score: 0.92,
+            content: AlertContent(
+                title: signal.title, description: signal.description,
+                severity: .high, recommendedAction: "Quarantine the file."
+            ),
+            contributingSignals: [signal], timestamp: signal.timestamp
         )
     }
 }

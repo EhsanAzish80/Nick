@@ -57,8 +57,9 @@ final class QuarantineManager {
 
     /// Moves `filePath` to the vault and records a `QuarantineRecord`.
     ///
-    /// - Returns: The `QuarantineRecord` on success; `nil` if the file could
-    ///   not be moved. A failed quarantine never deletes the original file.
+    /// - Returns: The record on success or a typed failure preserving the
+    ///   underlying errno/NSError evidence. A failed quarantine never deletes
+    ///   the original file.
     @discardableResult
     func quarantine(
         filePath:    String,
@@ -67,24 +68,24 @@ final class QuarantineManager {
         severity:    String,
         processPath: String,
         pid:         Int32
-    ) -> QuarantineRecord? {
+    ) -> Result<QuarantineRecord, QuarantineFailure> {
         let fm = FileManager.default
         let normalizedHash = hash.lowercased()
         guard normalizedHash.count == 64,
               normalizedHash.allSatisfy({ character in character.isHexDigit }) else {
             Self.logger.error("Quarantine refused because the SHA-256 hash is invalid")
-            return nil
+            return .failure(failure(.other, code: Int(EINVAL), path: filePath))
         }
         guard let canonicalOriginalPath = canonicalOriginalPath(for: filePath),
               fm.fileExists(atPath: canonicalOriginalPath) else {
             Self.logger.warning("Quarantine skipped — file no longer exists: \(filePath)")
-            return nil
+            return .failure(failure(.fileGone, code: Int(ENOENT), path: filePath))
         }
 
         let sourceFD = open(canonicalOriginalPath, O_RDONLY | O_NOFOLLOW)
         guard sourceFD >= 0 else {
             Self.logger.warning("Quarantine refused because the selected item could not be opened safely")
-            return nil
+            return .failure(failureForCurrentErrno(path: canonicalOriginalPath))
         }
         defer { close(sourceFD) }
 
@@ -93,7 +94,7 @@ final class QuarantineManager {
               originalStat.st_mode & S_IFMT == S_IFREG,
               let openedHash = sha256(fileDescriptor: sourceFD) else {
             Self.logger.warning("Quarantine refused because the opened file does not match the reviewed hash")
-            return nil
+            return .failure(failureForCurrentErrno(path: canonicalOriginalPath))
         }
         let reviewedIdentity = FileIdentity(stat: originalStat)
         var pathStat = stat()
@@ -105,7 +106,7 @@ final class QuarantineManager {
                   currentHash: openedHash
               ) else {
             Self.logger.warning("Quarantine refused because the selected item is not a regular file")
-            return nil
+            return .failure(failure(.other, code: Int(EINVAL), path: canonicalOriginalPath))
         }
 
         let recordID = UUID()
@@ -157,10 +158,11 @@ final class QuarantineManager {
             database.insert(record: record)
 
             Self.logger.info("Quarantined '\(filePath)' → .\(vaultName).quarantine. (threat: \(threatName))")
-            return record
+            return .success(record)
 
         } catch {
-            Self.logger.error("Quarantine failed for '\(filePath)': \(error.localizedDescription)")
+            let typedFailure = failure(from: error, path: canonicalOriginalPath)
+            Self.logger.error("Quarantine failed for '\(filePath)': \(error.localizedDescription, privacy: .public) [\(typedFailure.errorDomain, privacy: .public):\(typedFailure.errorCode)]")
             // Quarantine is fail-safe: if the move succeeded but a later vault step
             // failed, put the original back whenever possible. Never delete it.
             if fm.fileExists(atPath: quarantinedPath),
@@ -169,8 +171,63 @@ final class QuarantineManager {
                 try? fm.moveItem(atPath: quarantinedPath, toPath: canonicalOriginalPath)
             }
             try? fm.removeItem(atPath: metaPath)
-            return nil
+            return .failure(typedFailure)
         }
+    }
+
+    private func failureForCurrentErrno(path: String) -> QuarantineFailure {
+        failure(reason(forPOSIXCode: errno), code: Int(errno), path: path)
+    }
+
+    private func failure(from error: Error, path: String) -> QuarantineFailure {
+        let nsError = error as NSError
+        let errors = errorChain(nsError)
+        if let posix = errors.first(where: { $0.domain == NSPOSIXErrorDomain }) {
+            return failure(reason(forPOSIXCode: Int32(posix.code)), domain: posix.domain, code: posix.code, path: path)
+        }
+        let reason: QuarantineFailureReason
+        switch CocoaError.Code(rawValue: nsError.code) {
+        case .fileNoSuchFile: reason = .fileGone
+        case .fileWriteNoPermission, .fileReadNoPermission: reason = .permissionDenied
+        case .fileLocking, .fileWriteInapplicableStringEncoding: reason = .inUse
+        default: reason = .other
+        }
+        return failure(reason, domain: nsError.domain, code: nsError.code, path: path)
+    }
+
+    private func errorChain(_ error: NSError) -> [NSError] {
+        var result = [error]
+        var current = error
+        while let underlying = current.userInfo[NSUnderlyingErrorKey] as? NSError {
+            result.append(underlying)
+            current = underlying
+        }
+        return result
+    }
+
+    private func reason(forPOSIXCode code: Int32) -> QuarantineFailureReason {
+        switch code {
+        case EROFS: .readOnlyVolume
+        case EPERM, EACCES: .permissionDenied
+        case ENOENT: .fileGone
+        case EBUSY, ETXTBSY: .inUse
+        default: .other
+        }
+    }
+
+    private func failure(
+        _ reason: QuarantineFailureReason,
+        domain: String = NSPOSIXErrorDomain,
+        code: Int,
+        path: String
+    ) -> QuarantineFailure {
+        let values = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeNameKey])
+        return QuarantineFailure(
+            reason: reason,
+            errorDomain: domain,
+            errorCode: code,
+            volumeName: values?.volumeName
+        )
     }
 
     private func sha256(fileDescriptor: Int32) -> String? {

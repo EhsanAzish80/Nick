@@ -563,6 +563,20 @@ private struct AlertRow: View {
                 Text("Nick found this while monitoring \(URL(fileURLWithPath: path).deletingLastPathComponent().path). It has not been removed.")
                     .font(.nickCaption)
                     .foregroundStyle(Color.textSecondary)
+                if let signal = alert.contributingSignals.first,
+                   signal.metadata["remediationStatus"] == "quarantine-failed" {
+                    Text(signal.metadata["remediationStatusLine"] ?? "Quarantine failed")
+                        .font(.nickBodyMedium)
+                        .foregroundStyle(Color.statusRed)
+                    if let volume = signal.metadata["remediationVolumeName"] {
+                        Text("Volume: \(volume)")
+                            .font(.nickCaption)
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    Text(signal.metadata["remediationGuidance"] ?? alert.recommendedAction)
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textSecondary)
+                }
             }
             .padding(.leading, NickSpacing.lg)
         } else if detectedFilePath != nil {
@@ -589,13 +603,16 @@ private struct AlertRow: View {
         xpcClient.requestQuarantineFile(
             path: path,
             expectedThreatName: detectionRule ?? "Detected threat"
-        ) { success, message in
+        ) { result in
             quarantining = false
-            if success {
-                engine.resolveAlert(alert.id)
+            switch result {
+            case .success:
+                engine.recordManualQuarantineSuccess(alertID: alert.id)
                 engine.runFullScan()
-            } else {
-                quarantineError = message ?? "Nick could not quarantine the file."
+            case .failure(let failure):
+                engine.recordManualQuarantineFailure(failure, alertID: alert.id)
+                let volume = failure.volumeName.map { " Volume: \($0)." } ?? ""
+                quarantineError = failure.statusLine + "." + volume + " " + failure.guidance
             }
         }
     }

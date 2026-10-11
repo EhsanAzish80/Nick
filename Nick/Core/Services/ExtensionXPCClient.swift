@@ -531,6 +531,7 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
+#if DEBUG
     /// Test seam for exercising latest-wins write completion without XPC.
     func completeIncidentWriteForTesting(through generation: UInt64, succeeded: Bool) {
         completeIncidentWrite(through: generation, succeeded: succeeded)
@@ -546,6 +547,7 @@ public final class ExtensionXPCClient: NSObject {
         }
         return (generation, result)
     }
+#endif
 
     func validateIncidentVerdictTarget(
         id: UUID,
@@ -839,10 +841,14 @@ public final class ExtensionXPCClient: NSObject {
     public func requestQuarantineFile(
         path: String,
         expectedThreatName: String,
-        completion: @escaping (Bool, String?) -> Void
+        completion: @escaping (Result<QuarantineRecord, QuarantineFailure>) -> Void
     ) {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
-            completion(false, "Real-Time Protection is not connected.")
+            completion(.failure(QuarantineFailure(
+                reason: .other,
+                errorDomain: "NickExtensionXPC",
+                errorCode: 1
+            )))
             return
         }
         proxy.requestQuarantineFile(path: path, expectedThreatName: expectedThreatName) {
@@ -853,8 +859,19 @@ public final class ExtensionXPCClient: NSObject {
                    let record = try? JSONDecoder().decode(QuarantineRecord.self, from: recordData) {
                     self?.quarantineRecords.removeAll { $0.id == record.id }
                     self?.quarantineRecords.insert(record, at: 0)
+                    completion(.success(record))
+                    return
                 }
-                completion(success, message)
+                if let recordData,
+                   let failure = try? JSONDecoder().decode(QuarantineFailure.self, from: recordData) {
+                    completion(.failure(failure))
+                } else {
+                    completion(.failure(QuarantineFailure(
+                        reason: .other,
+                        errorDomain: "NickExtensionXPC",
+                        errorCode: 2
+                    )))
+                }
             }
         }
     }
@@ -1161,15 +1178,18 @@ struct ExtensionFinding: Sendable {
         let quarantineFailureReason = report.actions.first {
             $0.type == .quarantineFile && !$0.success
         }?.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typedFailure = report.actions.first {
+            $0.type == .quarantineFile && !$0.success
+        }?.quarantineFailure
         let failureReason = quarantineFailureReason.flatMap { detail in
             detail.isEmpty ? nil : detail
         } ?? "The quarantine operation did not complete."
         signal = ThreatSignal(
             id: stableID,
             source: .filesystem,
-            severity: succeeded ? .high : .critical,
+            severity: succeeded ? .high : (typedFailure?.reason == .fileGone ? .info : .critical),
             timestamp: report.timestamp,
-            title: succeeded ? "Threat remediation completed" : "Quarantine failed — needs attention",
+            title: succeeded ? "Threat remediation completed" : report.threatName,
             description: succeeded
                 ? "Nick completed a response action for \(report.threatName)."
                 : "Nick detected \(report.threatName), but quarantine failed. The file is still present at its original location. Reason: \(failureReason)",
@@ -1185,15 +1205,21 @@ struct ExtensionFinding: Sendable {
                     "reason": "endpoint_remediation",
                     "rule": "endpoint_remediation",
                     "ruleTier": "protected",
-                    "remediationStatus": succeeded ? "quarantined" : "quarantine-failed",
-                    "remediationFailureReason": succeeded ? "" : failureReason
+                    "remediationStatus": succeeded ? "quarantined" : (typedFailure?.reason == .fileGone ? "file-gone" : "quarantine-failed"),
+                    "remediationFailureReason": succeeded ? "" : (typedFailure?.reason.rawValue ?? failureReason),
+                    "remediationStatusLine": succeeded ? "" : (typedFailure?.statusLine ?? "Quarantine failed — \(failureReason)"),
+                    "remediationGuidance": succeeded ? "" : (typedFailure?.guidance ?? "Review the file immediately and retry quarantine if it is still present."),
+                    "remediationErrorDomain": typedFailure?.errorDomain ?? "",
+                    "remediationErrorCode": typedFailure.map { String($0.errorCode) } ?? "",
+                    "remediationVolumeName": typedFailure?.volumeName ?? "",
+                    "remediationDiskImagePath": typedFailure?.diskImagePath ?? ""
                 ]
             )
         )
         score = succeeded ? 0.88 : 0.98
         recommendedAction = succeeded
             ? "Review the remediation record and keep the item quarantined unless you trust it."
-            : "Review the file immediately and retry quarantine if it is still present."
+            : (typedFailure?.guidance ?? "Review the file immediately and retry quarantine if it is still present.")
     }
 
     /// Deterministic non-cryptographic identifier used only for incident
