@@ -609,13 +609,17 @@ final class ThreatCorrelatorTests: XCTestCase {
     func test_repeatSameSubjectPreservesReviewUntilSeverityEscalates() throws {
         let store = IncidentStore(defaults: isolatedDefaults())
         let first = makeAlert(signal: makeSignal(
-            metadata: ["reason": "repeat_behavior", "path": "/Users/test/repeated"]
+            metadata: [
+                "reason": "repeat_behavior", "rule": "system_hardening",
+            ]
         ))
         _ = store.ingest([first])
         store.performAuthenticatedUserAction(.reviewed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
 
         let repeated = makeAlert(signal: makeSignal(
-            metadata: ["reason": "repeat_behavior", "path": "/Users/test/repeated"]
+            metadata: [
+                "reason": "repeat_behavior", "rule": "system_hardening",
+            ]
         ))
         _ = store.ingest([repeated])
 
@@ -627,7 +631,9 @@ final class ThreatCorrelatorTests: XCTestCase {
         let escalated = makeAlert(
             signal: makeSignal(
                 severity: .high,
-                metadata: ["reason": "repeat_behavior", "path": "/Users/test/repeated"]
+                metadata: [
+                    "reason": "repeat_behavior", "rule": "system_hardening",
+                ]
             ),
             severity: .high
         )

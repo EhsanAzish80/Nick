@@ -87,6 +87,13 @@ struct SimpleAlertSheet: View {
                             "Previously dismissed \(dismissedAt.formatted(date: .abbreviated, time: .shortened)). This new occurrence reopened the incident."
                         )
                     }
+                    if let state = incident?.reopenedAfterState,
+                       let reopenedAt = incident?.reopenedAfterAt {
+                        row(
+                            "HISTORY",
+                            "Reopened after \(state.displayName) on \(reopenedAt.formatted(date: .abbreviated, time: .shortened))."
+                        )
+                    }
                     technicalDetails(current)
                         .padding(.top, 6)
                 }

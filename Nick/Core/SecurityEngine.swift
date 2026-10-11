@@ -398,6 +398,7 @@ final class SecurityEngine {
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
     private(set) var incidentStore = IncidentStore()
+    private let durableIncidentNotifications = DurableIncidentNotificationQueue()
     private var incidentActionAuthorizer: ((UUID, IncidentActionKind) async -> IncidentActionAuthorizationResult)?
     private var nextIncidentStoreAuthorization: Data?
     private var pendingIncidentAction: PendingIncidentAction?
@@ -512,6 +513,15 @@ final class SecurityEngine {
 
     func confirmIncidentStorePersistence(generation: UInt64) {
         incidentStore.confirmDurablePersistence(generation: generation)
+        let confirmedAlerts = durableIncidentNotifications.confirm(generation: generation)
+        guard !confirmedAlerts.isEmpty else { return }
+        Task { @MainActor in
+            let (formatter, outputs) = buildPipeline()
+            for alert in confirmedAlerts {
+                await NotificationManager.shared.send(for: alert)
+                await emitAlert(alert, formatter: formatter, outputs: outputs)
+            }
+        }
     }
 
     /// Clears all stored threat alerts, resets threat counters, and removes all
@@ -739,16 +749,18 @@ final class SecurityEngine {
         let result = incidentStore.ingest([alert])
         alerts = result.visibleAlerts
         rebuildUserFacingAlerts()
-        for newAlert in result.newlyActionable {
-            await NotificationManager.shared.send(for: newAlert)
-            let (formatter, outputs) = buildPipeline()
-            await emitAlert(newAlert, formatter: formatter, outputs: outputs)
-        }
 #if DEBUG
         precondition(result.outcomes.count == 1, "A live finding must produce exactly one ingest outcome")
 #endif
         guard result.outcomes.count == 1 else { return .failed }
-        return result.outcomes[0]
+        let outcome = result.outcomes[0]
+        switch outcome {
+        case .persisted(let generation), .coalesced(let generation):
+            durableIncidentNotifications.stage(result.newlyActionable, for: generation)
+        case .suppressedByPolicy, .failed:
+            break
+        }
+        return outcome
     }
 
     /// Adds a single alert from the real-time pipeline. Repeat evidence updates

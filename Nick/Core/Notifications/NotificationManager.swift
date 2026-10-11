@@ -152,9 +152,15 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         content.title = isDocumentedUninstall
             ? "Nick is being moved to the Trash"
             : "Nick — \(alert.severity.displayName) Alert"
-        content.body = isDocumentedUninstall
-            ? "Use Nick Uninstaller later if you also want to remove protection components and generated data."
-            : alert.title
+        if isDocumentedUninstall {
+            content.body = "Use Nick Uninstaller later if you also want to remove protection components and generated data."
+        } else if let tamper = alert.contributingSignals.first(where: {
+            $0.metadata["reason"] == "endpoint_tamper_observed"
+        }) {
+            content.body = Self.tamperNotificationBody(alert: alert, signal: tamper)
+        } else {
+            content.body = alert.title
+        }
         content.sound = isDocumentedUninstall ? nil : .default
         content.interruptionLevel = isDocumentedUninstall ? .active : .timeSensitive
         content.categoryIdentifier = isDocumentedUninstall ? "NICK_UNINSTALL" : "THREAT_ALERT"
@@ -172,6 +178,18 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         } catch {
             Self.log.error("Failed to deliver notification: \(error.localizedDescription)")
         }
+    }
+
+    static func tamperNotificationBody(alert: ThreatAlert, signal: ThreatSignal) -> String {
+        let operation = UserFacingAlertBuilder.userFacingTamperOperation(
+            signal.metadata["tamperOperation"]
+        )
+        let actor = signal.processInfo?.name.isEmpty == false
+            ? signal.processInfo!.name
+            : (signal.processInfo?.path as NSString?)?.lastPathComponent ?? "unknown actor"
+        let count = alert.occurrenceCount
+        let unit = count == 1 ? "time" : "times"
+        return "\(operation.capitalized) by \(actor) — attempted \(count) \(unit)"
     }
 
     func sendUpdateAvailable(version: String) async {

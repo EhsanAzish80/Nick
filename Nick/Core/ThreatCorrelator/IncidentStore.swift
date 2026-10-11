@@ -19,6 +19,23 @@ enum IncidentActionKind: String, Codable, Sendable {
     case resolved
     case allowedOnce
     case alwaysAllowed
+    case reopened
+}
+
+enum IncidentReopenState: String, Codable, Sendable {
+    case reviewed
+    case resolved
+    case hidden
+    case allowed
+
+    var displayName: String {
+        switch self {
+        case .reviewed: "reviewed"
+        case .resolved: "resolved"
+        case .hidden: "hidden"
+        case .allowed: "Always Allow"
+        }
+    }
 }
 
 struct IncidentActionRecord: Codable, Sendable, Equatable {
@@ -244,6 +261,9 @@ struct SecurityIncident: Identifiable, Codable, Sendable, Equatable {
     var isVisible: Bool
     var permanentlyDismissed: Bool
     var previouslyDismissedAt: Date?
+    var reopenedAfterState: IncidentReopenState?
+    var reopenedAfterAt: Date?
+    var lastNotifiedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -254,7 +274,10 @@ struct SecurityIncident: Identifiable, Codable, Sendable, Equatable {
         actions: [IncidentActionRecord] = [],
         isVisible: Bool = true,
         permanentlyDismissed: Bool = false,
-        previouslyDismissedAt: Date? = nil
+        previouslyDismissedAt: Date? = nil,
+        reopenedAfterState: IncidentReopenState? = nil,
+        reopenedAfterAt: Date? = nil,
+        lastNotifiedAt: Date? = nil
     ) {
         schemaVersion = Self.currentSchemaVersion
         self.id = id
@@ -266,6 +289,9 @@ struct SecurityIncident: Identifiable, Codable, Sendable, Equatable {
         self.isVisible = isVisible
         self.permanentlyDismissed = permanentlyDismissed
         self.previouslyDismissedAt = previouslyDismissedAt
+        self.reopenedAfterState = reopenedAfterState
+        self.reopenedAfterAt = reopenedAfterAt
+        self.lastNotifiedAt = lastNotifiedAt
     }
 }
 
@@ -274,12 +300,41 @@ enum IncidentIngestOutcome: Equatable {
     case coalesced(UInt64)
     case suppressedByPolicy(String)
     case failed
+
+    var generation: UInt64? {
+        switch self {
+        case .persisted(let generation), .coalesced(let generation): generation
+        case .suppressedByPolicy, .failed: nil
+        }
+    }
 }
 
 struct IncidentIngestResult {
     let visibleAlerts: [ThreatAlert]
     let newlyActionable: [ThreatAlert]
     let outcomes: [IncidentIngestOutcome]
+}
+
+@MainActor
+final class DurableIncidentNotificationQueue {
+    private var alertsByGeneration: [UInt64: [ThreatAlert]] = [:]
+    var pendingGenerationCount: Int { alertsByGeneration.count }
+
+    func stage(_ alerts: [ThreatAlert], for generation: UInt64) {
+        guard generation > 0, !alerts.isEmpty else { return }
+        alertsByGeneration[generation] = alerts
+    }
+
+    func confirm(generation: UInt64) -> [ThreatAlert] {
+        var newestByIncidentID: [UUID: ThreatAlert] = [:]
+        for key in alertsByGeneration.keys.filter({ $0 <= generation }).sorted() {
+            for alert in alertsByGeneration[key] ?? [] {
+                newestByIncidentID[alert.id] = alert
+            }
+        }
+        alertsByGeneration = alertsByGeneration.filter { $0.key > generation }
+        return Array(newestByIncidentID.values)
+    }
 }
 
 /// The only policy and persistence boundary after deterministic correlation.
@@ -310,6 +365,10 @@ final class IncidentStore {
     private var lastPrivilegedPayload: Data?
     private(set) var lastQueuedGeneration: UInt64 = 0
     private(set) var lastDurablyConfirmedGeneration: UInt64 = 0
+    private var pendingNotificationSignalIDs: Set<UUID> = []
+    private var notificationSignalIDsByGeneration: [UInt64: Set<UUID>] = [:]
+    private var pendingNotificationIncidentIDs: Set<UUID> = []
+    private var notificationIncidentIDsByGeneration: [UInt64: Set<UUID>] = [:]
 
     var hasUnconfirmedChanges: Bool {
         lastQueuedGeneration > lastDurablyConfirmedGeneration
@@ -385,6 +444,12 @@ final class IncidentStore {
     func confirmDurablePersistence(generation: UInt64) {
         guard generation <= lastQueuedGeneration else { return }
         lastDurablyConfirmedGeneration = max(lastDurablyConfirmedGeneration, generation)
+        for key in Array(notificationSignalIDsByGeneration.keys) where key <= generation {
+            pendingNotificationSignalIDs.subtract(notificationSignalIDsByGeneration.removeValue(forKey: key) ?? [])
+        }
+        for key in Array(notificationIncidentIDsByGeneration.keys) where key <= generation {
+            pendingNotificationIncidentIDs.subtract(notificationIncidentIDsByGeneration.removeValue(forKey: key) ?? [])
+        }
     }
 
     func prepareLegacyMigration(defaults: UserDefaults = .standard) throws -> Data {
@@ -423,6 +488,8 @@ final class IncidentStore {
         var newlyActionable: [ThreatAlert] = []
         var outcomes: [IncidentIngestOutcome] = []
         var forcePersistence = false
+        var notificationSignalIDs: Set<UUID> = []
+        var notificationIncidentIDs: Set<UUID> = []
 
         for rawCandidate in candidates {
             let candidate = applyLearnedPriority(to: applyTrustedDowngrade(to: rawCandidate))
@@ -446,13 +513,16 @@ final class IncidentStore {
                         alert: reopened,
                         evidence: reopened.contributingSignals.map(Evidence.init(signal:)),
                         state: .new,
-                        actions: [Self.action(.detected, actor: .automatic)],
-                        previouslyDismissedAt: tombstone.dismissedAt
+                        actions: [action(.detected, actor: .automatic)],
+                        previouslyDismissedAt: tombstone.dismissedAt,
+                        lastNotifiedAt: now()
                     )
                     incident.isVisible = true
                     incidents.append(incident)
                     dismissalTombstones.removeAll { $0.incidentKey == tombstone.incidentKey }
                     newlyActionable.append(reopened)
+                    notificationIncidentIDs.insert(reopened.id)
+                    notificationSignalIDs.formUnion(reopened.contributingSignals.map(\.id))
                     outcomes.append(.persisted(0))
                     continue
                 }
@@ -467,6 +537,10 @@ final class IncidentStore {
                     if hasUnconfirmedChanges {
                         outcomes.append(.coalesced(0))
                         forcePersistence = true
+                        if !candidateSignalIDs.isDisjoint(with: pendingNotificationSignalIDs) {
+                            newlyActionable.append(prior.alert)
+                            notificationSignalIDs.formUnion(candidateSignalIDs)
+                        }
                     } else {
                         outcomes.append(.suppressedByPolicy("duplicate event identifier"))
                     }
@@ -477,7 +551,36 @@ final class IncidentStore {
                 incidents[index].alert = prior.alert.mergingOccurrence(candidate)
                 incidents[index].evidence = incomingEvidence
                 outcomes.append(.coalesced(0))
-                if escalated {
+                if isProtected(candidate) {
+                    let wasHidden = !prior.isVisible
+                    let shouldReopen = prior.state != .new || wasHidden
+                    let currentTime = now()
+                    let outsideNotificationWindow = prior.lastNotifiedAt.map {
+                        currentTime.timeIntervalSince($0) >= 600
+                    } ?? true
+                    if shouldReopen {
+                        incidents[index].reopenedAfterState = prior.state == .allowed
+                            ? .allowed
+                            : (wasHidden ? .hidden : Self.reopenState(for: prior.state))
+                        incidents[index].reopenedAfterAt = Self.lifecycleDate(for: prior)
+                        incidents[index].state = .new
+                        incidents[index].isVisible = true
+                        recordAction(.reopened, actor: .automatic, at: index)
+                    }
+                    if shouldReopen || outsideNotificationWindow {
+                        incidents[index].lastNotifiedAt = currentTime
+                        newlyActionable.append(incidents[index].alert)
+                        notificationIncidentIDs.insert(incidents[index].alert.id)
+                        notificationSignalIDs.formUnion(candidateSignalIDs)
+                    } else if pendingNotificationIncidentIDs.contains(prior.alert.id) {
+                        // A prior occurrence already earned a notification but
+                        // its snapshot has not reached durable storage yet.
+                        // Restage the newest whole-incident snapshot so a
+                        // superseding write delivers the final count once.
+                        newlyActionable.append(incidents[index].alert)
+                        notificationIncidentIDs.insert(incidents[index].alert.id)
+                    }
+                } else if escalated {
                     incidents[index].state = .new
                     incidents[index].isVisible = true
                     recordAction(.detected, actor: .automatic, at: index)
@@ -489,7 +592,12 @@ final class IncidentStore {
                     alert: candidate,
                     evidence: candidate.contributingSignals.map(Evidence.init(signal:))
                 )
-                incident.actions.append(Self.action(.detected, actor: .automatic))
+                incident.actions.append(action(.detected, actor: .automatic))
+                if isProtected(candidate) {
+                    incident.lastNotifiedAt = now()
+                    notificationSignalIDs.formUnion(candidate.contributingSignals.map(\.id))
+                    notificationIncidentIDs.insert(candidate.id)
+                }
                 incidents.append(incident)
                 outcomes.append(.persisted(0))
                 if candidate.severity != .info || Self.requiresVisibleNotification(candidate) {
@@ -499,6 +607,14 @@ final class IncidentStore {
         }
 
         let generation = persist(force: forcePersistence)
+        if generation > lastDurablyConfirmedGeneration, !notificationSignalIDs.isEmpty {
+            pendingNotificationSignalIDs.formUnion(notificationSignalIDs)
+            notificationSignalIDsByGeneration[generation, default: []].formUnion(notificationSignalIDs)
+        }
+        if generation > lastDurablyConfirmedGeneration, !notificationIncidentIDs.isEmpty {
+            pendingNotificationIncidentIDs.formUnion(notificationIncidentIDs)
+            notificationIncidentIDsByGeneration[generation, default: []].formUnion(notificationIncidentIDs)
+        }
         outcomes = outcomes.map { outcome in
             switch outcome {
             case .persisted: .persisted(generation)
@@ -544,7 +660,7 @@ final class IncidentStore {
         case .alwaysAllowed:
             incidents[index].state = .allowed
             incidents[index].isVisible = false
-        case .detected:
+        case .detected, .reopened:
             incidents[index].state = .new
         }
         persist()
@@ -650,8 +766,21 @@ final class IncidentStore {
             key: incidentKey(for: alert),
             alert: alert,
             evidence: alert.contributingSignals.map(Evidence.init(signal:)),
-            actions: [action(.detected, actor: .migration)]
+            actions: [migrationAction(.detected, actor: .migration)]
         )
+    }
+
+    private static func reopenState(for state: IncidentState) -> IncidentReopenState {
+        switch state {
+        case .resolved: .resolved
+        case .reviewed: .reviewed
+        case .allowed: .allowed
+        case .new: .reviewed
+        }
+    }
+
+    private static func lifecycleDate(for incident: SecurityIncident) -> Date {
+        incident.actions.last?.lastTimestamp ?? incident.alert.lastSeen
     }
 
     /// Cross-source identity intentionally omits monitor source. Two monitors
@@ -768,12 +897,16 @@ final class IncidentStore {
         expectedCooldowns = expectedCooldowns.filter { $0.value > now }
     }
 
-    private static func action(_ kind: IncidentActionKind, actor: EvidenceVerdictActor) -> IncidentActionRecord {
+    private static func migrationAction(_ kind: IncidentActionKind, actor: EvidenceVerdictActor) -> IncidentActionRecord {
         IncidentActionRecord(action: kind, actor: actor, timestamp: Date())
     }
 
+    private func action(_ kind: IncidentActionKind, actor: EvidenceVerdictActor) -> IncidentActionRecord {
+        IncidentActionRecord(action: kind, actor: actor, timestamp: now())
+    }
+
     private func recordAction(_ kind: IncidentActionKind, actor: EvidenceVerdictActor, at index: Int) {
-        let now = Date()
+        let now = now()
         if let existing = incidents[index].actions.firstIndex(where: { $0.action == kind && $0.actor == actor }) {
             incidents[index].actions[existing].recordOccurrence(at: now)
         } else {
