@@ -76,6 +76,37 @@ struct IncidentDismissalTombstone: Codable, Sendable, Equatable {
     let incidentKey: String
     let alertDeduplicationKey: String
     let dismissedAt: Date
+    /// Number of occurrences covered by this dismissal. Older snapshots did
+    /// not persist the count; treating them as one preserves first-write-wins
+    /// while allowing later protected evidence to reopen the incident.
+    let occurrenceCountAtDismissal: Int
+
+    init(
+        incidentKey: String,
+        alertDeduplicationKey: String,
+        dismissedAt: Date,
+        occurrenceCountAtDismissal: Int = 1
+    ) {
+        self.incidentKey = incidentKey
+        self.alertDeduplicationKey = alertDeduplicationKey
+        self.dismissedAt = dismissedAt
+        self.occurrenceCountAtDismissal = max(1, occurrenceCountAtDismissal)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case incidentKey, alertDeduplicationKey, dismissedAt, occurrenceCountAtDismissal
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        incidentKey = try container.decode(String.self, forKey: .incidentKey)
+        alertDeduplicationKey = try container.decode(String.self, forKey: .alertDeduplicationKey)
+        dismissedAt = try container.decode(Date.self, forKey: .dismissedAt)
+        occurrenceCountAtDismissal = max(
+            1,
+            try container.decodeIfPresent(Int.self, forKey: .occurrenceCountAtDismissal) ?? 1
+        )
+    }
 }
 
 struct LearnedReviewEntry: Codable, Sendable, Equatable, Identifiable {
@@ -212,6 +243,7 @@ struct SecurityIncident: Identifiable, Codable, Sendable, Equatable {
     var actions: [IncidentActionRecord]
     var isVisible: Bool
     var permanentlyDismissed: Bool
+    var previouslyDismissedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -221,7 +253,8 @@ struct SecurityIncident: Identifiable, Codable, Sendable, Equatable {
         state: IncidentState = .new,
         actions: [IncidentActionRecord] = [],
         isVisible: Bool = true,
-        permanentlyDismissed: Bool = false
+        permanentlyDismissed: Bool = false,
+        previouslyDismissedAt: Date? = nil
     ) {
         schemaVersion = Self.currentSchemaVersion
         self.id = id
@@ -232,12 +265,21 @@ struct SecurityIncident: Identifiable, Codable, Sendable, Equatable {
         self.actions = actions
         self.isVisible = isVisible
         self.permanentlyDismissed = permanentlyDismissed
+        self.previouslyDismissedAt = previouslyDismissedAt
     }
+}
+
+enum IncidentIngestOutcome: Equatable {
+    case persisted(UInt64)
+    case coalesced(UInt64)
+    case suppressedByPolicy(String)
+    case failed
 }
 
 struct IncidentIngestResult {
     let visibleAlerts: [ThreatAlert]
     let newlyActionable: [ThreatAlert]
+    let outcomes: [IncidentIngestOutcome]
 }
 
 /// The only policy and persistence boundary after deterministic correlation.
@@ -264,8 +306,14 @@ final class IncidentStore {
     private var verdictLearningEnabled = false
     private let now: () -> Date
     private let identityValidator: (String, String, String) -> Bool
-    private var privilegedPersistence: ((Data) -> Void)?
+    private var privilegedPersistence: ((Data, UInt64) -> Void)?
     private var lastPrivilegedPayload: Data?
+    private(set) var lastQueuedGeneration: UInt64 = 0
+    private(set) var lastDurablyConfirmedGeneration: UInt64 = 0
+
+    var hasUnconfirmedChanges: Bool {
+        lastQueuedGeneration > lastDurablyConfirmedGeneration
+    }
 
     init(
         defaults: UserDefaults? = nil,
@@ -320,7 +368,7 @@ final class IncidentStore {
 
     func installPrivilegedSnapshot(
         _ payload: Data,
-        persistence: @escaping (Data) -> Void
+        persistence: @escaping (Data, UInt64) -> Void
     ) throws {
         let snapshot = try Self.decodeSnapshot(payload)
         incidents = snapshot.incidents
@@ -332,6 +380,11 @@ final class IncidentStore {
         boundInMemory()
         privilegedPersistence = persistence
         lastPrivilegedPayload = try encodedSnapshot()
+    }
+
+    func confirmDurablePersistence(generation: UInt64) {
+        guard generation <= lastQueuedGeneration else { return }
+        lastDurablyConfirmedGeneration = max(lastDurablyConfirmedGeneration, generation)
     }
 
     func prepareLegacyMigration(defaults: UserDefaults = .standard) throws -> Data {
@@ -368,23 +421,62 @@ final class IncidentStore {
         pruneExpiredCooldowns()
         pruneExpiredLearnedEntries()
         var newlyActionable: [ThreatAlert] = []
+        var outcomes: [IncidentIngestOutcome] = []
+        var forcePersistence = false
 
         for rawCandidate in candidates {
             let candidate = applyLearnedPriority(to: applyTrustedDowngrade(to: rawCandidate))
-            guard !isSuppressed(candidate), !isCoolingDown(candidate) else { continue }
+            guard !isSuppressed(candidate) else {
+                outcomes.append(.suppressedByPolicy("suppression rule"))
+                continue
+            }
+            guard !isCoolingDown(candidate) else {
+                outcomes.append(.suppressedByPolicy("expected-activity cooldown"))
+                continue
+            }
             let key = Self.incidentKey(for: candidate)
-            guard !isDismissed(candidate, incidentKey: key) else { continue }
+            if let tombstone = matchingDismissal(for: candidate, incidentKey: key) {
+                if isProtected(candidate) {
+                    var reopened = candidate
+                    reopened = reopened.withOccurrenceCount(
+                        max(tombstone.occurrenceCountAtDismissal + 1, candidate.occurrenceCount)
+                    )
+                    var incident = SecurityIncident(
+                        key: key,
+                        alert: reopened,
+                        evidence: reopened.contributingSignals.map(Evidence.init(signal:)),
+                        state: .new,
+                        actions: [Self.action(.detected, actor: .automatic)],
+                        previouslyDismissedAt: tombstone.dismissedAt
+                    )
+                    incident.isVisible = true
+                    incidents.append(incident)
+                    dismissalTombstones.removeAll { $0.incidentKey == tombstone.incidentKey }
+                    newlyActionable.append(reopened)
+                    outcomes.append(.persisted(0))
+                    continue
+                }
+                outcomes.append(.suppressedByPolicy("dismissal"))
+                continue
+            }
             if let index = incidents.firstIndex(where: { $0.key == key }) {
                 let prior = incidents[index]
                 let priorSignalIDs = Set(prior.alert.contributingSignals.map(\.id))
                 let candidateSignalIDs = Set(candidate.contributingSignals.map(\.id))
                 if !candidateSignalIDs.isEmpty, candidateSignalIDs.isSubset(of: priorSignalIDs) {
+                    if hasUnconfirmedChanges {
+                        outcomes.append(.coalesced(0))
+                        forcePersistence = true
+                    } else {
+                        outcomes.append(.suppressedByPolicy("duplicate event identifier"))
+                    }
                     continue
                 }
                 let escalated = candidate.severity > prior.alert.severity
                 let incomingEvidence = candidate.contributingSignals.map(Evidence.init(signal:))
                 incidents[index].alert = prior.alert.mergingOccurrence(candidate)
                 incidents[index].evidence = incomingEvidence
+                outcomes.append(.coalesced(0))
                 if escalated {
                     incidents[index].state = .new
                     incidents[index].isVisible = true
@@ -399,14 +491,26 @@ final class IncidentStore {
                 )
                 incident.actions.append(Self.action(.detected, actor: .automatic))
                 incidents.append(incident)
+                outcomes.append(.persisted(0))
                 if candidate.severity != .info || Self.requiresVisibleNotification(candidate) {
                     newlyActionable.append(candidate)
                 }
             }
         }
 
-        persist()
-        return IncidentIngestResult(visibleAlerts: visibleAlerts, newlyActionable: newlyActionable)
+        let generation = persist(force: forcePersistence)
+        outcomes = outcomes.map { outcome in
+            switch outcome {
+            case .persisted: .persisted(generation)
+            case .coalesced: .coalesced(generation)
+            case .suppressedByPolicy, .failed: outcome
+            }
+        }
+        return IncidentIngestResult(
+            visibleAlerts: visibleAlerts,
+            newlyActionable: newlyActionable,
+            outcomes: outcomes
+        )
     }
 
     func performAuthenticatedUserAction(_ kind: IncidentActionKind, alertID: UUID) {
@@ -428,7 +532,9 @@ final class IncidentStore {
             return
         case .resolved:
             incidents[index].state = .resolved
-            incidents[index].isVisible = false
+            // Resolution changes actionability, not protected-evidence
+            // retention. Keep it available to both projections as history.
+            incidents[index].isVisible = isProtected(incidents[index].alert)
         case .allowedOnce:
             incidents[index].state = .allowed
             incidents[index].isVisible = false
@@ -486,7 +592,8 @@ final class IncidentStore {
         return try encoder.encode(learnedReviewEntries.sorted { $0.lastConfirmedAt > $1.lastConfirmedAt })
     }
 
-    private func persist() {
+    @discardableResult
+    private func persist(force: Bool = false) -> UInt64 {
         boundInMemory()
         if let defaults = legacyTestDefaults {
             if let data = try? JSONEncoder().encode(incidents) {
@@ -500,11 +607,18 @@ final class IncidentStore {
                 defaults.set(data, forKey: "nickPersistedAlerts")
             }
         }
-        guard let privilegedPersistence,
-              let payload = try? encodedSnapshot(),
-              payload != lastPrivilegedPayload else { return }
+        guard let payload = try? encodedSnapshot() else { return lastQueuedGeneration }
+        guard let privilegedPersistence else {
+            lastQueuedGeneration &+= 1
+            lastDurablyConfirmedGeneration = lastQueuedGeneration
+            lastPrivilegedPayload = payload
+            return lastQueuedGeneration
+        }
+        guard force || payload != lastPrivilegedPayload else { return lastQueuedGeneration }
+        lastQueuedGeneration &+= 1
         lastPrivilegedPayload = payload
-        privilegedPersistence(payload)
+        privilegedPersistence(payload, lastQueuedGeneration)
+        return lastQueuedGeneration
     }
 
     private func encodedSnapshot() throws -> Data {
@@ -673,8 +787,11 @@ final class IncidentStore {
         alert.hasProtectedEvidence
     }
 
-    private func isDismissed(_ alert: ThreatAlert, incidentKey: String) -> Bool {
-        dismissalTombstones.contains { tombstone in
+    private func matchingDismissal(
+        for alert: ThreatAlert,
+        incidentKey: String
+    ) -> IncidentDismissalTombstone? {
+        dismissalTombstones.first { tombstone in
             if Self.isLegacyTombstone(tombstone) {
                 return !isProtected(alert)
                     && tombstone.alertDeduplicationKey == alert.deduplicationKey
@@ -801,7 +918,8 @@ final class IncidentStore {
             dismissalTombstones.append(IncidentDismissalTombstone(
                 incidentKey: "legacy-alert-dedup:\(deduplicationKey)",
                 alertDeduplicationKey: deduplicationKey,
-                dismissedAt: now()
+                dismissedAt: now(),
+                occurrenceCountAtDismissal: 1
             ))
         }
     }
@@ -811,7 +929,8 @@ final class IncidentStore {
         dismissalTombstones.append(IncidentDismissalTombstone(
             incidentKey: incident.key,
             alertDeduplicationKey: incident.alert.deduplicationKey,
-            dismissedAt: Date()
+            dismissedAt: now(),
+            occurrenceCountAtDismissal: incident.alert.occurrenceCount
         ))
     }
 

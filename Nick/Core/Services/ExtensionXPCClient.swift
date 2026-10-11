@@ -6,6 +6,20 @@ import Foundation
 import os
 import Security
 
+enum PersistedThreatIngestOutcome: Equatable {
+    case persisted(UInt64)
+    case coalesced(UInt64)
+    case suppressedByPolicy(String)
+    case failed
+
+    var mayAcknowledge: Bool {
+        switch self {
+        case .persisted, .coalesced, .suppressedByPolicy: true
+        case .failed: false
+        }
+    }
+}
+
 private final class UpdateLeaseReplyBox: @unchecked Sendable {
     private let lock = NSLock()
     private var stored = false
@@ -92,6 +106,10 @@ public final class ExtensionXPCClient: NSObject {
     /// Authenticated health snapshot returned by the system extension.
     public private(set) var extensionHealth: [String: Any]?
 
+    public private(set) var suppressedByDismissalCount = 0
+    public private(set) var ackWithoutPersistenceCount = 0
+    public private(set) var failedThreatEventIDs: Set<UUID> = []
+
     // MARK: - Configuration
 
     /// Maximum number of events kept in `events`. Older events are discarded.
@@ -100,9 +118,8 @@ public final class ExtensionXPCClient: NSObject {
     /// Installed by AppDelegate so privileged findings enter SecurityEngine's
     /// single incident pipeline. Kept as a closure to avoid a Core service
     /// owning UI/application lifetime state.
-    /// Returns true only after the finding's incident snapshot is durably
-    /// accepted by the privileged root-owned store.
-    var findingHandler: ((ExtensionFinding) async -> Bool)?
+    var findingHandler: ((ExtensionFinding) async -> IncidentIngestOutcome)?
+    var incidentPersistenceConfirmationHandler: ((UInt64) -> Void)?
     var integrityAcknowledgementHandler: ((UUID) -> Void)?
 
     // MARK: - Private
@@ -133,6 +150,9 @@ public final class ExtensionXPCClient: NSObject {
     private var bootstrapReconnectTask: Task<Void, Never>?
     private var bootstrapReconnectAttempt = 0
     private var healthRefreshTask: Task<Void, Never>?
+    /// Deterministic persistence completion seam used by unit tests. Production
+    /// always uses the privileged XPC write/reply path.
+    var incidentPersistenceOverride: ((UInt64) async -> (UInt64, Bool)?)?
 
     // MARK: - Public API
 
@@ -415,10 +435,14 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    func persistIncidentStore(_ payload: Data, authorizationExternalForm: Data? = nil) {
-        incidentWriteGeneration &+= 1
+    func persistIncidentStore(
+        _ payload: Data,
+        generation: UInt64,
+        authorizationExternalForm: Data? = nil
+    ) {
+        incidentWriteGeneration = max(incidentWriteGeneration, generation)
         pendingIncidentPayload = payload
-        pendingIncidentGeneration = incidentWriteGeneration
+        pendingIncidentGeneration = generation
         if let authorizationExternalForm {
             finishProtectionAuthorization(pendingIncidentAuthorization)
             pendingIncidentAuthorization = authorizationExternalForm
@@ -463,6 +487,9 @@ public final class ExtensionXPCClient: NSObject {
                     through: generation,
                     succeeded: accepted && record != nil
                 )
+                if accepted && record != nil {
+                    self.incidentPersistenceConfirmationHandler?(generation)
+                }
                 self.drainIncidentStoreWrites()
             }
         }
@@ -471,14 +498,17 @@ public final class ExtensionXPCClient: NSObject {
     /// Waits for the root-owned store reply corresponding to the newest
     /// snapshot queued by the caller. A rejection is not durable success and
     /// must keep any extension journal event eligible for redelivery.
-    func awaitIncidentStorePersistence() async -> Bool {
-        let generation = incidentWriteGeneration
-        guard generation > 0 else { return true }
-        if let result = incidentWriteResults[generation] { return result }
-        guard connection != nil, incidentRevision != nil else { return false }
-        return await withCheckedContinuation { continuation in
+    func awaitIncidentStorePersistence(generation: UInt64) async -> (UInt64, Bool)? {
+        guard generation > 0, generation <= incidentWriteGeneration else {
+            ackWithoutPersistenceCount += 1
+            return nil
+        }
+        if let result = incidentWriteResults[generation] { return (generation, result) }
+        guard connection != nil, incidentRevision != nil else { return nil }
+        let result = await withCheckedContinuation { continuation in
             incidentWriteWaiters.append((generation, continuation))
         }
+        return (generation, result)
     }
 
     private func completeIncidentWrite(through generation: UInt64, succeeded: Bool) {
@@ -487,8 +517,11 @@ public final class ExtensionXPCClient: NSObject {
             let floor = incidentWriteGeneration > 32 ? incidentWriteGeneration - 32 : 0
             incidentWriteResults = incidentWriteResults.filter { $0.key >= floor }
         }
-        let ready = incidentWriteWaiters.filter { $0.0 <= generation }
-        incidentWriteWaiters.removeAll { $0.0 <= generation }
+        // A later successful write must never satisfy a waiter for an earlier
+        // generation that failed. Each ingest is acknowledged only from the
+        // root-store reply for the exact snapshot generation it queued.
+        let ready = incidentWriteWaiters.filter { $0.0 == generation }
+        incidentWriteWaiters.removeAll { $0.0 == generation }
         for (_, continuation) in ready {
             continuation.resume(returning: succeeded)
         }
@@ -670,7 +703,7 @@ public final class ExtensionXPCClient: NSObject {
             return nil
         case .threat:
             guard let event = try? decoder.decode(ESEvent.self, from: finding.payload) else { return nil }
-            return await receiveThreat(event) ? event.id : nil
+            return await receiveThreat(event).mayAcknowledge ? event.id : nil
         case .remediation:
             guard let report = try? decoder.decode(RemediationReport.self, from: finding.payload) else { return nil }
             receive(report, deliverToEngine: !report.quarantineSucceeded)
@@ -690,11 +723,37 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    private func receiveThreat(_ event: ESEvent) async -> Bool {
+    private func receiveThreat(_ event: ESEvent) async -> PersistedThreatIngestOutcome {
         if !events.contains(where: { $0.id == event.id }) { events.insert(event, at: 0) }
         trim(&events)
-        guard let finding = ExtensionFinding(event: event), let findingHandler else { return false }
-        return await findingHandler(finding)
+        guard let finding = ExtensionFinding(event: event), let findingHandler else { return .failed }
+        let outcome = await findingHandler(finding)
+        switch outcome {
+        case .persisted(let requiredGeneration), .coalesced(let requiredGeneration):
+            let persistence = if let incidentPersistenceOverride {
+                await incidentPersistenceOverride(requiredGeneration)
+            } else {
+                await awaitIncidentStorePersistence(generation: requiredGeneration)
+            }
+            guard let (generation, succeeded) = persistence,
+                  generation == requiredGeneration, succeeded else {
+                failedThreatEventIDs.insert(event.id)
+                return .failed
+            }
+            failedThreatEventIDs.remove(event.id)
+            switch outcome {
+            case .persisted: return .persisted(generation)
+            case .coalesced: return .coalesced(generation)
+            default: return .failed
+            }
+        case .suppressedByPolicy(let reason):
+            if reason == "dismissal" { suppressedByDismissalCount += 1 }
+            failedThreatEventIDs.remove(event.id)
+            return .suppressedByPolicy(reason)
+        case .failed:
+            failedThreatEventIDs.insert(event.id)
+            return .failed
+        }
     }
 
     private func acknowledgeThreat(_ eventID: UUID) {
@@ -1242,7 +1301,7 @@ extension ExtensionXPCClient: NickAppXPCProtocol {
             return
         }
         Task { @MainActor [weak self] in
-            guard let self, await self.receiveThreat(event) else { return }
+            guard let self, await self.receiveThreat(event).mayAcknowledge else { return }
             self.acknowledgeThreat(event.id)
         }
     }

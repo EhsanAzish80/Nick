@@ -300,7 +300,7 @@ final class SimpleActivityFeedTests: XCTestCase {
         let presented = UserFacingAlertBuilder.shared.build(from: alert)
         XCTAssertEqual(
             presented.headline,
-            "Nick blocked an attempt to modify its files (rename-destination by mv)"
+            "Nick blocked an attempt to move or rename its files (mv)"
         )
         let inputs = SimpleActivityFeed.alertInputs(from: [alert], actionable: [alert.id])
         let items = SimpleActivityFeed.items(
@@ -308,6 +308,89 @@ final class SimpleActivityFeedTests: XCTestCase {
         )
         XCTAssertEqual(items.first?.status, .blocked)
         XCTAssertEqual(SimpleActivityFeed.count(items, .blocked), 1)
+    }
+
+    func test_rmMvAndTeeUseOperationSpecificWording() throws {
+        let cases = [
+            ("/bin/rm", "unlink", "Nick blocked an attempt to delete its files (rm)"),
+            ("/bin/mv", "rename-destination", "Nick blocked an attempt to move or rename its files (mv)"),
+            ("/usr/bin/tee", "open-for-write", "Nick blocked an attempt to modify its files (tee)"),
+        ]
+        for (actor, operation, expected) in cases {
+            let event = ESEvent(
+                eventType: .notifyWrite,
+                processPath: actor,
+                pid: 42,
+                parentPid: 1,
+                filePath: "/Applications/Nick.app/test",
+                decision: .deny,
+                threat: .init(
+                    threatName: "Nick protected path change blocked",
+                    threatFamily: "tamper",
+                    metadata: ["tamperOperation": operation, "tamperTarget": "/Applications/Nick.app/test"]
+                )
+            )
+            let finding = try XCTUnwrap(ExtensionFinding(event: event))
+            let alert = ThreatAlert(
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+            XCTAssertEqual(UserFacingAlertBuilder.shared.build(from: alert).headline, expected)
+        }
+    }
+
+    func test_legacyTamperWithoutDispositionStaysVisibleInBothModesWhenTargetIsMissing() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/bin/mv",
+            pid: 42,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app/missing",
+            decision: .allow,
+            threat: .init(
+                threatName: "Nick protected path change blocked",
+                threatFamily: "tamper",
+                metadata: [
+                    "tamperOperation": "rename-destination",
+                    "tamperTarget": "/Applications/Nick.app/missing",
+                ]
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        var metadata = finding.signal.metadata
+        metadata.removeValue(forKey: "tamperDisposition")
+        let signal = ThreatSignal(
+            id: finding.signal.id,
+            source: finding.signal.source,
+            severity: .high,
+            timestamp: finding.signal.timestamp,
+            title: finding.signal.title,
+            description: finding.signal.description,
+            context: ThreatSignalContext(
+                processInfo: finding.signal.processInfo,
+                fileInfo: finding.signal.fileInfo,
+                metadata: metadata
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.98,
+            content: AlertContent(title: signal.title, description: signal.description, severity: .high, recommendedAction: "Review"),
+            contributingSignals: [signal],
+            timestamp: signal.timestamp
+        )
+
+        XCTAssertEqual(alert.evidenceState(fileExists: { _ in false }), .historical)
+        XCTAssertEqual(UserFacingAlertBuilder.shared.build(from: alert).headline, "Tamper attempt — outcome not recorded")
+        let advancedIDs = [alert].filter { $0.isVisibleInActiveAlerts(showInformational: false) }.map(\.id)
+        let simpleIDs = SimpleActivityFeed.alertInputs(from: [alert], actionable: [alert.id]).map(\.id)
+        XCTAssertEqual(simpleIDs, advancedIDs)
     }
 
     func test_pendingFIMViolationIsNeedsActionInBothModes() {
@@ -426,7 +509,7 @@ final class SimpleActivityFeedTests: XCTestCase {
         )
         XCTAssertEqual(SimpleActivityFeed.count(items, .all), 3)
         XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
-        XCTAssertEqual(SimpleActivityFeed.count(items, .blocked), 2)
+        XCTAssertEqual(SimpleActivityFeed.count(items, .blocked), 1)
         XCTAssertEqual(SimpleActivityFeed.count(items, .quarantined), 1)
     }
 

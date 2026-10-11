@@ -107,10 +107,25 @@ private struct PendingIncidentAction {
 }
 
 extension ThreatAlert {
+    var isTamperEvidence: Bool {
+        contributingSignals.contains { $0.metadata["reason"] == "endpoint_tamper_observed" }
+    }
+
+    var isBlockedTamperEvidence: Bool {
+        contributingSignals.contains {
+            $0.metadata["reason"] == "endpoint_tamper_observed"
+                && $0.metadata["tamperDisposition"] == "blocked"
+        }
+    }
+
     /// Whether this alert still has evidence a user can act on. Keeping this in
     /// Core gives the sidebar badge, Alerts view, and menu-bar state one source
     /// of truth instead of letting persisted, expired evidence disagree.
     var hasActionableEvidence: Bool {
+        // A denied or legacy tamper attempt is historical evidence of an
+        // operation Nick handled. Whether the target exists afterward cannot
+        // erase that evidence.
+        if isTamperEvidence { return true }
         switch evidenceState() {
         case .fileNoLongerExists, .processEnded:
             return false
@@ -478,14 +493,14 @@ final class SecurityEngine {
 
     func installPrivilegedIncidentStore(
         payload: Data,
-        persistence: @escaping (Data, Data?) -> Void,
+        persistence: @escaping (Data, UInt64, Data?) -> Void,
         authorizer: @escaping (UUID, IncidentActionKind) async -> IncidentActionAuthorizationResult,
         removeLegacyState: Bool
     ) throws {
-        try incidentStore.installPrivilegedSnapshot(payload) { [weak self] payload in
+        try incidentStore.installPrivilegedSnapshot(payload) { [weak self] payload, generation in
             let authorization = self?.nextIncidentStoreAuthorization
             self?.nextIncidentStoreAuthorization = nil
-            persistence(payload, authorization)
+            persistence(payload, generation, authorization)
         }
         incidentActionAuthorizer = authorizer
         if removeLegacyState {
@@ -493,6 +508,10 @@ final class SecurityEngine {
         }
         syncAlertsFromStore()
         logger.info("Restored \(self.alerts.count) root-owned incident(s)")
+    }
+
+    func confirmIncidentStorePersistence(generation: UInt64) {
+        incidentStore.confirmDurablePersistence(generation: generation)
     }
 
     /// Clears all stored threat alerts, resets threat counters, and removes all
@@ -700,7 +719,7 @@ final class SecurityEngine {
         _ signal: ThreatSignal,
         score: Double,
         recommendedAction: String
-    ) async -> [ThreatAlert] {
+    ) async -> IncidentIngestOutcome {
         var alert = ThreatAlert(
             score: score,
             content: AlertContent(
@@ -725,7 +744,11 @@ final class SecurityEngine {
             let (formatter, outputs) = buildPipeline()
             await emitAlert(newAlert, formatter: formatter, outputs: outputs)
         }
-        return result.newlyActionable
+#if DEBUG
+        precondition(result.outcomes.count == 1, "A live finding must produce exactly one ingest outcome")
+#endif
+        guard result.outcomes.count == 1 else { return .failed }
+        return result.outcomes[0]
     }
 
     /// Adds a single alert from the real-time pipeline. Repeat evidence updates

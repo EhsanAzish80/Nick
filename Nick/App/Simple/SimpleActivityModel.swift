@@ -46,7 +46,7 @@ struct SimpleActivityItem: Identifiable, Equatable {
     }
 
     var isNeedsAction: Bool { status == .needsAction }
-    var isBlocked: Bool { status == .blocked || status == .quarantined }
+    var isBlocked: Bool { status == .blocked }
     var isQuarantined: Bool { status == .quarantined }
     var opensDetail: Bool { source != .blocked }
 }
@@ -107,6 +107,14 @@ enum SimpleActivityFeed {
         let name: String
         let date: Date
         let wasLaunch: Bool
+        let persistenceFailed: Bool
+
+        init(name: String, date: Date, wasLaunch: Bool, persistenceFailed: Bool = false) {
+            self.name = name
+            self.date = date
+            self.wasLaunch = wasLaunch
+            self.persistenceFailed = persistenceFailed
+        }
     }
 
     struct Day: Identifiable, Equatable {
@@ -141,10 +149,7 @@ enum SimpleActivityFeed {
                 level: level,
                 date: alert.lastSeen,
                 needsAction: alert.isActionableUserFinding && actionable.contains(alert.id),
-                isBlocked: alert.contributingSignals.contains {
-                    $0.metadata["reason"] == "endpoint_tamper_observed"
-                        && $0.metadata["tamperDisposition"] == "blocked"
-                }
+                isBlocked: alert.isBlockedTamperEvidence
             )
         }
     }
@@ -155,13 +160,23 @@ enum SimpleActivityFeed {
         return String(headline.dropLast(suffix.count)) + " activity observed"
     }
 
-    static func blockedInputs(from events: [ESEvent]) -> [BlockedInput] {
+    static func blockedInputs(
+        from events: [ESEvent],
+        failedThreatEventIDs: Set<UUID> = []
+    ) -> [BlockedInput] {
         events.compactMap { event in
             guard event.decision == .deny else { return nil }
+            let isTamper = event.threatFamily == "tamper"
+            guard !isTamper || failedThreatEventIDs.contains(event.id) else { return nil }
             let path = event.filePath ?? event.processPath
             let name = (path as NSString).lastPathComponent
             guard !name.isEmpty else { return nil }
-            return BlockedInput(name: name, date: event.timestamp, wasLaunch: event.eventType == .authExec)
+            return BlockedInput(
+                name: name,
+                date: event.timestamp,
+                wasLaunch: event.eventType == .authExec,
+                persistenceFailed: failedThreatEventIDs.contains(event.id)
+            )
         }
     }
 
@@ -206,19 +221,26 @@ enum SimpleActivityFeed {
 
         // Repeated blocks of the same item on the same day collapse to one line.
         // A block of something already in Quarantine is covered by that line.
-        struct Key: Hashable { let name: String; let day: Date; let launch: Bool }
+        struct Key: Hashable { let name: String; let day: Date; let launch: Bool; let failed: Bool }
         let groups = Dictionary(grouping: blocked.filter { !quarantinedNames.contains($0.name) }) {
-            Key(name: $0.name, day: calendar.startOfDay(for: $0.date), launch: $0.wasLaunch)
+            Key(
+                name: $0.name,
+                day: calendar.startOfDay(for: $0.date),
+                launch: $0.wasLaunch,
+                failed: $0.persistenceFailed
+            )
         }
         for (key, group) in groups {
             let times = group.count == 1 ? "" : " (\(group.count) times)"
             items.append(SimpleActivityItem(
                 id: "b-\(key.launch ? "x" : "o")-\(Int(key.day.timeIntervalSince1970))-\(key.name)",
                 source: .blocked,
-                title: key.launch ? "Stopped “\(key.name)” from running" : "Stopped “\(key.name)” from opening",
-                detail: "Blocked by real-time protection\(times)",
+                title: key.failed
+                    ? "Could not save blocked evidence for “\(key.name)”"
+                    : (key.launch ? "Stopped “\(key.name)” from running" : "Stopped “\(key.name)” from opening"),
+                detail: key.failed ? "Nick will retry from its protected journal" : "Blocked by real-time protection\(times)",
                 date: group.map(\.date).max() ?? key.day,
-                status: .blocked
+                status: key.failed ? .needsAction : .blocked
             ))
         }
 

@@ -38,6 +38,8 @@ struct DiagnosticsView: View {
                 diagnosticCard("Event delivery", systemImage: "waveform.path.ecg") {
                     row("App file-queue drops", String(engine.fileEventDroppedCount))
                     row("Incidents evicted by retention", String(engine.incidentStore.evictedIncidentCount))
+                    row("Suppressed by dismissal", String(xpcClient.suppressedByDismissalCount))
+                    row("Ack without persistence", String(xpcClient.ackWithoutPersistenceCount))
                     row("AUTH deadline misses", healthNumber("deadlineMissCount"))
                     row("Last AUTH deadline miss", healthDate("lastDeadlineMissAt")?.formatted(date: .abbreviated, time: .standard) ?? "None reported")
                     let rates = xpcClient.extensionHealth?["eventsPerSecond"] as? [String: Double] ?? [:]

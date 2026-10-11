@@ -38,6 +38,14 @@ struct AlertDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: NickSpacing.xl) {
                     descriptionSection
+                    if alert.isTamperEvidence {
+                        tamperDetailsSection
+                    }
+                    if let dismissedAt = incident?.previouslyDismissedAt {
+                        Text("Previously dismissed \(dismissedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.nickBodyMedium)
+                            .foregroundStyle(Color.statusYellow)
+                    }
                     if !alert.contributingSignals.isEmpty {
                         signalsSection
                     }
@@ -58,7 +66,40 @@ struct AlertDetailView: View {
     }
 
     private var actionHistory: [IncidentActionRecord] {
-        engine.incidentStore.incidents.first(where: { $0.alert.id == alert.id })?.actions ?? []
+        incident?.actions ?? []
+    }
+
+    private var incident: SecurityIncident? {
+        engine.incidentStore.incidents.first(where: { $0.alert.id == alert.id })
+    }
+
+    private var tamperDetailsSection: some View {
+        let signal = alert.contributingSignals.first { $0.metadata["reason"] == "endpoint_tamper_observed" }
+        let process = signal?.processInfo
+        let signing: String = {
+            guard let process else { return "Unknown" }
+            switch process.signingStatus {
+            case .signed(let teamID, let signingID): return "\(teamID) / \(signingID ?? "unknown identifier")"
+            case .adHoc: return "Ad-hoc signed"
+            case .unsigned: return "Unsigned"
+            case .invalid: return "Invalid signature"
+            case .unknown: return "Unsigned or identity unavailable"
+            case .pending: return "Signing identity pending"
+            }
+        }()
+        return VStack(alignment: .leading, spacing: NickSpacing.xs) {
+            Text("Tamper evidence").font(.nickSubtitle)
+            Text("Operation: \(UserFacingAlertBuilder.userFacingTamperOperation(signal?.metadata["tamperOperation"]))")
+            Text("Actor: \(process?.path ?? "Unknown")")
+            Text("Signing identity: \(signing)")
+            Text("Target: \(signal?.metadata["tamperTarget"] ?? signal?.fileInfo?.path ?? "Unknown")")
+            Text("Occurrences: \(alert.occurrenceCount)")
+            Text("First seen: \(alert.firstSeen.formatted(date: .abbreviated, time: .shortened))")
+            Text("Last seen: \(alert.lastSeen.formatted(date: .abbreviated, time: .shortened))")
+        }
+        .font(.nickBodySmall)
+        .padding(NickSpacing.lg)
+        .background(Color.backgroundTertiary, in: RoundedRectangle(cornerRadius: NickLayout.cardCornerRadius))
     }
 
     private var actionHistorySection: some View {

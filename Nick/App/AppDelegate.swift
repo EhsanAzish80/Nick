@@ -130,13 +130,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             endpointExtensionManager = endpointManager
             await endpointManager.ensureBundledVersionIsActive()
             xpcClient.findingHandler = { [weak self] finding in
-                guard let self else { return false }
-                _ = await self.engine.ingestLiveFinding(
+                guard let self else { return .failed }
+                return await self.engine.ingestLiveFinding(
                     finding.signal,
                     score: finding.score,
                     recommendedAction: finding.recommendedAction
                 )
-                return await self.xpcClient.awaitIncidentStorePersistence()
             }
             xpcClient.integrityAcknowledgementHandler = { [weak self] id in
                 self?.engine.resolveAcknowledgedFIMIncident(id)
@@ -156,9 +155,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     do {
                         try self.engine.installPrivilegedIncidentStore(
                             payload: record.payload,
-                            persistence: { [weak self] payload, authorization in
+                            persistence: { [weak self] payload, generation, authorization in
                                 self?.xpcClient.persistIncidentStore(
                                     payload,
+                                    generation: generation,
                                     authorizationExternalForm: authorization
                                 )
                             },
@@ -168,6 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             },
                             removeLegacyState: true
                         )
+                        self.xpcClient.incidentPersistenceConfirmationHandler = { [weak self] generation in
+                            self?.engine.confirmIncidentStorePersistence(generation: generation)
+                        }
                     } catch {
                         self.incidentStoreLogger.error(
                             "Could not load root-owned incident store: \(error.localizedDescription)"

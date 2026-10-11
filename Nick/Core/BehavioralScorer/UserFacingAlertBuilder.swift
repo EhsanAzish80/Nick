@@ -117,15 +117,22 @@ final class UserFacingAlertBuilder: Sendable {
 
         if let tamper = signals.first(where: {
             $0.metadata["reason"] == "endpoint_tamper_observed"
-                && $0.metadata["tamperDisposition"] == "blocked"
         }) {
-            let operation = tamper.metadata["tamperOperation"] ?? "modify"
+            let recordedOperation = tamper.metadata["tamperOperation"]
+            let operation = Self.userFacingTamperOperation(recordedOperation)
             let actor = userReadableProcessName(tamper.processInfo?.name) ?? "an unknown process"
+            let outcomeRecorded = tamper.metadata["tamperDisposition"] == "blocked"
             return AlertPattern(
-                headline: "Nick blocked an attempt to modify its files (\(operation) by \(actor))",
-                explanation: "Nick refused the \(operation) operation by \(actor) before it could change the protected target.",
-                assessment: "Blocked",
-                recommendedAction: "No file change was allowed. Review the actor and operation if you did not run them.",
+                headline: outcomeRecorded
+                    ? "Nick blocked an attempt to \(operation) its files (\(actor))"
+                    : "Tamper attempt — outcome not recorded",
+                explanation: outcomeRecorded
+                    ? "Nick refused the \(operation) operation by \(actor) before it could change the protected target."
+                    : "An older Nick build recorded a protected-path tamper attempt by \(actor), but did not store whether the operation was blocked or allowed.",
+                assessment: outcomeRecorded ? "Blocked" : "Protected evidence",
+                recommendedAction: outcomeRecorded
+                    ? "No file change was allowed. Review the actor and operation if you did not run them."
+                    : "Review the actor and target. Nick has kept this record visible because the older event did not include its outcome.",
                 severity: .critical,
                 actions: [.showDetails]
             )
@@ -314,6 +321,20 @@ final class UserFacingAlertBuilder: Sendable {
             recommendedAction: cleanRecommendation(alert.recommendedAction),
             actions: [.showDetails, .dismiss]
         )
+    }
+
+    static func userFacingTamperOperation(_ operation: String?) -> String {
+        switch operation {
+        case "unlink": "delete"
+        case "rename-source", "rename-destination": "move or rename"
+        case "open-for-write", "truncate": "modify"
+        case "create": "create"
+        case "link": "link"
+        case "clone": "clone"
+        case "copyfile": "copy"
+        case .some(let value) where !value.isEmpty: value
+        default: "change"
+        }
     }
 
     private func isSimulatorCapture(_ signal: ThreatSignal) -> Bool {
