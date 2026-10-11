@@ -493,7 +493,21 @@ final class ESEventHandler {
                 }
 
                 // --- Threat Detection + Remediation ---
-                guard self.shouldDeepScanModifiedFile(at: filePath) else { return }
+                let shouldDeepScan = self.shouldDeepScanModifiedFile(at: filePath)
+                let completedIdentity = FileIdentity(path: filePath)
+                let exactSignatureDecision = completedIdentity.map {
+                    ScanCandidatePolicy.completedWriteExactSignatureDecision(
+                        path: filePath,
+                        fileSize: $0.size
+                    )
+                } ?? .skip(.empty)
+                if exactSignatureDecision == .skip(.overSizeLimit) {
+                    Self.logger.info(
+                        "Completed-write exact-signature check skipped over size cap: \(filePath, privacy: .private)"
+                    )
+                }
+                let shouldCheckExactSignature = exactSignatureDecision == .check
+                guard shouldDeepScan || shouldCheckExactSignature else { return }
                 // Xcode/SwiftPM build products are rewritten constantly and
                 // legitimately contain linker/install/persistence strings that
                 // generic YARA rules match. Apple developer tools remain covered
@@ -502,56 +516,36 @@ final class ESEventHandler {
                 if isTrustedBuildOutput {
                     return
                 }
-                self.pushEvent(ESEvent(
-                    eventType: .notifyWrite,
+                guard let scanner = self.fileScanner else { return }
+                let result: FileScanner.ScanResult
+                if shouldDeepScan {
+                    self.pushEvent(ESEvent(
+                        eventType: .notifyWrite,
+                        processPath: processPath,
+                        pid: pid,
+                        parentPid: parentPid,
+                        filePath: filePath,
+                        decision: .notApplicable
+                    ))
+                    result = scanner.scan(filePath: filePath)
+                } else {
+                    guard let completedIdentity,
+                          let signatureResult = scanner.exactSignatureMatch(
+                            path: filePath,
+                            identity: completedIdentity
+                          ) else { return }
+                    result = signatureResult
+                }
+                guard result.isThreat else { return }
+                self.reportDetectedThreat(
+                    result,
                     processPath: processPath,
                     pid: pid,
                     parentPid: parentPid,
                     filePath: filePath,
-                    decision: .notApplicable
-                ))
-
-                guard let scanner = self.fileScanner else { return }
-                let result = scanner.scan(filePath: filePath)
-                guard result.isThreat else { return }
-                let hash = result.hash
-
-                // Report raw threat event
-                let threat = ESEvent(
-                    eventType:   .notifyWrite,
-                    processPath: processPath,
-                    pid:         pid,
-                    parentPid:   parentPid,
-                    filePath:    filePath,
-                    decision:    .notApplicable,
-                    threat:      ESEvent.ThreatContext(
-                        sha256:       hash,
-                        threatName:   result.threatName,
-                        threatFamily: result.threatFamily
-                    )
+                    processIdentity: processIdentity,
+                    terminateProcess: emailEvent == nil
                 )
-                self.reportThreat(threat)
-                // Phase 6: mark the writing process as a threat in the process tree
-                self.processTree?.markAsThreat(pid: pid)
-                // Heuristic/YARA matches are user-review findings. Automated
-                // kill/quarantine is reserved for exact curated hash evidence.
-                if result.mayBlock, let engine = self.remediationEngine {
-                    let report = engine.remediate(
-                        threatPath:  filePath,
-                        hash:        hash,
-                        threatName:  result.threatName ?? "Unknown",
-                        processPath: processPath,
-                        pid:         pid,
-                        processIdentity: processIdentity,
-                        // Mail and Outlook are delivery processes, not the
-                        // malware itself. Quarantine the confirmed attachment
-                        // without terminating the user's mail client.
-                        terminateProcess: emailEvent == nil
-                    )
-                    if let data = try? JSONEncoder().encode(report) {
-                        self.xpcServer?.sendRemediationToApp(data)
-                    }
-                }
             }
 
         // MARK: NOTIFY_RENAME — invalidate cache; track rename for ransomware detection
@@ -662,6 +656,38 @@ final class ESEventHandler {
                         actorIsPlatformBinary: renameActorIsPlatform,
                         teamID: renameTeamID,
                         signingID: renameSigningID
+                    )
+                }
+
+                // Browsers and Finder commonly finish a download by renaming a
+                // temporary file. Check the final intake path by exact hash so
+                // `.txt` and extensionless known samples cannot evade the
+                // completed-write scan. Temporary suffixes are excluded by the
+                // shared policy to avoid duplicate pre-finalization findings.
+                if let scanner = self.fileScanner,
+                   let destinationIdentity = FileIdentity(path: notifyDestPath) {
+                    let signatureDecision = ScanCandidatePolicy.completedWriteExactSignatureDecision(
+                        path: notifyDestPath,
+                        fileSize: destinationIdentity.size
+                    )
+                    if signatureDecision == .skip(.overSizeLimit) {
+                        Self.logger.info(
+                            "Completed-write exact-signature check skipped over size cap after rename: \(notifyDestPath, privacy: .private)"
+                        )
+                    }
+                    guard signatureDecision == .check,
+                          let result = scanner.exactSignatureMatch(
+                            path: notifyDestPath,
+                            identity: destinationIdentity
+                          ) else { return }
+                    self.reportDetectedThreat(
+                        result,
+                        processPath: processPath,
+                        pid: pid,
+                        parentPid: parentPid,
+                        filePath: notifyDestPath,
+                        processIdentity: processIdentity,
+                        terminateProcess: true
                     )
                 }
             }
@@ -945,6 +971,50 @@ final class ESEventHandler {
         guard let violation = fileIntegrityMonitor?.check(path: path),
               let data = try? encoder.encode(violation) else { return }
         xpcServer?.sendIntegrityViolationToApp(data)
+    }
+
+    /// Emits detector-confirmed evidence and performs automatic remediation
+    /// only for an exact curated signature. Must run on `dispatchQueue`.
+    private func reportDetectedThreat(
+        _ result: FileScanner.ScanResult,
+        processPath: String,
+        pid: Int32,
+        parentPid: Int32,
+        filePath: String,
+        processIdentity: ProcessInstanceIdentity?,
+        terminateProcess: Bool
+    ) {
+        let threat = ESEvent(
+            eventType: .notifyWrite,
+            processPath: processPath,
+            pid: pid,
+            parentPid: parentPid,
+            filePath: filePath,
+            decision: .notApplicable,
+            threat: ESEvent.ThreatContext(
+                sha256: result.hash,
+                threatName: result.threatName,
+                threatFamily: result.threatFamily
+            )
+        )
+        reportThreat(threat)
+        processTree?.markAsThreat(pid: pid)
+
+        // Heuristic/YARA matches are user-review findings. Automated
+        // kill/quarantine is reserved for exact curated hash evidence.
+        guard result.mayBlock, let engine = remediationEngine else { return }
+        let report = engine.remediate(
+            threatPath: filePath,
+            hash: result.hash,
+            threatName: result.threatName ?? "Unknown",
+            processPath: processPath,
+            pid: pid,
+            processIdentity: processIdentity,
+            terminateProcess: terminateProcess
+        )
+        if let data = try? JSONEncoder().encode(report) {
+            xpcServer?.sendRemediationToApp(data)
+        }
     }
 
     /// Reports a ransomware alert and, when the evidence allows it, stops the

@@ -51,6 +51,12 @@ day-one exact matches but does not replace current platform protections or a
 maintained antivirus feed. Diagnostics shows the bundled entry count and date.
 Settings → Acknowledgements shows the bundled ESET BSD-2-Clause notice.
 
+Real-time completed-write exact-hash checks are bounded to files of 100 MiB or
+less written into Downloads, Desktop, or Mail Downloads. Custom browser
+download folders are not covered by this 5.0 completed-write path. A future
+5.1 update may use a preserved `com.apple.quarantine` tag as a
+location-independent trigger; 5.0 does not claim that coverage.
+
 Expected behavior can be accepted for the specific app and behavior so repeated
 benign events do not create alerts. This is a local trust decision, not a global
 malware exclusion.

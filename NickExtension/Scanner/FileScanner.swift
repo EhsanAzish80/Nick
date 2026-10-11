@@ -214,6 +214,63 @@ final class FileScanner {
         return match
     }
 
+    /// Performs only the curated SHA-256 lookup, without running YARA. Used
+    /// after completed writes in bounded user intake folders where extension-
+    /// based scheduling would miss a known sample saved as text or without an
+    /// executable suffix.
+    func exactSignatureMatch(path: String, identity: FileIdentity) -> ScanResult? {
+        let identityKey = ScanCandidatePolicy.completedWriteSignatureIdentityKey(
+            device: identity.device,
+            inode: identity.inode,
+            size: identity.size,
+            modificationSeconds: identity.modificationSeconds,
+            modificationNanoseconds: identity.modificationNanoseconds
+        )
+        if let cached = cache.lookup(path: identityKey, identity: identity) {
+            guard cached.isThreat else { return nil }
+            return ScanResult(
+                filePath: path,
+                identity: identity,
+                hash: cached.hash,
+                isThreat: true,
+                mayBlock: cached.mayBlock,
+                threatName: cached.threatName,
+                threatFamily: cached.threatFamily
+            )
+        }
+
+        guard let hash = computeSHA256Streaming(path: path) else { return nil }
+        let match = signatureDB.lookup(hash: hash)
+        cache.store(
+            path: identityKey,
+            identity: identity,
+            hash: hash,
+            isThreat: match != nil,
+            mayBlock: match != nil,
+            threatName: match?.name,
+            threatFamily: match?.family
+        )
+        guard let match else { return nil }
+        cache.store(
+            path: path,
+            identity: identity,
+            hash: hash,
+            isThreat: true,
+            mayBlock: true,
+            threatName: match.name,
+            threatFamily: match.family
+        )
+        return ScanResult(
+            filePath: path,
+            identity: identity,
+            hash: hash,
+            isThreat: true,
+            mayBlock: true,
+            threatName: match.name,
+            threatFamily: match.family
+        )
+    }
+
     /// Whether any curated hashes are loaded. Refreshed at most once a minute
     /// so the AUTH path never runs a COUNT query.
     var hasSignatures: Bool {
