@@ -460,7 +460,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertTrue(restored.incidents.contains { $0.alert.severity == .critical })
     }
 
-    func test_dismissalTombstoneSurvivesIncidentRetentionNoise() throws {
+    func test_protectedDismissalTombstoneSurvivesNoiseAndReopens() throws {
         let suite = "IncidentDismissalRetentionTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.removePersistentDomain(forName: suite)
@@ -482,8 +482,11 @@ final class ThreatCorrelatorTests: XCTestCase {
 
         let restored = IncidentStore(defaults: defaults)
         let result = restored.ingest([dismissedAlert])
-        XCTAssertTrue(result.visibleAlerts.allSatisfy { $0.deduplicationKey != dismissedAlert.deduplicationKey })
-        XCTAssertTrue(restored.dismissedAlertDeduplicationKeys.contains(dismissedAlert.deduplicationKey))
+        let reopened = try XCTUnwrap(result.visibleAlerts.first {
+            $0.deduplicationKey == dismissedAlert.deduplicationKey
+        })
+        XCTAssertEqual(reopened.occurrenceCount, 2)
+        XCTAssertFalse(restored.dismissedAlertDeduplicationKeys.contains(dismissedAlert.deduplicationKey))
     }
 
     func test_fileFloodCoalescesByRuleAndSignedActorIdentity() throws {

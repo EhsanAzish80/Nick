@@ -107,10 +107,25 @@ private struct PendingIncidentAction {
 }
 
 extension ThreatAlert {
+    var isTamperEvidence: Bool {
+        contributingSignals.contains { $0.metadata["reason"] == "endpoint_tamper_observed" }
+    }
+
+    var isBlockedTamperEvidence: Bool {
+        contributingSignals.contains {
+            $0.metadata["reason"] == "endpoint_tamper_observed"
+                && $0.metadata["tamperDisposition"] == "blocked"
+        }
+    }
+
     /// Whether this alert still has evidence a user can act on. Keeping this in
     /// Core gives the sidebar badge, Alerts view, and menu-bar state one source
     /// of truth instead of letting persisted, expired evidence disagree.
     var hasActionableEvidence: Bool {
+        // A denied or legacy tamper attempt is historical evidence of an
+        // operation Nick handled. Whether the target exists afterward cannot
+        // erase that evidence.
+        if isTamperEvidence { return true }
         switch evidenceState() {
         case .fileNoLongerExists, .processEnded:
             return false
@@ -700,7 +715,7 @@ final class SecurityEngine {
         _ signal: ThreatSignal,
         score: Double,
         recommendedAction: String
-    ) async -> [ThreatAlert] {
+    ) async -> IncidentIngestOutcome {
         var alert = ThreatAlert(
             score: score,
             content: AlertContent(
@@ -725,7 +740,7 @@ final class SecurityEngine {
             let (formatter, outputs) = buildPipeline()
             await emitAlert(newAlert, formatter: formatter, outputs: outputs)
         }
-        return result.newlyActionable
+        return result.outcomes.first ?? .failed
     }
 
     /// Adds a single alert from the real-time pipeline. Repeat evidence updates

@@ -54,6 +54,10 @@ struct SimpleAlertSheet: View {
         }
     }
 
+    private var incident: SecurityIncident? {
+        engine.incidentStore.incidents.first { $0.alert.id == alert.id }
+    }
+
     private var toneColors: (Color, Color) {
         switch copy.tone {
         case .danger:  (.nickDangerText, .nickDangerBackground)
@@ -77,6 +81,12 @@ struct SimpleAlertSheet: View {
                     row("WHAT HAPPENED", current.whatHappened)
                     row("WHAT NICK DID", current.whatNickDid)
                     row("WHAT YOU SHOULD DO", current.whatToDo)
+                    if let dismissedAt = incident?.previouslyDismissedAt {
+                        row(
+                            "HISTORY",
+                            "Previously dismissed \(dismissedAt.formatted(date: .abbreviated, time: .shortened)). This new occurrence reopened the incident."
+                        )
+                    }
                     technicalDetails(current)
                         .padding(.top, 6)
                 }

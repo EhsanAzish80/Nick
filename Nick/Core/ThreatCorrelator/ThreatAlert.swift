@@ -162,10 +162,7 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         // A denied tamper operation is durable evidence of a completed block.
         // The protected destination may intentionally not exist, so path
         // revalidation must not demote the incident to non-actionable history.
-        if contributingSignals.contains(where: {
-            $0.metadata["reason"] == "endpoint_tamper_observed"
-                && $0.metadata["tamperDisposition"] == "blocked"
-        }) {
+        if isTamperEvidence {
             return .historical
         }
         if let path = detectedFilePath {
@@ -198,6 +195,25 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
             firstSeen: min(firstSeen, newer.firstSeen),
             lastSeen: max(lastSeen, newer.lastSeen),
             occurrenceCount: occurrenceCount + max(1, newer.occurrenceCount)
+        )
+    }
+
+    func withOccurrenceCount(_ count: Int) -> ThreatAlert {
+        ThreatAlert(
+            id: id,
+            score: score,
+            content: AlertContent(
+                title: title,
+                description: description,
+                severity: severity,
+                recommendedAction: recommendedAction,
+                explanation: explanation
+            ),
+            contributingSignals: contributingSignals,
+            timestamp: timestamp,
+            firstSeen: firstSeen,
+            lastSeen: lastSeen,
+            occurrenceCount: max(1, count)
         )
     }
 

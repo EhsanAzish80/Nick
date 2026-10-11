@@ -4,6 +4,97 @@ import XCTest
 final class NetworkProtectionPolicyTests: XCTestCase {
 
     @MainActor
+    func test_dismissedProtectedTamperReopensOnNewOccurrence() throws {
+        var clock = Date(timeIntervalSince1970: 10_000)
+        let store = IncidentStore(persistOnInit: false, now: { clock })
+        let first = tamperAlert(from: try XCTUnwrap(ExtensionFinding(
+            event: tamperEvent(operation: .unlink, target: "/Applications/Nick.app/test")
+        )))
+        _ = store.ingest([first])
+        store.performAuthenticatedUserAction(.dismissed, alertID: first.id)
+
+        clock = clock.addingTimeInterval(60)
+        let repeatAlert = tamperAlert(from: try XCTUnwrap(ExtensionFinding(
+            event: tamperEvent(operation: .unlink, target: "/Applications/Nick.app/test")
+        )))
+        let result = store.ingest([repeatAlert])
+
+        XCTAssertEqual(result.outcomes, [.persisted])
+        XCTAssertEqual(result.newlyActionable.count, 1, "reopen must notify")
+        XCTAssertEqual(store.incidents.first?.state, .new)
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 2)
+        XCTAssertEqual(store.incidents.first?.previouslyDismissedAt, Date(timeIntervalSince1970: 10_000))
+    }
+
+    @MainActor
+    func test_reviewTierDismissalRemainsSuppressedByPolicy() {
+        let store = IncidentStore(persistOnInit: false)
+        let signal = ThreatSignal(
+            source: .process,
+            severity: .info,
+            title: "Review activity",
+            description: "Review only",
+            context: ThreatSignalContext(metadata: [
+                "class": "audit",
+                "reason": "endpoint_management_observed",
+                "rule": "endpoint_management_observed",
+                "ruleTier": "review",
+            ])
+        )
+        let first = ThreatAlert(
+            score: 0.4,
+            content: AlertContent(title: signal.title, description: signal.description, severity: .info, recommendedAction: "Review"),
+            contributingSignals: [signal],
+            timestamp: signal.timestamp
+        )
+        _ = store.ingest([first])
+        store.performAuthenticatedUserAction(
+            .dismissed,
+            alertID: try! XCTUnwrap(store.visibleAlerts.first?.id)
+        )
+        XCTAssertEqual(store.ingest([first]).outcomes, [.suppressedByPolicy("dismissal")])
+        XCTAssertTrue(store.visibleAlerts.isEmpty)
+    }
+
+    @MainActor
+    func test_dismissedProtectedFileDetectionReopens() {
+        let store = IncidentStore(persistOnInit: false)
+        func alert(id: UUID = UUID()) -> ThreatAlert {
+            let signal = ThreatSignal(
+                id: id,
+                source: .yara,
+                severity: .critical,
+                title: "EICAR Anti-Malware Test File",
+                description: "Signature match",
+                context: ThreatSignalContext(
+                    fileInfo: FileInfo(
+                        path: "/Users/test/Downloads/eicar.com",
+                        sha256Hash: String(repeating: "a", count: 64),
+                        entropy: nil,
+                        signingStatus: nil,
+                        sizeBytes: 68
+                    ),
+                    metadata: ["reason": "hash_match", "ruleTier": "protected"]
+                )
+            )
+            return ThreatAlert(
+                score: 1,
+                content: AlertContent(title: signal.title, description: signal.description, severity: .critical, recommendedAction: "Quarantine"),
+                contributingSignals: [signal],
+                timestamp: signal.timestamp
+            )
+        }
+        let first = alert()
+        _ = store.ingest([first])
+        store.performAuthenticatedUserAction(.dismissed, alertID: first.id)
+        let result = store.ingest([alert()])
+
+        XCTAssertEqual(result.outcomes, [.persisted])
+        XCTAssertEqual(result.newlyActionable.count, 1)
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 2)
+    }
+
+    @MainActor
     func test_allDeniedTamperOperationsMapThroughXPCFindingAndIncidentStore() throws {
         let store = IncidentStore(persistOnInit: false)
         let target = "/Applications/Nick.app/Contents/Resources/test.txt"
@@ -137,9 +228,57 @@ final class NetworkProtectionPolicyTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(clientSource.contains("return await receiveThreat(event) ? event.id : nil"))
+        XCTAssertTrue(clientSource.contains("return await receiveThreat(event).mayAcknowledge ? event.id : nil"))
         XCTAssertTrue(clientSource.contains("proxy.acknowledgePersistedThreats"))
         XCTAssertTrue(serverSource.contains("func removeThreats(eventIDs: Set<UUID>)"))
+    }
+
+    @MainActor
+    func test_persistenceFailureDoesNotAckAndRetryPersists() async throws {
+        let client = ExtensionXPCClient()
+        client.findingHandler = { _ in .persisted }
+        var attempts = 0
+        client.incidentPersistenceOverride = { prior in
+            attempts += 1
+            return attempts == 1 ? nil : (prior + 1, true)
+        }
+        let event = tamperEvent(operation: .unlink, target: "/Applications/Nick.app/test")
+        let finding = PersistedExtensionFinding(kind: .threat, payload: try JSONEncoder().encode(event))
+
+        let firstResult = await client.receivePersisted(finding)
+        XCTAssertNil(firstResult)
+        XCTAssertTrue(client.failedThreatEventIDs.contains(event.id))
+        let retryResult = await client.receivePersisted(finding)
+        XCTAssertEqual(retryResult, event.id)
+        XCTAssertFalse(client.failedThreatEventIDs.contains(event.id))
+        XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
+    }
+
+    @MainActor
+    func test_suppressedDismissalAcksAndCountsWithoutReusingGeneration() async throws {
+        let client = ExtensionXPCClient()
+        client.findingHandler = { _ in .suppressedByPolicy("dismissal") }
+        client.incidentPersistenceOverride = { _ in XCTFail("suppression must not await a write"); return nil }
+        let event = tamperEvent(operation: .unlink, target: "/Applications/Nick.app/test")
+        let finding = PersistedExtensionFinding(kind: .threat, payload: try JSONEncoder().encode(event))
+
+        let result = await client.receivePersisted(finding)
+        XCTAssertEqual(result, event.id)
+        XCTAssertEqual(client.suppressedByDismissalCount, 1)
+        XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
+    }
+
+    @MainActor
+    func test_persistedOutcomeCannotAckWithoutThisIngestGeneration() async throws {
+        let client = ExtensionXPCClient()
+        client.findingHandler = { _ in .coalesced }
+        client.incidentPersistenceOverride = { _ in nil }
+        let event = tamperEvent(operation: .openWrite, target: "/Applications/Nick.app/test")
+        let finding = PersistedExtensionFinding(kind: .threat, payload: try JSONEncoder().encode(event))
+
+        let result = await client.receivePersisted(finding)
+        XCTAssertNil(result)
+        XCTAssertTrue(client.failedThreatEventIDs.contains(event.id))
     }
 
     private func tamperEvent(
@@ -594,7 +733,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
                 timestamp: finding.signal.timestamp
             )
             _ = store.ingest([alert])
-            return true
+            return .suppressedByPolicy("test fixture")
         }
 
         let acknowledgement = await client.receivePersisted(envelope)
@@ -610,7 +749,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
         var delivered = 0
         client.findingHandler = { _ in
             delivered += 1
-            return true
+            return .suppressedByPolicy("test fixture")
         }
         let record = QuarantineRecord(
             id: UUID(),
@@ -666,7 +805,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
             )
             newlyActionable = store.ingest([alert]).newlyActionable
             delivery.fulfill()
-            return true
+            return .suppressedByPolicy("test fixture")
         }
         let report = RemediationReport(
             timestamp: Date(timeIntervalSince1970: 789),
@@ -961,7 +1100,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
         var deliveredCount = 0
         client.findingHandler = { _ in
             deliveredCount += 1
-            return true
+            return .suppressedByPolicy("test fixture")
         }
 
         let acknowledgedID = await client.receivePersisted(envelope)
@@ -1004,7 +1143,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
                 timestamp: finding.signal.timestamp
             )
             _ = incidentStore.ingest([alert])
-            return false // privileged root-store write rejected
+            return .failed // privileged root-store write rejected
         }
 
         let firstAcknowledgement = await client.receivePersisted(journal[0])

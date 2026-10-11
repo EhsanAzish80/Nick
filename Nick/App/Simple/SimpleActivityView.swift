@@ -23,7 +23,10 @@ struct SimpleActivityView: View {
         return SimpleActivityFeed.items(
             alerts: SimpleActivityFeed.alertInputs(from: engine.alerts, actionable: actionable),
             quarantine: xpcClient.quarantineRecords,
-            blocked: SimpleActivityFeed.blockedInputs(from: xpcClient.events)
+            blocked: SimpleActivityFeed.blockedInputs(
+                from: xpcClient.events,
+                failedThreatEventIDs: xpcClient.failedThreatEventIDs
+            )
         )
     }
 
