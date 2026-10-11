@@ -48,7 +48,7 @@ struct AlertDetailView: View {
                     }
                     if let state = incident?.reopenedAfterState,
                        let reopenedAt = incident?.reopenedAfterAt {
-                        Text("Reopened after \(state.rawValue) on \(reopenedAt.formatted(date: .abbreviated, time: .shortened))")
+                        Text("Reopened after \(state.displayName) on \(reopenedAt.formatted(date: .abbreviated, time: .shortened))")
                             .font(.nickBodyMedium)
                             .foregroundStyle(Color.statusYellow)
                     }

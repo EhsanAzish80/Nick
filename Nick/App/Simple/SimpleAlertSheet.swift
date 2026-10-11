@@ -91,7 +91,7 @@ struct SimpleAlertSheet: View {
                        let reopenedAt = incident?.reopenedAfterAt {
                         row(
                             "HISTORY",
-                            "Reopened after \(state.rawValue) on \(reopenedAt.formatted(date: .abbreviated, time: .shortened))."
+                            "Reopened after \(state.displayName) on \(reopenedAt.formatted(date: .abbreviated, time: .shortened))."
                         )
                     }
                     technicalDetails(current)

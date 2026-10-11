@@ -26,6 +26,16 @@ enum IncidentReopenState: String, Codable, Sendable {
     case reviewed
     case resolved
     case hidden
+    case allowed
+
+    var displayName: String {
+        switch self {
+        case .reviewed: "reviewed"
+        case .resolved: "resolved"
+        case .hidden: "hidden"
+        case .allowed: "Always Allow"
+        }
+    }
 }
 
 struct IncidentActionRecord: Codable, Sendable, Equatable {
@@ -290,6 +300,13 @@ enum IncidentIngestOutcome: Equatable {
     case coalesced(UInt64)
     case suppressedByPolicy(String)
     case failed
+
+    var generation: UInt64? {
+        switch self {
+        case .persisted(let generation), .coalesced(let generation): generation
+        case .suppressedByPolicy, .failed: nil
+        }
+    }
 }
 
 struct IncidentIngestResult {
@@ -301,6 +318,7 @@ struct IncidentIngestResult {
 @MainActor
 final class DurableIncidentNotificationQueue {
     private var alertsByGeneration: [UInt64: [ThreatAlert]] = [:]
+    var pendingGenerationCount: Int { alertsByGeneration.count }
 
     func stage(_ alerts: [ThreatAlert], for generation: UInt64) {
         guard generation > 0, !alerts.isEmpty else { return }
@@ -308,9 +326,14 @@ final class DurableIncidentNotificationQueue {
     }
 
     func confirm(generation: UInt64) -> [ThreatAlert] {
-        let confirmed = alertsByGeneration.removeValue(forKey: generation) ?? []
+        var newestByIncidentID: [UUID: ThreatAlert] = [:]
+        for key in alertsByGeneration.keys.filter({ $0 <= generation }).sorted() {
+            for alert in alertsByGeneration[key] ?? [] {
+                newestByIncidentID[alert.id] = alert
+            }
+        }
         alertsByGeneration = alertsByGeneration.filter { $0.key > generation }
-        return confirmed
+        return Array(newestByIncidentID.values)
     }
 }
 
@@ -344,6 +367,8 @@ final class IncidentStore {
     private(set) var lastDurablyConfirmedGeneration: UInt64 = 0
     private var pendingNotificationSignalIDs: Set<UUID> = []
     private var notificationSignalIDsByGeneration: [UInt64: Set<UUID>] = [:]
+    private var pendingNotificationIncidentIDs: Set<UUID> = []
+    private var notificationIncidentIDsByGeneration: [UInt64: Set<UUID>] = [:]
 
     var hasUnconfirmedChanges: Bool {
         lastQueuedGeneration > lastDurablyConfirmedGeneration
@@ -422,6 +447,9 @@ final class IncidentStore {
         for key in Array(notificationSignalIDsByGeneration.keys) where key <= generation {
             pendingNotificationSignalIDs.subtract(notificationSignalIDsByGeneration.removeValue(forKey: key) ?? [])
         }
+        for key in Array(notificationIncidentIDsByGeneration.keys) where key <= generation {
+            pendingNotificationIncidentIDs.subtract(notificationIncidentIDsByGeneration.removeValue(forKey: key) ?? [])
+        }
     }
 
     func prepareLegacyMigration(defaults: UserDefaults = .standard) throws -> Data {
@@ -461,6 +489,7 @@ final class IncidentStore {
         var outcomes: [IncidentIngestOutcome] = []
         var forcePersistence = false
         var notificationSignalIDs: Set<UUID> = []
+        var notificationIncidentIDs: Set<UUID> = []
 
         for rawCandidate in candidates {
             let candidate = applyLearnedPriority(to: applyTrustedDowngrade(to: rawCandidate))
@@ -492,6 +521,7 @@ final class IncidentStore {
                     incidents.append(incident)
                     dismissalTombstones.removeAll { $0.incidentKey == tombstone.incidentKey }
                     newlyActionable.append(reopened)
+                    notificationIncidentIDs.insert(reopened.id)
                     notificationSignalIDs.formUnion(reopened.contributingSignals.map(\.id))
                     outcomes.append(.persisted(0))
                     continue
@@ -529,7 +559,9 @@ final class IncidentStore {
                         currentTime.timeIntervalSince($0) >= 600
                     } ?? true
                     if shouldReopen {
-                        incidents[index].reopenedAfterState = wasHidden ? .hidden : Self.reopenState(for: prior.state)
+                        incidents[index].reopenedAfterState = prior.state == .allowed
+                            ? .allowed
+                            : (wasHidden ? .hidden : Self.reopenState(for: prior.state))
                         incidents[index].reopenedAfterAt = Self.lifecycleDate(for: prior)
                         incidents[index].state = .new
                         incidents[index].isVisible = true
@@ -538,7 +570,15 @@ final class IncidentStore {
                     if shouldReopen || outsideNotificationWindow {
                         incidents[index].lastNotifiedAt = currentTime
                         newlyActionable.append(incidents[index].alert)
+                        notificationIncidentIDs.insert(incidents[index].alert.id)
                         notificationSignalIDs.formUnion(candidateSignalIDs)
+                    } else if pendingNotificationIncidentIDs.contains(prior.alert.id) {
+                        // A prior occurrence already earned a notification but
+                        // its snapshot has not reached durable storage yet.
+                        // Restage the newest whole-incident snapshot so a
+                        // superseding write delivers the final count once.
+                        newlyActionable.append(incidents[index].alert)
+                        notificationIncidentIDs.insert(incidents[index].alert.id)
                     }
                 } else if escalated {
                     incidents[index].state = .new
@@ -556,6 +596,7 @@ final class IncidentStore {
                 if isProtected(candidate) {
                     incident.lastNotifiedAt = now()
                     notificationSignalIDs.formUnion(candidate.contributingSignals.map(\.id))
+                    notificationIncidentIDs.insert(candidate.id)
                 }
                 incidents.append(incident)
                 outcomes.append(.persisted(0))
@@ -569,6 +610,10 @@ final class IncidentStore {
         if generation > lastDurablyConfirmedGeneration, !notificationSignalIDs.isEmpty {
             pendingNotificationSignalIDs.formUnion(notificationSignalIDs)
             notificationSignalIDsByGeneration[generation, default: []].formUnion(notificationSignalIDs)
+        }
+        if generation > lastDurablyConfirmedGeneration, !notificationIncidentIDs.isEmpty {
+            pendingNotificationIncidentIDs.formUnion(notificationIncidentIDs)
+            notificationIncidentIDsByGeneration[generation, default: []].formUnion(notificationIncidentIDs)
         }
         outcomes = outcomes.map { outcome in
             switch outcome {
@@ -728,7 +773,8 @@ final class IncidentStore {
     private static func reopenState(for state: IncidentState) -> IncidentReopenState {
         switch state {
         case .resolved: .resolved
-        case .reviewed, .allowed: .reviewed
+        case .reviewed: .reviewed
+        case .allowed: .allowed
         case .new: .reviewed
         }
     }

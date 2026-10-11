@@ -202,6 +202,159 @@ final class IncidentStorePersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func test_latestWinsBurstCoversAllWaitersAndDeliversThreeNotifications() async throws {
+        let client = ExtensionXPCClient()
+        let store = try privilegedStore()
+        let queue = DurableIncidentNotificationQueue()
+        let alerts = try [
+            tamperAlert(operation: .unlink),
+            tamperAlert(operation: .renameDestination),
+            tamperAlert(operation: .openWrite),
+        ]
+        var generations: [UInt64] = []
+        for alert in alerts {
+            let result = store.ingest([alert])
+            let generation = try XCTUnwrap(result.outcomes.first?.generation)
+            generations.append(generation)
+            queue.stage(result.newlyActionable, for: generation)
+            client.registerIncidentWriteGenerationForTesting(generation)
+        }
+        let waiters = generations.map { generation in
+            Task { @MainActor in await client.awaitIncidentStorePersistenceForTesting(generation: generation) }
+        }
+        await Task.yield()
+        XCTAssertEqual(client.pendingIncidentWriteWaiterCount, 3)
+
+        let finalGeneration = try XCTUnwrap(generations.last)
+        client.completeIncidentWriteForTesting(through: finalGeneration, succeeded: true)
+        store.confirmDurablePersistence(generation: finalGeneration)
+
+        for (index, waiter) in waiters.enumerated() {
+            let result = await waiter.value
+            XCTAssertEqual(result.0, generations[index])
+            XCTAssertEqual(result.1, true)
+        }
+        XCTAssertEqual(client.pendingIncidentWriteWaiterCount, 0)
+        XCTAssertEqual(Set(queue.confirm(generation: finalGeneration).map(\.id)).count, 3)
+        XCTAssertEqual(queue.pendingGenerationCount, 0)
+    }
+
+    @MainActor
+    func test_failedLatestWinsBurstRetainsNotificationsUntilRetrySucceeds() async throws {
+        let client = ExtensionXPCClient()
+        let store = try privilegedStore()
+        let queue = DurableIncidentNotificationQueue()
+        let alerts = try [
+            tamperAlert(operation: .unlink),
+            tamperAlert(operation: .renameDestination),
+            tamperAlert(operation: .openWrite),
+        ]
+        var failedWaiters: [Task<(UInt64, Bool)?, Never>] = []
+        var failedThrough: UInt64 = 0
+        for alert in alerts {
+            let result = store.ingest([alert])
+            let generation = try XCTUnwrap(result.outcomes.first?.generation)
+            failedThrough = generation
+            queue.stage(result.newlyActionable, for: generation)
+            client.registerIncidentWriteGenerationForTesting(generation)
+            failedWaiters.append(Task { @MainActor in
+                await client.awaitIncidentStorePersistenceForTesting(generation: generation)
+            })
+        }
+        await Task.yield()
+        client.completeIncidentWriteForTesting(through: failedThrough, succeeded: false)
+        for waiter in failedWaiters {
+            let result = await waiter.value
+            XCTAssertEqual(result?.1, false)
+        }
+        XCTAssertEqual(client.pendingIncidentWriteWaiterCount, 0)
+        XCTAssertEqual(queue.pendingGenerationCount, 3)
+
+        var retryWaiters: [Task<(UInt64, Bool)?, Never>] = []
+        var successfulThrough: UInt64 = failedThrough
+        for alert in alerts {
+            let retry = store.ingest([alert])
+            let generation = try XCTUnwrap(retry.outcomes.first?.generation)
+            successfulThrough = generation
+            queue.stage(retry.newlyActionable, for: generation)
+            client.registerIncidentWriteGenerationForTesting(generation)
+            retryWaiters.append(Task { @MainActor in
+                await client.awaitIncidentStorePersistenceForTesting(generation: generation)
+            })
+        }
+        await Task.yield()
+        client.completeIncidentWriteForTesting(through: successfulThrough, succeeded: true)
+        store.confirmDurablePersistence(generation: successfulThrough)
+        for waiter in retryWaiters {
+            let result = await waiter.value
+            XCTAssertEqual(result?.1, true)
+        }
+        XCTAssertEqual(client.pendingIncidentWriteWaiterCount, 0)
+        XCTAssertEqual(Set(queue.confirm(generation: successfulThrough).map(\.id)).count, 3)
+        XCTAssertTrue(queue.confirm(generation: successfulThrough).isEmpty)
+    }
+
+    @MainActor
+    func test_supersededCoalescedBurstDeliversFinalOccurrenceCountOnce() throws {
+        let store = try privilegedStore()
+        let queue = DurableIncidentNotificationQueue()
+        for _ in 0..<3 {
+            let result = store.ingest([try tamperAlert(operation: .unlink)])
+            let generation = try XCTUnwrap(result.outcomes.first?.generation)
+            queue.stage(result.newlyActionable, for: generation)
+        }
+        store.confirmDurablePersistence(generation: 3)
+        let delivered = queue.confirm(generation: 3)
+        XCTAssertEqual(delivered.count, 1)
+        XCTAssertEqual(delivered.first?.occurrenceCount, 3)
+    }
+
+    @MainActor
+    func test_failedWriteThenDistinctOccurrenceInsideWindowDeliversOnce() throws {
+        var clock = Date(timeIntervalSince1970: 50_000)
+        let store = try privilegedStore(now: { clock })
+        let queue = DurableIncidentNotificationQueue()
+        let first = store.ingest([try tamperAlert(operation: .unlink)])
+        queue.stage(first.newlyActionable, for: 1)
+
+        clock.addTimeInterval(60)
+        let second = store.ingest([try tamperAlert(operation: .unlink)])
+        queue.stage(second.newlyActionable, for: 2)
+        store.confirmDurablePersistence(generation: 2)
+
+        let delivered = queue.confirm(generation: 2)
+        XCTAssertEqual(delivered.count, 1)
+        XCTAssertEqual(delivered.first?.occurrenceCount, 2)
+    }
+
+    @MainActor
+    func test_allowedProtectedIncidentReopensAfterAlwaysAllow() throws {
+        let store = IncidentStore(persistOnInit: false)
+        let first = try tamperAlert(operation: .unlink)
+        _ = store.ingest([first])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: first.id)
+        _ = store.ingest([try tamperAlert(operation: .unlink)])
+        XCTAssertEqual(store.incidents.first?.reopenedAfterState, .allowed)
+        XCTAssertEqual(store.incidents.first?.reopenedAfterState?.displayName, "Always Allow")
+    }
+
+    @MainActor
+    func test_tamperNotificationBodyUsesCapitalizedSingularAndPluralWording() throws {
+        let single = try tamperAlert(operation: .unlink)
+        let signal = try XCTUnwrap(single.contributingSignals.first)
+        XCTAssertEqual(
+            NotificationManager.tamperNotificationBody(alert: single, signal: signal),
+            "Delete by test-actor — attempted 1 time"
+        )
+        XCTAssertEqual(
+            NotificationManager.tamperNotificationBody(
+                alert: single.withOccurrenceCount(3), signal: signal
+            ),
+            "Delete by test-actor — attempted 3 times"
+        )
+    }
+
+    @MainActor
     func test_resolvedProtectedTamperRemainsVisibleAsHistory() throws {
         let store = IncidentStore(persistOnInit: false)
         let alert = try tamperAlert(operation: .openWrite)
@@ -253,6 +406,16 @@ final class IncidentStorePersistenceTests: XCTestCase {
             ),
             contributingSignals: [finding.signal], timestamp: finding.signal.timestamp
         )
+    }
+
+    @MainActor
+    private func privilegedStore(now: @escaping () -> Date = Date.init) throws -> IncidentStore {
+        let store = IncidentStore(persistOnInit: false, now: now)
+        let snapshot = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [], dismissalTombstones: [], expectedCooldowns: [:]
+        ))
+        try store.installPrivilegedSnapshot(snapshot) { _, _ in }
+        return store
     }
 
     static func tamperEvent(

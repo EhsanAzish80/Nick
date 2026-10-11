@@ -143,6 +143,7 @@ public final class ExtensionXPCClient: NSObject {
     private var incidentWriteGeneration: UInt64 = 0
     private var incidentWriteResults: [UInt64: Bool] = [:]
     private var incidentWriteWaiters: [(UInt64, CheckedContinuation<Bool, Never>)] = []
+    var pendingIncidentWriteWaiterCount: Int { incidentWriteWaiters.count }
     private var activeProtectionAuthorizations: [Data: AuthorizationRef] = [:]
     private var incidentBootstrapCompleted = false
     private var bootstrapLegacyPayload: Data?
@@ -495,9 +496,10 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    /// Waits for the root-owned store reply corresponding to the newest
-    /// snapshot queued by the caller. A rejection is not durable success and
-    /// must keep any extension journal event eligible for redelivery.
+    /// Waits until a root-owned whole-store snapshot covers the generation
+    /// queued by the caller. A later successful generation covers all earlier
+    /// still-pending generations; a failed reply fails every waiter it covers
+    /// so those journal events remain eligible for redelivery.
     func awaitIncidentStorePersistence(generation: UInt64) async -> (UInt64, Bool)? {
         guard generation > 0, generation <= incidentWriteGeneration else {
             ackWithoutPersistenceCount += 1
@@ -512,19 +514,37 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     private func completeIncidentWrite(through generation: UInt64, succeeded: Bool) {
-        incidentWriteResults[generation] = succeeded
+        let coveredGenerations = Set(
+            incidentWriteWaiters.lazy.map(\.0).filter { $0 <= generation }
+        ).union([generation])
+        for covered in coveredGenerations where incidentWriteResults[covered] == nil {
+            incidentWriteResults[covered] = succeeded
+        }
         if incidentWriteResults.count > 32 {
             let floor = incidentWriteGeneration > 32 ? incidentWriteGeneration - 32 : 0
             incidentWriteResults = incidentWriteResults.filter { $0.key >= floor }
         }
-        // A later successful write must never satisfy a waiter for an earlier
-        // generation that failed. Each ingest is acknowledged only from the
-        // root-store reply for the exact snapshot generation it queued.
-        let ready = incidentWriteWaiters.filter { $0.0 == generation }
-        incidentWriteWaiters.removeAll { $0.0 == generation }
+        let ready = incidentWriteWaiters.filter { $0.0 <= generation }
+        incidentWriteWaiters.removeAll { $0.0 <= generation }
         for (_, continuation) in ready {
             continuation.resume(returning: succeeded)
         }
+    }
+
+    /// Test seam for exercising latest-wins write completion without XPC.
+    func completeIncidentWriteForTesting(through generation: UInt64, succeeded: Bool) {
+        completeIncidentWrite(through: generation, succeeded: succeeded)
+    }
+
+    func registerIncidentWriteGenerationForTesting(_ generation: UInt64) {
+        incidentWriteGeneration = max(incidentWriteGeneration, generation)
+    }
+
+    func awaitIncidentStorePersistenceForTesting(generation: UInt64) async -> (UInt64, Bool) {
+        let result = await withCheckedContinuation { continuation in
+            incidentWriteWaiters.append((generation, continuation))
+        }
+        return (generation, result)
     }
 
     func validateIncidentVerdictTarget(

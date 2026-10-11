@@ -157,13 +157,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         } else if let tamper = alert.contributingSignals.first(where: {
             $0.metadata["reason"] == "endpoint_tamper_observed"
         }) {
-            let operation = UserFacingAlertBuilder.userFacingTamperOperation(
-                tamper.metadata["tamperOperation"]
-            )
-            let actor = tamper.processInfo?.name.isEmpty == false
-                ? tamper.processInfo!.name
-                : (tamper.processInfo?.path as NSString?)?.lastPathComponent ?? "unknown actor"
-            content.body = "\(operation) by \(actor) — attempted \(alert.occurrenceCount) times"
+            content.body = Self.tamperNotificationBody(alert: alert, signal: tamper)
         } else {
             content.body = alert.title
         }
@@ -184,6 +178,18 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         } catch {
             Self.log.error("Failed to deliver notification: \(error.localizedDescription)")
         }
+    }
+
+    static func tamperNotificationBody(alert: ThreatAlert, signal: ThreatSignal) -> String {
+        let operation = UserFacingAlertBuilder.userFacingTamperOperation(
+            signal.metadata["tamperOperation"]
+        )
+        let actor = signal.processInfo?.name.isEmpty == false
+            ? signal.processInfo!.name
+            : (signal.processInfo?.path as NSString?)?.lastPathComponent ?? "unknown actor"
+        let count = alert.occurrenceCount
+        let unit = count == 1 ? "time" : "times"
+        return "\(operation.capitalized) by \(actor) — attempted \(count) \(unit)"
     }
 
     func sendUpdateAvailable(version: String) async {
