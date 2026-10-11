@@ -204,6 +204,27 @@ final class DetectionPolicyTests: XCTestCase {
         XCTAssertFalse(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
             path: "/Users/test/Downloads/oversized.txt",
             fileSize: ScanCandidatePolicy.completedWriteSignatureSizeLimit + 1))
+        XCTAssertEqual(
+            ScanCandidatePolicy.completedWriteExactSignatureDecision(
+                path: "/Users/test/Downloads/oversized.txt",
+                fileSize: ScanCandidatePolicy.completedWriteSignatureSizeLimit + 1
+            ),
+            .skip(.overSizeLimit)
+        )
+    }
+
+    func test_completedWriteSignatureIdentityKeyDedupesByInodeAndModificationTime() {
+        let first = ScanCandidatePolicy.completedWriteSignatureIdentityKey(
+            device: 1, inode: 42, size: 68,
+            modificationSeconds: 100, modificationNanoseconds: 200)
+        let same = ScanCandidatePolicy.completedWriteSignatureIdentityKey(
+            device: 1, inode: 42, size: 68,
+            modificationSeconds: 100, modificationNanoseconds: 200)
+        let rewritten = ScanCandidatePolicy.completedWriteSignatureIdentityKey(
+            device: 1, inode: 42, size: 68,
+            modificationSeconds: 101, modificationNanoseconds: 0)
+        XCTAssertEqual(first, same)
+        XCTAssertNotEqual(first, rewritten)
     }
 
     // MARK: - RansomwareRenamePolicy

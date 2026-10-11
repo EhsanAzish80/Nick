@@ -103,6 +103,27 @@ final class NetworkProtectionPolicyTests: XCTestCase {
         }
     }
 
+    func test_completedWriteHashingRunsOnlyFromAsynchronousNotifyPaths() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("NickExtension/EventHandler.swift"),
+            encoding: .utf8
+        )
+        let closeStart = try XCTUnwrap(source.range(of: "case ES_EVENT_TYPE_NOTIFY_CLOSE:"))
+        let renameStart = try XCTUnwrap(source.range(of: "case ES_EVENT_TYPE_NOTIFY_RENAME:"))
+        let unlinkStart = try XCTUnwrap(source.range(of: "case ES_EVENT_TYPE_AUTH_UNLINK:"))
+        let closeSection = String(source[closeStart.lowerBound..<renameStart.lowerBound])
+        let renameSection = String(source[renameStart.lowerBound..<unlinkStart.lowerBound])
+
+        XCTAssertTrue(closeSection.contains("dispatchQueue.async"))
+        XCTAssertTrue(closeSection.contains("scanner.exactSignatureMatch"))
+        XCTAssertTrue(renameSection.contains("dispatchQueue.async"))
+        XCTAssertTrue(renameSection.contains("scanner.exactSignatureMatch"))
+        XCTAssertTrue(source.contains("Completed-write exact-signature check skipped over size cap"))
+    }
+
     func test_persistedThreatReplayIngestsBeforeAcknowledgement() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

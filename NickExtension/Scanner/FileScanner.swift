@@ -219,8 +219,38 @@ final class FileScanner {
     /// based scheduling would miss a known sample saved as text or without an
     /// executable suffix.
     func exactSignatureMatch(path: String, identity: FileIdentity) -> ScanResult? {
-        guard let hash = computeSHA256Streaming(path: path),
-              let match = signatureDB.lookup(hash: hash) else { return nil }
+        let identityKey = ScanCandidatePolicy.completedWriteSignatureIdentityKey(
+            device: identity.device,
+            inode: identity.inode,
+            size: identity.size,
+            modificationSeconds: identity.modificationSeconds,
+            modificationNanoseconds: identity.modificationNanoseconds
+        )
+        if let cached = cache.lookup(path: identityKey, identity: identity) {
+            guard cached.isThreat else { return nil }
+            return ScanResult(
+                filePath: path,
+                identity: identity,
+                hash: cached.hash,
+                isThreat: true,
+                mayBlock: cached.mayBlock,
+                threatName: cached.threatName,
+                threatFamily: cached.threatFamily
+            )
+        }
+
+        guard let hash = computeSHA256Streaming(path: path) else { return nil }
+        let match = signatureDB.lookup(hash: hash)
+        cache.store(
+            path: identityKey,
+            identity: identity,
+            hash: hash,
+            isThreat: match != nil,
+            mayBlock: match != nil,
+            threatName: match?.name,
+            threatFamily: match?.family
+        )
+        guard let match else { return nil }
         cache.store(
             path: path,
             identity: identity,

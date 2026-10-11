@@ -12,6 +12,18 @@ import Foundation
 /// that can execute, while skipping caches, media, and databases.
 enum ScanCandidatePolicy {
 
+    enum CompletedWriteSignatureSkipReason: String, Equatable, Sendable {
+        case empty
+        case overSizeLimit
+        case temporaryDownload
+        case outsideSupportedIntakeLocation
+    }
+
+    enum CompletedWriteSignatureDecision: Equatable, Sendable {
+        case check
+        case skip(CompletedWriteSignatureSkipReason)
+    }
+
     /// Maximum completed-write size considered for an exact signature lookup.
     /// This path is intentionally hash-only and limited to user intake folders,
     /// so ordinary high-churn text, database and cache writes remain excluded.
@@ -91,16 +103,37 @@ enum ScanCandidatePolicy {
         path: String,
         fileSize: Int64
     ) -> Bool {
-        guard fileSize > 0, fileSize <= completedWriteSignatureSizeLimit else { return false }
+        completedWriteExactSignatureDecision(path: path, fileSize: fileSize) == .check
+    }
+
+    static func completedWriteExactSignatureDecision(
+        path: String,
+        fileSize: Int64
+    ) -> CompletedWriteSignatureDecision {
+        guard fileSize > 0 else { return .skip(.empty) }
+        guard fileSize <= completedWriteSignatureSizeLimit else {
+            return .skip(.overSizeLimit)
+        }
         let normalized = URL(fileURLWithPath: path).standardizedFileURL.path
         let temporaryExtensions: Set<String> = [
             "crdownload", "download", "opdownload", "part", "partial"
         ]
         guard !temporaryExtensions.contains(
             URL(fileURLWithPath: normalized).pathExtension.lowercased()
-        ) else { return false }
-        return normalized.contains("/Downloads/")
+        ) else { return .skip(.temporaryDownload) }
+        let supportedLocation = normalized.contains("/Downloads/")
             || normalized.contains("/Desktop/")
             || normalized.contains("/Mail Downloads/")
+        return supportedLocation ? .check : .skip(.outsideSupportedIntakeLocation)
+    }
+
+    static func completedWriteSignatureIdentityKey(
+        device: Int64,
+        inode: UInt64,
+        size: Int64,
+        modificationSeconds: Int,
+        modificationNanoseconds: Int
+    ) -> String {
+        "completed-write:\(device):\(inode):\(size):\(modificationSeconds):\(modificationNanoseconds)"
     }
 }

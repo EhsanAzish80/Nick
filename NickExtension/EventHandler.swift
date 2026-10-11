@@ -495,12 +495,18 @@ final class ESEventHandler {
                 // --- Threat Detection + Remediation ---
                 let shouldDeepScan = self.shouldDeepScanModifiedFile(at: filePath)
                 let completedIdentity = FileIdentity(path: filePath)
-                let shouldCheckExactSignature = completedIdentity.map {
-                    ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+                let exactSignatureDecision = completedIdentity.map {
+                    ScanCandidatePolicy.completedWriteExactSignatureDecision(
                         path: filePath,
                         fileSize: $0.size
                     )
-                } ?? false
+                } ?? .skip(.empty)
+                if exactSignatureDecision == .skip(.overSizeLimit) {
+                    Self.logger.info(
+                        "Completed-write exact-signature check skipped over size cap: \(filePath, privacy: .private)"
+                    )
+                }
+                let shouldCheckExactSignature = exactSignatureDecision == .check
                 guard shouldDeepScan || shouldCheckExactSignature else { return }
                 // Xcode/SwiftPM build products are rewritten constantly and
                 // legitimately contain linker/install/persistence strings that
@@ -659,15 +665,21 @@ final class ESEventHandler {
                 // completed-write scan. Temporary suffixes are excluded by the
                 // shared policy to avoid duplicate pre-finalization findings.
                 if let scanner = self.fileScanner,
-                   let destinationIdentity = FileIdentity(path: notifyDestPath),
-                   ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
-                    path: notifyDestPath,
-                    fileSize: destinationIdentity.size
-                   ),
-                   let result = scanner.exactSignatureMatch(
-                    path: notifyDestPath,
-                    identity: destinationIdentity
-                   ) {
+                   let destinationIdentity = FileIdentity(path: notifyDestPath) {
+                    let signatureDecision = ScanCandidatePolicy.completedWriteExactSignatureDecision(
+                        path: notifyDestPath,
+                        fileSize: destinationIdentity.size
+                    )
+                    if signatureDecision == .skip(.overSizeLimit) {
+                        Self.logger.info(
+                            "Completed-write exact-signature check skipped over size cap after rename: \(notifyDestPath, privacy: .private)"
+                        )
+                    }
+                    guard signatureDecision == .check,
+                          let result = scanner.exactSignatureMatch(
+                            path: notifyDestPath,
+                            identity: destinationIdentity
+                          ) else { return }
                     self.reportDetectedThreat(
                         result,
                         processPath: processPath,
