@@ -194,6 +194,52 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         ))
     }
 
+    func test_persistedIneligibleActorDoesNotFallThroughToEligibleParentForXPCTrust() throws {
+        let alertID = UUID()
+        let curl = NickProcessInfo(
+            pid: 99, path: "/usr/bin/curl", name: "curl", parentPID: 98, parentName: "Terminal",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.curl")
+        )
+        let terminal = NickProcessInfo(
+            pid: 98, path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+            name: "Terminal", parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal")
+        )
+        let actorSignal = ThreatSignal(
+            source: .network, severity: .high, title: "Known dangerous destination",
+            description: "curl tried to connect",
+            context: ThreatSignalContext(processInfo: curl)
+        )
+        let parentSignal = ThreatSignal(
+            source: .process, severity: .info, title: "Parent context",
+            description: "Terminal launched curl",
+            context: ThreatSignalContext(processInfo: terminal)
+        )
+        let alert = ThreatAlert(
+            id: alertID, score: 0.9,
+            content: AlertContent(
+                title: actorSignal.title, description: actorSignal.description,
+                severity: .critical, recommendedAction: "Review"
+            ),
+            contributingSignals: [actorSignal, parentSignal]
+        )
+        let snapshot = IncidentStoreSnapshot(
+            incidents: [SecurityIncident(
+                key: "curl-parent-test", alert: alert,
+                evidence: [Evidence(signal: actorSignal), Evidence(signal: parentSignal)]
+            )],
+            dismissalTombstones: [], expectedCooldowns: [:]
+        )
+        let record = PrivilegedIncidentStoreRecord(
+            revision: 1, payload: try JSONEncoder().encode(snapshot)
+        )
+
+        XCTAssertFalse(IncidentStoreTrustEligibilityPolicy.isEligible(
+            alertID: alertID.uuidString,
+            encodedRecord: try JSONEncoder().encode(record)
+        ))
+    }
+
     @MainActor
     func test_missingVerdictTargetIsRejectedBeforeAuthorizationPrompt() async {
         var promptCount = 0

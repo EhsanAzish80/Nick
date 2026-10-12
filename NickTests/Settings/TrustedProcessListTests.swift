@@ -277,4 +277,38 @@ final class TrustedProcessListTests: XCTestCase {
         )
         XCTAssertNil(TrustedProcessList.trustRejectionReason(for: thirdParty))
     }
+
+    func test_ineligiblePrimaryActorNeverFallsThroughToEligibleParentContext() {
+        let curl = NickProcessInfo(
+            pid: 601, path: "/usr/bin/curl", name: "curl", parentPID: 600, parentName: "Terminal",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.curl")
+        )
+        let terminal = NickProcessInfo(
+            pid: 600, path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+            name: "Terminal", parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal")
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: AlertContent(
+                title: "Known dangerous destination", description: "curl tried to connect",
+                severity: .critical, recommendedAction: "Review"
+            ),
+            contributingSignals: [
+                ThreatSignal(
+                    source: .network, severity: .high, title: "Known dangerous destination",
+                    description: "curl tried to connect",
+                    context: ThreatSignalContext(processInfo: curl)
+                ),
+                ThreatSignal(
+                    source: .process, severity: .info, title: "Parent context",
+                    description: "Terminal launched curl",
+                    context: ThreatSignalContext(processInfo: terminal)
+                ),
+            ]
+        )
+
+        // Both SimpleAlertSheet and AlertListView use this shared decision.
+        XCTAssertNil(TrustedProcessList.eligibleProcess(in: alert))
+    }
 }

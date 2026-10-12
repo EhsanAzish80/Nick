@@ -129,19 +129,20 @@ enum IncidentStoreTrustEligibilityPolicy {
                   (($0["alert"] as? [String: Any])?["id"] as? String) == alertID
               }),
               let alert = incident["alert"] as? [String: Any],
-              let signals = alert["contributingSignals"] as? [[String: Any]] else { return false }
+              let signals = alert["contributingSignals"] as? [[String: Any]],
+              let actorSignal = signals.first,
+              let process = actorSignal["processInfo"] as? [String: Any],
+              let status = process["signingStatus"] as? [String: Any],
+              status["type"] as? String == "signed",
+              let teamID = status["teamID"] as? String, !teamID.isEmpty else { return false }
 
-        return signals.contains { signal in
-            guard let process = signal["processInfo"] as? [String: Any],
-                  let status = process["signingStatus"] as? [String: Any],
-                  status["type"] as? String == "signed",
-                  let teamID = status["teamID"] as? String, !teamID.isEmpty else { return false }
-            return PersistentTrustEligibilityPolicy.isEligible(
-                name: process["name"] as? String ?? "",
-                path: process["path"] as? String ?? "",
-                signingID: status["signingID"] as? String
-            )
-        }
+        // The first signal is the detected operation. Never fall through to a
+        // signed parent/context process when the primary actor is ineligible.
+        return PersistentTrustEligibilityPolicy.isEligible(
+            name: process["name"] as? String ?? "",
+            path: process["path"] as? String ?? "",
+            signingID: status["signingID"] as? String
+        )
     }
 }
 
