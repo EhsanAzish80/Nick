@@ -845,9 +845,9 @@ public final class ExtensionXPCClient: NSObject {
     ) {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
             completion(.failure(QuarantineFailure(
-                reason: .other,
-                errorDomain: "NickExtensionXPC",
-                errorCode: 1
+                reason: .protectionDisconnected,
+                errorDomain: NSCocoaErrorDomain,
+                errorCode: CocoaError.Code.xpcConnectionInterrupted.rawValue
             )))
             return
         }
@@ -867,9 +867,9 @@ public final class ExtensionXPCClient: NSObject {
                     completion(.failure(failure))
                 } else {
                     completion(.failure(QuarantineFailure(
-                        reason: .other,
-                        errorDomain: "NickExtensionXPC",
-                        errorCode: 2
+                        reason: .protectionDisconnected,
+                        errorDomain: NSCocoaErrorDomain,
+                        errorCode: CocoaError.Code.xpcConnectionReplyInvalid.rawValue
                     )))
                 }
             }
@@ -1211,8 +1211,7 @@ struct ExtensionFinding: Sendable {
                     "remediationGuidance": succeeded ? "" : (typedFailure?.guidance ?? "Review the file immediately and retry quarantine if it is still present."),
                     "remediationErrorDomain": typedFailure?.errorDomain ?? "",
                     "remediationErrorCode": typedFailure.map { String($0.errorCode) } ?? "",
-                    "remediationVolumeName": typedFailure?.volumeName ?? "",
-                    "remediationDiskImagePath": typedFailure?.diskImagePath ?? ""
+                    "remediationVolumeName": typedFailure?.volumeName ?? ""
                 ]
             )
         )

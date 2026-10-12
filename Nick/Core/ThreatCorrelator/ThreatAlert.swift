@@ -227,7 +227,6 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
             metadata["remediationErrorDomain"] = failure.errorDomain
             metadata["remediationErrorCode"] = String(failure.errorCode)
             if let volumeName = failure.volumeName { metadata["remediationVolumeName"] = volumeName }
-            if let diskImagePath = failure.diskImagePath { metadata["remediationDiskImagePath"] = diskImagePath }
             return ThreatSignal(
                 id: signal.id,
                 source: signal.source,

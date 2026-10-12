@@ -3,6 +3,30 @@ import XCTest
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
     @MainActor
+    func test_disconnectedManualQuarantineUsesProtectionDisconnectedWording() {
+        let client = ExtensionXPCClient()
+        let completed = expectation(description: "quarantine reply")
+
+        client.requestQuarantineFile(path: "/tmp/eicar.com", expectedThreatName: "EICAR") { result in
+            guard case .failure(let failure) = result else {
+                XCTFail("Expected disconnected quarantine to fail")
+                completed.fulfill()
+                return
+            }
+            XCTAssertEqual(failure.reason, .protectionDisconnected)
+            XCTAssertEqual(failure.statusLine, "Real-Time Protection is not connected")
+            XCTAssertEqual(
+                failure.guidance,
+                "Open Settings and reconnect Real-Time Protection, then retry quarantine."
+            )
+            XCTAssertFalse(failure.statusLine.contains("NickExtensionXPC"))
+            completed.fulfill()
+        }
+
+        wait(for: [completed], timeout: 1)
+    }
+
+    @MainActor
     func test_automaticEROFSUsesSharedWordingAndNotifiesOnce() throws {
         let failure = QuarantineFailure(
             reason: .readOnlyVolume,

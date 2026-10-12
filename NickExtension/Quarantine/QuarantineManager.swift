@@ -6,6 +6,11 @@ import CryptoKit
 import Foundation
 import os
 
+struct QuarantineVolumeInfo: Equatable {
+    let isReadOnly: Bool
+    let name: String?
+}
+
 // MARK: - QuarantineManager
 
 /// Moves detected threat files into a locked vault, records metadata in a
@@ -34,16 +39,26 @@ final class QuarantineManager {
 
     private let vaultPath: String
     private let database:  QuarantineDatabase
+    private let volumeInfo: (String) -> QuarantineVolumeInfo?
+    private let moveItem: (String, String) throws -> Void
 
     // MARK: - Init
 
     /// - Parameter supportDir: The `com.ehsanazish.nick` app-support directory.
     ///   Both the vault subfolder and the SQLite DB are created here.
-    init(supportDir: String) {
+    init(
+        supportDir: String,
+        volumeInfo: @escaping (String) -> QuarantineVolumeInfo? = QuarantineManager.volumeInfo,
+        moveItem: @escaping (String, String) throws -> Void = { source, destination in
+            try FileManager.default.moveItem(atPath: source, toPath: destination)
+        }
+    ) {
         vaultPath = (supportDir as NSString).appendingPathComponent("Quarantine")
         let dbPath = (supportDir as NSString).appendingPathComponent("quarantine.db")
 
         database = QuarantineDatabase(dbPath: dbPath)
+        self.volumeInfo = volumeInfo
+        self.moveItem = moveItem
 
         // Ensure vault directory exists (root-owned, 0700)
         try? FileManager.default.createDirectory(
@@ -81,6 +96,15 @@ final class QuarantineManager {
             Self.logger.warning("Quarantine skipped — file no longer exists: \(filePath)")
             return .failure(failure(.fileGone, code: Int(ENOENT), path: filePath))
         }
+        if let sourceVolume = volumeInfo(canonicalOriginalPath), sourceVolume.isReadOnly {
+            Self.logger.notice("Quarantine refused before move because the source volume is read-only")
+            return .failure(QuarantineFailure(
+                reason: .readOnlyVolume,
+                errorDomain: NSPOSIXErrorDomain,
+                errorCode: Int(EROFS),
+                volumeName: sourceVolume.name
+            ))
+        }
 
         let sourceFD = open(canonicalOriginalPath, O_RDONLY | O_NOFOLLOW)
         guard sourceFD >= 0 else {
@@ -90,23 +114,32 @@ final class QuarantineManager {
         defer { close(sourceFD) }
 
         var originalStat = stat()
-        guard fstat(sourceFD, &originalStat) == 0,
-              originalStat.st_mode & S_IFMT == S_IFREG,
-              let openedHash = sha256(fileDescriptor: sourceFD) else {
-            Self.logger.warning("Quarantine refused because the opened file does not match the reviewed hash")
+        guard fstat(sourceFD, &originalStat) == 0 else {
+            Self.logger.warning("Quarantine refused because the opened file could not be inspected")
+            return .failure(failureForCurrentErrno(path: canonicalOriginalPath))
+        }
+        guard originalStat.st_mode & S_IFMT == S_IFREG else {
+            Self.logger.warning("Quarantine refused because the reviewed path is no longer a regular file")
+            return .failure(failure(.fileChanged, code: Int(EINVAL), path: canonicalOriginalPath))
+        }
+        guard let openedHash = sha256(fileDescriptor: sourceFD) else {
+            Self.logger.warning("Quarantine refused because the reviewed file could not be hashed")
             return .failure(failureForCurrentErrno(path: canonicalOriginalPath))
         }
         let reviewedIdentity = FileIdentity(stat: originalStat)
         var pathStat = stat()
-        guard lstat(canonicalOriginalPath, &pathStat) == 0,
-              QuarantineMovePolicy.matchesReviewedFile(
+        guard lstat(canonicalOriginalPath, &pathStat) == 0 else {
+            Self.logger.warning("Quarantine refused because the reviewed path could not be inspected")
+            return .failure(failureForCurrentErrno(path: canonicalOriginalPath))
+        }
+        guard QuarantineMovePolicy.matchesReviewedFile(
                   reviewedIdentity: reviewedIdentity,
                   reviewedHash: normalizedHash,
                   currentIdentity: FileIdentity(stat: pathStat),
                   currentHash: openedHash
               ) else {
-            Self.logger.warning("Quarantine refused because the selected item is not a regular file")
-            return .failure(failure(.other, code: Int(EINVAL), path: canonicalOriginalPath))
+            Self.logger.warning("Quarantine refused because the file changed after review")
+            return .failure(failure(.fileChanged, code: Int(ESTALE), path: canonicalOriginalPath))
         }
 
         let recordID = UUID()
@@ -132,7 +165,7 @@ final class QuarantineManager {
         do {
             // Every record receives a unique vault path, so identical files never
             // overwrite earlier evidence or share a stale database reference.
-            try fm.moveItem(atPath: canonicalOriginalPath, toPath: quarantinedPath)
+            try moveItem(canonicalOriginalPath, quarantinedPath)
 
             // The path can be replaced between scan and move. Bind the move to
             // the file opened above, then verify its identity at the vault
@@ -165,10 +198,18 @@ final class QuarantineManager {
             Self.logger.error("Quarantine failed for '\(filePath)': \(error.localizedDescription, privacy: .public) [\(typedFailure.errorDomain, privacy: .public):\(typedFailure.errorCode)]")
             // Quarantine is fail-safe: if the move succeeded but a later vault step
             // failed, put the original back whenever possible. Never delete it.
-            if fm.fileExists(atPath: quarantinedPath),
-               !fm.fileExists(atPath: canonicalOriginalPath) {
-                try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: quarantinedPath)
-                try? fm.moveItem(atPath: quarantinedPath, toPath: canonicalOriginalPath)
+            if fm.fileExists(atPath: quarantinedPath) {
+                if fm.fileExists(atPath: canonicalOriginalPath) {
+                    do {
+                        try fm.removeItem(atPath: quarantinedPath)
+                        Self.logger.notice("Removed incomplete vault copy after quarantine failure")
+                    } catch {
+                        Self.logger.error("Could not remove incomplete vault copy: \(error.localizedDescription, privacy: .public)")
+                    }
+                } else {
+                    try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: quarantinedPath)
+                    try? fm.moveItem(atPath: quarantinedPath, toPath: canonicalOriginalPath)
+                }
             }
             try? fm.removeItem(atPath: metaPath)
             return .failure(typedFailure)
@@ -187,6 +228,7 @@ final class QuarantineManager {
         }
         let reason: QuarantineFailureReason
         switch CocoaError.Code(rawValue: nsError.code) {
+        case .fileWriteVolumeReadOnly: reason = .readOnlyVolume
         case .fileNoSuchFile: reason = .fileGone
         case .fileWriteNoPermission, .fileReadNoPermission: reason = .permissionDenied
         case .fileLocking, .fileWriteInapplicableStringEncoding: reason = .inUse
@@ -227,6 +269,16 @@ final class QuarantineManager {
             errorDomain: domain,
             errorCode: code,
             volumeName: values?.volumeName
+        )
+    }
+
+    private static func volumeInfo(path: String) -> QuarantineVolumeInfo? {
+        var fileSystem = statfs()
+        guard statfs(path, &fileSystem) == 0 else { return nil }
+        let values = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeNameKey])
+        return QuarantineVolumeInfo(
+            isReadOnly: fileSystem.f_flags & UInt32(MNT_RDONLY) != 0,
+            name: values?.volumeName
         )
     }
 

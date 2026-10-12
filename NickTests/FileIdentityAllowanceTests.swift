@@ -33,11 +33,11 @@ final class FileIdentityAllowanceTests: XCTestCase {
         let file = try temporaryFile(contents: Data("reviewed".utf8))
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
 
-        let reviewed = try XCTUnwrap(FileIdentity(path: file.path))
+        let reviewed = try XCTUnwrap(Nick.FileIdentity(path: file.path))
         let allowance = OneTimeFileAllowance(identity: reviewed, sha256: "reviewed-hash")
 
         XCTAssertTrue(allowance.permits(
-            try XCTUnwrap(FileIdentity(path: file.path)),
+            try XCTUnwrap(Nick.FileIdentity(path: file.path)),
             sha256: "reviewed-hash"
         ))
     }
@@ -47,13 +47,13 @@ final class FileIdentityAllowanceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
 
         let allowance = OneTimeFileAllowance(
-            identity: try XCTUnwrap(FileIdentity(path: file.path)),
+            identity: try XCTUnwrap(Nick.FileIdentity(path: file.path)),
             sha256: "reviewed-hash"
         )
         try Data("replacement content".utf8).write(to: file)
 
         XCTAssertFalse(allowance.permits(
-            try XCTUnwrap(FileIdentity(path: file.path)),
+            try XCTUnwrap(Nick.FileIdentity(path: file.path)),
             sha256: "reviewed-hash"
         ))
     }
@@ -62,9 +62,9 @@ final class FileIdentityAllowanceTests: XCTestCase {
         let file = try temporaryFile(contents: Data("reviewed".utf8))
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
 
-        let reviewed = try XCTUnwrap(FileIdentity(path: file.path))
+        let reviewed = try XCTUnwrap(Nick.FileIdentity(path: file.path))
         try Data("swapped after scan".utf8).write(to: file)
-        let current = try XCTUnwrap(FileIdentity(path: file.path))
+        let current = try XCTUnwrap(Nick.FileIdentity(path: file.path))
 
         XCTAssertFalse(ReviewedFileAllowancePolicy.permits(
             reviewed: reviewed,
@@ -83,7 +83,7 @@ final class FileIdentityAllowanceTests: XCTestCase {
     func test_allowanceRejectsDifferentContentHashEvenWhenIdentityMatches() throws {
         let file = try temporaryFile(contents: Data("reviewed".utf8))
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
-        let identity = try XCTUnwrap(FileIdentity(path: file.path))
+        let identity = try XCTUnwrap(Nick.FileIdentity(path: file.path))
         let allowance = OneTimeFileAllowance(identity: identity, sha256: "reviewed-hash")
 
         XCTAssertFalse(allowance.permits(identity, sha256: "replacement-hash"))
@@ -102,7 +102,7 @@ final class FileIdentityAllowanceTests: XCTestCase {
         let link = directory.appendingPathComponent("link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
 
-        XCTAssertEqual(FileIdentity(path: link.path), FileIdentity(path: target.path))
+        XCTAssertEqual(Nick.FileIdentity(path: link.path), Nick.FileIdentity(path: target.path))
     }
 
     func test_endpointSecurityCanonicalPathKeepsPrivateTmpPrefix() throws {
@@ -115,7 +115,7 @@ final class FileIdentityAllowanceTests: XCTestCase {
 
         let canonical = try XCTUnwrap(EndpointSecurityPath.canonical(file.path))
         XCTAssertTrue(canonical.hasPrefix("/private/tmp/"), canonical)
-        XCTAssertEqual(FileIdentity(path: canonical), FileIdentity(path: file.path))
+        XCTAssertEqual(Nick.FileIdentity(path: canonical), Nick.FileIdentity(path: file.path))
     }
 
     func test_endpointSecurityCanonicalPathResolvesSymlinkedDotfileTarget() throws {

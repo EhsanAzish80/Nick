@@ -8,7 +8,9 @@ public enum QuarantineFailureReason: String, Codable, Sendable, Equatable {
     case readOnlyVolume
     case permissionDenied
     case fileGone
+    case fileChanged
     case inUse
+    case protectionDisconnected
     case other
 }
 
@@ -17,20 +19,17 @@ public struct QuarantineFailure: Codable, Sendable, Equatable, Error {
     public let errorDomain: String
     public let errorCode: Int
     public let volumeName: String?
-    public let diskImagePath: String?
 
     public init(
         reason: QuarantineFailureReason,
         errorDomain: String,
         errorCode: Int,
-        volumeName: String? = nil,
-        diskImagePath: String? = nil
+        volumeName: String? = nil
     ) {
         self.reason = reason
         self.errorDomain = errorDomain
         self.errorCode = errorCode
         self.volumeName = volumeName
-        self.diskImagePath = diskImagePath
     }
 
     public var statusLine: String {
@@ -38,7 +37,9 @@ public struct QuarantineFailure: Codable, Sendable, Equatable, Error {
         case .readOnlyVolume: "Quarantine failed — the file is on a read-only disk image"
         case .permissionDenied: "Quarantine failed — macOS denied permission to move the file"
         case .fileGone: "The file is no longer present"
+        case .fileChanged: "Quarantine failed — the file changed after Nick reviewed it"
         case .inUse: "Quarantine failed — the file is currently in use"
+        case .protectionDisconnected: "Real-Time Protection is not connected"
         case .other: "Quarantine failed — error \(errorDomain) \(errorCode)"
         }
     }
@@ -51,8 +52,12 @@ public struct QuarantineFailure: Codable, Sendable, Equatable, Error {
             "Leave the file unopened and review its permissions or System Integrity Protection status before retrying."
         case .fileGone:
             "No further quarantine action is needed because the file is no longer present."
+        case .fileChanged:
+            "Rescan the file before trying to quarantine it again."
         case .inUse:
             "Quit the app using the file, then retry quarantine."
+        case .protectionDisconnected:
+            "Open Settings and reconnect Real-Time Protection, then retry quarantine."
         case .other:
             "Leave the file unopened and retry quarantine. If it fails again, review the recorded error code."
         }

@@ -36,6 +36,8 @@
 		E40000000000000000000501 /* TamperProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000500 /* TamperProtectionPolicy.swift */; };
 		E40000000000000000000502 /* TamperProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000500 /* TamperProtectionPolicy.swift */; };
 		F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */; };
+		F60000000000000000000001 /* QuarantineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000003 /* QuarantineManager.swift */; };
+		F60000000000000000000002 /* QuarantineDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004 /* QuarantineDatabase.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -134,6 +136,8 @@
 		E40000000000000000000400 /* BundledHashCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BundledHashCatalog.swift; path = Shared/BundledHashCatalog.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000500 /* TamperProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TamperProtectionPolicy.swift; path = Shared/TamperProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
 		F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PrivilegedIncidentFileStore.swift; path = Nick/Core/ThreatCorrelator/PrivilegedIncidentFileStore.swift; sourceTree = SOURCE_ROOT; };
+		F60000000000000000000003 /* QuarantineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineManager.swift; path = NickExtension/Quarantine/QuarantineManager.swift; sourceTree = SOURCE_ROOT; };
+		F60000000000000000000004 /* QuarantineDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineDatabase.swift; path = NickExtension/Quarantine/QuarantineDatabase.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -294,6 +298,8 @@
 				E40000000000000000000400 /* BundledHashCatalog.swift */,
 				E40000000000000000000500 /* TamperProtectionPolicy.swift */,
 				F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */,
+				F60000000000000000000003 /* QuarantineManager.swift */,
+				F60000000000000000000004 /* QuarantineDatabase.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -717,6 +723,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F60000000000000000000001 /* QuarantineManager.swift in Sources */,
+				F60000000000000000000002 /* QuarantineDatabase.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
