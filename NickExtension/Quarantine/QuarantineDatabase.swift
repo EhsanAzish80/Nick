@@ -62,13 +62,15 @@ final class QuarantineDatabase {
                 pid              INTEGER NOT NULL,
                 original_owner   INTEGER,
                 original_group   INTEGER,
-                original_mode    INTEGER
+                original_mode    INTEGER,
+                incomplete       INTEGER NOT NULL DEFAULT 0
             );
         """
         sqlite3_exec(db, sql, nil, nil, nil)
         ensureColumn(named: "original_owner")
         ensureColumn(named: "original_group")
         ensureColumn(named: "original_mode")
+        ensureColumn(named: "incomplete")
     }
 
     // MARK: - CRUD
@@ -84,15 +86,12 @@ final class QuarantineDatabase {
                 return
             }
         }
-        let allowedColumns = ["original_owner", "original_group", "original_mode"]
+        let allowedColumns = ["original_owner", "original_group", "original_mode", "incomplete"]
         guard allowedColumns.contains(name) else { return }
-        sqlite3_exec(
-            db,
-            "ALTER TABLE quarantine ADD COLUMN \(name) INTEGER;",
-            nil,
-            nil,
-            nil
-        )
+        let declaration = name == "incomplete"
+            ? "INTEGER NOT NULL DEFAULT 0"
+            : "INTEGER"
+        sqlite3_exec(db, "ALTER TABLE quarantine ADD COLUMN \(name) \(declaration);", nil, nil, nil)
     }
 
     func insert(record: QuarantineRecord) {
@@ -102,8 +101,8 @@ final class QuarantineDatabase {
             INSERT OR REPLACE INTO quarantine
             (id, original_path, quarantined_path, hash, threat_name,
              severity, quarantined_at, process_path, pid,
-             original_owner, original_group, original_mode)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+             original_owner, original_group, original_mode, incomplete)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -121,6 +120,7 @@ final class QuarantineDatabase {
         bindOptionalInteger(record.originalOwnerID.map(Int64.init), to: 10, in: stmt)
         bindOptionalInteger(record.originalGroupID.map(Int64.init), to: 11, in: stmt)
         bindOptionalInteger(record.originalPermissions.map(Int64.init), to: 12, in: stmt)
+        sqlite3_bind_int(stmt, 13, record.isIncomplete ? 1 : 0)
         sqlite3_step(stmt)
     }
 
@@ -184,7 +184,8 @@ final class QuarantineDatabase {
             pid:              sqlite3_column_int(s, 8),
             originalOwnerID:  optionalUInt32(column: 9, in: s),
             originalGroupID:  optionalUInt32(column: 10, in: s),
-            originalPermissions: optionalUInt16(column: 11, in: s)
+            originalPermissions: optionalUInt16(column: 11, in: s),
+            isIncomplete: sqlite3_column_count(s) > 12 && sqlite3_column_int(s, 12) != 0
         )
     }
 

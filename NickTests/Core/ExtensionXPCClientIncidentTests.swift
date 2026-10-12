@@ -3,6 +3,71 @@ import XCTest
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
     @MainActor
+    func test_disconnectedManualQuarantineUsesProtectionDisconnectedWording() {
+        let client = ExtensionXPCClient()
+        let completed = expectation(description: "quarantine reply")
+
+        client.requestQuarantineFile(path: "/tmp/eicar.com", expectedThreatName: "EICAR") { result in
+            guard case .failure(let failure) = result else {
+                XCTFail("Expected disconnected quarantine to fail")
+                completed.fulfill()
+                return
+            }
+            XCTAssertEqual(failure.reason, .protectionDisconnected)
+            XCTAssertEqual(failure.statusLine, "Real-Time Protection is not connected")
+            XCTAssertEqual(
+                failure.guidance,
+                "Open Settings and reconnect Real-Time Protection, then retry quarantine."
+            )
+            XCTAssertFalse(failure.statusLine.contains("NickExtensionXPC"))
+            completed.fulfill()
+        }
+
+        wait(for: [completed], timeout: 1)
+    }
+
+    @MainActor
+    func test_automaticEROFSUsesSharedWordingAndNotifiesOnce() throws {
+        let failure = QuarantineFailure(
+            reason: .readOnlyVolume,
+            errorDomain: NSPOSIXErrorDomain,
+            errorCode: Int(EROFS),
+            volumeName: "NickReadOnly"
+        )
+        let report = RemediationReport(
+            timestamp: Date(timeIntervalSince1970: 123),
+            threatPath: "/Volumes/NickReadOnly/eicar.com",
+            threatName: "EICAR Anti-Malware Test File",
+            quarantineRecord: nil,
+            actions: [RemediationAction(
+                type: .quarantineFile,
+                target: "/Volumes/NickReadOnly/eicar.com",
+                success: false,
+                detail: failure.statusLine,
+                quarantineFailure: failure
+            )]
+        )
+        let finding = ExtensionFinding(report: report)
+        XCTAssertEqual(finding.signal.title, "EICAR Anti-Malware Test File")
+        XCTAssertEqual(finding.signal.metadata["remediationStatusLine"], failure.statusLine)
+        XCTAssertEqual(finding.recommendedAction, failure.guidance)
+
+        let store = IncidentStore(persistOnInit: false)
+        let alert = ThreatAlert(
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title, description: finding.signal.description,
+                severity: finding.signal.severity, recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal], timestamp: finding.signal.timestamp
+        )
+        let result = store.ingest([alert])
+        XCTAssertEqual(result.newlyActionable.count, 1)
+        XCTAssertEqual(store.incidents.first?.actions.last?.action, .quarantineFailed)
+        XCTAssertEqual(store.ingest([alert]).newlyActionable.count, 0)
+    }
+
+    @MainActor
     func test_failedRootWriteRedeliveryUsesRealStoreAndAcksOnlyRetryGeneration() async throws {
         let client = ExtensionXPCClient()
         let store = IncidentStore(persistOnInit: false)

@@ -913,6 +913,20 @@ final class SecurityEngine {
         syncAlertsFromStore()
     }
 
+    /// Records the outcome of a user-initiated quarantine attempt in the
+    /// canonical root-owned incident. Manual failures deliberately do not
+    /// enqueue a notification because the user is already looking at the
+    /// result.
+    func recordManualQuarantineFailure(_ failure: QuarantineFailure, alertID: UUID) {
+        incidentStore.recordQuarantineFailure(alertID: alertID, failure: failure)
+        syncAlertsFromStore()
+    }
+
+    func recordManualQuarantineSuccess(alertID: UUID) {
+        incidentStore.recordQuarantineSuccess(alertID: alertID)
+        syncAlertsFromStore()
+    }
+
     private func performAuthenticatedIncidentAction(
         _ action: IncidentActionKind,
         alertID: UUID,

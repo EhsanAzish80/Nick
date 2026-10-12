@@ -92,7 +92,7 @@ final class RemediationEngine {
 
         // 2. Quarantine the threat file. Never delete as a fallback: a failed
         // quarantine must remain recoverable and visible to the user.
-        let record = quarantineManager.quarantine(
+        let quarantineResult = quarantineManager.quarantine(
             filePath:    threatPath,
             hash:        hash,
             threatName:  threatName,
@@ -100,13 +100,24 @@ final class RemediationEngine {
             processPath: processPath,
             pid:         pid
         )
+        let record: QuarantineRecord?
+        let quarantineFailure: QuarantineFailure?
+        switch quarantineResult {
+        case .success(let value):
+            record = value
+            quarantineFailure = nil
+        case .failure(let failure):
+            record = nil
+            quarantineFailure = failure
+        }
         actions.append(RemediationAction(
             type:    .quarantineFile,
             target:  threatPath,
             success: record != nil,
             detail:  record != nil
                 ? "Moved to quarantine vault"
-                : "Failed to quarantine — file was not deleted"
+                : (quarantineFailure?.statusLine ?? "Failed to quarantine — file was not deleted"),
+            quarantineFailure: quarantineFailure
         ))
 
         // 3. Remove persistence mechanisms that reference the threat
@@ -176,7 +187,7 @@ final class RemediationEngine {
                     ))
                     continue
                 }
-                let record = quarantineManager.quarantine(
+                let result = quarantineManager.quarantine(
                     filePath: plistPath,
                     hash: hash,
                     threatName: "Persistence linked to quarantined threat",
@@ -184,13 +195,20 @@ final class RemediationEngine {
                     processPath: threatPath,
                     pid: 0
                 )
+                let succeeded: Bool
+                let failure: QuarantineFailure?
+                switch result {
+                case .success: succeeded = true; failure = nil
+                case .failure(let value): succeeded = false; failure = value
+                }
                 actions.append(RemediationAction(
                     type: .removeLaunchItem,
                     target: plistPath,
-                    success: record != nil,
-                    detail: record != nil
+                    success: succeeded,
+                    detail: succeeded
                         ? "Persistence plist moved to quarantine"
-                        : "Failed to quarantine plist; left unchanged"
+                        : "Failed to quarantine plist; left unchanged",
+                    quarantineFailure: failure
                 ))
             }
         }

@@ -4,6 +4,66 @@
 
 import Foundation
 
+public enum QuarantineFailureReason: String, Codable, Sendable, Equatable {
+    case readOnlyVolume
+    case permissionDenied
+    case fileGone
+    case fileChanged
+    case inUse
+    case protectionDisconnected
+    case other
+}
+
+public struct QuarantineFailure: Codable, Sendable, Equatable, Error {
+    public let reason: QuarantineFailureReason
+    public let errorDomain: String
+    public let errorCode: Int
+    public let volumeName: String?
+
+    public init(
+        reason: QuarantineFailureReason,
+        errorDomain: String,
+        errorCode: Int,
+        volumeName: String? = nil
+    ) {
+        self.reason = reason
+        self.errorDomain = errorDomain
+        self.errorCode = errorCode
+        self.volumeName = volumeName
+    }
+
+    public var statusLine: String {
+        switch reason {
+        case .readOnlyVolume: "Quarantine failed — the file is on a read-only disk image"
+        case .permissionDenied: "Quarantine failed — macOS denied permission to move the file"
+        case .fileGone: "The file is no longer present"
+        case .fileChanged: "Quarantine failed — the file changed after Nick reviewed it"
+        case .inUse: "Quarantine failed — the file is currently in use"
+        case .protectionDisconnected: "Real-Time Protection is not connected"
+        case .other: "Quarantine failed — error \(errorDomain) \(errorCode)"
+        }
+    }
+
+    public var guidance: String {
+        switch reason {
+        case .readOnlyVolume:
+            "Eject the disk image and delete the .dmg file it came from; Nick cannot move files off a read-only volume."
+        case .permissionDenied:
+            "Leave the file unopened and review its permissions or System Integrity Protection status before retrying."
+        case .fileGone:
+            "No further quarantine action is needed because the file is no longer present."
+        case .fileChanged:
+            "Rescan the file before trying to quarantine it again."
+        case .inUse:
+            "Quit the app using the file, then retry quarantine."
+        case .protectionDisconnected:
+            "Open Settings and reconnect Real-Time Protection, then retry quarantine."
+        case .other:
+            "Leave the file unopened and retry quarantine. If it fails again, review the recorded error code."
+        }
+    }
+}
+
 // MARK: - File identity
 
 /// The on-disk identity of file content at a specific point in time.
@@ -124,6 +184,9 @@ public struct QuarantineRecord: Codable, Sendable, Identifiable {
     public let originalOwnerID: UInt32?
     public let originalGroupID: UInt32?
     public let originalPermissions: UInt16?
+    /// True when quarantine moved the reviewed file into the vault but a later
+    /// vault step failed after another file occupied the original path.
+    public let isIncomplete: Bool
 
     public init(
         id: UUID,
@@ -137,7 +200,8 @@ public struct QuarantineRecord: Codable, Sendable, Identifiable {
         pid: Int32,
         originalOwnerID: UInt32? = nil,
         originalGroupID: UInt32? = nil,
-        originalPermissions: UInt16? = nil
+        originalPermissions: UInt16? = nil,
+        isIncomplete: Bool = false
     ) {
         self.id = id
         self.originalPath = originalPath
@@ -151,6 +215,30 @@ public struct QuarantineRecord: Codable, Sendable, Identifiable {
         self.originalOwnerID = originalOwnerID
         self.originalGroupID = originalGroupID
         self.originalPermissions = originalPermissions
+        self.isIncomplete = isIncomplete
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, originalPath, quarantinedPath, hash, threatName, severity
+        case quarantinedAt, processPath, pid, originalOwnerID, originalGroupID
+        case originalPermissions, isIncomplete
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        originalPath = try values.decode(String.self, forKey: .originalPath)
+        quarantinedPath = try values.decode(String.self, forKey: .quarantinedPath)
+        hash = try values.decode(String.self, forKey: .hash)
+        threatName = try values.decode(String.self, forKey: .threatName)
+        severity = try values.decode(String.self, forKey: .severity)
+        quarantinedAt = try values.decode(Date.self, forKey: .quarantinedAt)
+        processPath = try values.decode(String.self, forKey: .processPath)
+        pid = try values.decode(Int32.self, forKey: .pid)
+        originalOwnerID = try values.decodeIfPresent(UInt32.self, forKey: .originalOwnerID)
+        originalGroupID = try values.decodeIfPresent(UInt32.self, forKey: .originalGroupID)
+        originalPermissions = try values.decodeIfPresent(UInt16.self, forKey: .originalPermissions)
+        isIncomplete = try values.decodeIfPresent(Bool.self, forKey: .isIncomplete) ?? false
     }
 }
 
@@ -202,6 +290,21 @@ public struct RemediationAction: Codable, Sendable {
     public let target: String
     public let success: Bool
     public let detail: String
+    public let quarantineFailure: QuarantineFailure?
+
+    public init(
+        type: ActionType,
+        target: String,
+        success: Bool,
+        detail: String,
+        quarantineFailure: QuarantineFailure? = nil
+    ) {
+        self.type = type
+        self.target = target
+        self.success = success
+        self.detail = detail
+        self.quarantineFailure = quarantineFailure
+    }
 }
 
 // MARK: - IntegrityViolation

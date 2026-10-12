@@ -115,7 +115,14 @@ struct AlertDetailView: View {
                 .foregroundStyle(Color.textSecondary)
             ForEach(Array(actionHistory.enumerated()), id: \.offset) { _, record in
                 HStack {
-                    Text(record.action.rawValue.capitalized)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(record.action.rawValue.capitalized)
+                        if let detail = record.detail {
+                            Text(detail)
+                                .font(.nickCaption)
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
                     Spacer()
                     Text(record.actor.displayName)
                         .foregroundStyle(Color.textSecondary)

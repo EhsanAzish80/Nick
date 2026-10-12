@@ -501,18 +501,20 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
             let threatName = result.threatName
                 ?? (expectedThreatName.isEmpty ? "Detected threat" : expectedThreatName)
-            guard let record = manager.quarantine(
+            let quarantineResult = manager.quarantine(
                 filePath: standardPath,
                 hash: result.hash,
                 threatName: threatName,
                 severity: "critical",
                 processPath: "",
                 pid: 0
-            ) else {
-                reply(false, "Nick could not move this file into quarantine.", nil)
-                return
+            )
+            switch quarantineResult {
+            case .success(let record):
+                reply(true, nil, try? JSONEncoder().encode(record))
+            case .failure(let failure):
+                reply(false, failure.statusLine + ". " + failure.guidance, try? JSONEncoder().encode(failure))
             }
-            reply(true, nil, try? JSONEncoder().encode(record))
         }
     }
 

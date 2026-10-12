@@ -20,6 +20,8 @@ enum IncidentActionKind: String, Codable, Sendable {
     case allowedOnce
     case alwaysAllowed
     case reopened
+    case quarantineFailed
+    case quarantined
 }
 
 enum IncidentReopenState: String, Codable, Sendable {
@@ -44,17 +46,19 @@ struct IncidentActionRecord: Codable, Sendable, Equatable {
     private(set) var firstTimestamp: Date
     private(set) var lastTimestamp: Date
     private(set) var count: Int
+    let detail: String?
 
     /// Compatibility accessor for callers that previously read the single
     /// action timestamp. It now represents the most recent occurrence.
     var timestamp: Date { lastTimestamp }
 
-    init(action: IncidentActionKind, actor: EvidenceVerdictActor, timestamp: Date) {
+    init(action: IncidentActionKind, actor: EvidenceVerdictActor, timestamp: Date, detail: String? = nil) {
         self.action = action
         self.actor = actor
         self.firstTimestamp = timestamp
         self.lastTimestamp = timestamp
         self.count = 1
+        self.detail = detail
     }
 
     mutating func recordOccurrence(at timestamp: Date) {
@@ -64,7 +68,7 @@ struct IncidentActionRecord: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case action, actor, timestamp, firstTimestamp, lastTimestamp, count
+        case action, actor, timestamp, firstTimestamp, lastTimestamp, count, detail
     }
 
     init(from decoder: Decoder) throws {
@@ -77,6 +81,7 @@ struct IncidentActionRecord: Codable, Sendable, Equatable {
         lastTimestamp = try container.decodeIfPresent(Date.self, forKey: .lastTimestamp)
             ?? legacyTimestamp ?? firstTimestamp
         count = max(1, try container.decodeIfPresent(Int.self, forKey: .count) ?? 1)
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -86,6 +91,7 @@ struct IncidentActionRecord: Codable, Sendable, Equatable {
         try container.encode(firstTimestamp, forKey: .firstTimestamp)
         try container.encode(lastTimestamp, forKey: .lastTimestamp)
         try container.encode(count, forKey: .count)
+        try container.encodeIfPresent(detail, forKey: .detail)
     }
 }
 
@@ -550,6 +556,11 @@ final class IncidentStore {
                 let incomingEvidence = candidate.contributingSignals.map(Evidence.init(signal:))
                 incidents[index].alert = prior.alert.mergingOccurrence(candidate)
                 incidents[index].evidence = incomingEvidence
+                recordAutomaticRemediationAction(from: candidate, at: index)
+                if candidate.contributingSignals.contains(where: { $0.metadata["remediationStatus"] == "file-gone" }) {
+                    incidents[index].state = .resolved
+                    incidents[index].isVisible = true
+                }
                 outcomes.append(.coalesced(0))
                 if isProtected(candidate) {
                     let wasHidden = !prior.isVisible
@@ -592,7 +603,13 @@ final class IncidentStore {
                     alert: candidate,
                     evidence: candidate.contributingSignals.map(Evidence.init(signal:))
                 )
+                if candidate.contributingSignals.contains(where: { $0.metadata["remediationStatus"] == "file-gone" }) {
+                    incident.state = .resolved
+                }
                 incident.actions.append(action(.detected, actor: .automatic))
+                if let remediation = Self.remediationAction(from: candidate, actor: .automatic, at: now()) {
+                    incident.actions.append(remediation)
+                }
                 if isProtected(candidate) {
                     incident.lastNotifiedAt = now()
                     notificationSignalIDs.formUnion(candidate.contributingSignals.map(\.id))
@@ -660,10 +677,41 @@ final class IncidentStore {
         case .alwaysAllowed:
             incidents[index].state = .allowed
             incidents[index].isVisible = false
-        case .detected, .reopened:
+        case .detected, .reopened, .quarantineFailed, .quarantined:
             incidents[index].state = .new
         }
         persist()
+    }
+
+    @discardableResult
+    func recordQuarantineFailure(alertID: UUID, failure: QuarantineFailure) -> UInt64 {
+        guard let index = incidents.firstIndex(where: { $0.alert.id == alertID }) else { return 0 }
+        let detail = "quarantine failed: \(failure.reason.rawValue) [\(failure.errorDomain):\(failure.errorCode)]"
+        incidents[index].actions.append(IncidentActionRecord(
+            action: .quarantineFailed,
+            actor: .user,
+            timestamp: now(),
+            detail: detail
+        ))
+        incidents[index].alert = incidents[index].alert.withQuarantineFailure(failure)
+        incidents[index].state = failure.reason == .fileGone ? .resolved : .new
+        incidents[index].isVisible = true
+        return persist()
+    }
+
+    @discardableResult
+    func recordQuarantineSuccess(alertID: UUID) -> UInt64 {
+        guard let index = incidents.firstIndex(where: { $0.alert.id == alertID }) else { return 0 }
+        incidents[index].actions.append(IncidentActionRecord(
+            action: .quarantined,
+            actor: .user,
+            timestamp: now(),
+            detail: "quarantine succeeded"
+        ))
+        incidents[index].alert = incidents[index].alert.clearingQuarantineFailure()
+        incidents[index].state = .resolved
+        incidents[index].isVisible = true
+        return persist()
     }
 
     func clear() {
@@ -913,6 +961,42 @@ final class IncidentStore {
             incidents[index].actions.append(
                 IncidentActionRecord(action: kind, actor: actor, timestamp: now)
             )
+        }
+    }
+
+    private func recordAutomaticRemediationAction(from alert: ThreatAlert, at index: Int) {
+        guard let remediation = Self.remediationAction(from: alert, actor: .automatic, at: now()) else { return }
+        incidents[index].actions.append(remediation)
+    }
+
+    private static func remediationAction(
+        from alert: ThreatAlert,
+        actor: EvidenceVerdictActor,
+        at timestamp: Date
+    ) -> IncidentActionRecord? {
+        guard let signal = alert.contributingSignals.first(where: {
+            $0.metadata["remediationStatus"] != nil
+        }) else { return nil }
+        switch signal.metadata["remediationStatus"] {
+        case "quarantine-failed", "file-gone":
+            let reason = signal.metadata["remediationFailureReason"] ?? "unknown"
+            let domain = signal.metadata["remediationErrorDomain"] ?? "unknown"
+            let code = signal.metadata["remediationErrorCode"] ?? "unknown"
+            return IncidentActionRecord(
+                action: .quarantineFailed,
+                actor: actor,
+                timestamp: timestamp,
+                detail: "quarantine failed: \(reason) [\(domain):\(code)]"
+            )
+        case "quarantined":
+            return IncidentActionRecord(
+                action: .quarantined,
+                actor: actor,
+                timestamp: timestamp,
+                detail: "quarantine succeeded"
+            )
+        default:
+            return nil
         }
     }
 
