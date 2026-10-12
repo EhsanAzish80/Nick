@@ -143,8 +143,10 @@ final class FilterDataProvider: NEFilterDataProvider {
         let verdict = NetworkProtectionPolicy(configuration: configuration).evaluate(
             host: host,
             appIdentifier: appID,
-            isBlocklisted: blocklist.isBlocked(host:),
-            isScam: scamGuardian.isSuspicious(host:)
+            isBlocklisted: { host in
+                blocklist.isBlocked(host: host) || self.scamGuardian.isExactMatch(host: host)
+            },
+            isScam: scamGuardian.isHeuristicMatch(host:)
         )
 
         if case .block(let reason) = verdict {
@@ -204,11 +206,12 @@ final class FilterDataProvider: NEFilterDataProvider {
         port: Int
     ) {
         let normalizedHost = NetworkProtectionConfiguration.normalizedDomain(host) ?? host
-        let throttleKey = "\(appID)|\(reason.rawValue)"
+        let throttleKey = "\(appID)|\(reason.rawValue)|\(normalizedHost)"
+        let throttleInterval: TimeInterval = reason == .knownThreat ? 600 : 300
         let now = Date()
         let shouldRecord = observationLock.withLock {
             if let previous = observationTimestamps[throttleKey],
-               now.timeIntervalSince(previous) < 300 {
+               now.timeIntervalSince(previous) < throttleInterval {
                 return false
             }
             observationTimestamps[throttleKey] = now

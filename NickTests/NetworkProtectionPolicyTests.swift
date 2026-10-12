@@ -337,7 +337,9 @@ final class NetworkProtectionPolicyTests: XCTestCase {
         XCTAssertEqual(context.destinationKind, .localDevice)
         XCTAssertEqual(context.destinationLabel, "Nearby device")
         XCTAssertEqual(context.destinationActionLabel, "Allow This Destination")
-        XCTAssertTrue(context.explanation.contains("No connection was blocked"))
+        XCTAssertTrue(context.explanation.contains("tried to connect"))
+        XCTAssertTrue(context.explanation.contains("it did not block it"))
+        XCTAssertFalse(context.explanation.contains("connected to"))
         XCTAssertTrue(context.explanation.contains("Apple device pairing and sync"))
         XCTAssertTrue(context.guidance.contains("no action is required"))
     }
@@ -1000,6 +1002,21 @@ final class ScamGuardianTests: XCTestCase {
         XCTAssertTrue(guardian.isSuspicious(host: "secure.apple-id-login.com"))
     }
 
+    func test_everyCuratedExactDomainUsesExactVerdictAheadOfHeuristics() {
+        for domain in guardian.exactBlocklist {
+            XCTAssertTrue(guardian.isExactMatch(host: domain), domain)
+            let verdict = NetworkProtectionPolicy(configuration: .init()).evaluate(
+                host: domain,
+                appIdentifier: nil,
+                isBlocklisted: guardian.isExactMatch(host:),
+                isScam: guardian.isHeuristicMatch(host:)
+            )
+            XCTAssertEqual(verdict, .observe(.knownThreat), domain)
+        }
+        XCTAssertFalse(guardian.isExactMatch(host: "paypa1.com"))
+        XCTAssertTrue(guardian.isHeuristicMatch(host: "paypa1.com"))
+    }
+
     func test_typosquatMatchesAcrossPublicSuffix() {
         XCTAssertTrue(guardian.isSuspicious(host: "login.paypa1.co.uk"))
         XCTAssertTrue(guardian.isSuspicious(host: "payapl.com"))
@@ -1020,5 +1037,65 @@ final class ScamGuardianTests: XCTestCase {
     func test_malformedHostFailsOpen() {
         XCTAssertFalse(guardian.isSuspicious(host: "not/a/host"))
         XCTAssertFalse(guardian.isSuspicious(host: ""))
+    }
+}
+
+@MainActor
+final class Step9NetworkIncidentPolicyTests: XCTestCase {
+    private func alert(reason: NetworkObservationReason, id: UUID = UUID(), timestamp: Date) -> ThreatAlert {
+        let event = NetworkBlockEvent(
+            id: id,
+            timestamp: timestamp,
+            host: reason == .knownThreat ? "nick-scam-test.invalid" : "paypa1.com",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: reason.rawValue,
+            reasonTitle: reason.userTitle,
+            port: 53
+        )
+        let finding = NetworkFinding(event: event)
+        return ThreatAlert(
+            id: id,
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: timestamp
+        )
+    }
+
+    func test_exactKnownThreatUsesDedicatedTitleHonestWordingAndCoalescedNotification() {
+        var clock = Date(timeIntervalSince1970: 50_000)
+        let store = IncidentStore(persistOnInit: false, now: { clock })
+        let first = alert(reason: .knownThreat, timestamp: clock)
+        let firstResult = store.ingest([first])
+        let copy = UserFacingAlertBuilder.shared.build(from: first)
+
+        XCTAssertEqual(copy.headline, "Known dangerous destination")
+        XCTAssertTrue(copy.explanation.contains("tried to connect"))
+        XCTAssertFalse(copy.explanation.contains("connected to"))
+        XCTAssertEqual(firstResult.newlyActionable.count, 1)
+
+        clock.addTimeInterval(599)
+        let repeated = store.ingest([alert(reason: .knownThreat, timestamp: clock)])
+        XCTAssertTrue(repeated.newlyActionable.isEmpty)
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 2)
+    }
+
+    func test_heuristicScamGuardianIsReviewTierAndSilent() {
+        let now = Date(timeIntervalSince1970: 60_000)
+        let candidate = alert(reason: .scamGuardian, timestamp: now)
+        let store = IncidentStore(persistOnInit: false, now: { now })
+        let result = store.ingest([candidate])
+
+        XCTAssertFalse(candidate.hasProtectedEvidence)
+        XCTAssertTrue(result.newlyActionable.isEmpty)
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertTrue(candidate.description.contains("tried to connect"))
+        XCTAssertFalse(candidate.description.contains("connected to"))
     }
 }

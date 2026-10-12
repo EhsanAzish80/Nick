@@ -339,6 +339,7 @@ enum EvidenceRulePolicy {
     private static let reviewRuleIDs: Set<String> = [
         "system_hardening",
         "endpoint_management_observed",
+        "network_scamGuardian",
         // Compatibility with incidents created before management observations
         // used their stable reason as the rule identifier.
         "System extension management observed",

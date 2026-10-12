@@ -4,6 +4,33 @@
 
 import Foundation
 
+enum PersistentTrustEligibilityPolicy {
+    static let forbiddenSigningIDs: Set<String> = [
+        "com.apple.bash", "com.apple.zsh", "com.apple.sh", "com.apple.osascript",
+        "com.apple.curl", "com.apple.ssh", "com.apple.python3", "com.apple.ruby",
+        "com.apple.tclsh", "com.apple.dt.xcode_select.tool-shim-public",
+        "org.nodejs.node", "org.python.python"
+    ]
+    static let forbiddenSigningIDPrefixes = ["com.apple.perl"]
+    static let forbiddenExecutableNames: Set<String> = [
+        "bash", "zsh", "sh", "dash", "fish", "ksh", "csh", "python", "python3",
+        "ruby", "perl", "osascript", "curl", "wget", "node", "deno", "bun",
+        "env", "swift", "tclsh", "awk", "xargs", "find", "open", "launchctl",
+        "xattr", "crontab", "mktemp", "php", "lua", "pwsh", "java"
+    ]
+
+    static func isEligible(name: String, path: String, signingID: String?) -> Bool {
+        guard let signingID, !signingID.isEmpty else { return false }
+        let normalizedID = signingID.lowercased()
+        let executable = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        let normalizedName = name.lowercased()
+        return !forbiddenSigningIDs.contains(normalizedID)
+            && !forbiddenSigningIDPrefixes.contains(where: { normalizedID.hasPrefix($0) })
+            && !forbiddenExecutableNames.contains(executable)
+            && !forbiddenExecutableNames.contains(normalizedName)
+    }
+}
+
 /// Durable envelope for security findings produced by the system extension.
 /// The payload remains the original JSON representation so older records can
 /// be migrated without coupling the privileged store to app-only models.
@@ -59,11 +86,13 @@ enum IncidentVerdictValidationPolicy {
         alertID: String,
         action: String,
         existingAlertIDs: Set<String>,
+        persistentTrustEligible: Bool = true,
         hasProtectionAuthorization: Bool
     ) -> IncidentVerdictValidationResult {
         guard UUID(uuidString: alertID) != nil,
               allowedActions.contains(action) else { return .invalidRequest }
         guard existingAlertIDs.contains(alertID) else { return .targetMissing }
+        if action == "alwaysAllowed", !persistentTrustEligible { return .invalidRequest }
         let protectionReducingActions: Set<String> = ["dismissed", "allowedOnce", "alwaysAllowed"]
         guard protectionReducingActions.contains(action) else { return .accepted }
         return hasProtectionAuthorization ? .accepted : .authorizationRequired
@@ -88,6 +117,32 @@ enum IncidentStoreAlertIDPolicy {
         return Set(incidents.compactMap { incident in
             (incident["alert"] as? [String: Any])?["id"] as? String
         })
+    }
+}
+
+enum IncidentStoreTrustEligibilityPolicy {
+    static func isEligible(alertID: String, encodedRecord: Data) -> Bool {
+        guard let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: encodedRecord),
+              let root = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
+              let incidents = root["incidents"] as? [[String: Any]],
+              let incident = incidents.first(where: {
+                  (($0["alert"] as? [String: Any])?["id"] as? String) == alertID
+              }),
+              let alert = incident["alert"] as? [String: Any],
+              let signals = alert["contributingSignals"] as? [[String: Any]],
+              let actorSignal = signals.first,
+              let process = actorSignal["processInfo"] as? [String: Any],
+              let status = process["signingStatus"] as? [String: Any],
+              status["type"] as? String == "signed",
+              let teamID = status["teamID"] as? String, !teamID.isEmpty else { return false }
+
+        // The first signal is the detected operation. Never fall through to a
+        // signed parent/context process when the primary actor is ineligible.
+        return PersistentTrustEligibilityPolicy.isEligible(
+            name: process["name"] as? String ?? "",
+            path: process["path"] as? String ?? "",
+            signingID: status["signingID"] as? String
+        )
     }
 }
 

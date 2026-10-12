@@ -283,20 +283,23 @@ struct NetworkEventContext: Equatable, Sendable {
         destinationActionLabel = destinationKind == .website
             ? "Allow This Website"
             : "Allow This Destination"
-        appActionLabel = "Allow This App"
+        appActionLabel = "Allow This Domain"
 
         let purpose = portPurpose.map { " It used \($0)." } ?? ""
         switch event.decision {
         case .observed:
-            explanation = "\(appName) connected to this \(destinationLabel.lowercased()). Nick recorded it because \(event.reasonTitle.lowercased()). No connection was blocked.\(purpose)"
-            guidance = "If you recognize the app and expected this activity, no action is required. Allow this destination only to stop warnings for this address; allow this app only if you trust all of its network activity."
+            let classification = event.reason == NetworkObservationReason.knownThreat.rawValue
+                ? "a known dangerous destination"
+                : "a destination flagged as \(event.reasonTitle.lowercased())"
+            explanation = "\(appName) tried to connect to \(event.host), \(classification). Nick recorded the attempt; it did not block it.\(purpose)"
+            guidance = "If you expected this attempt, no action is required. Allow this domain only to stop warnings for this destination."
         case .blocked:
             explanation = "Nick blocked \(appName) from connecting to this \(destinationLabel.lowercased()) because \(event.reasonTitle.lowercased()).\(purpose)"
             guidance = "Review the app and destination first. Allow this destination for the narrowest exception, or allow the app only if you trust all of its network activity."
         }
     }
 
-    private static func displayName(for identifier: String?) -> String {
+    static func displayName(for identifier: String?) -> String {
         guard let identifier, !identifier.isEmpty else { return "An unidentified process" }
         let knownNames: [String: String] = [
             "com.apple.rapportd": "Apple Continuity",
