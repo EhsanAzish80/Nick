@@ -48,6 +48,36 @@ final class QuarantineManagerFailureTests: XCTestCase {
         XCTAssertTrue(try fixture.vaultContents().isEmpty)
     }
 
+    func test_sameVolumeMoveFailurePreservesLockedVaultItemWhenOriginalPathWasRecreated() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let replacement = Data("replacement file must remain untouched".utf8)
+        let manager = QuarantineManager(
+            supportDir: fixture.support.path,
+            volumeInfo: { _ in QuarantineVolumeInfo(isReadOnly: false, name: "Writable") },
+            moveItem: { source, destination in
+                try FileManager.default.moveItem(atPath: source, toPath: destination)
+                try replacement.write(to: URL(fileURLWithPath: source))
+            },
+            afterMove: { _ in throw CocoaError(.fileWriteUnknown) }
+        )
+
+        let failure = try XCTUnwrap(manager.quarantineFailure(for: fixture.file, hash: fixture.hash))
+
+        XCTAssertEqual(failure.reason, .other)
+        XCTAssertEqual(failure.errorDomain, NSCocoaErrorDomain)
+        XCTAssertEqual(failure.errorCode, CocoaError.fileWriteUnknown.rawValue)
+        XCTAssertEqual(try Data(contentsOf: fixture.file), replacement)
+
+        let records = manager.listQuarantined()
+        let record = try XCTUnwrap(records.first)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertTrue(record.isIncomplete)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: record.quarantinedPath))
+        let attributes = try FileManager.default.attributesOfItem(atPath: record.quarantinedPath)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.uint16Value, 0)
+    }
+
     func test_cocoaReadOnlyVolumeErrorMapsToReadOnlyVolume() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

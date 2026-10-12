@@ -184,6 +184,9 @@ public struct QuarantineRecord: Codable, Sendable, Identifiable {
     public let originalOwnerID: UInt32?
     public let originalGroupID: UInt32?
     public let originalPermissions: UInt16?
+    /// True when quarantine moved the reviewed file into the vault but a later
+    /// vault step failed after another file occupied the original path.
+    public let isIncomplete: Bool
 
     public init(
         id: UUID,
@@ -197,7 +200,8 @@ public struct QuarantineRecord: Codable, Sendable, Identifiable {
         pid: Int32,
         originalOwnerID: UInt32? = nil,
         originalGroupID: UInt32? = nil,
-        originalPermissions: UInt16? = nil
+        originalPermissions: UInt16? = nil,
+        isIncomplete: Bool = false
     ) {
         self.id = id
         self.originalPath = originalPath
@@ -211,6 +215,30 @@ public struct QuarantineRecord: Codable, Sendable, Identifiable {
         self.originalOwnerID = originalOwnerID
         self.originalGroupID = originalGroupID
         self.originalPermissions = originalPermissions
+        self.isIncomplete = isIncomplete
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, originalPath, quarantinedPath, hash, threatName, severity
+        case quarantinedAt, processPath, pid, originalOwnerID, originalGroupID
+        case originalPermissions, isIncomplete
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        originalPath = try values.decode(String.self, forKey: .originalPath)
+        quarantinedPath = try values.decode(String.self, forKey: .quarantinedPath)
+        hash = try values.decode(String.self, forKey: .hash)
+        threatName = try values.decode(String.self, forKey: .threatName)
+        severity = try values.decode(String.self, forKey: .severity)
+        quarantinedAt = try values.decode(Date.self, forKey: .quarantinedAt)
+        processPath = try values.decode(String.self, forKey: .processPath)
+        pid = try values.decode(Int32.self, forKey: .pid)
+        originalOwnerID = try values.decodeIfPresent(UInt32.self, forKey: .originalOwnerID)
+        originalGroupID = try values.decodeIfPresent(UInt32.self, forKey: .originalGroupID)
+        originalPermissions = try values.decodeIfPresent(UInt16.self, forKey: .originalPermissions)
+        isIncomplete = try values.decodeIfPresent(Bool.self, forKey: .isIncomplete) ?? false
     }
 }
 

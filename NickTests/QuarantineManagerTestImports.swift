@@ -14,6 +14,8 @@ typealias QuarantineRecord = Nick.QuarantineRecord
 
 struct FileIdentity: Hashable, Sendable {
     fileprivate let shared: Nick.FileIdentity
+    var device: Int64 { shared.device }
+    var inode: UInt64 { shared.inode }
 
     init(stat info: stat) {
         shared = Nick.FileIdentity(stat: info)

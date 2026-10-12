@@ -41,6 +41,7 @@ final class QuarantineManager {
     private let database:  QuarantineDatabase
     private let volumeInfo: (String) -> QuarantineVolumeInfo?
     private let moveItem: (String, String) throws -> Void
+    private let afterMove: (String) throws -> Void
 
     // MARK: - Init
 
@@ -51,7 +52,8 @@ final class QuarantineManager {
         volumeInfo: @escaping (String) -> QuarantineVolumeInfo? = QuarantineManager.volumeInfo,
         moveItem: @escaping (String, String) throws -> Void = { source, destination in
             try FileManager.default.moveItem(atPath: source, toPath: destination)
-        }
+        },
+        afterMove: @escaping (String) throws -> Void = { _ in }
     ) {
         vaultPath = (supportDir as NSString).appendingPathComponent("Quarantine")
         let dbPath = (supportDir as NSString).appendingPathComponent("quarantine.db")
@@ -59,6 +61,7 @@ final class QuarantineManager {
         database = QuarantineDatabase(dbPath: dbPath)
         self.volumeInfo = volumeInfo
         self.moveItem = moveItem
+        self.afterMove = afterMove
 
         // Ensure vault directory exists (root-owned, 0700)
         try? FileManager.default.createDirectory(
@@ -178,6 +181,7 @@ final class QuarantineManager {
                 onReviewedFileSwap?(canonicalOriginalPath)
                 throw CocoaError(.fileWriteFileExists)
             }
+            try afterMove(quarantinedPath)
 
             // Strip attributes while the owner can still access the file, then
             // lock the vault copy against reading, writing, and execution.
@@ -199,19 +203,50 @@ final class QuarantineManager {
             // Quarantine is fail-safe: if the move succeeded but a later vault step
             // failed, put the original back whenever possible. Never delete it.
             if fm.fileExists(atPath: quarantinedPath) {
-                if fm.fileExists(atPath: canonicalOriginalPath) {
+                var currentOriginalStat = stat()
+                if lstat(canonicalOriginalPath, &currentOriginalStat) == 0,
+                   reviewedIdentity.device == Int64(currentOriginalStat.st_dev),
+                   reviewedIdentity.inode == UInt64(currentOriginalStat.st_ino) {
                     do {
                         try fm.removeItem(atPath: quarantinedPath)
                         Self.logger.notice("Removed incomplete vault copy after quarantine failure")
                     } catch {
                         Self.logger.error("Could not remove incomplete vault copy: \(error.localizedDescription, privacy: .public)")
                     }
+                } else if fm.fileExists(atPath: canonicalOriginalPath) {
+                    let incompleteRecord = QuarantineRecord(
+                        id: record.id,
+                        originalPath: record.originalPath,
+                        quarantinedPath: record.quarantinedPath,
+                        hash: record.hash,
+                        threatName: record.threatName,
+                        severity: record.severity,
+                        quarantinedAt: record.quarantinedAt,
+                        processPath: record.processPath,
+                        pid: record.pid,
+                        originalOwnerID: record.originalOwnerID,
+                        originalGroupID: record.originalGroupID,
+                        originalPermissions: record.originalPermissions,
+                        isIncomplete: true
+                    )
+                    stripXattrs(path: quarantinedPath)
+                    do {
+                        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: quarantinedPath)
+                        let metaData = try JSONEncoder().encode(incompleteRecord)
+                        try metaData.write(to: URL(fileURLWithPath: metaPath), options: .atomic)
+                        database.insert(record: incompleteRecord)
+                        Self.logger.error("Preserved incomplete quarantine record \(record.id, privacy: .public) because the original path now identifies a different file")
+                    } catch {
+                        Self.logger.error("Could not persist incomplete quarantine record \(record.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    }
                 } else {
                     try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: quarantinedPath)
                     try? fm.moveItem(atPath: quarantinedPath, toPath: canonicalOriginalPath)
                 }
             }
-            try? fm.removeItem(atPath: metaPath)
+            if database.get(id: record.id) == nil {
+                try? fm.removeItem(atPath: metaPath)
+            }
             return .failure(typedFailure)
         }
     }
