@@ -342,7 +342,7 @@ struct NetworkFinding: Sendable {
             severity: severity,
             timestamp: event.timestamp,
             title: event.reasonTitle,
-            description: "\(event.appIdentifier ?? "An application") connected to \(event.host). Nick observed the connection and did not block it.",
+            description: NetworkEventContext(event: event).explanation,
             context: ThreatSignalContext(metadata: [
                 "reason": "network_extension_\(event.reason)",
                 "rule": "network_\(event.reason)",
@@ -353,7 +353,7 @@ struct NetworkFinding: Sendable {
             ])
         )
         recommendedAction = reason == .scamGuardian
-            ? "Close the page if you did not intend to visit it and verify the address before entering information."
-            : "Review the destination and the application that opened the connection."
+            ? "Review the attempted destination and quit the app if you did not expect it."
+            : "Review the attempted destination and the application responsible."
     }
 }

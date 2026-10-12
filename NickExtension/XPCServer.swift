@@ -436,6 +436,10 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             alertID: alertID,
             action: action,
             existingAlertIDs: incidentAlertIDs(),
+            persistentTrustEligible: IncidentStoreTrustEligibilityPolicy.isEligible(
+                alertID: alertID,
+                encodedRecord: incidentStore.load()
+            ),
             hasProtectionAuthorization: verifyProtectionAuthorization(authorizationExternalForm)
         ).rawValue)
     }

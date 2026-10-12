@@ -99,6 +99,7 @@ struct AlertListView: View {
 /// `.info` severity alerts (trusted-app activity) render with `textTertiary`
 /// styling to visually distinguish them from actionable alerts.
 private struct AlertRow: View {
+    @Environment(NetworkProtectionManager.self) private var networkProtection
 
     let alert: ThreatAlert
     @Environment(SecurityEngine.self) private var engine
@@ -184,15 +185,8 @@ private struct AlertRow: View {
             .first(where: { !$0.isEmpty })
     }
 
-    private var hasStableSignedIdentity: Bool {
-        alert.contributingSignals.contains { signal in
-            guard let process = signal.processInfo,
-                  case .signed(let teamID, let signingID?) = process.signingStatus else {
-                return false
-            }
-            return !teamID.isEmpty && !signingID.isEmpty
-        }
-    }
+    private var trustEligibleProcess: NickProcessInfo? { TrustedProcessList.eligibleProcess(in: alert) }
+    private var networkDomain: String? { TrustedProcessList.networkDomain(in: alert) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: NickSpacing.md) {
@@ -316,14 +310,19 @@ private struct AlertRow: View {
 
             // Buttons
             HStack(spacing: NickSpacing.md) {
-                if (!isMalwareDetection || isHeuristicDetection), reviewProcessName != nil {
+                if let networkDomain {
+                    Button("Allow This Domain") {
+                        Task { _ = await networkProtection.allowDomain(networkDomain) }
+                    }
+                    .buttonStyle(.nickSecondary)
+                } else if (!isMalwareDetection || isHeuristicDetection), reviewProcessName != nil {
                     Button("Expected for 24 Hours") {
                         engine.allowAlertOnce(alert.id)
                     }
                     .buttonStyle(.nickSecondary)
                     .help("Mutes only this exact behavior for 24 hours. Different, critical, persistence, and malware activity still alerts.")
 
-                    if hasStableSignedIdentity {
+                    if trustEligibleProcess != nil {
                         Button("Allow This Behavior for 7 Days") {
                             engine.alwaysAllowBehavior(from: alert.id)
                         }

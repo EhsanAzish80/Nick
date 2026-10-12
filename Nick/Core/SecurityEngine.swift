@@ -865,20 +865,15 @@ final class SecurityEngine {
     func alwaysAllowBehavior(from alertID: UUID) {
         performAuthenticatedIncidentAction(.alwaysAllowed, alertID: alertID) { [weak self] alert in
             guard let self,
-                  let name = alert.contributingSignals.compactMap(\.processInfo?.name)
-                    .first(where: { !$0.isEmpty }) else { return }
-            let signedIdentity = alert.contributingSignals.compactMap { signal -> String? in
-                guard let process = signal.processInfo,
-                      case .signed(let teamID, let signingID?) = process.signingStatus,
-                      !teamID.isEmpty,
-                      !signingID.isEmpty else { return nil }
-                return "\(teamID)|\(signingID)"
-            }.first
-            guard let signedIdentity else {
+                  let process = TrustedProcessList.eligibleProcess(in: alert),
+                  case .signed(let teamID, let signingID?) = process.signingStatus,
+                  !teamID.isEmpty, !signingID.isEmpty else {
                 // Unsigned/name-only identities are trivial to impersonate. They
                 // may be accepted once, but never receive persistent trust.
                 return
             }
+            let name = process.name
+            let signedIdentity = "\(teamID)|\(signingID)"
             suppressionRules.append(SuppressionRule(
                 type: .signedProcess,
                 value: signedIdentity,

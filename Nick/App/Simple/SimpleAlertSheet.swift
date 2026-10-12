@@ -17,6 +17,7 @@ struct SimpleAlertSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(SecurityEngine.self) private var engine
     @Environment(ExtensionXPCClient.self) private var xpcClient
+    @Environment(NetworkProtectionManager.self) private var networkProtection
 
     @State private var showsTechnicalDetails = false
     @State private var confirmsTrust = false
@@ -46,13 +47,8 @@ struct SimpleAlertSheet: View {
         )
     }
 
-    private var hasStableSignedIdentity: Bool {
-        alert.contributingSignals.contains { signal in
-            guard let process = signal.processInfo,
-                  case .signed(let teamID, let signingID?) = process.signingStatus else { return false }
-            return !teamID.isEmpty && !signingID.isEmpty
-        }
-    }
+    private var trustEligibleProcess: NickProcessInfo? { TrustedProcessList.eligibleProcess(in: alert) }
+    private var networkDomain: String? { TrustedProcessList.networkDomain(in: alert) }
 
     private var incident: SecurityIncident? {
         engine.incidentStore.incidents.first { $0.alert.id == alert.id }
@@ -113,7 +109,7 @@ struct SimpleAlertSheet: View {
             isPresented: $confirmsTrust,
             titleVisibility: .visible
         ) {
-            Button(hasStableSignedIdentity ? "Trust for 7 Days" : "Trust for 24 Hours") { trust() }
+            Button("Trust for 7 Days") { trust() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Nick will stop warning about this exact behaviour. It will still warn you about anything new or harmful.")
@@ -205,7 +201,14 @@ struct SimpleAlertSheet: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            if copy.status != .info {
+            if let networkDomain {
+                Button("Allow this domain") {
+                    Task { _ = await networkProtection.allowDomain(networkDomain) }
+                    dismiss()
+                }
+                .buttonStyle(.link)
+                .tint(Color.nickAccent)
+            } else if copy.status != .info, trustEligibleProcess != nil {
                 Button("I trust this app…") { confirmsTrust = true }
                     .buttonStyle(.link)
                     .tint(Color.nickAccent)
@@ -234,11 +237,8 @@ struct SimpleAlertSheet: View {
     // MARK: Actions
 
     private func trust() {
-        if hasStableSignedIdentity {
-            engine.alwaysAllowBehavior(from: alert.id)
-        } else {
-            engine.allowAlertOnce(alert.id)
-        }
+        guard trustEligibleProcess != nil else { return }
+        engine.alwaysAllowBehavior(from: alert.id)
         dismiss()
     }
 

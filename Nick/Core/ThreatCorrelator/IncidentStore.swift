@@ -591,7 +591,7 @@ final class IncidentStore {
                         newlyActionable.append(incidents[index].alert)
                         notificationIncidentIDs.insert(incidents[index].alert.id)
                     }
-                } else if escalated {
+                } else if escalated && !Self.isSilentReview(candidate) {
                     incidents[index].state = .new
                     incidents[index].isVisible = true
                     recordAction(.detected, actor: .automatic, at: index)
@@ -617,7 +617,8 @@ final class IncidentStore {
                 }
                 incidents.append(incident)
                 outcomes.append(.persisted(0))
-                if candidate.severity != .info || Self.requiresVisibleNotification(candidate) {
+                if (candidate.severity != .info || Self.requiresVisibleNotification(candidate))
+                    && !Self.isSilentReview(candidate) {
                     newlyActionable.append(candidate)
                 }
             }
@@ -1002,6 +1003,12 @@ final class IncidentStore {
 
     private func isProtected(_ alert: ThreatAlert) -> Bool {
         alert.hasProtectedEvidence
+    }
+
+    private static func isSilentReview(_ alert: ThreatAlert) -> Bool {
+        alert.contributingSignals.contains {
+            $0.metadata["reason"] == "network_extension_scamGuardian"
+        }
     }
 
     private func matchingDismissal(

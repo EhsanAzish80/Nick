@@ -255,4 +255,26 @@ final class TrustedProcessListTests: XCTestCase {
             XCTAssertFalse(sut.addUserTrusted(process), "\(name) must not be trustable")
         }
     }
+
+    func test_curlOsascriptAndZshExposeNoPersistentTrustWhileSignedAppDoes() {
+        let blocked = [
+            ("curl", "/usr/bin/curl", "com.apple.curl"),
+            ("osascript", "/usr/bin/osascript", "com.apple.osascript"),
+            ("zsh", "/bin/zsh", "com.apple.zsh"),
+        ]
+        for (name, path, signingID) in blocked {
+            let process = NickProcessInfo(
+                pid: 500, path: path, name: name, parentPID: 1, parentName: "launchd",
+                signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: signingID)
+            )
+            XCTAssertNotNil(TrustedProcessList.trustRejectionReason(for: process), name)
+        }
+
+        let thirdParty = NickProcessInfo(
+            pid: 501, path: "/Applications/Example.app/Contents/MacOS/Example", name: "Example",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "THIRDPARTY", signingID: "com.example.app")
+        )
+        XCTAssertNil(TrustedProcessList.trustRejectionReason(for: thirdParty))
+    }
 }

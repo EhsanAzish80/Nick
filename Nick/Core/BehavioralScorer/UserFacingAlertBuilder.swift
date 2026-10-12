@@ -278,13 +278,40 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
-        // --- C2 / suspicious network ---
+        // --- Network extension findings ---
         if hasNetwork && !features.contains("shell") {
+            if let known = signals.first(where: {
+                $0.metadata["reason"] == "network_extension_knownThreat"
+            }) {
+                let app = NetworkEventContext.displayName(for: known.metadata["appIdentifier"])
+                let domain = known.metadata["destination"] ?? "the destination"
+                return AlertPattern(
+                    headline: "Known dangerous destination",
+                    explanation: "\(app) tried to connect to \(domain), a known dangerous destination. Nick recorded the attempt; it did not block it.",
+                    assessment: "Known threat",
+                    recommendedAction: "Review the attempted destination and quit the app if you did not expect it.",
+                    severity: .critical,
+                    actions: [.showDetails, .dismiss]
+                )
+            }
+            if let heuristic = signals.first(where: {
+                $0.metadata["reason"] == "network_extension_scamGuardian"
+            }) {
+                let app = NetworkEventContext.displayName(for: heuristic.metadata["appIdentifier"])
+                let domain = heuristic.metadata["destination"] ?? "the destination"
+                return AlertPattern(
+                    headline: "Possible phishing destination",
+                    explanation: "\(app) tried to connect to \(domain), which matched a phishing heuristic. Nick recorded the attempt; it did not block it.",
+                    assessment: "Needs your review",
+                    recommendedAction: "Review the attempted destination and quit the app if you did not expect it.",
+                    actions: [.showDetails, .dismiss]
+                )
+            }
             return AlertPattern(
                 headline: "An app made an unusual network connection",
                 explanation: "An app tried to connect to a server that Nick flagged as potentially dangerous. "
                     + "This can be malware communication, but raw IP addresses and uncommon ports are also used by legitimate software. "
-                    + "Nick observed this connection; passive monitoring does not block it.",
+                    + "Nick recorded the attempt; passive monitoring did not block it.",
                 assessment: "Needs your review",
                 recommendedAction: "Keep the app if you recognize it and expected network activity. Otherwise, quit it and review the destination in Details.",
                 actions: [.showDetails, .dismiss]
