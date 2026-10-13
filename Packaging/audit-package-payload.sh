@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+export COPYFILE_DISABLE=1
+
 if (( $# != 1 )); then
   print -u2 "Usage: $0 /path/to/Nick.pkg"
   exit 64

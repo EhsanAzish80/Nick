@@ -1,6 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
+export COPYFILE_DISABLE=1
+
 SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h}
 BUILD_DIR=${BUILD_DIR:-"${PROJECT_DIR}/build/package"}
