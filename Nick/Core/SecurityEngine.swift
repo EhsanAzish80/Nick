@@ -763,19 +763,21 @@ final class SecurityEngine {
             durableIncidentNotifications.stage(result.newlyActionable, for: generation)
             if result.newlyActionable.isEmpty {
                 networkIngestLogger.info(
-                    "notification skipped reason=no-actionable-candidate generation=\(generation, privacy: .public)"
+                    "notification skipped id=\(signal.id.uuidString, privacy: .public) reason=no-actionable-candidate generation=\(generation, privacy: .public)"
                 )
             } else {
                 networkIngestLogger.info(
-                    "notification staged count=\(result.newlyActionable.count, privacy: .public) generation=\(generation, privacy: .public)"
+                    "notification staged id=\(signal.id.uuidString, privacy: .public) count=\(result.newlyActionable.count, privacy: .public) generation=\(generation, privacy: .public)"
                 )
             }
         case .suppressedByPolicy(let reason):
             networkIngestLogger.info(
-                "notification skipped reason=policy-\(reason, privacy: .public)"
+                "notification skipped id=\(signal.id.uuidString, privacy: .public) reason=policy-\(reason, privacy: .public)"
             )
         case .failed:
-            networkIngestLogger.error("notification skipped reason=ingest-failed")
+            networkIngestLogger.error(
+                "notification skipped id=\(signal.id.uuidString, privacy: .public) reason=ingest-failed"
+            )
         }
         return outcome
     }

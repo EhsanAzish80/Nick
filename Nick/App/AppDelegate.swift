@@ -231,6 +231,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 recommendedAction: finding.recommendedAction
             )
         }
+        networkProtection.incidentPersistenceHandler = { [weak self] generation in
+            guard let self else { return nil }
+            return await self.xpcClient.awaitIncidentStorePersistence(
+                generation: generation
+            )
+        }
         networkIngestLogger.info(
             "handler attached elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
         )
