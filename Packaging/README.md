@@ -39,7 +39,10 @@ Nick.
 
 `release.sh` performs the complete production sequence: archive, timestamp-sign
 Sparkle's nested helpers, verify the app, sign the installer, notarize, staple,
-run Gatekeeper validation, and print the Sparkle enclosure signature.
+run Gatekeeper validation, and print the Sparkle enclosure signature. Before
+notarization it audits the raw installer payload for AppleDouble entries,
+verifies the extracted app again, and rejects an invalid or unexpected
+installer signature.
 
 ```sh
 ./Packaging/release.sh
