@@ -1068,7 +1068,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         )
     }
 
-    func test_stalledEndpointActivationDoesNotGateNetworkOrESIncidentHandlers() async throws {
+    func test_stalledEndpointActivationAttachesESHandlerButDoesNotIngestBeforeStoreReady() async throws {
         let delegate = AppDelegate()
         let activationStarted = expectation(description: "endpoint activation entered")
         let bootstrap = delegate.beginEndpointBootstrap {
@@ -1091,6 +1091,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             port: 53
         )
         delegate.networkProtection.ingestEvents([networkEvent])
+        XCTAssertNil(delegate.networkProtection.findingHandler)
 
         let esEvent = ESEvent(
             eventType: .authExec,
@@ -1106,26 +1107,35 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
                 isCodeSigned: true
             )
         )
-        let esFinding = try XCTUnwrap(ExtensionFinding(event: esEvent))
-        let esOutcome = await delegate.xpcClient.findingHandler?(esFinding)
-        XCTAssertNotNil(esOutcome)
-
-        let deadline = ContinuousClock.now + .seconds(2)
-        while ContinuousClock.now < deadline,
-              !delegate.engine.incidentStore.incidents.contains(where: {
-                  $0.alert.contributingSignals.contains { $0.id == networkEvent.id }
-              }) {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-
-        let signalIDs = Set(
-            delegate.engine.incidentStore.incidents
-                .flatMap(\.alert.contributingSignals)
-                .map(\.id)
+        let persisted = PersistedExtensionFinding(
+            kind: .threat,
+            payload: try JSONEncoder().encode(esEvent)
         )
-        XCTAssertTrue(signalIDs.contains(networkEvent.id))
-        XCTAssertTrue(signalIDs.contains(esEvent.id))
+        let beforeReady = await delegate.xpcClient.receivePersisted(persisted)
+        XCTAssertNil(beforeReady)
+        XCTAssertTrue(delegate.engine.incidentStore.incidents.isEmpty)
+        XCTAssertEqual(delegate.xpcClient.ackWithoutPersistenceCount, 0)
         XCTAssertNotNil(delegate.xpcClient.integrityAcknowledgementHandler)
+    }
+
+    func test_5_0NetworkIncidentDeliveryIsOffWhileActivityCopyRemainsHonest() {
+        XCTAssertFalse(AppDelegate.networkIncidentIngestionEnabledFor5_0)
+        let event = NetworkBlockEvent(
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle,
+            port: 53
+        )
+        let context = NetworkEventContext(event: event)
+        XCTAssertEqual(event.reasonTitle, "Known dangerous destination")
+        XCTAssertEqual(event.decision, .observed)
+        XCTAssertTrue(context.explanation.contains("tried to connect"))
+        XCTAssertTrue(context.explanation.contains("recorded the attempt"))
+        XCTAssertTrue(context.explanation.contains("did not block it"))
+        XCTAssertFalse(context.explanation.contains("connected to"))
+        XCTAssertEqual(context.destinationActionLabel, "Allow This Website")
     }
 
     func test_exactKnownThreatUsesDedicatedTitleHonestWordingAndCoalescedNotification() {
@@ -1420,7 +1430,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         let manager = NetworkProtectionManager()
         manager.findingHandler = { _ in .suppressedByPolicy("review-tier") }
         manager.ingestEvents(events)
-        try? await Task.sleep(for: .milliseconds(250))
+        while manager.deliveredEventCount < events.count { await Task.yield() }
         let baseline = manager.reloadSummaryCount
 
         for _ in 0..<100 { manager.ingestEvents(events) }

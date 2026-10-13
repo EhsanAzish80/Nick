@@ -398,6 +398,10 @@ final class SecurityEngine {
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
     private(set) var incidentStore = IncidentStore()
+    /// True only after the authoritative root-owned incident snapshot has been
+    /// installed. Live providers must not enter the incident pipeline before
+    /// this flips: local pre-bootstrap generations cannot be durably confirmed.
+    private(set) var incidentStoreReady = false
     private let durableIncidentNotifications = DurableIncidentNotificationQueue()
     private var incidentActionAuthorizer: ((UUID, IncidentActionKind) async -> IncidentActionAuthorizationResult)?
     private var nextIncidentStoreAuthorization: Data?
@@ -502,6 +506,7 @@ final class SecurityEngine {
         authorizer: @escaping (UUID, IncidentActionKind) async -> IncidentActionAuthorizationResult,
         removeLegacyState: Bool
     ) throws {
+        incidentStoreReady = false
         try incidentStore.installPrivilegedSnapshot(payload) { [weak self] payload, generation in
             let authorization = self?.nextIncidentStoreAuthorization
             self?.nextIncidentStoreAuthorization = nil
@@ -512,6 +517,7 @@ final class SecurityEngine {
             incidentStore.removeLegacyPersistence()
         }
         syncAlertsFromStore()
+        incidentStoreReady = true
         logger.info("Restored \(self.alerts.count) root-owned incident(s)")
     }
 

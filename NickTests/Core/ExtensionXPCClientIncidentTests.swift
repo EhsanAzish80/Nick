@@ -3,6 +3,55 @@ import XCTest
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
     @MainActor
+    func test_preStoreThreatWaitsThenDeliversAndAcknowledgesExactlyOnce() async throws {
+        let client = ExtensionXPCClient()
+        var storeReady = false
+        client.incidentStoreReadyProvider = { storeReady }
+        var ingestCount = 0
+        client.findingHandler = { _ in
+            ingestCount += 1
+            return .persisted(7)
+        }
+        client.incidentPersistenceOverride = { generation in (generation, true) }
+        var acknowledged: [UUID] = []
+        let acknowledgedOnce = expectation(description: "durable threat acknowledged")
+        client.threatAcknowledgementOverride = { id in
+            acknowledged.append(id)
+            acknowledgedOnce.fulfill()
+        }
+        let event = IncidentStorePersistenceTests.tamperEvent(operation: .unlink)
+        let persisted = PersistedExtensionFinding(
+            kind: .threat,
+            payload: try JSONEncoder().encode(event)
+        )
+
+        let beforeReady = await client.receivePersisted(persisted)
+        XCTAssertNil(beforeReady)
+        XCTAssertEqual(ingestCount, 0)
+        XCTAssertTrue(acknowledged.isEmpty)
+        XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
+
+        // A bootstrap that never finishes leaves the journal item untouched.
+        client.incidentStoreDidBecomeReady()
+        await Task.yield()
+        XCTAssertEqual(ingestCount, 0)
+        XCTAssertTrue(acknowledged.isEmpty)
+
+        storeReady = true
+        client.incidentStoreDidBecomeReady()
+        await fulfillment(of: [acknowledgedOnce], timeout: 2)
+        XCTAssertEqual(ingestCount, 1)
+        XCTAssertEqual(acknowledged, [event.id])
+        XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
+
+        // Journal replay of the same UUID is acknowledged without re-ingest.
+        let replay = await client.receivePersisted(persisted)
+        XCTAssertEqual(replay, event.id)
+        XCTAssertEqual(ingestCount, 1)
+        XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
+    }
+
+    @MainActor
     func test_disconnectedManualQuarantineUsesProtectionDisconnectedWording() {
         let client = ExtensionXPCClient()
         let completed = expectation(description: "quarantine reply")
