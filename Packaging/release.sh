@@ -60,7 +60,8 @@ xcodebuild \
 xcodebuild -exportArchive \
   -archivePath "${ARCHIVE_PATH}" \
   -exportPath "${EXPORT_PATH}" \
-  -exportOptionsPlist "${PROJECT_DIR}/Nick/Scripts/ExportOptions.plist"
+  -exportOptionsPlist "${PROJECT_DIR}/Nick/Scripts/ExportOptions.plist" \
+  -allowProvisioningUpdates
 
 EXPORTED_APP="${EXPORT_PATH}/Nick.app"
 "${SCRIPT_DIR}/stage-package-root.sh" "${EXPORTED_APP}" "${PAYLOAD_ROOT}"
