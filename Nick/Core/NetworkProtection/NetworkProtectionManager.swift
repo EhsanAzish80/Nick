@@ -29,15 +29,21 @@ final class NetworkProtectionManager {
             ingestEvents(blockEvents)
         }
     }
+    /// Confirms that the root-owned incident-store snapshot covering a live
+    /// finding was durably accepted. Network events are not claimed until this
+    /// succeeds, matching the Endpoint Security delivery contract.
+    var incidentPersistenceHandler: ((UInt64) async -> (UInt64, Bool)?)?
     private var observationToken: NSObjectProtocol?
     private var eventDirectorySource: DispatchSourceFileSystemObject?
     private var deliveredEventIDs: Set<UUID> = []
+    private var inFlightEventIDs: Set<UUID> = []
     private let eventsURLProvider: () -> URL?
     private let logger = Logger(
         subsystem: "com.ehsanazish.nick",
         category: "NetworkIngest"
     )
     private var storeChangeCount = 0
+    private(set) var reloadSummaryCount = 0
 
     init(eventsURLProvider: @escaping () -> URL? = {
         NetworkProtectionSharedStore.eventsURL()
@@ -254,9 +260,6 @@ final class NetworkProtectionManager {
             blockEvents = []
             return
         }
-        logger.info(
-            "store decoded trigger=\(trigger, privacy: .public) count=\(decoded.count, privacy: .public) handlerPresent=\(self.findingHandler != nil, privacy: .public)"
-        )
         ingestEvents(decoded)
     }
 
@@ -271,24 +274,29 @@ final class NetworkProtectionManager {
     func ingestEvents(_ decoded: [NetworkBlockEvent]) {
         let sorted = decoded.sorted { $0.timestamp > $1.timestamp }
         blockEvents = sorted
+        let skippedAlreadyDelivered = sorted.lazy.filter {
+            self.deliveredEventIDs.contains($0.id)
+        }.count
+        let newEvents = sorted.filter {
+            !self.deliveredEventIDs.contains($0.id) && !self.inFlightEventIDs.contains($0.id)
+        }
+        reloadSummaryCount += 1
+        logger.info(
+            "reload summary decoded=\(sorted.count, privacy: .public) new=\(newEvents.count, privacy: .public) skipped-already-delivered=\(skippedAlreadyDelivered, privacy: .public)"
+        )
         guard let findingHandler else {
-            logger.info("event delivery skipped reason=handler-absent count=\(sorted.count, privacy: .public)")
+            logger.info("event delivery skipped reason=handler-absent count=\(newEvents.count, privacy: .public)")
             return
         }
-        for event in sorted {
-            guard deliveredEventIDs.insert(event.id).inserted else {
-                logger.info(
-                    "event skipped id=\(event.id.uuidString, privacy: .public) reason=already-delivered"
-                )
-                continue
-            }
+        for event in newEvents {
+            inFlightEventIDs.insert(event.id)
             let finding = NetworkFinding(event: event)
             logger.info(
                 "finding built id=\(event.id.uuidString, privacy: .public) reason=\(event.reason, privacy: .public) decision=\(event.decision.rawValue, privacy: .public)"
             )
             Task {
                 let outcome = await findingHandler(finding)
-                self.log(outcome: outcome, eventID: event.id)
+                await self.finishDelivery(outcome: outcome, eventID: event.id)
             }
         }
     }
@@ -332,17 +340,26 @@ final class NetworkProtectionManager {
         loadEvents(trigger: trigger)
     }
 
-    private func log(outcome: IncidentIngestOutcome, eventID: UUID) {
+    private func finishDelivery(outcome: IncidentIngestOutcome, eventID: UUID) async {
+        defer { inFlightEventIDs.remove(eventID) }
         switch outcome {
-        case .persisted(let generation):
+        case .persisted(let generation), .coalesced(let generation):
+            let persistence = await incidentPersistenceHandler?(generation)
+            guard let (confirmedGeneration, succeeded) = persistence,
+                  confirmedGeneration == generation,
+                  succeeded else {
+                logger.error(
+                    "ingest outcome id=\(eventID.uuidString, privacy: .public) result=failed reason=durability-unconfirmed generation=\(generation, privacy: .public)"
+                )
+                return
+            }
+            deliveredEventIDs.insert(eventID)
+            let result = if case .persisted = outcome { "persisted" } else { "coalesced" }
             logger.info(
-                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=persisted generation=\(generation, privacy: .public)"
-            )
-        case .coalesced(let generation):
-            logger.info(
-                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=coalesced generation=\(generation, privacy: .public)"
+                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=\(result, privacy: .public) generation=\(generation, privacy: .public) durable=yes"
             )
         case .suppressedByPolicy(let reason):
+            deliveredEventIDs.insert(eventID)
             logger.info(
                 "ingest outcome id=\(eventID.uuidString, privacy: .public) result=suppressed reason=\(reason, privacy: .public)"
             )

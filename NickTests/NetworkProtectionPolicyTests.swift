@@ -1176,6 +1176,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         delivered.expectedFulfillmentCount = 2
         var notificationCandidates: [ThreatAlert] = []
 
+        manager.incidentPersistenceHandler = { generation in (generation, true) }
         manager.findingHandler = { finding in
             let alert = ThreatAlert(
                 id: finding.signal.id,
@@ -1223,6 +1224,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         let delivered = expectation(description: "startup event delivered after handler attachment")
         delivered.assertForOverFulfill = true
         var deliveryCount = 0
+        manager.incidentPersistenceHandler = { generation in (generation, true) }
         manager.findingHandler = { finding in
             XCTAssertEqual(finding.signal.id, event.id)
             deliveryCount += 1
@@ -1265,6 +1267,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         var deliveryCount = 0
         var persistedGeneration: UInt64?
 
+        manager.incidentPersistenceHandler = { generation in (generation, true) }
         manager.findingHandler = { finding in
             deliveryCount += 1
             let alert = ThreatAlert(
@@ -1314,6 +1317,115 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         XCTAssertTrue(
             notifications.confirm(generation: try XCTUnwrap(persistedGeneration)).isEmpty
         )
+    }
+
+    func test_failedDurableWriteIsNotClaimedAndNextReloadDeliversOnce() async {
+        let event = NetworkBlockEvent(
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle,
+            port: 53
+        )
+        let manager = NetworkProtectionManager()
+        let submitted = expectation(description: "failed event retried")
+        submitted.expectedFulfillmentCount = 2
+        var submissionCount = 0
+        var persistenceAttempt = 0
+        manager.findingHandler = { _ in
+            submissionCount += 1
+            submitted.fulfill()
+            return .persisted(UInt64(submissionCount))
+        }
+        manager.incidentPersistenceHandler = { generation in
+            persistenceAttempt += 1
+            return (generation, persistenceAttempt > 1)
+        }
+
+        manager.ingestEvents([event])
+        while persistenceAttempt < 1 { await Task.yield() }
+        manager.ingestEvents([event])
+        await fulfillment(of: [submitted], timeout: 2)
+        while persistenceAttempt < 2 { await Task.yield() }
+
+        manager.ingestEvents([event])
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(submissionCount, 2)
+    }
+
+    func test_suppressedNetworkEventIsClaimedAndNotResubmitted() async {
+        let event = NetworkBlockEvent(
+            host: "review-only.example",
+            appIdentifier: "com.example.browser",
+            decision: .observed,
+            reason: NetworkObservationReason.scamGuardian.rawValue,
+            reasonTitle: NetworkObservationReason.scamGuardian.userTitle
+        )
+        let manager = NetworkProtectionManager()
+        let submitted = expectation(description: "policy suppression submitted once")
+        var submissionCount = 0
+        manager.findingHandler = { _ in
+            submissionCount += 1
+            submitted.fulfill()
+            return .suppressedByPolicy("suppression rule")
+        }
+
+        manager.ingestEvents([event])
+        await fulfillment(of: [submitted], timeout: 2)
+        await Task.yield()
+        manager.ingestEvents([event])
+        try? await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(submissionCount, 1)
+    }
+
+    func test_concurrentReloadWhileNetworkEventIsInFlightSubmitsOnce() async {
+        let event = NetworkBlockEvent(
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle
+        )
+        let manager = NetworkProtectionManager()
+        let submitted = expectation(description: "single in-flight submission")
+        var submissionCount = 0
+        manager.findingHandler = { _ in
+            submissionCount += 1
+            submitted.fulfill()
+            try? await Task.sleep(for: .milliseconds(100))
+            return .persisted(1)
+        }
+        manager.incidentPersistenceHandler = { generation in (generation, true) }
+
+        manager.ingestEvents([event])
+        manager.ingestEvents([event])
+        manager.ingestEvents([event])
+        await fulfillment(of: [submitted], timeout: 2)
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(submissionCount, 1)
+    }
+
+    func test_reloadingFiveHundredDeliveredEventsOneHundredTimesEmitsOneSummaryPerReload() async {
+        let events = (0..<500).map { index in
+            NetworkBlockEvent(
+                timestamp: Date(timeIntervalSince1970: TimeInterval(index)),
+                host: "host-\(index).example",
+                appIdentifier: "com.example.browser",
+                decision: .observed,
+                reason: NetworkObservationReason.scamGuardian.rawValue,
+                reasonTitle: NetworkObservationReason.scamGuardian.userTitle
+            )
+        }
+        let manager = NetworkProtectionManager()
+        manager.findingHandler = { _ in .suppressedByPolicy("review-tier") }
+        manager.ingestEvents(events)
+        try? await Task.sleep(for: .milliseconds(250))
+        let baseline = manager.reloadSummaryCount
+
+        for _ in 0..<100 { manager.ingestEvents(events) }
+
+        XCTAssertEqual(manager.reloadSummaryCount - baseline, 100)
     }
 
     func test_heuristicScamGuardianIsReviewTierAndSilent() {
