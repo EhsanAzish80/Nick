@@ -20,6 +20,10 @@ import SystemExtensions
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
+    /// Time-boxed 5.0 policy: the filter remains an honest observation surface,
+    /// while durable network-to-incident cursoring is completed for 5.0.1.
+    static let networkIncidentIngestionEnabledFor5_0 = false
+
     // MARK: - Shared State
 
     /// Single SecurityEngine instance shared across all scenes. This must stay
@@ -160,6 +164,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 if let record {
                     do {
+                        self.xpcClient.incidentPersistenceConfirmationHandler = { [weak self] generation in
+                            self?.engine.confirmIncidentStorePersistence(generation: generation)
+                        }
                         try self.engine.installPrivilegedIncidentStore(
                             payload: record.payload,
                             persistence: { [weak self] payload, generation, authorization in
@@ -175,9 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             },
                             removeLegacyState: true
                         )
-                        self.xpcClient.incidentPersistenceConfirmationHandler = { [weak self] generation in
-                            self?.engine.confirmIncidentStorePersistence(generation: generation)
-                        }
+                        self.xpcClient.incidentStoreDidBecomeReady()
                     } catch {
                         self.incidentStoreLogger.error(
                             "Could not load root-owned incident store: \(error.localizedDescription)"
@@ -223,25 +228,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func wireLiveFindingHandlers() {
-        networkProtection.findingHandler = { [weak self] finding in
-            guard let self else { return .failed }
-            return await self.engine.ingestLiveFinding(
-                finding.signal,
-                score: finding.score,
-                recommendedAction: finding.recommendedAction
+        if Self.networkIncidentIngestionEnabledFor5_0 {
+            networkProtection.findingHandler = { [weak self] finding in
+                guard let self, self.engine.incidentStoreReady else { return .failed }
+                return await self.engine.ingestLiveFinding(
+                    finding.signal,
+                    score: finding.score,
+                    recommendedAction: finding.recommendedAction
+                )
+            }
+            networkProtection.incidentPersistenceHandler = { [weak self] generation in
+                guard let self else { return nil }
+                return await self.xpcClient.awaitIncidentStorePersistence(generation: generation)
+            }
+            networkIngestLogger.info(
+                "handler attached elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
             )
+        } else {
+            networkProtection.findingHandler = nil
+            networkProtection.incidentPersistenceHandler = nil
+            networkIngestLogger.info("incident delivery disabled release=5.0")
         }
-        networkProtection.incidentPersistenceHandler = { [weak self] generation in
-            guard let self else { return nil }
-            return await self.xpcClient.awaitIncidentStorePersistence(
-                generation: generation
-            )
+        xpcClient.incidentStoreReadyProvider = { [weak self] in
+            self?.engine.incidentStoreReady == true
         }
-        networkIngestLogger.info(
-            "handler attached elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
-        )
         xpcClient.findingHandler = { [weak self] finding in
-            guard let self else { return .failed }
+            guard let self, self.engine.incidentStoreReady else { return .failed }
             return await self.engine.ingestLiveFinding(
                 finding.signal,
                 score: finding.score,
