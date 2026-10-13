@@ -1068,6 +1068,66 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         )
     }
 
+    func test_stalledEndpointActivationDoesNotGateNetworkOrESIncidentHandlers() async throws {
+        let delegate = AppDelegate()
+        let activationStarted = expectation(description: "endpoint activation entered")
+        let bootstrap = delegate.beginEndpointBootstrap {
+            activationStarted.fulfill()
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+        }
+        defer { bootstrap.cancel() }
+        await fulfillment(of: [activationStarted], timeout: 2)
+
+        let networkEvent = NetworkBlockEvent(
+            id: UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!,
+            timestamp: Date(timeIntervalSince1970: 100_000),
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle,
+            port: 53
+        )
+        delegate.networkProtection.ingestEvents([networkEvent])
+
+        let esEvent = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/open",
+            pid: 42,
+            parentPid: 1,
+            filePath: "/private/tmp/stalled-activation-eicar.com",
+            decision: .deny,
+            threat: .init(
+                sha256: "stalled-activation",
+                threatName: "Stalled Activation Test Threat",
+                threatFamily: "test",
+                isCodeSigned: true
+            )
+        )
+        let esFinding = try XCTUnwrap(ExtensionFinding(event: esEvent))
+        let esOutcome = await delegate.xpcClient.findingHandler?(esFinding)
+        XCTAssertNotNil(esOutcome)
+
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline,
+              !delegate.engine.incidentStore.incidents.contains(where: {
+                  $0.alert.contributingSignals.contains { $0.id == networkEvent.id }
+              }) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let signalIDs = Set(
+            delegate.engine.incidentStore.incidents
+                .flatMap(\.alert.contributingSignals)
+                .map(\.id)
+        )
+        XCTAssertTrue(signalIDs.contains(networkEvent.id))
+        XCTAssertTrue(signalIDs.contains(esEvent.id))
+        XCTAssertNotNil(delegate.xpcClient.integrityAcknowledgementHandler)
+    }
+
     func test_exactKnownThreatUsesDedicatedTitleHonestWordingAndCoalescedNotification() {
         var clock = Date(timeIntervalSince1970: 50_000)
         let store = IncidentStore(persistOnInit: false, now: { clock })
@@ -1129,8 +1189,10 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
                 contributingSignals: [finding.signal],
                 timestamp: finding.signal.timestamp
             )
-            notificationCandidates.append(contentsOf: store.ingest([alert]).newlyActionable)
+            let result = store.ingest([alert])
+            notificationCandidates.append(contentsOf: result.newlyActionable)
             delivered.fulfill()
+            return result.outcomes[0]
         }
         manager.ingestEvents(decoded.sorted { $0.timestamp < $1.timestamp })
         await fulfillment(of: [delivered], timeout: 2)
@@ -1165,12 +1227,93 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             XCTAssertEqual(finding.signal.id, event.id)
             deliveryCount += 1
             delivered.fulfill()
+            return .persisted(1)
         }
         await fulfillment(of: [delivered], timeout: 2)
 
         manager.ingestEvents([event])
         try? await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(deliveryCount, 1)
+    }
+
+    @MainActor
+    func test_sharedStoreWatcherDeliversKnownThreatThroughIncidentAndDurableNotificationOnce() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let eventsURL = directory.appendingPathComponent("network-block-events.json")
+        let now = Date(timeIntervalSince1970: 90_000)
+        let event = NetworkBlockEvent(
+            id: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!,
+            timestamp: now,
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle,
+            port: 53
+        )
+        let manager = NetworkProtectionManager(eventsURLProvider: { eventsURL })
+        let store = IncidentStore(persistOnInit: false, now: { now })
+        let notifications = DurableIncidentNotificationQueue()
+        let delivered = expectation(description: "filesystem change reached the incident boundary")
+        delivered.assertForOverFulfill = true
+        var deliveryCount = 0
+        var persistedGeneration: UInt64?
+
+        manager.findingHandler = { finding in
+            deliveryCount += 1
+            let alert = ThreatAlert(
+                id: finding.signal.id,
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+            let result = store.ingest([alert])
+            let outcome = try! XCTUnwrap(result.outcomes.first)
+            let generation = try! XCTUnwrap(outcome.generation)
+            notifications.stage(result.newlyActionable, for: generation)
+            persistedGeneration = generation
+            delivered.fulfill()
+            return outcome
+        }
+
+        let payload = try JSONEncoder().encode([event])
+        try payload.write(to: eventsURL, options: .atomic)
+        await fulfillment(of: [delivered], timeout: 2)
+
+        let incident = try XCTUnwrap(store.incidents.first)
+        let signal = try XCTUnwrap(incident.alert.contributingSignals.first)
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertTrue(incident.alert.hasProtectedEvidence)
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: incident.alert).headline,
+            "Known dangerous destination"
+        )
+        XCTAssertEqual(signal.metadata["ruleTier"], "protected")
+        let confirmed = notifications.confirm(generation: try XCTUnwrap(persistedGeneration))
+        XCTAssertEqual(confirmed.count, 1)
+        XCTAssertEqual(confirmed.first?.id, incident.alert.id)
+
+        // A later reload of the exact same filter event must not traverse the
+        // handler or stage another notification.
+        try payload.write(to: eventsURL, options: .atomic)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(deliveryCount, 1)
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertTrue(
+            notifications.confirm(generation: try XCTUnwrap(persistedGeneration)).isEmpty
+        )
     }
 
     func test_heuristicScamGuardianIsReviewTierAndSilent() {

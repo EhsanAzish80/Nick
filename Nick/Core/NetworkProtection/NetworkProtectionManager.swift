@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import NetworkExtension
 import Observation
+import OSLog
 
 @MainActor
 @Observable
@@ -22,7 +23,7 @@ final class NetworkProtectionManager {
     private(set) var temporaryAllowedDomains: [String: Date] = [:]
     private(set) var temporaryAllowedAppIdentifiers: [String: Date] = [:]
     private(set) var blockEvents: [NetworkBlockEvent] = []
-    var findingHandler: ((NetworkFinding) async -> Void)? {
+    var findingHandler: ((NetworkFinding) async -> IncidentIngestOutcome)? {
         didSet {
             guard findingHandler != nil else { return }
             ingestEvents(blockEvents)
@@ -31,15 +32,31 @@ final class NetworkProtectionManager {
     private var observationToken: NSObjectProtocol?
     private var eventDirectorySource: DispatchSourceFileSystemObject?
     private var deliveredEventIDs: Set<UUID> = []
+    private let eventsURLProvider: () -> URL?
+    private let logger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "NetworkIngest"
+    )
+    private var storeChangeCount = 0
 
-    init() {
+    init(eventsURLProvider: @escaping () -> URL? = {
+        NetworkProtectionSharedStore.eventsURL()
+    }) {
+        self.eventsURLProvider = eventsURLProvider
         observationToken = DistributedNotificationCenter.default().addObserver(
             forName: Self.observationNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.loadEvents() }
+            MainActor.assumeIsolated {
+                self?.storeDidChange(trigger: "distributed-notification")
+            }
         }
+        // Event delivery must not depend on a view appearing or on the async
+        // system-extension refresh completing. Start observing the production
+        // store as soon as AppDelegate creates this manager; refresh retries if
+        // the support directory was not available yet.
+        startEventDirectoryWatcher()
     }
 
     var isEnabled: Bool { state == .enabled }
@@ -212,19 +229,34 @@ final class NetworkProtectionManager {
     }
 
     func clearEvents() {
-        guard let url = NetworkProtectionSharedStore.eventsURL() else { return }
+        guard let url = eventsURLProvider() else { return }
         try? FileManager.default.removeItem(at: url)
         blockEvents = []
     }
 
     func loadEvents() {
-        guard let url = NetworkProtectionSharedStore.eventsURL(),
-              let data = try? Data(contentsOf: url),
-              let decoded = Self.decodeEvents(data)
-        else {
+        loadEvents(trigger: "explicit-reload")
+    }
+
+    private func loadEvents(trigger: String) {
+        guard let url = eventsURLProvider() else {
+            logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=no-url")
             blockEvents = []
             return
         }
+        guard let data = try? Data(contentsOf: url) else {
+            logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=read-failed")
+            blockEvents = []
+            return
+        }
+        guard let decoded = Self.decodeEvents(data) else {
+            logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=decode-failed")
+            blockEvents = []
+            return
+        }
+        logger.info(
+            "store decoded trigger=\(trigger, privacy: .public) count=\(decoded.count, privacy: .public) handlerPresent=\(self.findingHandler != nil, privacy: .public)"
+        )
         ingestEvents(decoded)
     }
 
@@ -239,11 +271,25 @@ final class NetworkProtectionManager {
     func ingestEvents(_ decoded: [NetworkBlockEvent]) {
         let sorted = decoded.sorted { $0.timestamp > $1.timestamp }
         blockEvents = sorted
-        guard let findingHandler else { return }
-        let newEvents = sorted.filter { deliveredEventIDs.insert($0.id).inserted }
-        for event in newEvents {
+        guard let findingHandler else {
+            logger.info("event delivery skipped reason=handler-absent count=\(sorted.count, privacy: .public)")
+            return
+        }
+        for event in sorted {
+            guard deliveredEventIDs.insert(event.id).inserted else {
+                logger.info(
+                    "event skipped id=\(event.id.uuidString, privacy: .public) reason=already-delivered"
+                )
+                continue
+            }
             let finding = NetworkFinding(event: event)
-            Task { await findingHandler(finding) }
+            logger.info(
+                "finding built id=\(event.id.uuidString, privacy: .public) reason=\(event.reason, privacy: .public) decision=\(event.decision.rawValue, privacy: .public)"
+            )
+            Task {
+                let outcome = await findingHandler(finding)
+                self.log(outcome: outcome, eventID: event.id)
+            }
         }
     }
 
@@ -256,21 +302,55 @@ final class NetworkProtectionManager {
 
     private func startEventDirectoryWatcher() {
         guard eventDirectorySource == nil,
-              let directory = NetworkProtectionSharedStore.eventsURL()?.deletingLastPathComponent()
+              let directory = eventsURLProvider()?.deletingLastPathComponent()
         else { return }
         let descriptor = open(directory.path, O_EVTONLY)
-        guard descriptor >= 0 else { return }
+        guard descriptor >= 0 else {
+            logger.error("store watcher unavailable reason=open-failed")
+            return
+        }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
             eventMask: [.write, .extend, .rename, .delete],
             queue: .main
         )
         source.setEventHandler { [weak self] in
-            MainActor.assumeIsolated { self?.loadEvents() }
+            MainActor.assumeIsolated {
+                self?.storeDidChange(trigger: "filesystem")
+            }
         }
         source.setCancelHandler { close(descriptor) }
         source.resume()
         eventDirectorySource = source
+    }
+
+    private func storeDidChange(trigger: String) {
+        storeChangeCount += 1
+        logger.info(
+            "store change observed trigger=\(trigger, privacy: .public) count=\(self.storeChangeCount, privacy: .public)"
+        )
+        loadEvents(trigger: trigger)
+    }
+
+    private func log(outcome: IncidentIngestOutcome, eventID: UUID) {
+        switch outcome {
+        case .persisted(let generation):
+            logger.info(
+                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=persisted generation=\(generation, privacy: .public)"
+            )
+        case .coalesced(let generation):
+            logger.info(
+                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=coalesced generation=\(generation, privacy: .public)"
+            )
+        case .suppressedByPolicy(let reason):
+            logger.info(
+                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=suppressed reason=\(reason, privacy: .public)"
+            )
+        case .failed:
+            logger.error(
+                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=failed"
+            )
+        }
     }
 
     private func saveAllowlist(
