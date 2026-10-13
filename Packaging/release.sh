@@ -163,6 +163,26 @@ pkgutil --expand-full "${LOCAL_PACKAGE_PATH}" "${EXPANDED_PACKAGE}"
 codesign --verify --deep --strict --verbose=2 \
   "${EXPANDED_PACKAGE}/Payload/Applications/Nick.app"
 
+# Expansion is part of the real Installer compatibility audit. Verify the
+# installer signature again afterwards so a package that only appears valid
+# before its first parse can never be released.
+POST_EXPANSION_SIGNATURE=$(LC_ALL=C pkgutil --check-signature "${LOCAL_PACKAGE_PATH}" 2>&1) || {
+  print -r -- "${POST_EXPANSION_SIGNATURE}"
+  print -u2 "Installer signature failed after expansion; refusing release."
+  exit 1
+}
+print -r -- "${POST_EXPANSION_SIGNATURE}"
+if print -r -- "${POST_EXPANSION_SIGNATURE}" | grep -Eq \
+  'Status: (invalid signature|no signature)'; then
+  print -u2 "Installer signature is not valid after expansion; refusing release."
+  exit 1
+fi
+if ! print -r -- "${POST_EXPANSION_SIGNATURE}" | grep -q \
+  'Developer ID Installer: ehsan azish (UXGW5V3BY6)'; then
+  print -u2 "Expanded installer is not signed with the expected Developer ID Installer identity."
+  exit 1
+fi
+
 # Only move the completed, audited flat package onto a shared or externally
 # managed destination. Building there can cause copyfile metadata sidecars to
 # be serialized into the package payload itself.
