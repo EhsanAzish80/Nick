@@ -63,4 +63,6 @@ ruby -e '
   .github/workflows/*.yml \
   .github/ISSUE_TEMPLATE/*.yml
 
+./Scripts/test-release-payload-audit.sh
+
 echo "Repository metadata validation passed."

@@ -129,15 +129,30 @@ COPYFILE_DISABLE=1 pkgbuild \
   --sign "${INSTALLER_SIGNING_IDENTITY}" \
   "${LOCAL_PACKAGE_PATH}"
 
+"${SCRIPT_DIR}/audit-package-payload.sh" "${LOCAL_PACKAGE_PATH}"
+
+PACKAGE_SIGNATURE=$(LC_ALL=C pkgutil --check-signature "${LOCAL_PACKAGE_PATH}" 2>&1) || {
+  print -r -- "${PACKAGE_SIGNATURE}"
+  print -u2 "Installer signature check failed; refusing release."
+  exit 1
+}
+print -r -- "${PACKAGE_SIGNATURE}"
+if print -r -- "${PACKAGE_SIGNATURE}" | grep -Eq \
+  'Status: (invalid signature|no signature)'; then
+  print -u2 "Installer signature is not valid; refusing release."
+  exit 1
+fi
+if ! print -r -- "${PACKAGE_SIGNATURE}" | grep -q \
+  'Developer ID Installer: ehsan azish (UXGW5V3BY6)'; then
+  print -u2 "Installer is not signed with the expected Developer ID Installer identity."
+  exit 1
+fi
+
 EXPANDED_PACKAGE="${BUILD_DIR}/ExpandedPackage"
 rm -rf "${EXPANDED_PACKAGE}"
 pkgutil --expand-full "${LOCAL_PACKAGE_PATH}" "${EXPANDED_PACKAGE}"
-APPLEDOUBLE_COUNT=$(find "${EXPANDED_PACKAGE}" -name '._*' -print | wc -l | tr -d ' ')
-print "Installer AppleDouble metadata entries: ${APPLEDOUBLE_COUNT}"
-if (( APPLEDOUBLE_COUNT > 0 )); then
-  print -u2 "Installer payload contains AppleDouble metadata; refusing to notarize it."
-  exit 1
-fi
+codesign --verify --deep --strict --verbose=2 \
+  "${EXPANDED_PACKAGE}/Payload/Applications/Nick.app"
 
 # Only move the completed, audited flat package onto a shared or externally
 # managed destination. Building there can cause copyfile metadata sidecars to
@@ -147,6 +162,13 @@ if [[ "${LOCAL_PACKAGE_PATH}" != "${OUTPUT_PATH}" ]]; then
   COPYFILE_DISABLE=1 ditto --noextattr --noqtn \
     "${LOCAL_PACKAGE_PATH}" "${OUTPUT_PATH}"
 fi
+
+LOCAL_PACKAGE_SHA=$(shasum -a 256 "${LOCAL_PACKAGE_PATH}" | awk '{print $1}')
+OUTPUT_PACKAGE_SHA=$(shasum -a 256 "${OUTPUT_PATH}" | awk '{print $1}')
+[[ "${LOCAL_PACKAGE_SHA}" == "${OUTPUT_PACKAGE_SHA}" ]] || {
+  print -u2 "Release package changed while copying to its output destination."
+  exit 1
+}
 
 if [[ "${NOTARIZE}" == "1" ]]; then
   xcrun notarytool submit "${OUTPUT_PATH}" \
