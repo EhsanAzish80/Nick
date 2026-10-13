@@ -264,8 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "handler attached kind=finding elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
         )
         xpcClient.integrityAcknowledgementHandler = { [weak self] id in
-            guard let self, self.engine.incidentStoreReady else { return }
-            self.engine.resolveAcknowledgedFIMIncident(id)
+            self?.engine.resolveAcknowledgedFIMIncident(id)
         }
         esIngestLogger.info(
             "handler attached kind=integrity-ack elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"

@@ -451,6 +451,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
             payload: try JSONEncoder().encode(event)
         )
         let client = ExtensionXPCClient()
+        client.incidentStoreReadyProvider = { true }
         let store = IncidentStore(persistOnInit: false)
         client.findingHandler = { finding in
             let alert = ThreatAlert(
@@ -829,6 +830,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
             payload: try JSONEncoder().encode(event)
         )
         let client = ExtensionXPCClient()
+        client.incidentStoreReadyProvider = { true }
         var deliveredCount = 0
         client.findingHandler = { _ in
             deliveredCount += 1
@@ -859,6 +861,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
         )
         var journal = [envelope]
         let client = ExtensionXPCClient()
+        client.incidentStoreReadyProvider = { true }
         let incidentStore = IncidentStore(persistOnInit: false)
         var deliveries = 0
         client.findingHandler = { finding in

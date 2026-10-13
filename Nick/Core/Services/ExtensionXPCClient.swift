@@ -150,6 +150,9 @@ public final class ExtensionXPCClient: NSObject {
     private var deferredThreatEvents: [UUID: ESEvent] = [:]
     private var threatEventIDsInFlight: Set<UUID> = []
     private var durablyHandledThreatEventIDs: Set<UUID> = []
+    private var durablyHandledThreatEventOrder: [UUID] = []
+    private var pendingIntegrityAcknowledgementIDs: Set<UUID> = []
+    private let durableThreatDeduplicationLimit = 4_096
     var pendingIncidentWriteWaiterCount: Int { incidentWriteWaiters.count }
     private var activeProtectionAuthorizations: [Data: AuthorizationRef] = [:]
     private var incidentBootstrapCompleted = false
@@ -759,7 +762,7 @@ public final class ExtensionXPCClient: NSObject {
         if durablyHandledThreatEventIDs.contains(event.id) {
             return .suppressedByPolicy("already-durably-handled")
         }
-        guard incidentStoreReadyProvider?() != false else {
+        guard incidentStoreReadyProvider?() == true else {
             deferredThreatEvents[event.id] = event
             Self.logger.info("Holding ES threat until incident store is ready id=\(event.id.uuidString, privacy: .public)")
             return .failed
@@ -782,7 +785,7 @@ public final class ExtensionXPCClient: NSObject {
             }
             failedThreatEventIDs.remove(event.id)
             deferredThreatEvents.removeValue(forKey: event.id)
-            durablyHandledThreatEventIDs.insert(event.id)
+            rememberDurablyHandledThreat(event.id)
             switch outcome {
             case .persisted: return .persisted(generation)
             case .coalesced: return .coalesced(generation)
@@ -792,7 +795,7 @@ public final class ExtensionXPCClient: NSObject {
             if reason == "dismissal" { suppressedByDismissalCount += 1 }
             failedThreatEventIDs.remove(event.id)
             deferredThreatEvents.removeValue(forKey: event.id)
-            durablyHandledThreatEventIDs.insert(event.id)
+            rememberDurablyHandledThreat(event.id)
             return .suppressedByPolicy(reason)
         case .failed:
             failedThreatEventIDs.insert(event.id)
@@ -809,12 +812,40 @@ public final class ExtensionXPCClient: NSObject {
         proxy.acknowledgePersistedThreats(eventIDs: [eventID.uuidString])
     }
 
+    private func rememberDurablyHandledThreat(_ eventID: UUID) {
+        guard durablyHandledThreatEventIDs.insert(eventID).inserted else { return }
+        durablyHandledThreatEventOrder.append(eventID)
+        let overflow = durablyHandledThreatEventOrder.count - durableThreatDeduplicationLimit
+        guard overflow > 0 else { return }
+        for expiredID in durablyHandledThreatEventOrder.prefix(overflow) {
+            durablyHandledThreatEventIDs.remove(expiredID)
+        }
+        durablyHandledThreatEventOrder.removeFirst(overflow)
+    }
+
+    /// Applies a successful FIM acknowledgement only after the authoritative
+    /// incident store exists. Pre-bootstrap IDs are retained for the readiness
+    /// transition instead of disappearing from the app-side incident state.
+    func applyOrDeferIntegrityAcknowledgement(_ id: UUID) {
+        guard incidentStoreReadyProvider?() == true else {
+            pendingIntegrityAcknowledgementIDs.insert(id)
+            return
+        }
+        pendingIntegrityAcknowledgementIDs.remove(id)
+        integrityAcknowledgementHandler?(id)
+    }
+
     /// Opens the ES ingest gate after the root snapshot is installed. In-memory
     /// startup findings are drained first, then the extension journal is
     /// requested so a reconnect is never required for redelivery.
     func incidentStoreDidBecomeReady() {
-        guard incidentStoreReadyProvider?() != false else { return }
+        guard incidentStoreReadyProvider?() == true else { return }
         let pending = deferredThreatEvents.values.sorted { $0.timestamp < $1.timestamp }
+        let pendingIntegrityAcknowledgements = pendingIntegrityAcknowledgementIDs
+        pendingIntegrityAcknowledgementIDs.removeAll()
+        for id in pendingIntegrityAcknowledgements {
+            integrityAcknowledgementHandler?(id)
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             for event in pending where !self.durablyHandledThreatEventIDs.contains(event.id) {
@@ -982,7 +1013,7 @@ public final class ExtensionXPCClient: NSObject {
                 self?.finishProtectionAuthorization(authorization)
                 if accepted {
                     self?.integrityViolations.removeAll { $0.id == id }
-                    self?.integrityAcknowledgementHandler?(id)
+                    self?.applyOrDeferIntegrityAcknowledgement(id)
                 }
                 completion(accepted)
             }

@@ -6,7 +6,6 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     func test_preStoreThreatWaitsThenDeliversAndAcknowledgesExactlyOnce() async throws {
         let client = ExtensionXPCClient()
         var storeReady = false
-        client.incidentStoreReadyProvider = { storeReady }
         var ingestCount = 0
         client.findingHandler = { _ in
             ingestCount += 1
@@ -31,12 +30,14 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         XCTAssertTrue(acknowledged.isEmpty)
         XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
 
-        // A bootstrap that never finishes leaves the journal item untouched.
+        // An unset readiness provider fails closed and leaves the journal item
+        // untouched.
         client.incidentStoreDidBecomeReady()
         await Task.yield()
         XCTAssertEqual(ingestCount, 0)
         XCTAssertTrue(acknowledged.isEmpty)
 
+        client.incidentStoreReadyProvider = { storeReady }
         storeReady = true
         client.incidentStoreDidBecomeReady()
         await fulfillment(of: [acknowledgedOnce], timeout: 2)
@@ -49,6 +50,31 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         XCTAssertEqual(replay, event.id)
         XCTAssertEqual(ingestCount, 1)
         XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
+    }
+
+    @MainActor
+    func test_preStoreFIMAcknowledgementIsAppliedOnceWhenStoreBecomesReady() {
+        let client = ExtensionXPCClient()
+        let id = UUID()
+        var storeReady = false
+        var applied: [UUID] = []
+        client.integrityAcknowledgementHandler = { applied.append($0) }
+
+        client.applyOrDeferIntegrityAcknowledgement(id)
+        client.applyOrDeferIntegrityAcknowledgement(id)
+        client.incidentStoreDidBecomeReady()
+        XCTAssertTrue(applied.isEmpty)
+
+        client.incidentStoreReadyProvider = { storeReady }
+        client.incidentStoreDidBecomeReady()
+        XCTAssertTrue(applied.isEmpty)
+
+        storeReady = true
+        client.incidentStoreDidBecomeReady()
+        XCTAssertEqual(applied, [id])
+
+        client.incidentStoreDidBecomeReady()
+        XCTAssertEqual(applied, [id])
     }
 
     @MainActor
@@ -119,6 +145,7 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     @MainActor
     func test_failedRootWriteRedeliveryUsesRealStoreAndAcksOnlyRetryGeneration() async throws {
         let client = ExtensionXPCClient()
+        client.incidentStoreReadyProvider = { true }
         let store = IncidentStore(persistOnInit: false)
         let snapshot = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [], dismissalTombstones: [], expectedCooldowns: [:]
@@ -160,6 +187,7 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     @MainActor
     func test_suppressedDismissalAcksAndCountsWithoutPersistenceWait() async throws {
         let client = ExtensionXPCClient()
+        client.incidentStoreReadyProvider = { true }
         client.findingHandler = { _ in .suppressedByPolicy("dismissal") }
         client.incidentPersistenceOverride = { _ in XCTFail("suppression must not await a write"); return nil }
         let event = IncidentStorePersistenceTests.tamperEvent(operation: .unlink)
@@ -174,6 +202,7 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     @MainActor
     func test_persistedOutcomeCannotAckFromDifferentGeneration() async throws {
         let client = ExtensionXPCClient()
+        client.incidentStoreReadyProvider = { true }
         client.findingHandler = { _ in .coalesced(7) }
         client.incidentPersistenceOverride = { _ in (8, true) }
         let event = IncidentStorePersistenceTests.tamperEvent(operation: .openWrite)
