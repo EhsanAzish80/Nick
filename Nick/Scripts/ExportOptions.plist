@@ -15,7 +15,11 @@
     <key>provisioningProfiles</key>
     <dict>
         <key>com.ehsanazish.nick</key>
-        <string>Nick Developer ID</string>
+		<string>nickdistribute</string>
+		<key>com.ehsanazish.nick.NickExtension</key>
+		<string>NickExtension</string>
+		<key>com.ehsanazish.nick.NickNetFilter</key>
+		<string>NickNetFilter Developer ID 4.0 Release</string>
     </dict>
 </dict>
 </plist>
