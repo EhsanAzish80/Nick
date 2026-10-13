@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let mainWindowDelegate = MainWindowDelegate()
     private var coordinator: MonitorCoordinator?
     private var endpointExtensionManager: ExtensionManager?
+    private var endpointBootstrapTask: Task<Void, Never>?
     private var updaterController: SPUStandardUpdaterController?
     private var updateBadgeVisible = false
     private let updateLogger = Logger(
@@ -47,6 +48,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         subsystem: "com.ehsanazish.nick",
         category: "IncidentStore"
     )
+    private let networkIngestLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "NetworkIngest"
+    )
+    private let esIngestLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "ESIngest"
+    )
+    private let launchUptime = ProcessInfo.processInfo.systemUptime
     private var receivedUpdateCheckResult = false
     /// Sparkle must be allowed to terminate Nick after the user accepts an
     /// update, even when Nick's main window is hidden. Otherwise the installer
@@ -124,30 +134,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             userDriverDelegate: self
         )
         setupStatusItem()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let endpointManager = ExtensionManager()
-            endpointExtensionManager = endpointManager
+        let endpointManager = ExtensionManager()
+        endpointExtensionManager = endpointManager
+        endpointBootstrapTask = beginEndpointBootstrap {
             await endpointManager.ensureBundledVersionIsActive()
-            xpcClient.findingHandler = { [weak self] finding in
-                guard let self else { return .failed }
-                return await self.engine.ingestLiveFinding(
-                    finding.signal,
-                    score: finding.score,
-                    recommendedAction: finding.recommendedAction
-                )
-            }
-            xpcClient.integrityAcknowledgementHandler = { [weak self] id in
-                self?.engine.resolveAcknowledgedFIMIncident(id)
-            }
-            networkProtection.findingHandler = { [weak self] finding in
-                guard let self else { return .failed }
-                return await self.engine.ingestLiveFinding(
-                    finding.signal,
-                    score: finding.score,
-                    recommendedAction: finding.recommendedAction
-                )
-            }
+        }
+        installApplicationLifecycleObserver()
+    }
+
+    /// Installs every live-finding consumer before extension activation starts.
+    /// Activation can wait indefinitely for macOS approval or replacement; it
+    /// must never create an interval where already-running providers have no
+    /// incident consumer.
+    @discardableResult
+    func beginEndpointBootstrap(
+        ensureActive: @escaping @MainActor () async -> Void
+    ) -> Task<Void, Never> {
+        wireLiveFindingHandlers()
+        return Task { @MainActor [weak self] in
+            guard let self else { return }
+            await ensureActive()
+            guard !Task.isCancelled else { return }
             let legacyPayload = engine.prepareLegacyIncidentMigration()
             xpcClient.connect(legacyIncidentPayload: legacyPayload) { [weak self] record, _ in
                 guard let self else { return }
@@ -213,6 +220,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await self.networkProtection.refresh()
             }
         }
+    }
+
+    private func wireLiveFindingHandlers() {
+        networkProtection.findingHandler = { [weak self] finding in
+            guard let self else { return .failed }
+            return await self.engine.ingestLiveFinding(
+                finding.signal,
+                score: finding.score,
+                recommendedAction: finding.recommendedAction
+            )
+        }
+        networkIngestLogger.info(
+            "handler attached elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
+        )
+        xpcClient.findingHandler = { [weak self] finding in
+            guard let self else { return .failed }
+            return await self.engine.ingestLiveFinding(
+                finding.signal,
+                score: finding.score,
+                recommendedAction: finding.recommendedAction
+            )
+        }
+        esIngestLogger.info(
+            "handler attached kind=finding elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
+        )
+        xpcClient.integrityAcknowledgementHandler = { [weak self] id in
+            self?.engine.resolveAcknowledgedFIMIncident(id)
+        }
+        esIngestLogger.info(
+            "handler attached kind=integrity-ack elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
+        )
+    }
+
+    private var launchElapsedMilliseconds: Int {
+        max(0, Int((ProcessInfo.processInfo.systemUptime - launchUptime) * 1_000))
+    }
+
+    private func installApplicationLifecycleObserver() {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(applicationWillBecomeActive),

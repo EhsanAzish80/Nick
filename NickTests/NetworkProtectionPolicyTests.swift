@@ -1068,6 +1068,66 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         )
     }
 
+    func test_stalledEndpointActivationDoesNotGateNetworkOrESIncidentHandlers() async throws {
+        let delegate = AppDelegate()
+        let activationStarted = expectation(description: "endpoint activation entered")
+        let bootstrap = delegate.beginEndpointBootstrap {
+            activationStarted.fulfill()
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+        }
+        defer { bootstrap.cancel() }
+        await fulfillment(of: [activationStarted], timeout: 2)
+
+        let networkEvent = NetworkBlockEvent(
+            id: UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!,
+            timestamp: Date(timeIntervalSince1970: 100_000),
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle,
+            port: 53
+        )
+        delegate.networkProtection.ingestEvents([networkEvent])
+
+        let esEvent = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/open",
+            pid: 42,
+            parentPid: 1,
+            filePath: "/private/tmp/stalled-activation-eicar.com",
+            decision: .deny,
+            threat: .init(
+                sha256: "stalled-activation",
+                threatName: "Stalled Activation Test Threat",
+                threatFamily: "test",
+                isCodeSigned: true
+            )
+        )
+        let esFinding = try XCTUnwrap(ExtensionFinding(event: esEvent))
+        let esOutcome = await delegate.xpcClient.findingHandler?(esFinding)
+        XCTAssertNotNil(esOutcome)
+
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline,
+              !delegate.engine.incidentStore.incidents.contains(where: {
+                  $0.alert.contributingSignals.contains { $0.id == networkEvent.id }
+              }) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let signalIDs = Set(
+            delegate.engine.incidentStore.incidents
+                .flatMap(\.alert.contributingSignals)
+                .map(\.id)
+        )
+        XCTAssertTrue(signalIDs.contains(networkEvent.id))
+        XCTAssertTrue(signalIDs.contains(esEvent.id))
+        XCTAssertNotNil(delegate.xpcClient.integrityAcknowledgementHandler)
+    }
+
     func test_exactKnownThreatUsesDedicatedTitleHonestWordingAndCoalescedNotification() {
         var clock = Date(timeIntervalSince1970: 50_000)
         let store = IncidentStore(persistOnInit: false, now: { clock })
