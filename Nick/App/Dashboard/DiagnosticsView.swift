@@ -40,6 +40,8 @@ struct DiagnosticsView: View {
                     row("Incidents evicted by retention", String(engine.incidentStore.evictedIncidentCount))
                     row("Suppressed by dismissal", String(xpcClient.suppressedByDismissalCount))
                     row("Ack without persistence", String(xpcClient.ackWithoutPersistenceCount))
+                    row("AUTH response p50", healthMilliseconds("authResponseP50Milliseconds"))
+                    row("AUTH response p99", healthMilliseconds("authResponseP99Milliseconds"))
                     row("AUTH deadline misses", healthNumber("deadlineMissCount"))
                     row("Last AUTH deadline miss", healthDate("lastDeadlineMissAt")?.formatted(date: .abbreviated, time: .standard) ?? "None reported")
                     let rates = xpcClient.extensionHealth?["eventsPerSecond"] as? [String: Double] ?? [:]
@@ -111,6 +113,11 @@ struct DiagnosticsView: View {
     private func healthNumber(_ key: String) -> String {
         if let value = xpcClient.extensionHealth?[key] as? NSNumber { return value.stringValue }
         return "Unavailable"
+    }
+
+    private func healthMilliseconds(_ key: String) -> String {
+        guard let value = xpcClient.extensionHealth?[key] as? NSNumber else { return "Unavailable" }
+        return String(format: "%.2f ms", value.doubleValue)
     }
 
     private func healthDate(_ key: String) -> Date? {

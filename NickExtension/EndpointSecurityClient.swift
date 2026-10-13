@@ -115,6 +115,7 @@ final class EndpointSecurityClient {
         guard let client else { return }
         guard message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return }
 
+        Self.healthMetrics.recordAuthResponse(messageMachTime: message.pointee.mach_time)
         let missedDeadline = mach_absolute_time() >= message.pointee.deadline
         if missedDeadline {
             Self.healthMetrics.recordDeadlineMiss()
@@ -226,6 +227,7 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         var eventCounts: [String: UInt64] = [:]
         var deadlineMisses: UInt64 = 0
         var lastDeadlineMissAt: Date?
+        var authResponseLatenciesMilliseconds: [Double] = []
     }
     private let lock = NSLock()
     private var state = State()
@@ -241,16 +243,52 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         }
     }
 
+    func recordAuthResponse(messageMachTime: UInt64, nowMachTime: UInt64 = mach_absolute_time()) {
+        guard nowMachTime >= messageMachTime else { return }
+        var timebase = mach_timebase_info_data_t()
+        guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom != 0 else { return }
+        let elapsed = nowMachTime - messageMachTime
+        let nanoseconds = Double(elapsed) * Double(timebase.numer) / Double(timebase.denom)
+        recordAuthResponseLatency(milliseconds: nanoseconds / 1_000_000)
+    }
+
+    func recordAuthResponseLatency(milliseconds: Double) {
+        guard milliseconds.isFinite, milliseconds >= 0 else { return }
+        lock.withLock {
+            state.authResponseLatenciesMilliseconds.append(milliseconds)
+            if state.authResponseLatenciesMilliseconds.count > 4096 {
+                state.authResponseLatenciesMilliseconds.removeFirst(
+                    state.authResponseLatenciesMilliseconds.count - 4096
+                )
+            }
+        }
+    }
+
     func snapshot() -> (
         eventsPerSecond: [String: Double],
         deadlineMisses: UInt64,
-        lastDeadlineMissAt: Date?
+        lastDeadlineMissAt: Date?,
+        authResponseP50Milliseconds: Double?,
+        authResponseP99Milliseconds: Double?
     ) {
         lock.withLock {
             let elapsed = max(Date().timeIntervalSince(state.startedAt), 1)
             let rates = state.eventCounts.mapValues { Double($0) / elapsed }
-            return (rates, state.deadlineMisses, state.lastDeadlineMissAt)
+            let sorted = state.authResponseLatenciesMilliseconds.sorted()
+            return (
+                rates,
+                state.deadlineMisses,
+                state.lastDeadlineMissAt,
+                Self.percentile(0.50, in: sorted),
+                Self.percentile(0.99, in: sorted)
+            )
         }
+    }
+
+    private static func percentile(_ percentile: Double, in sortedValues: [Double]) -> Double? {
+        guard !sortedValues.isEmpty else { return nil }
+        let index = Int(ceil(percentile * Double(sortedValues.count))) - 1
+        return sortedValues[max(0, min(index, sortedValues.count - 1))]
     }
 
     private static func name(_ type: es_event_type_t) -> String {
