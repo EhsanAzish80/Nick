@@ -22,7 +22,12 @@ final class NetworkProtectionManager {
     private(set) var temporaryAllowedDomains: [String: Date] = [:]
     private(set) var temporaryAllowedAppIdentifiers: [String: Date] = [:]
     private(set) var blockEvents: [NetworkBlockEvent] = []
-    var findingHandler: ((NetworkFinding) async -> Void)?
+    var findingHandler: ((NetworkFinding) async -> Void)? {
+        didSet {
+            guard findingHandler != nil else { return }
+            ingestEvents(blockEvents)
+        }
+    }
     private var observationToken: NSObjectProtocol?
     private var eventDirectorySource: DispatchSourceFileSystemObject?
     private var deliveredEventIDs: Set<UUID> = []
@@ -215,16 +220,28 @@ final class NetworkProtectionManager {
     func loadEvents() {
         guard let url = NetworkProtectionSharedStore.eventsURL(),
               let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([NetworkBlockEvent].self, from: data)
+              let decoded = Self.decodeEvents(data)
         else {
             blockEvents = []
             return
         }
+        ingestEvents(decoded)
+    }
+
+    static func decodeEvents(_ data: Data) -> [NetworkBlockEvent]? {
+        try? JSONDecoder().decode([NetworkBlockEvent].self, from: data)
+    }
+
+    /// The app-side entry point for the filter's shared-store payload. Event
+    /// identifiers are claimed only after a consumer is installed; otherwise
+    /// an event arriving during app startup could be marked delivered and then
+    /// permanently skipped when the live-finding handler is attached.
+    func ingestEvents(_ decoded: [NetworkBlockEvent]) {
         let sorted = decoded.sorted { $0.timestamp > $1.timestamp }
-        let newEvents = sorted.filter { deliveredEventIDs.insert($0.id).inserted }
         blockEvents = sorted
+        guard let findingHandler else { return }
+        let newEvents = sorted.filter { deliveredEventIDs.insert($0.id).inserted }
         for event in newEvents {
-            guard let findingHandler else { continue }
             let finding = NetworkFinding(event: event)
             Task { await findingHandler(finding) }
         }
@@ -346,6 +363,7 @@ struct NetworkFinding: Sendable {
             context: ThreatSignalContext(metadata: [
                 "reason": "network_extension_\(event.reason)",
                 "rule": "network_\(event.reason)",
+                "ruleTier": reason == .knownThreat ? "protected" : "review",
                 "destination": event.host,
                 "destinationClass": destinationClass,
                 "appIdentifier": event.appIdentifier ?? "unknown",

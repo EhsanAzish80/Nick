@@ -1086,6 +1086,93 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 2)
     }
 
+    func test_filterPayloadUsesLiveAppEntryPointAndStagesOneKnownThreatNotification() async throws {
+        let now = Date(timeIntervalSince1970: 70_000)
+        let firstEvent = NetworkBlockEvent(
+            id: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
+            timestamp: now,
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle,
+            port: 53
+        )
+        let repeatedEvent = NetworkBlockEvent(
+            id: UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!,
+            timestamp: now.addingTimeInterval(599),
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle,
+            port: 53
+        )
+        let payload = try JSONEncoder().encode([firstEvent, repeatedEvent])
+        let decoded = try XCTUnwrap(NetworkProtectionManager.decodeEvents(payload))
+        let manager = NetworkProtectionManager()
+        let store = IncidentStore(persistOnInit: false, now: { now })
+        let delivered = expectation(description: "filter payload reached incident policy")
+        delivered.expectedFulfillmentCount = 2
+        var notificationCandidates: [ThreatAlert] = []
+
+        manager.findingHandler = { finding in
+            let alert = ThreatAlert(
+                id: finding.signal.id,
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+            notificationCandidates.append(contentsOf: store.ingest([alert]).newlyActionable)
+            delivered.fulfill()
+        }
+        manager.ingestEvents(decoded.sorted { $0.timestamp < $1.timestamp })
+        await fulfillment(of: [delivered], timeout: 2)
+
+        let incident = try XCTUnwrap(store.incidents.first)
+        let signal = try XCTUnwrap(incident.alert.contributingSignals.first)
+        let copy = UserFacingAlertBuilder.shared.build(from: incident.alert)
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(incident.alert.occurrenceCount, 2)
+        XCTAssertEqual(notificationCandidates.count, 1)
+        XCTAssertEqual(copy.headline, "Known dangerous destination")
+        XCTAssertEqual(signal.metadata["reason"], "network_extension_knownThreat")
+        XCTAssertEqual(signal.metadata["rule"], "network_knownThreat")
+        XCTAssertEqual(signal.metadata["ruleTier"], "protected")
+    }
+
+    func test_eventWrittenBeforeHandlerIsDeliveredExactlyOnceAfterAttachment() async {
+        let event = NetworkBlockEvent(
+            host: "nick-scam-test.invalid",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle,
+            port: 53
+        )
+        let manager = NetworkProtectionManager()
+        manager.ingestEvents([event])
+        let delivered = expectation(description: "startup event delivered after handler attachment")
+        delivered.assertForOverFulfill = true
+        var deliveryCount = 0
+        manager.findingHandler = { finding in
+            XCTAssertEqual(finding.signal.id, event.id)
+            deliveryCount += 1
+            delivered.fulfill()
+        }
+        await fulfillment(of: [delivered], timeout: 2)
+
+        manager.ingestEvents([event])
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(deliveryCount, 1)
+    }
+
     func test_heuristicScamGuardianIsReviewTierAndSilent() {
         let now = Date(timeIntervalSince1970: 60_000)
         let candidate = alert(reason: .scamGuardian, timestamp: now)
@@ -1097,5 +1184,16 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         XCTAssertEqual(store.incidents.count, 1)
         XCTAssertTrue(candidate.description.contains("tried to connect"))
         XCTAssertFalse(candidate.description.contains("connected to"))
+    }
+
+    func test_knownThreatAndHeuristicUseDifferentIncidentKeys() {
+        let now = Date(timeIntervalSince1970: 80_000)
+        let known = alert(reason: .knownThreat, timestamp: now)
+        let heuristic = alert(reason: .scamGuardian, timestamp: now)
+
+        XCTAssertNotEqual(
+            IncidentStore.incidentKey(for: known),
+            IncidentStore.incidentKey(for: heuristic)
+        )
     }
 }
