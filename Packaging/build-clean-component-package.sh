@@ -23,6 +23,7 @@ OUTPUT_PATH=${5:A}
 
 WORK_DIR=$(mktemp -d /private/tmp/NickCleanPackage.XXXXXX)
 trap 'rm -rf "${WORK_DIR}"' EXIT
+SCRIPT_DIR=${0:A:h}
 
 # Let pkgbuild produce canonical PackageInfo metadata, but do not retain the
 # payload it creates: current macOS can serialize protected provenance xattrs
@@ -37,18 +38,34 @@ pkgbuild \
 
 (
   cd "${WORK_DIR}"
-  xar -xf metadata.pkg PackageInfo
+  xar -xf metadata.pkg PackageInfo Payload
 )
+
+# Preserve pkgbuild's Installer-compatible portable-ASCII cpio records while
+# removing only AppleDouble records. Re-creating the archive with a generic
+# tar/cpio writer can produce a stream pkgutil and Installer reject.
+gzip -dc "${WORK_DIR}/Payload" > "${WORK_DIR}/Payload.raw"
+"${SCRIPT_DIR}/filter-appledouble-cpio.pl" \
+  "${WORK_DIR}/Payload.raw" "${WORK_DIR}/Payload.clean.raw"
+gzip -9 < "${WORK_DIR}/Payload.clean.raw" > "${WORK_DIR}/Payload"
+
+# pkgbuild counted its synthesized AppleDouble records in PackageInfo. Keep the
+# declared payload count consistent with the filtered archive or Installer will
+# reject an otherwise valid odc stream as a malformed cpio payload.
+PAYLOAD_FILE_COUNT=$(cpio -it < "${WORK_DIR}/Payload.clean.raw" 2>/dev/null \
+  | wc -l | tr -d ' ')
+PAYLOAD_INSTALL_KB=$(du -sk "${PAYLOAD_ROOT}" | awk '{print $1}')
+perl -0pi -e \
+  's{<payload numberOfFiles="[0-9]+" installKBytes="[0-9]+"/>}{<payload numberOfFiles="'"${PAYLOAD_FILE_COUNT}"'" installKBytes="'"${PAYLOAD_INSTALL_KB}"'"/>}' \
+  "${WORK_DIR}/PackageInfo"
 
 mkbom "${PAYLOAD_ROOT}" "${WORK_DIR}/Bom"
 (
-  cd "${PAYLOAD_ROOT}"
-  bsdtar --no-xattrs --format cpio -cf - . \
-    | gzip -9 > "${WORK_DIR}/Payload"
-)
-(
   cd "${WORK_DIR}"
-  xar -cf unsigned-clean.pkg Bom PackageInfo Payload
+  # Installer expects the already-gzipped Payload member to remain uncompressed
+  # in the outer xar container, matching pkgbuild's package layout.
+  xar -cf unsigned-clean.pkg --no-compress '^Payload$' \
+    Bom PackageInfo Payload
 )
 
 mkdir -p "${OUTPUT_PATH:h}"

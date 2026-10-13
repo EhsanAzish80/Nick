@@ -77,6 +77,13 @@ xattr_output=$("${AUDITOR}" "${TEST_DIR}/xattr-staged.pkg")
   print -u2 "The xattr-bearing staging fixture produced AppleDouble entries."
   exit 1
 }
+pkgutil --expand-full \
+  "${TEST_DIR}/xattr-staged.pkg" \
+  "${TEST_DIR}/xattr-expanded"
+[[ -d "${TEST_DIR}/xattr-expanded/Payload/Applications/Nick.app" ]] || {
+  print -u2 "The clean dry-run package did not expand to the expected payload."
+  exit 1
+}
 
 clean_output=$("${AUDITOR}" "${TEST_DIR}/clean.pkg")
 [[ "${clean_output}" == *"AppleDouble entries: 0"* ]] || {
