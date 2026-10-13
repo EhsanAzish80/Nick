@@ -141,8 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.engine.resolveAcknowledgedFIMIncident(id)
             }
             networkProtection.findingHandler = { [weak self] finding in
-                guard let self else { return }
-                _ = await self.engine.ingestLiveFinding(
+                guard let self else { return .failed }
+                return await self.engine.ingestLiveFinding(
                     finding.signal,
                     score: finding.score,
                     recommendedAction: finding.recommendedAction

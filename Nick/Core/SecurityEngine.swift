@@ -422,6 +422,10 @@ final class SecurityEngine {
     let activityLog = ActivityLog()
 
     private let logger = Logger(subsystem: "com.ehsanazish.nick", category: "SecurityEngine")
+    private let networkIngestLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "NetworkIngest"
+    )
 
     /// Stored handle for the running scan. Kept on the engine so the task outlives
     /// any SwiftUI view scope — panel hide/show cannot cancel it.
@@ -757,8 +761,21 @@ final class SecurityEngine {
         switch outcome {
         case .persisted(let generation), .coalesced(let generation):
             durableIncidentNotifications.stage(result.newlyActionable, for: generation)
-        case .suppressedByPolicy, .failed:
-            break
+            if result.newlyActionable.isEmpty {
+                networkIngestLogger.info(
+                    "notification skipped reason=no-actionable-candidate generation=\(generation, privacy: .public)"
+                )
+            } else {
+                networkIngestLogger.info(
+                    "notification staged count=\(result.newlyActionable.count, privacy: .public) generation=\(generation, privacy: .public)"
+                )
+            }
+        case .suppressedByPolicy(let reason):
+            networkIngestLogger.info(
+                "notification skipped reason=policy-\(reason, privacy: .public)"
+            )
+        case .failed:
+            networkIngestLogger.error("notification skipped reason=ingest-failed")
         }
         return outcome
     }
