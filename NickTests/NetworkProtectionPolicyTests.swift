@@ -1147,7 +1147,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         XCTAssertEqual(signal.metadata["ruleTier"], "protected")
     }
 
-    func test_eventIsNotClaimedBeforeLiveFindingHandlerIsAttached() async {
+    func test_eventWrittenBeforeHandlerIsDeliveredExactlyOnceAfterAttachment() async {
         let event = NetworkBlockEvent(
             host: "nick-scam-test.invalid",
             appIdentifier: "com.apple.curl",
@@ -1159,12 +1159,18 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         let manager = NetworkProtectionManager()
         manager.ingestEvents([event])
         let delivered = expectation(description: "startup event delivered after handler attachment")
+        delivered.assertForOverFulfill = true
+        var deliveryCount = 0
         manager.findingHandler = { finding in
             XCTAssertEqual(finding.signal.id, event.id)
+            deliveryCount += 1
             delivered.fulfill()
         }
-        manager.ingestEvents([event])
         await fulfillment(of: [delivered], timeout: 2)
+
+        manager.ingestEvents([event])
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(deliveryCount, 1)
     }
 
     func test_heuristicScamGuardianIsReviewTierAndSilent() {

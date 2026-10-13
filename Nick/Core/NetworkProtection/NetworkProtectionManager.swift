@@ -22,7 +22,12 @@ final class NetworkProtectionManager {
     private(set) var temporaryAllowedDomains: [String: Date] = [:]
     private(set) var temporaryAllowedAppIdentifiers: [String: Date] = [:]
     private(set) var blockEvents: [NetworkBlockEvent] = []
-    var findingHandler: ((NetworkFinding) async -> Void)?
+    var findingHandler: ((NetworkFinding) async -> Void)? {
+        didSet {
+            guard findingHandler != nil else { return }
+            ingestEvents(blockEvents)
+        }
+    }
     private var observationToken: NSObjectProtocol?
     private var eventDirectorySource: DispatchSourceFileSystemObject?
     private var deliveredEventIDs: Set<UUID> = []
