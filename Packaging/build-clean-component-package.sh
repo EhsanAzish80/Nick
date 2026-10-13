@@ -68,6 +68,15 @@ mkbom "${PAYLOAD_ROOT}" "${WORK_DIR}/Bom"
     Bom PackageInfo Payload
 )
 
+# Force Installer to parse the completed unsigned package before productsign.
+# On current macOS, signing a package whose payload has not yet been expanded
+# can initially verify but become invalid after its first full expansion.
+# Preflighting the exact unsigned bytes makes that parse happen before the
+# signature is created, so later release audits cannot mutate signature state.
+pkgutil --expand-full \
+  "${WORK_DIR}/unsigned-clean.pkg" \
+  "${WORK_DIR}/ExpandedUnsigned"
+
 mkdir -p "${OUTPUT_PATH:h}"
 if [[ -n "${INSTALLER_IDENTITY}" ]]; then
   productsign \
