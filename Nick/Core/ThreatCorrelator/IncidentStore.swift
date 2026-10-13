@@ -554,9 +554,20 @@ final class IncidentStore {
                 }
                 let escalated = candidate.severity > prior.alert.severity
                 let incomingEvidence = candidate.contributingSignals.map(Evidence.init(signal:))
-                incidents[index].alert = prior.alert.mergingOccurrence(candidate)
+                let isCaptureInactive = candidate.contributingSignals.allSatisfy {
+                    $0.source == .avCapture
+                        && $0.metadata["reason"] == "capture_device_inactive"
+                }
+                incidents[index].alert = isCaptureInactive
+                    ? prior.alert.mergingLifecycleTransition(candidate)
+                    : prior.alert.mergingOccurrence(candidate)
                 incidents[index].evidence = incomingEvidence
                 recordAutomaticRemediationAction(from: candidate, at: index)
+                if isCaptureInactive {
+                    incidents[index].state = .resolved
+                    incidents[index].isVisible = true
+                    recordAction(.resolved, actor: .automatic, at: index)
+                }
                 if candidate.contributingSignals.contains(where: { $0.metadata["remediationStatus"] == "file-gone" }) {
                     incidents[index].state = .resolved
                     incidents[index].isVisible = true
@@ -835,6 +846,15 @@ final class IncidentStore {
     /// Cross-source identity intentionally omits monitor source. Two monitors
     /// describing the same rule and subject update one incident.
     static func incidentKey(for alert: ThreatAlert) -> String {
+        let captureSignals = alert.contributingSignals.filter { $0.source == .avCapture }
+        if !captureSignals.isEmpty, captureSignals.count == alert.contributingSignals.count {
+            let subjects = Set(captureSignals.map {
+                let media = ($0.metadata["mediaType"] ?? "capture").lowercased()
+                let device = normalize($0.metadata["deviceName"] ?? "device")
+                return "capture-device|media:\(media)|device:\(device)"
+            }).sorted()
+            return subjects.joined(separator: "||")
+        }
         let subjects = Set(alert.contributingSignals.map { signal -> String in
             let rule = EvidenceRulePolicy.ruleID(for: signal).lowercased()
             if signal.metadata["reason"] == "endpoint_tamper_observed",
@@ -867,6 +887,8 @@ final class IncidentStore {
     static func requiresVisibleNotification(_ alert: ThreatAlert) -> Bool {
         alert.contributingSignals.contains {
             $0.metadata["rule"] == "nick_documented_uninstall"
+                || ($0.source == .avCapture
+                    && $0.metadata["reason"] == "capture_device_active")
         }
     }
 

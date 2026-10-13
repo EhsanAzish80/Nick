@@ -146,9 +146,38 @@ final class UserFacingAlertBuilder: Sendable {
         if hasCapture {
             let mediaType = signals.compactMap { $0.metadata["mediaType"] }.first ?? "camera or microphone"
             let device = signals.compactMap { $0.metadata["deviceName"] }.first ?? mediaType
+            let isInactive = signals.allSatisfy {
+                $0.metadata["reason"] == "capture_device_inactive"
+            }
             let isSimulatorActivity = signals.contains(where: isSimulatorCapture)
             let hasAuthoritativeAttribution = signals.allSatisfy {
                 $0.metadata["attributionConfidence"] == "authoritative"
+            }
+            let hasContextualAttribution = signals.contains {
+                $0.metadata["attributionConfidence"] == "contextual"
+            }
+
+            if isInactive {
+                return AlertPattern(
+                    headline: "\(device) became inactive",
+                    explanation: "Nick observed that the \(mediaType) stopped streaming.",
+                    assessment: "No longer active",
+                    recommendedAction: "No action is needed.",
+                    severity: .safe,
+                    actions: [.showDetails, .dismiss]
+                )
+            }
+
+            if hasContextualAttribution {
+                let foregroundApp = displayProcess ?? "another app"
+                return AlertPattern(
+                    headline: "\(device) became active while \(foregroundApp) was frontmost",
+                    explanation: "Nick observed \(mediaType) activity while \(foregroundApp) was the foreground app. This is useful context, but it is not proof that \(foregroundApp) owned the capture session.",
+                    assessment: "Informational activity",
+                    recommendedAction: "If this matches what you were doing, no action is needed. If it is unexpected, check the macOS privacy indicator and review \(mediaType) permissions in System Settings → Privacy & Security.",
+                    severity: .safe,
+                    actions: [.showDetails, .dismiss]
+                )
             }
 
             if !hasAuthoritativeAttribution {

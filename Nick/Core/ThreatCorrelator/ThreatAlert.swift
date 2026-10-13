@@ -198,6 +198,30 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         )
     }
 
+    /// Records a lifecycle transition (for example capture active -> inactive)
+    /// while retaining the incident identity and historical risk peak. Unlike a
+    /// normal coalesced occurrence, the newest content is always displayed: an
+    /// inactive device must not leave an "active" headline behind merely because
+    /// the activation carried a higher severity.
+    func mergingLifecycleTransition(_ newer: ThreatAlert) -> ThreatAlert {
+        ThreatAlert(
+            id: id,
+            score: max(score, newer.score),
+            content: AlertContent(
+                title: newer.title,
+                description: newer.description,
+                severity: newer.severity,
+                recommendedAction: newer.recommendedAction,
+                explanation: newer.explanation ?? explanation
+            ),
+            contributingSignals: newer.contributingSignals,
+            timestamp: firstSeen,
+            firstSeen: min(firstSeen, newer.firstSeen),
+            lastSeen: max(lastSeen, newer.lastSeen),
+            occurrenceCount: occurrenceCount + max(1, newer.occurrenceCount)
+        )
+    }
+
     func withOccurrenceCount(_ count: Int) -> ThreatAlert {
         ThreatAlert(
             id: id,

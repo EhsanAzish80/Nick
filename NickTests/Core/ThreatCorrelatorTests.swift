@@ -218,6 +218,37 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(second.visibleAlerts.count, first.visibleAlerts.count)
     }
 
+    func test_captureActivationNotifiesAndInactiveTransitionResolvesSameIncident() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let active = makeCaptureAlert(
+            reason: "capture_device_active",
+            title: "Camera or microphone activity observed",
+            description: "HD Web Camera became active.",
+            severity: .info
+        )
+
+        let activation = store.ingest([active])
+        XCTAssertEqual(activation.newlyActionable.count, 1)
+        let originalID = try XCTUnwrap(store.incidents.first?.alert.id)
+        XCTAssertEqual(store.incidents.first?.state, .new)
+
+        let inactive = makeCaptureAlert(
+            reason: "capture_device_inactive",
+            title: "Camera or microphone became inactive",
+            description: "HD Web Camera stopped streaming.",
+            severity: .info
+        )
+        let deactivation = store.ingest([inactive])
+
+        XCTAssertTrue(deactivation.newlyActionable.isEmpty)
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(store.incidents.first?.alert.id, originalID)
+        XCTAssertEqual(store.incidents.first?.state, .resolved)
+        XCTAssertEqual(store.incidents.first?.alert.title, "Camera or microphone became inactive")
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 2)
+        XCTAssertEqual(store.incidents.first?.alert.contributingSignals.first?.metadata["reason"], "capture_device_inactive")
+    }
+
     func test_simultaneousFullAndQuickIngest_emitOneAlert() async {
         let sharedSignal = makeSignal(
             source: .network,
@@ -1477,6 +1508,37 @@ final class ThreatCorrelatorTests: XCTestCase {
             )
         )
         return makeAlert(signal: signal, severity: .high)
+    }
+
+    private func makeCaptureAlert(
+        reason: String,
+        title: String,
+        description: String,
+        severity: SignalSeverity
+    ) -> ThreatAlert {
+        let signal = ThreatSignal(
+            source: .avCapture,
+            severity: severity,
+            title: title,
+            description: description,
+            context: ThreatSignalContext(metadata: [
+                "reason": reason,
+                "mediaType": "camera",
+                "deviceName": "HD Web Camera",
+                "attributionConfidence": "contextual",
+                "process": "Photo Booth"
+            ])
+        )
+        return ThreatAlert(
+            score: severity == .info ? 0.15 : 0.55,
+            content: AlertContent(
+                title: title,
+                description: description,
+                severity: severity,
+                recommendedAction: severity == .info ? "No action is needed." : "Review"
+            ),
+            contributingSignals: [signal]
+        )
     }
 
     private func passthroughRule() -> CorrelationRule {

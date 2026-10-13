@@ -157,6 +157,74 @@ final class AVCaptureMonitorTests: XCTestCase {
         XCTAssertTrue(signal.description.contains("reliable app ownership"))
     }
 
+    func test_makeCaptureSignal_contextualProcess_namesForegroundAppWithoutClaimingOwnership() async {
+        let process = DetectedCaptureProcess(
+            pid: 222,
+            name: "Photo Booth",
+            path: "/System/Applications/Photo Booth.app/Contents/MacOS/Photo Booth",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM"),
+            confidence: "contextual"
+        )
+        let signal = monitor.makeCaptureSignal(
+            mediaType: "camera", deviceName: "HD Web Camera", process: process
+        )
+
+        XCTAssertEqual(signal.severity, .info)
+        XCTAssertEqual(signal.metadata["attributionConfidence"], "contextual")
+        XCTAssertTrue(signal.description.contains("Photo Booth was the foreground app"))
+        XCTAssertTrue(signal.description.contains("not proof"))
+        XCTAssertFalse(signal.description.contains("attributed the session"))
+    }
+
+    func test_cameraTransition_emitsOneActiveAndOneInactiveSignal() async {
+        let process = DetectedCaptureProcess(
+            pid: 222, name: "Photo Booth",
+            path: "/System/Applications/Photo Booth.app/Contents/MacOS/Photo Booth",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM"), confidence: "contextual"
+        )
+
+        monitor.processCameraState(
+            deviceID: 42, running: true, deviceName: "HD Web Camera", detectedProcess: process
+        )
+        monitor.processCameraState(
+            deviceID: 42, running: true, deviceName: "HD Web Camera", detectedProcess: process
+        )
+        monitor.processCameraState(
+            deviceID: 42, running: false, deviceName: "HD Web Camera", detectedProcess: nil
+        )
+        monitor.processCameraState(
+            deviceID: 42, running: false, deviceName: "HD Web Camera", detectedProcess: nil
+        )
+
+        let signals = await monitor.latestSignals()
+        XCTAssertEqual(signals.count, 2)
+        XCTAssertEqual(signals.map { $0.metadata["reason"] }, [
+            "capture_device_active", "capture_device_inactive"
+        ])
+        XCTAssertEqual(signals.last?.metadata["process"], "Photo Booth")
+        XCTAssertTrue(signals.last?.description.contains("stopped streaming") == true)
+    }
+
+    func test_microphoneTransition_emitsOneActiveAndOneInactiveSignal() async {
+        let process = DetectedCaptureProcess(
+            pid: 333, name: "Voice Memos",
+            path: "/System/Applications/VoiceMemos.app/Contents/MacOS/VoiceMemos",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM"), confidence: "authoritative"
+        )
+
+        monitor.processMicrophoneState(
+            deviceID: 77, running: true, deviceName: "Mic-HD Web Camera", detectedProcess: process
+        )
+        monitor.processMicrophoneState(
+            deviceID: 77, running: false, deviceName: "Mic-HD Web Camera", detectedProcess: nil
+        )
+
+        let signals = await monitor.latestSignals()
+        XCTAssertEqual(signals.count, 2)
+        XCTAssertEqual(signals.first?.metadata["process"], "Voice Memos")
+        XCTAssertEqual(signals.last?.metadata["reason"], "capture_device_inactive")
+    }
+
     // MARK: - latestSignals drains buffer
 
     func test_latestSignals_freshMonitor_returnsEmpty() async {
@@ -237,6 +305,28 @@ final class AVCaptureMonitorTests: XCTestCase {
         )
         let alert = correlationRule(named: "unexpected_capture_device")?.evaluate([signal])
         XCTAssertEqual(alert?.severity, .info)
+    }
+
+    func test_unexpectedCaptureDeviceRule_inactiveTransition_isInformationalAndHonest() {
+        var signal = makeCaptureSignal(severity: .info, deviceName: "HD Web Camera")
+        signal = ThreatSignal(
+            source: signal.source,
+            severity: signal.severity,
+            title: "HD Web Camera stopped being active",
+            description: "The HD Web Camera stopped streaming.",
+            context: ThreatSignalContext(metadata: [
+                "mediaType": "camera",
+                "deviceName": "HD Web Camera",
+                "process": "Photo Booth",
+                "reason": "capture_device_inactive",
+                "attributionConfidence": "contextual"
+            ])
+        )
+
+        let alert = correlationRule(named: "unexpected_capture_device")?.evaluate([signal])
+        XCTAssertEqual(alert?.severity, .info)
+        XCTAssertEqual(alert?.title, "Camera or microphone became inactive")
+        XCTAssertTrue(alert?.description.contains("stopped streaming") == true)
     }
 
     // MARK: - MonitorType display helpers

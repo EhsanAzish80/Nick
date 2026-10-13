@@ -311,4 +311,30 @@ final class TrustedProcessListTests: XCTestCase {
         // Both SimpleAlertSheet and AlertListView use this shared decision.
         XCTAssertNil(TrustedProcessList.eligibleProcess(in: alert))
     }
+
+    func test_contextualCaptureDoesNotOfferPersistentTrust() {
+        let photoBooth = NickProcessInfo(
+            pid: 700,
+            path: "/System/Applications/Photo Booth.app/Contents/MacOS/Photo Booth",
+            name: "Photo Booth", parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.PhotoBooth")
+        )
+        let alert = ThreatAlert(
+            score: 0.2,
+            content: AlertContent(
+                title: "Camera activity", description: "Camera active",
+                severity: .info, recommendedAction: "Review"
+            ),
+            contributingSignals: [ThreatSignal(
+                source: .avCapture, severity: .info, title: "Camera active",
+                description: "Photo Booth was frontmost",
+                context: ThreatSignalContext(
+                    processInfo: photoBooth,
+                    metadata: ["attributionConfidence": "contextual"]
+                )
+            )]
+        )
+
+        XCTAssertNil(TrustedProcessList.eligibleProcess(in: alert))
+    }
 }
