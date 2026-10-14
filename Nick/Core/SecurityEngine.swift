@@ -534,6 +534,104 @@ final class SecurityEngine {
         }
     }
 
+#if DEBUG
+    /// Validation-only retention flood. This deliberately enters through the
+    /// same privileged IncidentStore persistence boundary as live findings,
+    /// but is absent from Release builds.
+    func debugRunRetentionFlood() -> String {
+        guard incidentStoreReady else { return "FAILED: incident store is not ready" }
+        let criticalIDs = Set(incidentStore.incidents.compactMap {
+            $0.alert.severity == .critical ? $0.id : nil
+        })
+        guard !criticalIDs.isEmpty else { return "FAILED: no critical incident exists to preserve" }
+
+        let evictedBefore = incidentStore.evictedIncidentCount
+        let candidates = (0..<126).map { index in
+            let ruleIndex = index % 6
+            let process = NickProcessInfo(
+                pid: Int32(60_000 + index),
+                path: "/private/tmp/nick-retention-noise-\(index)",
+                name: "nick-retention-noise-\(index)",
+                parentPID: 1,
+                parentName: "launchd",
+                signingStatus: .signed(
+                    teamID: "RETENTION\(index)",
+                    signingID: "com.ehsanazish.nick.retention.\(index)"
+                )
+            )
+            let signal = ThreatSignal(
+                source: .process,
+                severity: .info,
+                title: "Retention validation noise",
+                description: "Harmless validation-only retention evidence.",
+                context: ThreatSignalContext(
+                    processInfo: process,
+                    metadata: [
+                        "rule": "debug_retention_noise_\(ruleIndex)",
+                        "class": "audit"
+                    ]
+                )
+            )
+            return ThreatAlert(
+                score: 0,
+                content: AlertContent(
+                    title: signal.title,
+                    description: signal.description,
+                    severity: .info,
+                    recommendedAction: "No action needed."
+                ),
+                contributingSignals: [signal],
+                timestamp: signal.timestamp
+            )
+        }
+
+        configureIncidentStore()
+        let result = incidentStore.ingest(candidates)
+        syncAlertsFromStore()
+        let retainedCriticalIDs = Set(incidentStore.incidents.compactMap {
+            $0.alert.severity == .critical ? $0.id : nil
+        })
+        let noiseCounts = Dictionary(grouping: incidentStore.incidents.filter {
+            $0.alert.contributingSignals.filter { signal in
+                signal.metadata["rule"]?.hasPrefix("debug_retention_noise_") == true
+            }.isEmpty == false
+        }) { incident in
+            incident.alert.contributingSignals.filter {
+                $0.metadata["rule"]?.hasPrefix("debug_retention_noise_") == true
+            }.first?.metadata["rule"] ?? "unknown"
+        }
+        let maximumNoisePerRule = noiseCounts.values.map { $0.count }.max() ?? 0
+        let criticalPreserved = criticalIDs.isSubset(of: retainedCriticalIDs)
+        let evictedDelta = incidentStore.evictedIncidentCount - evictedBefore
+        let generation = result.outcomes.compactMap(\.generation).max() ?? 0
+        return "injected=126 retained=\(incidentStore.incidents.count) "
+            + "evictedDelta=\(evictedDelta) perRuleMax=\(maximumNoisePerRule) "
+            + "criticalPreserved=\(criticalPreserved) "
+            + "generation=\(generation) durable=\(!incidentStore.hasUnconfirmedChanges)"
+    }
+
+    func debugRetentionFloodPersistenceStatus() -> String {
+        "retained=\(incidentStore.incidents.count) "
+            + "evicted=\(incidentStore.evictedIncidentCount) "
+            + "durable=\(!incidentStore.hasUnconfirmedChanges)"
+    }
+
+    func debugCleanRetentionFlood() -> String {
+        guard incidentStoreReady else { return "FAILED: incident store is not ready" }
+        let before = incidentStore.incidents.count
+        incidentStore.removeIncidents { incident in
+            incident.alert.contributingSignals.filter { signal in
+                signal.metadata["rule"]?.hasPrefix("debug_retention_noise_") == true
+            }.isEmpty == false
+        }
+        syncAlertsFromStore()
+        return "removed=\(before - incidentStore.incidents.count) "
+            + "retained=\(incidentStore.incidents.count) "
+            + "evicted=\(incidentStore.evictedIncidentCount) "
+            + "durable=\(!incidentStore.hasUnconfirmedChanges)"
+    }
+#endif
+
     /// Clears all stored threat alerts, resets threat counters, and removes all
     /// dismissed-alert suppression so every alert type can fire again.
     ///
