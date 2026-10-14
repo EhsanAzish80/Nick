@@ -212,29 +212,7 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
             store.confirmDurablePersistence(generation: generation)
             return (generation, true)
         }
-        let event = ESEvent(
-            eventType: .authExec,
-            processPath: "/Applications/Terminal.app/Contents/MacOS/Terminal",
-            pid: 421,
-            parentPid: 1,
-            filePath: "/bin/sh",
-            decision: .allow,
-            threat: .init(
-                threatName: "Download-to-shell command detected",
-                threatFamily: "lolbin-behavior",
-                isCodeSigned: true,
-                teamID: "APPLE_PLATFORM",
-                signingID: "com.apple.sh",
-                metadata: [
-                    "reason": "curl_pipe_shell",
-                    "rule": "curl_pipe_shell",
-                    "ruleTier": "protected",
-                    "detectionKind": "lolbin-behavior",
-                    "signalSeverity": "critical",
-                    "execTargetPath": "/bin/sh"
-                ]
-            )
-        )
+        let event = LOLBinTestFixtures.curlPipeEvent(pid: 421)
         let persisted = PersistedExtensionFinding(kind: .threat, payload: try JSONEncoder().encode(event))
 
         let firstDelivery = await client.receivePersisted(persisted)

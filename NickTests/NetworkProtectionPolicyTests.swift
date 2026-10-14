@@ -635,29 +635,7 @@ final class UnifiedSourceFindingTests: XCTestCase {
     }
 
     func test_lolbinExecEventMapsToProtectedCriticalEvidenceAndHonestWording() throws {
-        let event = ESEvent(
-            eventType: .authExec,
-            processPath: "/Applications/Terminal.app/Contents/MacOS/Terminal",
-            pid: 420,
-            parentPid: 1,
-            filePath: "/bin/sh",
-            decision: .allow,
-            threat: .init(
-                threatName: "Download-to-shell command detected",
-                threatFamily: "lolbin-behavior",
-                isCodeSigned: true,
-                teamID: "APPLE_PLATFORM",
-                signingID: "com.apple.sh",
-                metadata: [
-                    "reason": "curl_pipe_shell",
-                    "rule": "curl_pipe_shell",
-                    "ruleTier": "protected",
-                    "detectionKind": "lolbin-behavior",
-                    "signalSeverity": "critical",
-                    "execTargetPath": "/bin/sh"
-                ]
-            )
-        )
+        let event = LOLBinTestFixtures.curlPipeEvent(pid: 420)
 
         let finding = try XCTUnwrap(ExtensionFinding(event: event))
         XCTAssertEqual(finding.signal.severity, .critical)
