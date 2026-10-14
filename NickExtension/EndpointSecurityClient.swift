@@ -115,6 +115,7 @@ final class EndpointSecurityClient {
         guard let client else { return }
         guard message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return }
 
+        Self.healthMetrics.recordAuthResponse(messageMachTime: message.pointee.mach_time)
         let missedDeadline = mach_absolute_time() >= message.pointee.deadline
         if missedDeadline {
             Self.healthMetrics.recordDeadlineMiss()
@@ -229,6 +230,13 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
     }
     private let lock = NSLock()
     private var state = State()
+    private let authLatencyWindow = AuthLatencyWindow(capacity: AuthLatencyWindow.productionCapacity)
+
+    private static let machTimebase: mach_timebase_info_data_t? = {
+        var timebase = mach_timebase_info_data_t()
+        guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom != 0 else { return nil }
+        return timebase
+    }()
 
     func record(eventType: es_event_type_t) {
         lock.withLock { state.eventCounts[Self.name(eventType), default: 0] += 1 }
@@ -241,16 +249,37 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         }
     }
 
+    func recordAuthResponse(messageMachTime: UInt64, nowMachTime: UInt64 = mach_absolute_time()) {
+        guard nowMachTime >= messageMachTime, let timebase = Self.machTimebase else { return }
+        let elapsed = nowMachTime - messageMachTime
+        let nanoseconds = Double(elapsed) * Double(timebase.numer) / Double(timebase.denom)
+        recordAuthResponseLatency(milliseconds: nanoseconds / 1_000_000)
+    }
+
+    func recordAuthResponseLatency(milliseconds: Double) {
+        authLatencyWindow.record(milliseconds: milliseconds)
+    }
+
     func snapshot() -> (
         eventsPerSecond: [String: Double],
         deadlineMisses: UInt64,
-        lastDeadlineMissAt: Date?
+        lastDeadlineMissAt: Date?,
+        authResponseP50Milliseconds: Double?,
+        authResponseP99Milliseconds: Double?
     ) {
-        lock.withLock {
+        let eventSnapshot = lock.withLock {
             let elapsed = max(Date().timeIntervalSince(state.startedAt), 1)
             let rates = state.eventCounts.mapValues { Double($0) / elapsed }
             return (rates, state.deadlineMisses, state.lastDeadlineMissAt)
         }
+        let latencySnapshot = authLatencyWindow.snapshot()
+        return (
+            eventSnapshot.0,
+            eventSnapshot.1,
+            eventSnapshot.2,
+            latencySnapshot.p50Milliseconds,
+            latencySnapshot.p99Milliseconds
+        )
     }
 
     private static func name(_ type: es_event_type_t) -> String {

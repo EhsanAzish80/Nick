@@ -38,6 +38,7 @@
 		F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */; };
 		F60000000000000000000001 /* QuarantineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000003 /* QuarantineManager.swift */; };
 		F60000000000000000000002 /* QuarantineDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004 /* QuarantineDatabase.swift */; };
+		A17A7E000000000000000002 /* AuthLatencyWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17A7E000000000000000001 /* AuthLatencyWindow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -138,6 +139,7 @@
 		F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PrivilegedIncidentFileStore.swift; path = Nick/Core/ThreatCorrelator/PrivilegedIncidentFileStore.swift; sourceTree = SOURCE_ROOT; };
 		F60000000000000000000003 /* QuarantineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineManager.swift; path = NickExtension/Quarantine/QuarantineManager.swift; sourceTree = SOURCE_ROOT; };
 		F60000000000000000000004 /* QuarantineDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineDatabase.swift; path = NickExtension/Quarantine/QuarantineDatabase.swift; sourceTree = SOURCE_ROOT; };
+		A17A7E000000000000000001 /* AuthLatencyWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AuthLatencyWindow.swift; path = Nick/Core/Metrics/AuthLatencyWindow.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -692,6 +694,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A17A7E000000000000000002 /* AuthLatencyWindow.swift in Sources */,
 				F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */,
 				E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */,
 				E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */,

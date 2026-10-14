@@ -58,6 +58,12 @@ func writeExtensionHealth() {
     if let lastDeadlineMissAt = esMetrics.lastDeadlineMissAt {
         health["lastDeadlineMissAt"] = lastDeadlineMissAt.timeIntervalSince1970
     }
+    if let p50 = esMetrics.authResponseP50Milliseconds {
+        health["authResponseP50Milliseconds"] = p50
+    }
+    if let p99 = esMetrics.authResponseP99Milliseconds {
+        health["authResponseP99Milliseconds"] = p99
+    }
 
     do {
         try FileManager.default.createDirectory(

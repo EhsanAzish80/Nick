@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import AVFoundation
+import AppKit
 import CoreAudio
 import CoreMediaIO
 import Darwin
@@ -15,13 +16,14 @@ import os
 /// Detects active camera and microphone usage by any process.
 ///
 /// On each `start()` call the monitor snapshots all CoreMediaIO video devices and
-/// all CoreAudio input devices, comparing running state against a previously
-/// recorded baseline.  A `ThreatSignal` is emitted only when a device transitions
-/// from inactive → active, preventing duplicate alerts across successive scans.
+/// all CoreAudio input devices, then property listeners track both active and
+/// inactive transitions. A `ThreatSignal` is emitted once per state change,
+/// preventing duplicates across repeated callbacks.
 ///
-/// The public capture APIs expose device activity but not a trustworthy owning
-/// process. Nick reports activation without naming an app; guessing from the
-/// process list previously caused unrelated recently-launched apps to be accused.
+/// Public device-client evidence is used when macOS supplies it. If camera APIs
+/// expose activity without a client PID, Nick may retain the signed foreground
+/// app as explicitly non-authoritative context; it must never be described or
+/// trusted as the owner of the capture session.
 ///
 /// - Note: `AVCaptureDevice` connection/disconnection notifications are registered
 ///         for real-time supplemental coverage (physical device plug events).
@@ -50,6 +52,8 @@ final class AVCaptureMonitor: MonitorProtocol {
     /// Tracks device IDs → last-known running state to detect new activations.
     private var knownVideoState:  [CMIODeviceID:  Bool] = [:]
     private var knownAudioState:  [AudioDeviceID: Bool] = [:]
+    private var videoAttribution: [CMIODeviceID: DetectedCaptureProcess] = [:]
+    private var audioAttribution: [AudioDeviceID: DetectedCaptureProcess] = [:]
 
     private var deviceObservers: [NSObjectProtocol] = []
     private var videoActivityListeners: [CMIODeviceID: CMIOObjectPropertyListenerBlock] = [:]
@@ -107,17 +111,16 @@ final class AVCaptureMonitor: MonitorProtocol {
 
         for deviceID in deviceIDs {
             let running    = CaptureDeviceAccessor.isCMIODeviceRunning(deviceID)
-            let wasRunning = knownVideoState[deviceID] ?? false
-
             if running { anyRunning = true }
-
-            if running && !wasRunning {
-                let name = CaptureDeviceAccessor.cmioDeviceName(deviceID) ?? "Camera"
-                emit(makeCaptureSignal(mediaType: "camera", deviceName: name, process: nil))
-                Self.log.notice("Camera activated: \(name) — owner unavailable")
-            }
-
-            knownVideoState[deviceID] = running
+            processCameraState(
+                deviceID: deviceID,
+                running: running,
+                deviceName: CaptureDeviceAccessor.cmioDeviceName(deviceID) ?? "Camera",
+                detectedProcess: running
+                    ? CaptureProcessScanner.cameraOwner(deviceID: deviceID)
+                        ?? CaptureProcessScanner.frontmostContext()
+                    : nil
+            )
         }
 
         isCameraActive = anyRunning
@@ -129,20 +132,67 @@ final class AVCaptureMonitor: MonitorProtocol {
 
         for deviceID in deviceIDs {
             let running    = CaptureDeviceAccessor.isAudioDeviceRunning(deviceID)
-            let wasRunning = knownAudioState[deviceID] ?? false
-
             if running { anyRunning = true }
-
-            if running && !wasRunning {
-                let name = CaptureDeviceAccessor.audioDeviceName(deviceID) ?? "Microphone"
-                emit(makeCaptureSignal(mediaType: "microphone", deviceName: name, process: nil))
-                Self.log.notice("Microphone activated: \(name) — owner unavailable")
-            }
-
-            knownAudioState[deviceID] = running
+            processMicrophoneState(
+                deviceID: deviceID,
+                running: running,
+                deviceName: CaptureDeviceAccessor.audioDeviceName(deviceID) ?? "Microphone",
+                detectedProcess: running
+                    ? CaptureProcessScanner.microphoneOwner(deviceID: deviceID)
+                        ?? CaptureProcessScanner.frontmostContext()
+                    : nil
+            )
         }
 
         isMicrophoneActive = anyRunning
+    }
+
+    /// State reducers are internal so tests exercise the same transition path
+    /// used by the CMIO/CoreAudio listeners without requiring physical hardware.
+    func processCameraState(
+        deviceID: CMIODeviceID,
+        running: Bool,
+        deviceName: String,
+        detectedProcess: DetectedCaptureProcess?
+    ) {
+        let wasRunning = knownVideoState[deviceID] ?? false
+        if running && !wasRunning {
+            if let detectedProcess { videoAttribution[deviceID] = detectedProcess }
+            emit(makeCaptureSignal(
+                mediaType: "camera", deviceName: deviceName, process: detectedProcess
+            ))
+            Self.log.notice("Camera activated: \(deviceName) — attribution \(detectedProcess?.confidence ?? "unavailable")")
+        } else if !running && wasRunning {
+            let process = videoAttribution.removeValue(forKey: deviceID)
+            emit(makeCaptureSignal(
+                mediaType: "camera", deviceName: deviceName, process: process, active: false
+            ))
+            Self.log.notice("Camera became inactive: \(deviceName)")
+        }
+        knownVideoState[deviceID] = running
+    }
+
+    func processMicrophoneState(
+        deviceID: AudioDeviceID,
+        running: Bool,
+        deviceName: String,
+        detectedProcess: DetectedCaptureProcess?
+    ) {
+        let wasRunning = knownAudioState[deviceID] ?? false
+        if running && !wasRunning {
+            if let detectedProcess { audioAttribution[deviceID] = detectedProcess }
+            emit(makeCaptureSignal(
+                mediaType: "microphone", deviceName: deviceName, process: detectedProcess
+            ))
+            Self.log.notice("Microphone activated: \(deviceName) — attribution \(detectedProcess?.confidence ?? "unavailable")")
+        } else if !running && wasRunning {
+            let process = audioAttribution.removeValue(forKey: deviceID)
+            emit(makeCaptureSignal(
+                mediaType: "microphone", deviceName: deviceName, process: process, active: false
+            ))
+            Self.log.notice("Microphone became inactive: \(deviceName)")
+        }
+        knownAudioState[deviceID] = running
     }
 
     // MARK: - Signal Generation
@@ -159,12 +209,15 @@ final class AVCaptureMonitor: MonitorProtocol {
     func makeCaptureSignal(
         mediaType:  String,
         deviceName: String,
-        process:    DetectedCaptureProcess?
+        process:    DetectedCaptureProcess?,
+        active:     Bool = true
     ) -> ThreatSignal {
         let processName = process?.name ?? "unavailable"
 
         let severity: SignalSeverity = {
+            guard active else { return .info }
             guard let p = process else { return .info }
+            guard p.confidence == "authoritative" else { return .info }
             if Self.isSimulatorRuntimeProcess(p.path) { return .info }
             switch p.signingStatus {
             case .unsigned, .invalid: return .high
@@ -187,21 +240,41 @@ final class AVCaptureMonitor: MonitorProtocol {
         return ThreatSignal(
             source:      .avCapture,
             severity:    severity,
-            title:       "\(deviceName) activated by \(processName)",
-            description: process == nil
-                ? "The \(deviceName) began streaming. macOS did not provide Nick with reliable app ownership for this event."
-                : "The \(deviceName) began streaming and was attributed to \(processName).",
+            title: active
+                ? "\(deviceName) activated by \(processName)"
+                : "\(deviceName) stopped being active",
+            description: captureDescription(
+                active: active, deviceName: deviceName, process: process
+            ),
             context: ThreatSignalContext(
                 processInfo: processInfo,
                 metadata: [
                     "mediaType":  mediaType,
                     "deviceName": deviceName,
                     "process":    processName,
-                    "reason":     "capture_device_active",
-                    "attributionConfidence": process == nil ? "unavailable" : "test_only"
+                    "reason": active ? "capture_device_active" : "capture_device_inactive",
+                    "captureState": active ? "active" : "inactive",
+                    "attributionConfidence": process?.confidence ?? "unavailable"
                 ]
             )
         )
+    }
+
+    private func captureDescription(
+        active: Bool,
+        deviceName: String,
+        process: DetectedCaptureProcess?
+    ) -> String {
+        guard active else {
+            return "The \(deviceName) stopped streaming."
+        }
+        guard let process else {
+            return "The \(deviceName) began streaming. macOS did not provide Nick with reliable app ownership for this event."
+        }
+        if process.confidence == "authoritative" {
+            return "The \(deviceName) began streaming and macOS attributed the session to \(process.name)."
+        }
+        return "The \(deviceName) began streaming while \(process.name) was the foreground app. This is context, not proof that the app owned the session."
     }
 
     /// Simulator runtime binaries are ad-hoc signed by design. Treating that
@@ -320,6 +393,23 @@ struct DetectedCaptureProcess: Sendable {
     let name:          String
     let path:          String
     let signingStatus: SigningStatus
+    /// `authoritative` comes from a device-client PID; `contextual` means only
+    /// that the signed app was foreground when the transition occurred.
+    let confidence: String
+
+    init(
+        pid: Int32,
+        name: String,
+        path: String,
+        signingStatus: SigningStatus,
+        confidence: String = "authoritative"
+    ) {
+        self.pid = pid
+        self.name = name
+        self.path = path
+        self.signingStatus = signingStatus
+        self.confidence = confidence
+    }
 }
 
 // MARK: - CaptureDeviceAccessor
@@ -472,16 +562,139 @@ enum CaptureDeviceAccessor: Sendable {
 
 // MARK: - CaptureProcessScanner
 
-/// Identifies the most likely user-space process accessing a capture device.
-///
-/// Uses `sysctl` to list running processes and returns the most recently started
-/// non-system candidate.  Signing status is evaluated via `SignatureValidator`.
-///
-/// - Note: Attribution is best-effort; a future Endpoint Security integration
-///         will provide authoritative access records.
+/// Resolves device-client evidence where public APIs provide it and otherwise
+/// records only foreground application context. The deprecated process-recency
+/// scanner remains solely for source compatibility and is not used for capture
+/// attribution.
 enum CaptureProcessScanner: Sendable {
 
+    /// Returns the exclusive CMIO owner when the device publishes one. A PID
+    /// obtained from this property is device evidence, not a process-list guess.
+    static func cameraOwner(deviceID: CMIODeviceID) -> DetectedCaptureProcess? {
+        var address = CMIOObjectPropertyAddress(
+            mSelector: CMIOObjectPropertySelector(kCMIODevicePropertyHogMode),
+            mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+            mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain)
+        )
+        guard CMIOObjectHasProperty(deviceID, &address) else { return nil }
+        var pid: pid_t = -1
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        guard CMIOObjectGetPropertyData(
+            deviceID, &address, 0, nil, size, &size, &pid
+        ) == noErr, pid > 0 else { return nil }
+        return process(pid: pid, confidence: "authoritative")
+    }
+
+    /// CoreAudio's public Process objects identify clients with active input IO.
+    /// Match both the running-input bit and the device list to avoid attributing
+    /// an unrelated audio client to the microphone transition.
+    static func microphoneOwner(deviceID: AudioDeviceID) -> DetectedCaptureProcess? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var byteCount: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &byteCount
+        ) == noErr, byteCount > 0 else { return nil }
+
+        var objects = [AudioObjectID](
+            repeating: kAudioObjectUnknown,
+            count: Int(byteCount) / MemoryLayout<AudioObjectID>.size
+        )
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &byteCount, &objects
+        ) == noErr else { return nil }
+
+        for object in objects where audioProcessIsUsingInput(object, deviceID: deviceID) {
+            var pidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioProcessPropertyPID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var pid: pid_t = 0
+            var pidSize = UInt32(MemoryLayout<pid_t>.size)
+            if AudioObjectGetPropertyData(
+                object, &pidAddress, 0, nil, &pidSize, &pid
+            ) == noErr, let resolved = process(pid: pid, confidence: "authoritative") {
+                return resolved
+            }
+        }
+        return nil
+    }
+
+    /// Public camera APIs do not always publish a client PID. In that case,
+    /// preserve useful context without claiming ownership.
+    @MainActor
+    static func frontmostContext() -> DetectedCaptureProcess? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let path = app.executableURL?.path,
+              !path.isEmpty else { return nil }
+        let signing = SignatureValidator.shared.evaluate(binaryPath: path)
+        guard !signing.isSuspicious else { return nil }
+        return DetectedCaptureProcess(
+            pid: app.processIdentifier,
+            name: app.localizedName ?? (path as NSString).lastPathComponent,
+            path: path,
+            signingStatus: signing,
+            confidence: "contextual"
+        )
+    }
+
+    private static func audioProcessIsUsingInput(
+        _ object: AudioObjectID,
+        deviceID: AudioDeviceID
+    ) -> Bool {
+        var runningAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunningInput,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var running: UInt32 = 0
+        var runningSize = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(
+            object, &runningAddress, 0, nil, &runningSize, &running
+        ) == noErr, running != 0 else { return false }
+
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyDevices,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var devicesSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            object, &devicesAddress, 0, nil, &devicesSize
+        ) == noErr, devicesSize > 0 else { return false }
+        var devices = [AudioObjectID](
+            repeating: kAudioObjectUnknown,
+            count: Int(devicesSize) / MemoryLayout<AudioObjectID>.size
+        )
+        guard AudioObjectGetPropertyData(
+            object, &devicesAddress, 0, nil, &devicesSize, &devices
+        ) == noErr else { return false }
+        return devices.contains(deviceID)
+    }
+
+    private static func process(pid: pid_t, confidence: String) -> DetectedCaptureProcess? {
+        guard let info = ProcessScanner.quickInfo(pid: pid) else { return nil }
+        let signing = info.path.isEmpty
+            ? SigningStatus.unknown
+            : SignatureValidator.shared.evaluate(binaryPath: info.path)
+        let name = NSRunningApplication(processIdentifier: pid)?.localizedName
+            ?? info.name
+        return DetectedCaptureProcess(
+            pid: pid,
+            name: name,
+            path: info.path,
+            signingStatus: signing,
+            confidence: confidence
+        )
+    }
+
     /// Returns the most likely process currently accessing a capture device.
+    @available(*, deprecated, message: "Process-list recency is not capture ownership evidence")
     static func detectAccessingProcess() -> DetectedCaptureProcess? {
         guard let snapshots = listRunningProcesses(), !snapshots.isEmpty else { return nil }
 
