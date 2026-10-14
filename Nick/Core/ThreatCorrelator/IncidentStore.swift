@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import os
 
 enum IncidentState: String, Codable, Sendable {
     case new
@@ -348,6 +349,10 @@ final class DurableIncidentNotificationQueue {
 /// evaluated here once, irrespective of which monitor supplied the evidence.
 @MainActor
 final class IncidentStore {
+    private static let logger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "IncidentStore"
+    )
     static let persistenceKey = "nickSecurityIncidentsV1"
     static let dismissalPersistenceKey = "nickDismissedIncidentKeysV1"
     static let maximumPersistedIncidents = 100
@@ -508,6 +513,15 @@ final class IncidentStore {
                 continue
             }
             let key = Self.incidentKey(for: candidate)
+            let isCaptureInactive = candidate.contributingSignals.allSatisfy {
+                $0.source == .avCapture
+                    && $0.metadata["reason"] == "capture_device_inactive"
+            }
+            if isCaptureInactive, !incidents.contains(where: { $0.key == key }) {
+                Self.logger.info("capture inactive ignored because no matching incident exists")
+                outcomes.append(.suppressedByPolicy("capture inactive without active incident"))
+                continue
+            }
             if let tombstone = matchingDismissal(for: candidate, incidentKey: key) {
                 if isProtected(candidate) {
                     var reopened = candidate
@@ -554,10 +568,6 @@ final class IncidentStore {
                 }
                 let escalated = candidate.severity > prior.alert.severity
                 let incomingEvidence = candidate.contributingSignals.map(Evidence.init(signal:))
-                let isCaptureInactive = candidate.contributingSignals.allSatisfy {
-                    $0.source == .avCapture
-                        && $0.metadata["reason"] == "capture_device_inactive"
-                }
                 incidents[index].alert = isCaptureInactive
                     ? prior.alert.mergingLifecycleTransition(candidate)
                     : prior.alert.mergingOccurrence(candidate)

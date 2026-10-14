@@ -249,6 +249,26 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(store.incidents.first?.alert.contributingSignals.first?.metadata["reason"], "capture_device_inactive")
     }
 
+    func test_captureInactiveWithoutExistingIncidentIsLoggedAndIgnored() {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let inactive = makeCaptureAlert(
+            reason: "capture_device_inactive",
+            title: "Camera or microphone became inactive",
+            description: "HD Web Camera stopped streaming.",
+            severity: .info
+        )
+
+        let result = store.ingest([inactive])
+
+        XCTAssertTrue(store.incidents.isEmpty)
+        XCTAssertTrue(result.visibleAlerts.isEmpty)
+        XCTAssertTrue(result.newlyActionable.isEmpty)
+        XCTAssertEqual(
+            result.outcomes,
+            [.suppressedByPolicy("capture inactive without active incident")]
+        )
+    }
+
     func test_simultaneousFullAndQuickIngest_emitOneAlert() async {
         let sharedSignal = makeSignal(
             source: .network,
