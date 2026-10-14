@@ -63,6 +63,7 @@ struct SettingsView: View {
     @State private var trustedProcessStatus: String?
 #if DEBUG
     @State private var authorizationHarnessStatus: String?
+    @State private var retentionHarnessStatus: String?
 #endif
     @State private var newAllowedDomain: String = ""
     @State private var newAllowedApp: String = ""
@@ -177,6 +178,9 @@ struct SettingsView: View {
         integrationsSection
         monitoredDirectoriesSection
         trustedProcessesSection
+#if DEBUG
+        debugValidationSection
+#endif
         suppressionRulesSection
     }
 
@@ -711,7 +715,18 @@ struct SettingsView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
+        } header: {
+            Text("Trusted Processes")
+        } footer: {
+            Text("Add a currently running, signed process. Trust is bound to its exact Team ID and signing identifier; its name alone is never trusted.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+        }
+    }
+
 #if DEBUG
+    private var debugValidationSection: some View {
+        Section("DEBUG Validation") {
             Button("Test Refused Authorization Form") {
                 xpcClient.debugSendNeverAuthorizedProtectionCall { accepted in
                     authorizationHarnessStatus = accepted
@@ -725,15 +740,32 @@ struct SettingsView: View {
                     .font(.system(size: 11.5, design: .monospaced))
                     .foregroundStyle(authorizationHarnessStatus.hasPrefix("Passed") ? .green : .red)
             }
-#endif
-        } header: {
-            Text("Trusted Processes")
-        } footer: {
-            Text("Add a currently running, signed process. Trust is bound to its exact Team ID and signing identifier; its name alone is never trusted.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
+            Button("Run Retention Flood Harness") {
+                retentionHarnessStatus = engine.debugRunRetentionFlood()
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    retentionHarnessStatus = (retentionHarnessStatus ?? "")
+                        + " | " + engine.debugRetentionFloodPersistenceStatus()
+                }
+            }
+            .buttonStyle(.bordered)
+            Button("Clean Retention Flood Harness") {
+                retentionHarnessStatus = engine.debugCleanRetentionFlood()
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    retentionHarnessStatus = (retentionHarnessStatus ?? "")
+                        + " | " + engine.debugRetentionFloodPersistenceStatus()
+                }
+            }
+            .buttonStyle(.bordered)
+            if let retentionHarnessStatus {
+                Text(retentionHarnessStatus)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(retentionHarnessStatus.contains("FAILED") ? .red : .green)
+            }
         }
     }
+#endif
 
     @ViewBuilder
     private var legacyTrustedProcessContent: some View {

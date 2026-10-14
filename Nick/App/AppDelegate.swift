@@ -183,6 +183,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             removeLegacyState: true
                         )
                         self.xpcClient.incidentStoreDidBecomeReady()
+#if DEBUG
+                        self.runRequestedRetentionValidation()
+#endif
                     } catch {
                         self.incidentStoreLogger.error(
                             "Could not load root-owned incident store: \(error.localizedDescription)"
@@ -226,6 +229,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+#if DEBUG
+    private func runRequestedRetentionValidation() {
+        guard let mode = ProcessInfo.processInfo.environment["NICK_DEBUG_RETENTION_HARNESS"] else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let initial = mode == "cleanup"
+                ? engine.debugCleanRetentionFlood()
+                : engine.debugRunRetentionFlood()
+            try? await Task.sleep(for: .seconds(2))
+            let result = initial + " | " + engine.debugRetentionFloodPersistenceStatus()
+            try? result.write(
+                to: URL(fileURLWithPath: "/private/tmp/nick-retention-harness-result.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+    }
+#endif
 
     private func wireLiveFindingHandlers() {
         if Self.networkIncidentIngestionEnabledFor5_0 {
