@@ -1039,7 +1039,10 @@ final class SecurityEngine {
     /// Lazily-created YARA engine used for on-demand file scanning.
     private var yaraEngine: YARAEngine?
 
-    /// Scans a single file or directory with the bundled YARA rule set.
+    /// Lazily-created exact-hash scanner backed by the validated bundled catalog.
+    private var bundledHashFileScanner: BundledHashFileScanner?
+
+    /// Scans a single file or directory with the bundled exact-hash catalog and YARA rules.
     ///
     /// The YARA engine is compiled lazily on first use from the `Rules` directory
     /// inside the app bundle. If the bundle does not contain a `Rules` directory
@@ -1056,9 +1059,27 @@ final class SecurityEngine {
             yaraEngine = try YARAEngine(rulesDirectory: rulesDir)
         }
         guard let engine = yaraEngine else { throw YARAError.noRulesCompiled }
-        if url.hasDirectoryPath {
-            return try await engine.scanDirectory(at: url.path, recursive: true)
+        if bundledHashFileScanner == nil {
+            bundledHashFileScanner = try BundledHashFileScanner(bundle: .main)
         }
-        return try await engine.scanFile(at: url.path)
+        guard let hashScanner = bundledHashFileScanner else {
+            throw BundledHashFileScanner.ScannerError.catalogMissing
+        }
+        if url.hasDirectoryPath {
+            async let yaraMatches = engine.scanDirectory(at: url.path, recursive: true)
+            async let hashMatches = Task.detached {
+                try hashScanner.scanDirectory(at: url)
+            }.value
+            return try await yaraMatches + hashMatches
+        }
+        async let yaraMatches = engine.scanFile(at: url.path)
+        async let hashMatch = Task.detached {
+            try hashScanner.scanFile(at: url)
+        }.value
+        var results = try await yaraMatches
+        if let hashMatch = try await hashMatch {
+            results.append(hashMatch)
+        }
+        return results
     }
 }
