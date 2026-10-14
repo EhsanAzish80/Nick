@@ -1125,11 +1125,18 @@ struct ExtensionFinding: Sendable {
         let isDocumentedUninstall = event.threatFamily == "nick-documented-uninstall"
         let isManagementObservation = event.threatFamily == "endpoint-management"
         let isRansomwareBehavior = event.metadata?["detectionKind"] == "ransomware-behavior"
+        let isLOLBinBehavior = event.metadata?["detectionKind"] == "lolbin-behavior"
         let severity: SignalSeverity
         if event.decision == .deny {
             severity = .critical
         } else if isManagementObservation || isNickMaintenance || isDocumentedUninstall {
             severity = .info
+        } else if isLOLBinBehavior {
+            switch event.metadata?["signalSeverity"] {
+            case "critical": severity = .critical
+            case "medium": severity = .medium
+            default: severity = .high
+            }
         } else {
             severity = .high
         }
@@ -1139,16 +1146,19 @@ struct ExtensionFinding: Sendable {
         } else {
             signingStatus = .unknown
         }
+        let actorPath = isLOLBinBehavior
+            ? (event.metadata?["execTargetPath"] ?? filePath)
+            : event.processPath
         let process = NickProcessInfo(
             pid: event.pid,
-            path: event.processPath,
-            name: URL(fileURLWithPath: event.processPath).lastPathComponent,
+            path: actorPath,
+            name: URL(fileURLWithPath: actorPath).lastPathComponent,
             parentPID: event.parentPid,
             parentName: nil,
             signingStatus: signingStatus
         )
         let isAuditEvent = isManagementObservation || isNickMaintenance || isDocumentedUninstall
-        let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : (isRansomwareBehavior ? "behavior" : "signature"))
+        let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : ((isRansomwareBehavior || isLOLBinBehavior) ? "behavior" : "signature"))
         let ruleTier = isAuditEvent ? "review" : "protected"
         var metadata = [
             "reason": isTamper
@@ -1165,6 +1175,15 @@ struct ExtensionFinding: Sendable {
             "ruleTier": ruleTier,
             "threatFamily": event.threatFamily ?? "unknown"
         ].merging(event.metadata ?? [:]) { current, _ in current }
+        if isLOLBinBehavior {
+            // The classifier's concrete reason is the behavior identity used
+            // by presentation and deduplication. The generic endpoint default
+            // must not overwrite it on the persisted-event path.
+            metadata["reason"] = event.metadata?["reason"] ?? "lolbin_behavior"
+            metadata["rule"] = event.metadata?["rule"] ?? metadata["reason"]
+            metadata["class"] = "behavior"
+            metadata["ruleTier"] = "protected"
+        }
         if isTamper {
             metadata["tamperDisposition"] = event.decision == .deny ? "blocked" : "observed"
         }

@@ -947,6 +947,11 @@ final class ESEventHandler {
         processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: [])
         tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid, args: arguments)
 
+        let lolbinFinding = LOLBinExecutionPolicy.finding(
+            executablePath: targetPath,
+            arguments: arguments
+        )
+
         pushEvent(ESEvent(
             eventType:   .authExec,
             processPath: processPath,
@@ -956,11 +961,24 @@ final class ESEventHandler {
             decision:    blocked ? .deny : .allow,
             threat:      ESEvent.ThreatContext(
                 sha256:       verdict?.hash,
-                threatName:   verdict?.threatName,
-                threatFamily: verdict?.threatFamily,
+                threatName:   verdict?.threatName ?? lolbinFinding?.title,
+                threatFamily: verdict?.threatFamily ?? (lolbinFinding == nil ? nil : "lolbin-behavior"),
                 isCodeSigned: trustedSigner,
                 teamID: teamID,
-                signingID: signingID
+                signingID: signingID,
+                metadata: lolbinFinding.map {
+                    [
+                        "reason": $0.reason,
+                        "rule": $0.reason,
+                        "ruleTier": "protected",
+                        "detectionKind": "lolbin-behavior",
+                        "signalSeverity": $0.severity,
+                        // Keep the executable identity needed by incident and
+                        // trust policy without persisting argv, which can
+                        // contain credentials or other sensitive values.
+                        "execTargetPath": targetPath
+                    ]
+                }
             )
         ))
     }

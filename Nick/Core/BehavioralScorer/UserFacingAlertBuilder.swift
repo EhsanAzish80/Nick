@@ -85,7 +85,16 @@ final class UserFacingAlertBuilder: Sendable {
         let processName    = firstProcess?.name ?? signals.compactMap { $0.metadata["process"] }.first
         let displayProcess = userReadableProcessName(processName)
         let parentName     = firstProcess?.parentName.flatMap(userReadableProcessName)
-        let isDeveloperWorkflow = signals.contains(where: isDeveloperWorkflowSignal)
+        let protectedCommandReasons: Set<String> = [
+            "curl_pipe_shell", "wget_pipe_shell", "osascript_shell",
+            "quarantine_removal", "base64_payload", "launchctl_tmp",
+            "crontab_modify", "mktemp_execute"
+        ]
+        let hasProtectedCommandEvidence = signals.contains {
+            protectedCommandReasons.contains($0.metadata["reason"] ?? "")
+        }
+        let isDeveloperWorkflow = !hasProtectedCommandEvidence
+            && signals.contains(where: isDeveloperWorkflowSignal)
 
         // Alerts persisted by an older development build can include Nick's own
         // unsigned Xcode products. They are build artifacts, not user threats.
@@ -215,6 +224,29 @@ final class UserFacingAlertBuilder: Sendable {
                 assessment: isUntrusted ? "Potentially dangerous" : "Needs your review",
                 recommendedAction: "If you expected this, keep the app. If not, quit it and remove its \(mediaType) permission in System Settings → Privacy & Security.",
                 severity: isUntrusted ? .critical : .warning,
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
+        // --- Protected dual-use command behavior ---
+        // Exec-time evidence from the system extension is stronger than the
+        // periodic process inventory's generic developer-tool heuristic. Keep
+        // the wording factual: Nick observed the launch; it did not prove that
+        // a payload ran successfully and it did not block the command.
+        if hasProtectedCommandEvidence {
+            let reason = signals.compactMap { $0.metadata["reason"] }
+                .first(where: protectedCommandReasons.contains) ?? ""
+            let isDownloadPipe = reason == "curl_pipe_shell" || reason == "wget_pipe_shell"
+            return AlertPattern(
+                headline: isDownloadPipe
+                    ? "Download-to-shell command detected"
+                    : "Sensitive system-tool command detected",
+                explanation: isDownloadPipe
+                    ? "A shell was launched with a command that pipes downloaded content into an interpreter. Nick recorded the launch; it did not block it."
+                    : "A system tool was launched with arguments associated with a security-sensitive change. Nick recorded the launch; it did not block it.",
+                assessment: "Potentially dangerous",
+                recommendedAction: "Review the initiating app and command context. If you did not run it, stop the related process and investigate how it started.",
+                severity: signals.contains(where: { $0.severity == .critical }) ? .critical : .warning,
                 actions: [.showDetails, .dismiss]
             )
         }
