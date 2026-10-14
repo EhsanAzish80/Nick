@@ -6,7 +6,7 @@ import SwiftUI
 
 // MARK: - FileScanResultsView
 
-/// Sheet shown after a manual YARA file or folder scan triggered from the
+/// Sheet shown after a manual exact-hash and YARA file or folder scan triggered from the
 /// "Scan File…" button in the dashboard bottom bar (or via Finder Services).
 ///
 /// Four states:
@@ -64,7 +64,7 @@ struct FileScanResultsView: View {
                 Text("Nick Scan")
                     .font(.nickBodyMedium)
                     .foregroundStyle(Color.textPrimary)
-                Text("Powered by YARA")
+                Text("Exact hashes + YARA")
                     .font(.nickCaption)
                     .foregroundStyle(Color.textTertiary)
             }

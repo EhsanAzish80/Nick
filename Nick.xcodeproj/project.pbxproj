@@ -636,6 +636,7 @@
 				"$(SRCROOT)/Rules/community",
 				"$(SRCROOT)/Rules/families",
 				"$(SRCROOT)/Rules/families/LICENSES",
+				"$(SRCROOT)/NickExtension/known-threat-hashes.json",
 			);
 			name = "Copy YARA Rules";
 			outputFileListPaths = (
@@ -645,10 +646,11 @@
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/families",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/families/LICENSES",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/known-threat-hashes.json",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules\"\nRULES_LIST=\"${RULES_SRC}/YARARules.xcfilelist\"\nrm -rf \"${RULES_DST}\"\nmkdir -p \"${RULES_DST}\"\nwhile IFS= read -r RULE_FILE || [ -n \"${RULE_FILE}\" ]; do\n  RULE_FILE=$(printf '%s\\n' \"${RULE_FILE}\" | sed \"s|^\\$(SRCROOT)|${SRCROOT}|\")\n  RELATIVE_PATH=\"${RULE_FILE#${RULES_SRC}/}\"\n  mkdir -p \"${RULES_DST}/$(dirname \"${RELATIVE_PATH}\")\"\n  cp \"${RULE_FILE}\" \"${RULES_DST}/${RELATIVE_PATH}\"\ndone < \"${RULES_LIST}\"\necho \"note: Copied YARA rules to ${RULES_DST}\"\n";
+			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules\"\nRULES_LIST=\"${RULES_SRC}/YARARules.xcfilelist\"\nRESOURCES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nrm -rf \"${RULES_DST}\"\nmkdir -p \"${RULES_DST}\"\nwhile IFS= read -r RULE_FILE || [ -n \"${RULE_FILE}\" ]; do\n  RULE_FILE=$(printf '%s\\n' \"${RULE_FILE}\" | sed \"s|^\\$(SRCROOT)|${SRCROOT}|\")\n  RELATIVE_PATH=\"${RULE_FILE#${RULES_SRC}/}\"\n  mkdir -p \"${RULES_DST}/$(dirname \"${RELATIVE_PATH}\")\"\n  cp \"${RULE_FILE}\" \"${RULES_DST}/${RELATIVE_PATH}\"\ndone < \"${RULES_LIST}\"\ncp \"${SRCROOT}/NickExtension/known-threat-hashes.json\" \"${RESOURCES_DST}/known-threat-hashes.json\"\necho \"note: Copied YARA rules and exact-hash catalog to ${RESOURCES_DST}\"\n";
 		};
 		CC1AABB4D5E6F78900002301 /* Copy YARA Rules Into Extension */ = {
 			isa = PBXShellScriptBuildPhase;
