@@ -229,6 +229,12 @@ final class ThreatCorrelatorTests: XCTestCase {
 
         let activation = store.ingest([active])
         XCTAssertEqual(activation.newlyActionable.count, 1)
+        let presentation = NotificationManager.presentation(for: active)
+        XCTAssertTrue(presentation.requiresVisibleDelivery)
+        XCTAssertFalse(presentation.isDocumentedUninstall)
+        XCTAssertEqual(presentation.title, active.title)
+        XCTAssertEqual(presentation.body, active.description)
+        XCTAssertEqual(presentation.categoryIdentifier, "THREAT_ALERT")
         let originalID = try XCTUnwrap(store.incidents.first?.alert.id)
         XCTAssertEqual(store.incidents.first?.state, .new)
 

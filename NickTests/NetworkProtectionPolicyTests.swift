@@ -634,6 +634,37 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertEqual(finding.signal.processInfo?.signingStatus, .unknown)
     }
 
+    func test_lolbinExecEventMapsToProtectedCriticalEvidenceAndHonestWording() throws {
+        let event = LOLBinTestFixtures.curlPipeEvent(pid: 420)
+
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.severity, .critical)
+        XCTAssertEqual(finding.signal.metadata["class"], "behavior")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
+        XCTAssertEqual(finding.signal.processInfo?.path, "/bin/sh")
+        XCTAssertNil(finding.signal.metadata["arguments"])
+
+        let alert = ThreatAlert(
+            id: event.id,
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: finding.signal.timestamp
+        )
+        let copy = UserFacingAlertBuilder.shared.build(from: alert)
+        XCTAssertEqual(copy.headline, "Download-to-shell command detected")
+        XCTAssertEqual(copy.severity, .critical)
+        XCTAssertTrue(copy.explanation.contains("recorded the launch"))
+        XCTAssertTrue(copy.explanation.contains("did not block it"))
+        XCTAssertFalse(copy.headline.contains("Developer command needs context"))
+        XCTAssertFalse(copy.explanation.lowercased().contains("attack"))
+    }
+
     func test_endpointFindingUsesOnlyConcreteSigningIdentity() throws {
         let event = ESEvent(
             eventType: .authExec,

@@ -185,6 +185,53 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     }
 
     @MainActor
+    func test_persistedLOLBinExecUsesRealIngestPathAndDurablyAcknowledgesOnce() async throws {
+        let client = ExtensionXPCClient()
+        client.incidentStoreReadyProvider = { true }
+        let store = IncidentStore(persistOnInit: false)
+        let snapshot = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [], dismissalTombstones: [], expectedCooldowns: [:]
+        ))
+        try store.installPrivilegedSnapshot(snapshot) { _, _ in }
+        client.findingHandler = { finding in
+            let alert = ThreatAlert(
+                id: finding.signal.id,
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+            return store.ingest([alert]).outcomes.first ?? .failed
+        }
+        client.incidentPersistenceOverride = { generation in
+            store.confirmDurablePersistence(generation: generation)
+            return (generation, true)
+        }
+        let event = LOLBinTestFixtures.curlPipeEvent(pid: 421)
+        let persisted = PersistedExtensionFinding(kind: .threat, payload: try JSONEncoder().encode(event))
+
+        let firstDelivery = await client.receivePersisted(persisted)
+        XCTAssertEqual(firstDelivery, event.id)
+        let incident = try XCTUnwrap(store.incidents.first)
+        XCTAssertTrue(incident.alert.hasProtectedEvidence)
+        XCTAssertEqual(incident.alert.severity, .critical)
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: incident.alert).headline,
+            "Download-to-shell command detected"
+        )
+        let replayDelivery = await client.receivePersisted(persisted)
+        XCTAssertEqual(replayDelivery, event.id)
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 1)
+        XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
+    }
+
+    @MainActor
     func test_suppressedDismissalAcksAndCountsWithoutPersistenceWait() async throws {
         let client = ExtensionXPCClient()
         client.incidentStoreReadyProvider = { true }

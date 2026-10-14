@@ -124,8 +124,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     /// Silently returns when `alert.severity == .info` (trusted-app activity) or
     /// when the alert's severity is below the user-configured threshold.
     func send(for alert: ThreatAlert) async {
-        let isDocumentedUninstall = IncidentStore.requiresVisibleNotification(alert)
-        guard alert.severity != .info || isDocumentedUninstall else { return }
+        let presentation = Self.presentation(for: alert)
+        guard alert.severity != .info || presentation.requiresVisibleDelivery else { return }
 
         // macOS does not throw from add() when permission is denied — it silently
         // discards the notification. Check authorization first and bail early with
@@ -143,17 +143,15 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
 
         let threshold = notificationThreshold
-        guard isDocumentedUninstall || alert.severity >= threshold else {
+        guard presentation.requiresVisibleDelivery || alert.severity >= threshold else {
             Self.log.debug("Alert '\(alert.title)' below threshold (\(threshold.displayName)) — suppressed")
             return
         }
 
         let content = UNMutableNotificationContent()
-        content.title = isDocumentedUninstall
-            ? "Nick is being moved to the Trash"
-            : "Nick — \(alert.severity.displayName) Alert"
-        if isDocumentedUninstall {
-            content.body = "Use Nick Uninstaller later if you also want to remove protection components and generated data."
+        content.title = presentation.title ?? "Nick — \(alert.severity.displayName) Alert"
+        if let body = presentation.body {
+            content.body = body
         } else if let tamper = alert.contributingSignals.first(where: {
             $0.metadata["reason"] == "endpoint_tamper_observed"
         }) {
@@ -161,9 +159,9 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         } else {
             content.body = alert.title
         }
-        content.sound = isDocumentedUninstall ? nil : .default
-        content.interruptionLevel = isDocumentedUninstall ? .active : .timeSensitive
-        content.categoryIdentifier = isDocumentedUninstall ? "NICK_UNINSTALL" : "THREAT_ALERT"
+        content.sound = presentation.isDocumentedUninstall ? nil : .default
+        content.interruptionLevel = presentation.isDocumentedUninstall ? .active : .timeSensitive
+        content.categoryIdentifier = presentation.categoryIdentifier
         content.userInfo = ["alertID": alert.id.uuidString]
 
         let request = UNNotificationRequest(
@@ -178,6 +176,40 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         } catch {
             Self.log.error("Failed to deliver notification: \(error.localizedDescription)")
         }
+    }
+
+    struct Presentation: Equatable {
+        let requiresVisibleDelivery: Bool
+        let isDocumentedUninstall: Bool
+        let title: String?
+        let body: String?
+        let categoryIdentifier: String
+    }
+
+    static func presentation(for alert: ThreatAlert) -> Presentation {
+        let isDocumentedUninstall = alert.contributingSignals.contains {
+            $0.metadata["rule"] == "nick_documented_uninstall"
+        }
+        if isDocumentedUninstall {
+            return Presentation(
+                requiresVisibleDelivery: true,
+                isDocumentedUninstall: true,
+                title: "Nick is being moved to the Trash",
+                body: "Use Nick Uninstaller later if you also want to remove protection components and generated data.",
+                categoryIdentifier: "NICK_UNINSTALL"
+            )
+        }
+
+        let isCaptureActivation = alert.contributingSignals.contains {
+            $0.source == .avCapture && $0.metadata["reason"] == "capture_device_active"
+        }
+        return Presentation(
+            requiresVisibleDelivery: isCaptureActivation,
+            isDocumentedUninstall: false,
+            title: isCaptureActivation ? alert.title : nil,
+            body: isCaptureActivation ? alert.description : nil,
+            categoryIdentifier: "THREAT_ALERT"
+        )
     }
 
     static func tamperNotificationBody(alert: ThreatAlert, signal: ThreatSignal) -> String {
