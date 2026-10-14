@@ -3,6 +3,34 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import Security
+
+enum ProtectionAuthorizationExternalFormVerifier {
+    static func verify(_ data: Data?, rightName: String) -> Bool {
+        guard let data, data.count == MemoryLayout<AuthorizationExternalForm>.size else {
+            return false
+        }
+        var external = AuthorizationExternalForm()
+        _ = withUnsafeMutableBytes(of: &external) { data.copyBytes(to: $0) }
+        var authorization: AuthorizationRef?
+        guard AuthorizationCreateFromExternalForm(&external, &authorization) == errAuthorizationSuccess,
+              let authorization else { return false }
+        defer { AuthorizationFree(authorization, []) }
+        return rightName.withCString { name in
+            var item = AuthorizationItem(name: name, valueLength: 0, value: nil, flags: 0)
+            return withUnsafeMutablePointer(to: &item) { pointer in
+                var rights = AuthorizationRights(count: 1, items: pointer)
+                return AuthorizationCopyRights(
+                    authorization,
+                    &rights,
+                    nil,
+                    [.extendRights],
+                    nil
+                ) == errAuthorizationSuccess
+            }
+        }
+    }
+}
 
 enum PersistentTrustEligibilityPolicy {
     static let forbiddenSigningIDs: Set<String> = [

@@ -142,12 +142,14 @@ final class NetworkAnalyzerTests: XCTestCase {
 
     // MARK: - Multiple connections
 
-    func test_signals_mixedConnections_returnsCorrectCount() {
+    func test_signals_mixedConnections_returnsCorrectCount() async {
         let reverseShell = makeConnection(processName: "bash", remoteAddress: "1.2.3.4", remotePort: 4444, state: .established)
         let normal       = makeConnection(processName: "Safari", remoteAddress: "17.x.x.x", remotePort: 443, state: .established)
         let rawIP        = makeConnection(processName: "myapp", remoteAddress: "99.99.99.99", remotePort: 8080, state: .established)
 
-        let signals = scanner.signals(from: [reverseShell, normal, rawIP])
+        let signals = await Task.detached(priority: .utility) {
+            ConnectionScanner().signals(from: [reverseShell, normal, rawIP])
+        }.value
         // Safari is a trusted process, so only reverseShell + rawIP (myapp) fire → 2 signals
         XCTAssertEqual(signals.count, 2)
     }

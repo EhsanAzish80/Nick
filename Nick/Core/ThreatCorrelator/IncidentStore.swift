@@ -1106,6 +1106,10 @@ final class IncidentStore {
         let evidence = alert.contributingSignals.map(Evidence.init(signal:))
         guard !evidence.isEmpty,
               evidence.allSatisfy({ $0.ruleTier == .review }),
+              evidence.allSatisfy({ item in
+                  item.source != .avCapture
+                      || item.metadata["attributionConfidence"] == "authoritative"
+              }),
               let first = evidence.first,
               let identity = first.signingIdentity,
               identity.kind == .signed,

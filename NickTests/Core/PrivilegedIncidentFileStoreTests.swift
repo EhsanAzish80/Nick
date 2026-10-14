@@ -1,4 +1,5 @@
 import XCTest
+import Security
 @testable import Nick
 
 final class PrivilegedIncidentFileStoreTests: XCTestCase {
@@ -392,6 +393,23 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         var weakerRule = expected
         weakerRule["rule"] = ["allow"]
         XCTAssertFalse(ProtectionAuthorizationRightPolicy.isExpected(weakerRule))
+    }
+
+    func test_neverAuthorizedExternalFormIsRefusedByProductionVerifier() throws {
+        let rightName = "com.ehsanazish.nick.modify-protection"
+        var authorization: AuthorizationRef?
+        XCTAssertEqual(AuthorizationCreate(nil, nil, [], &authorization), errAuthorizationSuccess)
+        let created = try XCTUnwrap(authorization)
+        defer { AuthorizationFree(created, [.destroyRights]) }
+
+        var external = AuthorizationExternalForm()
+        XCTAssertEqual(AuthorizationMakeExternalForm(created, &external), errAuthorizationSuccess)
+        let form = withUnsafeBytes(of: external) { Data($0) }
+
+        XCTAssertFalse(ProtectionAuthorizationExternalFormVerifier.verify(
+            form,
+            rightName: rightName
+        ))
     }
 
     func test_incidentStoreRequiresAuthorizationForNewReducingStateOrAction() throws {

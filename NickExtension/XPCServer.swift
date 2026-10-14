@@ -7,7 +7,7 @@ import os
 import Security
 
 private enum ProtectionAuthorization {
-    static let rightName = "com.ehsanazish.nick.modify-protection"
+    fileprivate static let rightName = "com.ehsanazish.nick.modify-protection"
     enum RightState { case valid, installed, repaired(observed: String), failed }
 
     static func ensureRight() -> RightState {
@@ -43,30 +43,6 @@ private enum ProtectionAuthorization {
         return status == errAuthorizationSuccess
     }
 
-    static func verify(_ data: Data?) -> Bool {
-        guard let data, data.count == MemoryLayout<AuthorizationExternalForm>.size else {
-            return false
-        }
-        var external = AuthorizationExternalForm()
-        _ = withUnsafeMutableBytes(of: &external) { data.copyBytes(to: $0) }
-        var authorization: AuthorizationRef?
-        guard AuthorizationCreateFromExternalForm(&external, &authorization) == errAuthorizationSuccess,
-              let authorization else { return false }
-        defer { AuthorizationFree(authorization, []) }
-        return rightName.withCString { name in
-            var item = AuthorizationItem(name: name, valueLength: 0, value: nil, flags: 0)
-            return withUnsafeMutablePointer(to: &item) { pointer in
-                var rights = AuthorizationRights(count: 1, items: pointer)
-                return AuthorizationCopyRights(
-                    authorization,
-                    &rights,
-                    nil,
-                    [.extendRights],
-                    nil
-                ) == errAuthorizationSuccess
-            }
-        }
-    }
 }
 
 // MARK: - ESXPCServer
@@ -177,7 +153,10 @@ final class ESXPCServer: NSObject {
         case .valid, .installed:
             break
         }
-        return ProtectionAuthorization.verify(data)
+        return ProtectionAuthorizationExternalFormVerifier.verify(
+            data,
+            rightName: ProtectionAuthorization.rightName
+        )
     }
 
     private func reportAuthorizationRuleTamper(observed: String) {

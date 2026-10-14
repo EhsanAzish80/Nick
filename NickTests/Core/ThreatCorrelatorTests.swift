@@ -737,6 +737,65 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(result.visibleAlerts.count, 1, "Learning must remain visible, never suppress")
     }
 
+    func test_verdictLearningCanActivateFromAuthoritativeCaptureIncidents() throws {
+        let store = IncidentStore(defaults: isolatedDefaults(), identityValidator: { _, _, _ in true })
+        store.configure(
+            trustedProcessList: TrustedProcessList(),
+            suppressionRules: [],
+            verdictLearningEnabled: true
+        )
+
+        let first = makeAlert(signal: makeAuthoritativeCaptureSignal())
+        _ = store.ingest([first])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: first.id)
+        XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 1)
+
+        store.removeIncidents { _ in true }
+        let second = makeAlert(signal: makeAuthoritativeCaptureSignal())
+        _ = store.ingest([second])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: second.id)
+        XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
+
+        store.removeIncidents { _ in true }
+        let third = makeAlert(signal: makeAuthoritativeCaptureSignal())
+        let result = store.ingest([third])
+        XCTAssertEqual(result.visibleAlerts.first?.severity, .info)
+        XCTAssertEqual(result.visibleAlerts.count, 1, "Capture learning must lower priority, never hide evidence")
+    }
+
+    func test_verdictLearningRefusesContextualCaptureAttribution() throws {
+        let store = IncidentStore(defaults: isolatedDefaults(), identityValidator: { _, _, _ in true })
+        store.configure(
+            trustedProcessList: TrustedProcessList(),
+            suppressionRules: [],
+            verdictLearningEnabled: true
+        )
+        let process = NickProcessInfo(
+            pid: 42,
+            path: "/System/Applications/Photo Booth.app/Contents/MacOS/Photo Booth",
+            name: "Photo Booth",
+            parentPID: 1,
+            parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.PhotoBooth")
+        )
+        let signal = ThreatSignal(
+            source: .avCapture,
+            severity: .medium,
+            title: "Camera activity observed",
+            description: "Photo Booth was frontmost.",
+            context: ThreatSignalContext(processInfo: process, metadata: [
+                "reason": "capture_device_active",
+                "mediaType": "camera",
+                "deviceName": "HD Web Camera",
+                "attributionConfidence": "contextual"
+            ])
+        )
+        let alert = makeAlert(signal: signal)
+        _ = store.ingest([alert])
+        store.performAuthenticatedUserAction(.dismissed, alertID: alert.id)
+        XCTAssertTrue(store.learnedReviewEntries.isEmpty)
+    }
+
     func test_verdictLearningRefusesAllowOnceProtectedUnsignedAndInterpreterEvidence() throws {
         let store = IncidentStore(defaults: isolatedDefaults(), identityValidator: { _, _, _ in true })
         store.configure(
@@ -1564,6 +1623,29 @@ final class ThreatCorrelatorTests: XCTestCase {
                 recommendedAction: severity == .info ? "No action is needed." : "Review"
             ),
             contributingSignals: [signal]
+        )
+    }
+
+    private func makeAuthoritativeCaptureSignal() -> ThreatSignal {
+        let process = NickProcessInfo(
+            pid: 42,
+            path: "/System/Applications/VoiceMemos.app/Contents/MacOS/VoiceMemos",
+            name: "Voice Memos",
+            parentPID: 1,
+            parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.VoiceMemos")
+        )
+        return ThreatSignal(
+            source: .avCapture,
+            severity: .medium,
+            title: "Microphone activity needs review",
+            description: "Voice Memos used the microphone.",
+            context: ThreatSignalContext(processInfo: process, metadata: [
+                "reason": "capture_device_active",
+                "mediaType": "microphone",
+                "deviceName": "Mac Studio Microphone",
+                "attributionConfidence": "authoritative"
+            ])
         )
     }
 
