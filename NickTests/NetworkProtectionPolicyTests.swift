@@ -1389,9 +1389,11 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
 
         manager.ingestEvents([event])
         while persistenceAttempt < 1 { await Task.yield() }
+        while manager.inFlightEventCount > 0 { await Task.yield() }
         manager.ingestEvents([event])
         await fulfillment(of: [submitted], timeout: 2)
         while persistenceAttempt < 2 { await Task.yield() }
+        while manager.inFlightEventCount > 0 { await Task.yield() }
 
         manager.ingestEvents([event])
         try? await Task.sleep(for: .milliseconds(50))

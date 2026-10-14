@@ -49,6 +49,7 @@ struct SimpleAlertSheet: View {
 
     private var trustEligibleProcess: NickProcessInfo? { TrustedProcessList.eligibleProcess(in: alert) }
     private var networkDomain: String? { TrustedProcessList.networkDomain(in: alert) }
+    private var contributesToLearning: Bool { engine.contributesToVerdictLearning(alert) }
 
     private var incident: SecurityIncident? {
         engine.incidentStore.incidents.first { $0.alert.id == alert.id }
@@ -105,14 +106,18 @@ struct SimpleAlertSheet: View {
         .frame(width: 720, height: 640)
         .background(Color.nickCard)
         .confirmationDialog(
-            "Trust this app?",
+            contributesToLearning ? "Confirm this expected activity?" : "Trust this app?",
             isPresented: $confirmsTrust,
             titleVisibility: .visible
         ) {
-            Button("Trust for 7 Days") { trust() }
+            Button(contributesToLearning ? "Confirm Expected Activity" : "Trust for 7 Days") { trust() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Nick will stop warning about this exact behaviour. It will still warn you about anything new or harmful.")
+            if contributesToLearning {
+                Text("Nick will record this review decision. A second distinct occurrence must also be confirmed before matching review-only findings are lowered to Info. They are never hidden.")
+            } else {
+                Text("Nick will stop warning about this exact behaviour for 7 days. It will still warn you about anything new or harmful.")
+            }
         }
         .confirmationDialog(
             "Move this app to the Trash?",

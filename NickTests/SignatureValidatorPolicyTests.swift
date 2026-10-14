@@ -64,6 +64,22 @@ final class SignatureValidatorPolicyTests: XCTestCase {
         )
     }
 
+    func test_applePlatformIdentityValidatesWithoutSyntheticTeamOU() async {
+        let valid = await Task.detached(priority: .utility) {
+            SignatureValidator.shared.validatesDeveloperIdentity(
+                binaryPath: "/bin/zsh",
+                teamID: "APPLE_PLATFORM",
+                signingIdentifier: "com.apple.zsh"
+            )
+        }.value
+        XCTAssertTrue(valid)
+        XCTAssertFalse(SignatureValidator.shared.validatesDeveloperIdentity(
+            binaryPath: "/private/tmp/not-a-sealed-apple-binary",
+            teamID: "APPLE_PLATFORM",
+            signingIdentifier: "com.apple.zsh"
+        ))
+    }
+
     func test_verifiedBuiltInIdentitiesMatchInstalledAppleBinaries() async {
         let verified: [(String, SigningIdentity)] = [
             (

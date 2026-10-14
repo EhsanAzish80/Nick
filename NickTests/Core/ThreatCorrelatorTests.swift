@@ -727,12 +727,13 @@ final class ThreatCorrelatorTests: XCTestCase {
         )
 
         store.removeIncidents { _ in true }
-        XCTAssertEqual(store.ingest([alert]).visibleAlerts.first?.severity, .medium)
+        let secondAlert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        XCTAssertEqual(store.ingest([secondAlert]).visibleAlerts.first?.severity, .medium)
         store.performAuthenticatedUserAction(.alwaysAllowed, alertID: try XCTUnwrap(store.visibleAlerts.first?.id))
         XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
 
         store.removeIncidents { _ in true }
-        let result = store.ingest([alert])
+        let result = store.ingest([makeAlert(signal: makeSignedSignal(reason: "system_hardening"))])
         XCTAssertEqual(result.visibleAlerts.first?.severity, .info)
         XCTAssertEqual(result.visibleAlerts.count, 1, "Learning must remain visible, never suppress")
     }
@@ -761,6 +762,40 @@ final class ThreatCorrelatorTests: XCTestCase {
         let result = store.ingest([third])
         XCTAssertEqual(result.visibleAlerts.first?.severity, .info)
         XCTAssertEqual(result.visibleAlerts.count, 1, "Capture learning must lower priority, never hide evidence")
+    }
+
+    func test_verdictLearningCountsDistinctOccurrencesOfCanonicalIncident() throws {
+        let store = IncidentStore(defaults: isolatedDefaults(), identityValidator: { _, _, _ in true })
+        store.configure(
+            trustedProcessList: TrustedProcessList(),
+            suppressionRules: [],
+            verdictLearningEnabled: true
+        )
+
+        let first = makeAlert(signal: makeAuthoritativeCaptureSignal())
+        _ = store.ingest([first])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: first.id)
+        XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 1)
+
+        let second = makeAlert(signal: makeAuthoritativeCaptureSignal())
+        let secondResult = store.ingest([second])
+        XCTAssertEqual(secondResult.newlyActionable.count, 1)
+        XCTAssertEqual(secondResult.visibleAlerts.count, 1)
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: first.id)
+        XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
+
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: first.id)
+        XCTAssertEqual(
+            store.learnedReviewEntries.first?.confirmationCount,
+            2,
+            "Repeated actions on one occurrence must not activate learning"
+        )
+
+        let third = makeAlert(signal: makeAuthoritativeCaptureSignal())
+        let thirdResult = store.ingest([third])
+        XCTAssertTrue(thirdResult.newlyActionable.isEmpty)
+        XCTAssertEqual(thirdResult.visibleAlerts.count, 1)
+        XCTAssertEqual(thirdResult.visibleAlerts.first?.severity, .info)
     }
 
     func test_verdictLearningRefusesContextualCaptureAttribution() throws {
@@ -851,8 +886,9 @@ final class ThreatCorrelatorTests: XCTestCase {
         _ = store.ingest([reviewAlert])
         store.performAuthenticatedUserAction(.alwaysAllowed, alertID: reviewAlert.id)
         store.removeIncidents { _ in true }
-        _ = store.ingest([reviewAlert])
-        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: reviewAlert.id)
+        let secondReviewAlert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([secondReviewAlert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: secondReviewAlert.id)
         XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
 
         store.removeIncidents { _ in true }
@@ -880,8 +916,9 @@ final class ThreatCorrelatorTests: XCTestCase {
         _ = store.ingest([applicationAlert])
         store.performAuthenticatedUserAction(.alwaysAllowed, alertID: applicationAlert.id)
         store.removeIncidents { _ in true }
-        _ = store.ingest([applicationAlert])
-        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: applicationAlert.id)
+        let secondApplicationAlert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([secondApplicationAlert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: secondApplicationAlert.id)
         XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
 
         store.removeIncidents { _ in true }
@@ -911,15 +948,19 @@ final class ThreatCorrelatorTests: XCTestCase {
         store.resetLearnedEntry(id: entryID)
         XCTAssertTrue(store.learnedReviewEntries.isEmpty)
 
-        _ = store.ingest([alert])
-        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: alert.id)
         store.removeIncidents { _ in true }
-        _ = store.ingest([alert])
-        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: alert.id)
+        let firstAfterReset = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([firstAfterReset])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: firstAfterReset.id)
+        store.removeIncidents { _ in true }
+        let secondAfterReset = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([secondAfterReset])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: secondAfterReset.id)
         XCTAssertEqual(store.learnedReviewEntries.first?.confirmationCount, 2)
         clock.addTimeInterval(IncidentStore.learnedEntryLifetime + 1)
         store.removeIncidents { _ in true }
-        XCTAssertEqual(store.ingest([alert]).visibleAlerts.first?.severity, .medium)
+        let afterExpiry = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        XCTAssertEqual(store.ingest([afterExpiry]).visibleAlerts.first?.severity, .medium)
         XCTAssertTrue(store.learnedReviewEntries.isEmpty)
 
         let entries = (0..<(IncidentStore.maximumLearnedEntriesPerIdentity + 5)).map { index in
