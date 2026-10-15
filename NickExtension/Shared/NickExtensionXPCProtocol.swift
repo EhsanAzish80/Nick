@@ -330,6 +330,7 @@ enum IncidentStoreWritePolicy {
     func requestQuarantineFile(
         path: String,
         expectedThreatName: String,
+        expectedSHA256: String,
         reply: @escaping (Bool, String?, Data?) -> Void
     )
 

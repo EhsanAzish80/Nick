@@ -936,6 +936,7 @@ public final class ExtensionXPCClient: NSObject {
     public func requestQuarantineFile(
         path: String,
         expectedThreatName: String,
+        expectedSHA256: String = "",
         completion: @escaping (Result<QuarantineRecord, QuarantineFailure>) -> Void
     ) {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
@@ -946,7 +947,11 @@ public final class ExtensionXPCClient: NSObject {
             )))
             return
         }
-        proxy.requestQuarantineFile(path: path, expectedThreatName: expectedThreatName) {
+        proxy.requestQuarantineFile(
+            path: path,
+            expectedThreatName: expectedThreatName,
+            expectedSHA256: expectedSHA256
+        ) {
             [weak self] success, message, recordData in
             Task { @MainActor [weak self] in
                 if success,

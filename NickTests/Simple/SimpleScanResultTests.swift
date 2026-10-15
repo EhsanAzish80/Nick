@@ -29,6 +29,50 @@ final class SimpleScanResultTests: XCTestCase {
         XCTAssertFalse(result.headline.contains("/"))
     }
 
+    func test_fileCheckRetainsReviewedHashAndThreatNameForSafeRemediation() {
+        let path = "/private/tmp/eicar.com"
+        let hash = String(repeating: "a", count: 64)
+        let detected = YARAMatch(
+            ruleName: "eicar_exact_hash",
+            tags: ["signature"],
+            filePath: path,
+            metadata: [
+                "description": "EICAR Anti-Malware Test File",
+                "sha256": hash,
+            ]
+        )
+
+        let result = SimpleScanResult.fileCheck(
+            target: URL(fileURLWithPath: path),
+            matches: [detected],
+            classify: { _ in .threat }
+        )
+
+        XCTAssertEqual(result.reviewedHashes[path], hash)
+        XCTAssertEqual(result.threatNames[path], "EICAR Anti-Malware Test File")
+    }
+
+    func test_scannerHashOverridesLaterFallbackHash() {
+        let path = "/private/tmp/eicar.com"
+        let reviewedHash = String(repeating: "b", count: 64)
+        let laterHash = String(repeating: "c", count: 64)
+        let detected = YARAMatch(
+            ruleName: "eicar_exact_hash",
+            tags: ["signature"],
+            filePath: path,
+            metadata: ["sha256": reviewedHash]
+        )
+
+        let result = SimpleScanResult.fileCheck(
+            target: URL(fileURLWithPath: path),
+            matches: [detected],
+            reviewedHashes: [path: laterHash],
+            classify: { _ in .threat }
+        )
+
+        XCTAssertEqual(result.reviewedHashes[path], reviewedHash)
+    }
+
     func test_safeVerdictsAreNotFlagged() {
         let result = SimpleScanResult.fileCheck(
             target: URL(fileURLWithPath: "/Applications/App.app"),

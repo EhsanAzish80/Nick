@@ -450,6 +450,7 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     func requestQuarantineFile(
         path: String,
         expectedThreatName: String,
+        expectedSHA256: String,
         reply: @escaping (Bool, String?, Data?) -> Void
     ) {
         guard let scanner = ESXPCServer.fileScannerRef,
@@ -469,6 +470,17 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
         DispatchQueue.global(qos: .userInitiated).async {
             let result = scanner.scan(filePath: standardPath)
+            let reviewedHash = expectedSHA256.lowercased()
+            if !reviewedHash.isEmpty,
+               (reviewedHash.count != 64 || result.hash.lowercased() != reviewedHash) {
+                let failure = QuarantineFailure(
+                    reason: .fileChanged,
+                    errorDomain: NSPOSIXErrorDomain,
+                    errorCode: Int(ESTALE)
+                )
+                reply(false, failure.statusLine + ". " + failure.guidance, try? JSONEncoder().encode(failure))
+                return
+            }
             guard result.isThreat else {
                 reply(
                     false,
@@ -486,7 +498,7 @@ extension ESXPCServer: NickExtensionXPCProtocol {
                 ?? (expectedThreatName.isEmpty ? "Detected threat" : expectedThreatName)
             let quarantineResult = manager.quarantine(
                 filePath: standardPath,
-                hash: result.hash,
+                hash: reviewedHash.isEmpty ? result.hash : reviewedHash,
                 threatName: threatName,
                 severity: "critical",
                 processPath: "",
