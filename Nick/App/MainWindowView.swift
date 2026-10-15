@@ -269,6 +269,7 @@ struct MainWindowView: View {
         case .scan:       SimpleScanView()
         case .activity:   SimpleActivityView()
         case .protection: SimpleProtectionView()
+        case .storage:    PerformanceView()
         case .settings:   SettingsView()
         }
     }

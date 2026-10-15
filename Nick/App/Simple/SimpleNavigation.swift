@@ -12,6 +12,7 @@ enum SimpleSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     case scan
     case activity
     case protection
+    case storage
     case settings
 
     var id: String { rawValue }
@@ -22,6 +23,7 @@ enum SimpleSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .scan:       "Scan"
         case .activity:   "Activity"
         case .protection: "Protection"
+        case .storage:    "Storage"
         case .settings:   "Settings"
         }
     }
@@ -32,12 +34,13 @@ enum SimpleSection: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .scan:       "magnifyingglass"
         case .activity:   "bell"
         case .protection: "slider.horizontal.3"
+        case .storage:    "internaldrive"
         case .settings:   "gearshape"
         }
     }
 
-    /// The four main destinations (Settings sits at the bottom).
-    static let primary: [SimpleSection] = [.home, .scan, .activity, .protection]
+    /// The main destinations (Settings sits at the bottom).
+    static let primary: [SimpleSection] = [.home, .scan, .activity, .protection, .storage]
 }
 
 // MARK: - Mode switch routing
@@ -50,6 +53,7 @@ enum InterfaceModeRouting {
         case .overview:              .home
         case .smartScan, .scan:      .scan
         case .alerts, .quarantine:   .activity
+        case .performance:           .storage
         case .settings:              .settings
         default:                     .home
         }
@@ -61,6 +65,7 @@ enum InterfaceModeRouting {
         case .scan:       .smartScan
         case .activity:   .alerts
         case .protection: .settings
+        case .storage:    .performance
         case .settings:   .settings
         }
     }
@@ -68,7 +73,7 @@ enum InterfaceModeRouting {
 
 // MARK: - SimpleSidebar
 
-/// Four items plus Settings, no section headers.
+/// Primary destinations plus Settings, with no section headers.
 struct SimpleSidebar: View {
     @Binding var selection: SimpleSection?
     let activityBadge: Int

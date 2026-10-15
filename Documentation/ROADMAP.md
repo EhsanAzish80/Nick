@@ -127,8 +127,9 @@ gates pass, not on a fixed date. Planned capabilities:
 
 - Join related shell events into one incident chain.
 - Reorganize Settings in both Simple and Advanced modes.
-- Expand the Advanced Storage screen and place the JunkYard cleaner App Store
-  link in Advanced/About. Storage promotion does not belong on Simple Home.
+- Continue expanding the shared Simple and Advanced Storage screen after 5.0.
+  Nick 5.0 credits its JunkYard-powered cleanup engine and links to the full
+  JunkYard Cleaner App Store product from the Storage screen in both modes.
 
 - Publish Nick-maintained, signed YARA, network-rule and hash bundles.
 - Add staged rollout, expiry, rollback, and last-known-good recovery.
