@@ -8,6 +8,23 @@ Open vulnerability details are maintained in a private security tracker and
 are not published before remediation. Report new issues through the private
 channels in [`SECURITY.md`](../SECURITY.md).
 
+### Protection-continuity limits for 5.0
+
+Nick's Endpoint Security extension records a root-owned heartbeat every 45
+seconds. On reconnect it compares the last heartbeat, boot session and clean
+shutdown marker and records one durable interruption or restart event. While
+the extension is unavailable, the app immediately shows a red sensor status,
+notifies the user and records a user-level observation; the extension imports
+that observation on reconnect as `app-observed` corroborating evidence.
+
+This design cannot prevent or reliably attribute actions performed by a
+hostile root user, and root can modify or remove local evidence. If the
+extension never reconnects, it cannot promote the app journal into the
+root-owned incident store; the immediate app status and notification remain
+the only local warning. Nick 5.0 does not ship or register a privileged helper
+for this feature. These limits and the macOS 27.x signal exemptions remain in
+the external security-review scope.
+
 | Area | Current public status |
 |---|---|
 | App-to-extension communication | The Endpoint Security extension accepts connections only from Nick's exact signed app identity, enforced by the XPC listener. Persisted endpoint events are readable only by the extension. |

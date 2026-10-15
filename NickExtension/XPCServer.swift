@@ -349,6 +349,81 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         reply(FileManager.default.contents(atPath: path) ?? Data())
     }
 
+    func recordAuthorizedProtectionStop(
+        reason: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    ) {
+        guard verifyProtectionAuthorization(authorizationExternalForm),
+              let ledger = Self.protectionContinuityLedgerRef else {
+            reply(false)
+            return
+        }
+        let now = Date()
+        let boot = ProtectionBootIdentity.sessionUUID()
+        guard ledger.markAuthorizedStop(now: now, bootSessionUUID: boot, reason: reason) else {
+            reply(false)
+            return
+        }
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/Applications/Nick.app/Contents/MacOS/Nick",
+            pid: 0,
+            parentPid: 0,
+            filePath: nil,
+            decision: .allow,
+            threat: .init(
+                threatName: "Protection turned off by user (authorized)",
+                threatFamily: "protection-continuity",
+                metadata: ["reason": String(reason.prefix(160)), "trust": "root-observed"]
+            )
+        )
+        if let data = try? JSONEncoder().encode(event) { sendThreatToApp(data) }
+        reply(true)
+    }
+
+    func ingestAppObservedProtectionGap(_ payload: Data, reply: @escaping (Bool) -> Void) {
+        guard payload.count <= 4096,
+              let observation = try? JSONDecoder().decode(AppObservedProtectionGap.self, from: payload),
+              let ledger = Self.protectionContinuityLedgerRef else {
+            reply(false)
+            return
+        }
+        guard ledger.ingestAppObservation(observation) else {
+            reply(false)
+            return
+        }
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/Applications/Nick.app/Contents/MacOS/Nick",
+            pid: 0,
+            parentPid: 0,
+            filePath: nil,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: "Nick app observed protection unavailable",
+                threatFamily: "protection-continuity",
+                metadata: [
+                    "trust": "app-observed",
+                    "observationID": observation.id.uuidString,
+                    "observedAt": ISO8601DateFormatter().string(from: observation.observedAt),
+                    "reason": String(observation.reason.prefix(160))
+                ]
+            )
+        )
+        if let data = try? JSONEncoder().encode(event) { sendThreatToApp(data) }
+        reply(true)
+    }
+
+    func recordIntentionalAppExit(pid: Int32, reason: String, reply: @escaping (Bool) -> Void) {
+        guard pid > 1, reason.count <= 160, let registry = Self.intentionalAppExitRegistryRef else {
+            reply(false)
+            return
+        }
+        registry.authorize(pid: pid)
+        reply(true)
+    }
+
     func getPersistedEvents(reply: @escaping (Data) -> Void) {
         reply(eventStore.snapshot())
     }
@@ -718,6 +793,8 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     /// Weak reference to the `FileIntegrityMonitor` used to service
     /// `requestRebuildFIMBaseline` calls from the container app.
     nonisolated(unsafe) static weak var fimMonitorRef: FileIntegrityMonitor?
+    nonisolated(unsafe) static weak var protectionContinuityLedgerRef: ProtectionContinuityLedger?
+    nonisolated(unsafe) static weak var intentionalAppExitRegistryRef: IntentionalAppExitRegistry?
 
     /// Weak reference to the `RansomwareDetector` used to service
     /// `requestDeployCanaries` calls from the container app.

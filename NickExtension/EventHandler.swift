@@ -63,6 +63,7 @@ final class ESEventHandler {
     /// Phase 6 — tamper protection for Nick's own files.
     var tamperProtection: TamperProtection?
     var updateLeaseManager: NickUpdateLeaseManager?
+    var intentionalAppExitRegistry: IntentionalAppExitRegistry?
 
     // MARK: - Private
 
@@ -98,6 +99,73 @@ final class ESEventHandler {
         )
 
         switch msg.event_type {
+
+        // MARK: AUTH_SIGNAL — protect Nick processes from hostile termination
+
+        case ES_EVENT_TYPE_AUTH_SIGNAL:
+            let signalEvent = msg.event.signal
+            let target = signalEvent.target.pointee
+            let targetPID = audit_token_to_pid(target.audit_token)
+            let targetPath = esString(target.executable.pointee.path)
+            let targetIdentity = TamperActorIdentity(
+                teamID: esOptionalString(target.team_id),
+                signingID: esOptionalString(target.signing_id),
+                codesigningFlags: target.codesigning_flags,
+                isPlatformBinary: target.is_platform_binary
+            )
+            let effectiveSender = (msg.version >= 9 ? signalEvent.instigator : nil)?.pointee ?? process
+            let senderPID = audit_token_to_pid(effectiveSender.audit_token)
+            let senderPath = esString(effectiveSender.executable.pointee.path)
+            let senderIdentity = TamperActorIdentity(
+                teamID: esOptionalString(effectiveSender.team_id),
+                signingID: esOptionalString(effectiveSender.signing_id),
+                codesigningFlags: effectiveSender.codesigning_flags,
+                isPlatformBinary: effectiveSender.is_platform_binary
+            )
+            let senderNickValidated = TamperActorValidator.shared.validatesNickActor(
+                auditToken: effectiveSender.audit_token,
+                identity: senderIdentity
+            ) || TamperActorValidator.shared.validatesNickUpdateActor(
+                auditToken: effectiveSender.audit_token,
+                identity: senderIdentity
+            )
+            let deadlineExpired = mach_absolute_time() >= msg.deadline
+            let deny = !deadlineExpired && NickSignalProtectionPolicy.shouldDeny(
+                signal: Int32(signalEvent.sig),
+                targetIdentity: targetIdentity,
+                senderIdentity: senderIdentity,
+                senderNickIdentityValidated: senderNickValidated
+            )
+            esClient?.respond(to: message, allow: !deny)
+            if deny {
+                dispatchQueue.async { [weak self] in
+                    let event = ESEvent(
+                        eventType: .notifyWrite,
+                        processPath: senderPath,
+                        pid: senderPID,
+                        parentPid: parentPid,
+                        filePath: targetPath,
+                        decision: .deny,
+                        threat: .init(
+                            threatName: "Attempt to terminate Nick was blocked",
+                            threatFamily: "tamper",
+                            isCodeSigned: senderIdentity.isValidIdentitySignature,
+                            teamID: senderIdentity.teamID,
+                            signingID: senderIdentity.signingID,
+                            metadata: [
+                                "signal": String(signalEvent.sig),
+                                "targetPID": String(targetPID),
+                                "senderPID": String(senderPID),
+                                "senderPath": senderPath,
+                                "reason": "nick_signal_denied"
+                            ]
+                        )
+                    )
+                    if let data = try? self?.encoder.encode(event) {
+                        self?.xpcServer?.sendThreatToApp(data)
+                    }
+                }
+            }
 
         // MARK: AUTH_EXEC — block known-bad binaries on execution
 
@@ -782,7 +850,57 @@ final class ESEventHandler {
             // Phase 6: mark process exit in tree
             let exitCode: Int32 = 0  // exit code not provided by notify_exit in this binding
             processTree?.recordExit(pid: pid, exitCode: exitCode)
-            // Exits reclaim the behavioural timeline; they are not alerts.
+            if NickSignalProtectionPolicy.protectsTarget(tamperActorIdentity),
+               tamperActorIdentity.signingID == "com.ehsanazish.nick" {
+                let exit = intentionalAppExitRegistry?.consume(pid: pid)
+                    ?? (intentional: false, signal: nil)
+                if !exit.intentional {
+                    let signal = exit.signal
+                    dispatchQueue.async { [weak self] in
+                        let event = ESEvent(
+                            eventType: .notifyExit,
+                            processPath: processPath,
+                            pid: pid,
+                            parentPid: parentPid,
+                            filePath: nil,
+                            decision: .notApplicable,
+                            threat: .init(
+                                threatName: "Nick was terminated unexpectedly",
+                                threatFamily: "tamper",
+                                isCodeSigned: true,
+                                teamID: tamperActorIdentity.teamID,
+                                signingID: tamperActorIdentity.signingID,
+                                metadata: [
+                                    "reason": "nick_unexpected_exit",
+                                    "killerPID": signal.map { String($0.senderPID) } ?? "unknown",
+                                    "killerPath": signal?.senderPath ?? "unknown",
+                                    "signal": signal.map { String($0.signal) } ?? "unknown"
+                                ]
+                            )
+                        )
+                        if let data = try? self?.encoder.encode(event) {
+                            self?.xpcServer?.sendThreatToApp(data)
+                        }
+                    }
+                }
+            }
+
+        case ES_EVENT_TYPE_NOTIFY_SIGNAL:
+            // AUTH_SIGNAL owns enforcement and durable denial evidence. Keep
+            // the notify subscription so permitted root/platform signals can
+            // be correlated with a subsequent unexpected app exit in field logs.
+            let signalEvent = msg.event.signal
+            let targetPID = audit_token_to_pid(signalEvent.target.pointee.audit_token)
+            let sender = (msg.version >= 9 ? signalEvent.instigator : nil)?.pointee ?? process
+            intentionalAppExitRegistry?.recordSignal(
+                targetPID: targetPID,
+                context: .init(
+                    senderPID: audit_token_to_pid(sender.audit_token),
+                    senderPath: esString(sender.executable.pointee.path),
+                    signal: Int32(signalEvent.sig),
+                    observedAt: Date()
+                )
+            )
 
         // MARK: NOTIFY_MOUNT — Phase 5: scan external volumes
 

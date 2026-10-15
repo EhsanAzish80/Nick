@@ -5,6 +5,117 @@
 import Darwin
 import Foundation
 
+struct ProtectionHeartbeat: Codable, Equatable, Sendable {
+    let sequence: UInt64
+    let wallTime: Date
+    let bootSessionUUID: String
+}
+
+struct ProtectionCleanStop: Codable, Equatable, Sendable {
+    let heartbeatSequence: UInt64
+    let wallTime: Date
+    let bootSessionUUID: String
+    let reason: String
+}
+
+struct AppObservedProtectionGap: Codable, Equatable, Sendable {
+    let id: UUID
+    let observedAt: Date
+    let lastHealthyAt: Date?
+    let reason: String
+}
+
+struct ProtectionContinuityIncident: Equatable, Sendable {
+    enum Kind: String, Equatable, Sendable { case interrupted, resumedAfterRestart, authorizedStop }
+    let kind: Kind
+    let startedAt: Date?
+    let endedAt: Date
+    let detail: String
+    let appObservations: [AppObservedProtectionGap]
+}
+
+enum ProtectionContinuityPolicy {
+    struct Decision: Equatable, Sendable {
+        let kind: ProtectionContinuityIncident.Kind
+        let transitionKey: String
+    }
+
+    static func evaluate(
+        previous: ProtectionHeartbeat,
+        currentBootSessionUUID: String,
+        bootTime: Date
+    ) -> Decision {
+        if previous.bootSessionUUID == currentBootSessionUUID {
+            return Decision(
+                kind: .interrupted,
+                transitionKey: "gap:\(previous.bootSessionUUID):\(previous.sequence)"
+            )
+        }
+        let kind: ProtectionContinuityIncident.Kind = previous.wallTime < bootTime.addingTimeInterval(-120)
+            ? .interrupted : .resumedAfterRestart
+        return Decision(
+            kind: kind,
+            transitionKey: "boot:\(currentBootSessionUUID):\(previous.sequence):\(kind.rawValue)"
+        )
+    }
+
+    static func acceptsSequence(current: UInt64?, proposed: UInt64) -> Bool {
+        proposed > (current ?? 0)
+    }
+}
+
+enum NickSignalProtectionPolicy {
+    static let protectedSignals: Set<Int32> = [SIGKILL, SIGTERM, SIGSTOP, SIGINT, SIGHUP, SIGQUIT]
+    static let appleAllowedSigningIDs: Set<String> = [
+        "com.apple.launchd", "com.apple.installer", "com.apple.installd",
+        "com.apple.package_script_service", "com.apple.shove"
+    ]
+
+    static func protectsTarget(_ identity: TamperActorIdentity) -> Bool {
+        identity.teamID == TamperProtectionPolicy.nickTeamID
+            && identity.isValidIdentitySignature
+            && identity.signingID.map(TamperProtectionPolicy.nickMaintenanceSigningIDs.contains) == true
+    }
+
+    static func shouldDeny(
+        signal: Int32,
+        targetIdentity: TamperActorIdentity,
+        senderIdentity: TamperActorIdentity,
+        senderNickIdentityValidated: Bool
+    ) -> Bool {
+        guard protectedSignals.contains(signal), protectsTarget(targetIdentity) else { return false }
+        if senderNickIdentityValidated { return false }
+        if senderIdentity.isPlatformBinary,
+           let signingID = senderIdentity.signingID,
+           appleAllowedSigningIDs.contains(signingID) { return false }
+        return true
+    }
+}
+
+enum ProtectionBootIdentity {
+    static func sessionUUID() -> String {
+        sysctlString("kern.bootsessionuuid") ?? "unknown-boot"
+    }
+
+    static func bootTime() -> Date {
+        var value = timeval()
+        var size = MemoryLayout<timeval>.size
+        if sysctlbyname("kern.boottime", &value, &size, nil, 0) == 0 {
+            return Date(timeIntervalSince1970: TimeInterval(value.tv_sec))
+        }
+        return Date()
+    }
+
+    private static func sysctlString(_ name: String) -> String? {
+        var size = 0
+        guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 1 else { return nil }
+        var bytes = [CChar](repeating: 0, count: size)
+        guard sysctlbyname(name, &bytes, &size, nil, 0) == 0 else { return nil }
+        let content = bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: content, as: UTF8.self)
+    }
+}
+
 enum TamperProtectedOperation: String, Codable, CaseIterable, Sendable {
     case unlink
     case renameSource = "rename-source"

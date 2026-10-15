@@ -240,6 +240,56 @@ final class TamperProtectionPolicyTests: XCTestCase {
         ))
     }
 
+    func test_signalProtectionDeniesUntrustedTerminationButAllowsValidatedMaintenance() {
+        let target = identity(team: TamperProtectionPolicy.nickTeamID, signing: "com.ehsanazish.nick")
+        let terminal = identity(team: "OTHERTEAM", signing: "com.apple.Terminal")
+        XCTAssertTrue(NickSignalProtectionPolicy.shouldDeny(
+            signal: SIGKILL, targetIdentity: target,
+            senderIdentity: terminal, senderNickIdentityValidated: false
+        ))
+        XCTAssertFalse(NickSignalProtectionPolicy.shouldDeny(
+            signal: SIGKILL, targetIdentity: target,
+            senderIdentity: terminal, senderNickIdentityValidated: true
+        ))
+        let launchd = identity(signing: "com.apple.launchd", platform: true)
+        XCTAssertFalse(NickSignalProtectionPolicy.shouldDeny(
+            signal: SIGTERM, targetIdentity: target,
+            senderIdentity: launchd, senderNickIdentityValidated: false
+        ))
+        XCTAssertFalse(NickSignalProtectionPolicy.shouldDeny(
+            signal: SIGUSR1, targetIdentity: target,
+            senderIdentity: terminal, senderNickIdentityValidated: false
+        ))
+    }
+
+    func test_continuityPolicySameBootIsGapAndRebootIsInformational() {
+        let boot = Date(timeIntervalSince1970: 10_000)
+        let sameBoot = ProtectionContinuityPolicy.evaluate(
+            previous: .init(sequence: 7, wallTime: boot, bootSessionUUID: "A"),
+            currentBootSessionUUID: "A", bootTime: boot
+        )
+        XCTAssertEqual(sameBoot.kind, .interrupted)
+
+        let restarted = ProtectionContinuityPolicy.evaluate(
+            previous: .init(sequence: 8, wallTime: boot.addingTimeInterval(-30), bootSessionUUID: "A"),
+            currentBootSessionUUID: "B", bootTime: boot
+        )
+        XCTAssertEqual(restarted.kind, .resumedAfterRestart)
+
+        let preexistingGap = ProtectionContinuityPolicy.evaluate(
+            previous: .init(sequence: 9, wallTime: boot.addingTimeInterval(-300), bootSessionUUID: "A"),
+            currentBootSessionUUID: "B", bootTime: boot
+        )
+        XCTAssertEqual(preexistingGap.kind, .interrupted)
+    }
+
+    func test_continuityHeartbeatSequenceRejectsRollbackAndReplay() {
+        XCTAssertTrue(ProtectionContinuityPolicy.acceptsSequence(current: nil, proposed: 1))
+        XCTAssertTrue(ProtectionContinuityPolicy.acceptsSequence(current: 41, proposed: 42))
+        XCTAssertFalse(ProtectionContinuityPolicy.acceptsSequence(current: 42, proposed: 42))
+        XCTAssertFalse(ProtectionContinuityPolicy.acceptsSequence(current: 42, proposed: 1))
+    }
+
     private func identity(
         team: String? = nil,
         signing: String,
