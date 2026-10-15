@@ -61,6 +61,7 @@ final class InterfaceModeRoutingTests: XCTestCase {
         XCTAssertEqual(InterfaceModeRouting.simpleSection(for: .scan), .scan)
         XCTAssertEqual(InterfaceModeRouting.simpleSection(for: .alerts), .activity)
         XCTAssertEqual(InterfaceModeRouting.simpleSection(for: .quarantine), .activity)
+        XCTAssertEqual(InterfaceModeRouting.simpleSection(for: .performance), .storage)
         XCTAssertEqual(InterfaceModeRouting.simpleSection(for: .settings), .settings)
         XCTAssertEqual(InterfaceModeRouting.simpleSection(for: .processes), .home)
         XCTAssertEqual(InterfaceModeRouting.simpleSection(for: nil), .home)
@@ -71,11 +72,20 @@ final class InterfaceModeRoutingTests: XCTestCase {
         XCTAssertEqual(InterfaceModeRouting.advancedSection(for: .scan), .smartScan)
         XCTAssertEqual(InterfaceModeRouting.advancedSection(for: .activity), .alerts)
         XCTAssertEqual(InterfaceModeRouting.advancedSection(for: .protection), .settings)
+        XCTAssertEqual(InterfaceModeRouting.advancedSection(for: .storage), .performance)
         XCTAssertEqual(InterfaceModeRouting.advancedSection(for: .settings), .settings)
     }
 
-    func test_simpleSidebarHasFourItemsPlusSettings() {
-        XCTAssertEqual(SimpleSection.primary, [.home, .scan, .activity, .protection])
-        XCTAssertEqual(SimpleSection.allCases.count, 5)
+    func test_simpleSidebarIncludesStoragePlusSettings() {
+        XCTAssertEqual(SimpleSection.primary, [.home, .scan, .activity, .protection, .storage])
+        XCTAssertEqual(SimpleSection.allCases.count, 6)
+    }
+
+    func testStorageProductReferenceUsesJunkYardCleanerAppStoreListing() {
+        XCTAssertEqual(StorageProductReference.name, "JunkYard Cleaner")
+        XCTAssertEqual(
+            StorageProductReference.appStoreURL.absoluteString,
+            "https://apps.apple.com/app/junkyard-cleaner/id6759726421"
+        )
     }
 }

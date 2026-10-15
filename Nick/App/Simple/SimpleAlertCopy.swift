@@ -13,6 +13,7 @@ struct SimpleAlertCopy: Equatable {
     enum Status: String, Equatable {
         case blocked = "Blocked"
         case threat = "Threat"
+        case needsReview = "Needs review"
         case warning = "Warning"
         case info = "Info"
     }
@@ -37,25 +38,33 @@ struct SimpleAlertCopy: Equatable {
         now: Date = Date()
     ) -> SimpleAlertCopy {
         let when = HomeFormatting.dayAndTime(alert.lastSeen, now: now)
+        let behavior = BehaviorIncidentPresentation(alert: alert)
 
         let status: Status
         let tone: Tone
         let title: String
         let reassurance: String
-        switch (isQuarantined, user.severity) {
-        case (true, _):
+        switch (isQuarantined, behavior.status, user.severity) {
+        case (true, _, _):
             status = .blocked; tone = .danger
             title = "Nick stopped a harmful app"
             reassurance = "It can’t run from Quarantine"
-        case (false, .critical):
+        case (false, .needsReview, _):
+            status = .needsReview
+            tone = .danger
+            title = user.headline
+            reassurance = alert.evidenceState() == .processActive ? "Still running" : "The command has finished"
+        case (false, _, .critical):
             status = .threat; tone = .danger
             title = user.headline
-            reassurance = fileStillPresent ? "Take a look now" : "It’s no longer on your Mac"
-        case (false, .warning):
+            reassurance = behavior.isBehavior
+                ? (alert.evidenceState() == .processActive ? "Still running" : "The command has finished")
+                : (fileStillPresent ? "Take a look now" : "It’s no longer on your Mac")
+        case (false, _, .warning):
             status = .warning; tone = .warning
             title = user.headline
             reassurance = "Probably fine, but worth a look"
-        case (false, .safe):
+        case (false, _, .safe):
             status = .info; tone = .safe
             title = user.headline
             reassurance = "No action needed"

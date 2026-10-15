@@ -1238,7 +1238,8 @@ struct ExtensionFinding: Sendable {
                 isTamper: isTamper,
                 isManagementObservation: isManagementObservation,
                 isNickMaintenance: isNickMaintenance,
-                isDocumentedUninstall: isDocumentedUninstall
+                isDocumentedUninstall: isDocumentedUninstall,
+                isLOLBinBehavior: isLOLBinBehavior
             ),
             context: ThreatSignalContext(
                 processInfo: process,
@@ -1267,7 +1268,8 @@ struct ExtensionFinding: Sendable {
         isTamper: Bool,
         isManagementObservation: Bool,
         isNickMaintenance: Bool,
-        isDocumentedUninstall: Bool
+        isDocumentedUninstall: Bool,
+        isLOLBinBehavior: Bool
     ) -> String {
         if isManagementObservation {
             return "Nick observed routine use of Apple's system-extension management tool."
@@ -1287,6 +1289,20 @@ struct ExtensionFinding: Sendable {
         }
         if isDocumentedUninstall {
             return "Finder is moving Nick.app to the Trash. Protection components and generated data remain until you use Nick Uninstaller."
+        }
+        if isLOLBinBehavior {
+            switch event.metadata?["reason"] {
+            case "curl_pipe_shell", "wget_pipe_shell":
+                return "Nick saw a shell run a script supplied by a download command."
+            case "osascript_shell":
+                return "Nick saw AppleScript start a shell command."
+            case "quarantine_removal":
+                return "Nick saw a command remove macOS quarantine metadata."
+            case "base64_payload":
+                return "Nick saw a command decode and execute an encoded payload."
+            default:
+                return "Nick saw a command perform security-sensitive behavior."
+            }
         }
         if event.metadata?["detectionKind"] == "ransomware-behavior" {
             let actor = URL(fileURLWithPath: event.processPath).lastPathComponent
