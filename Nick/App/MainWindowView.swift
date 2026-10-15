@@ -529,19 +529,17 @@ struct OverviewDetailView: View {
 
     // MARK: - Section 1: Status Header
 
-    /// "1 issue needs attention" / "3 issues need attention".
-    nonisolated static func issuesHeadline(_ count: Int) -> String {
-        count == 1 ? "1 issue needs attention" : "\(count) issues need attention"
-    }
-
     private var statusHeader: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let presentation = AdvancedOverviewProtectionStatusModel(
+            status: engine.protectionStatus
+        ).presentation
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
-                Image(systemName: engine.protectionStatus.state == .protected ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                Image(systemName: presentation.systemImage)
                     .font(.title2)
-                    .foregroundStyle(engine.protectionStatus.state == .protected ? Color.nickAccent : Color.nickWarningText)
+                    .foregroundStyle(presentation.tone.statusColor)
                     .accessibilityHidden(true)
-                Text(engine.protectionStatus.state.rawValue)
+                Text(presentation.displayText)
                     .font(.title2.bold())
             }
             Text(statusLine)

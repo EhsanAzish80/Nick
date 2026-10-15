@@ -39,17 +39,22 @@ struct SmartScanContentView: View {
     }
 
     var body: some View {
+        let presentation = SmartScanProtectionStatusModel(
+            status: engine.protectionStatus
+        ).presentation
         VStack(spacing: 0) {
             // ── Header ──────────────────────────────────────────────────
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Smart Scan")
                         .font(.title2.bold())
-                    if status != nil {
-                        Text(engine.protectionStatus.state.rawValue)
-                            .font(.subheadline)
-                            .foregroundStyle(engine.protectionStatus.state == .protected ? Color.statusGreen : Color.statusOrange)
+                    HStack(spacing: 6) {
+                        Image(systemName: presentation.systemImage)
+                            .accessibilityHidden(true)
+                        Text(presentation.displayText)
                     }
+                    .font(.subheadline)
+                    .foregroundStyle(presentation.tone.statusColor)
                 }
                 Spacer()
                 if showDismiss {

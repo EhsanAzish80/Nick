@@ -190,6 +190,9 @@ final class SimpleActivityFeedTests: XCTestCase {
             unreviewedFindings: advancedActionable.count
         )
         let hero = HomeHero.make(
+            presentation: ProtectionStatusPresentation(
+                status: ProtectionStatus(state: .protected, count: 0)
+            ),
             incident: nil,
             issues: issues,
             websitesProtected: true,
@@ -198,7 +201,7 @@ final class SimpleActivityFeedTests: XCTestCase {
             now: now
         )
         XCTAssertEqual(hero.state, .protected)
-        XCTAssertEqual(hero.title, "Your Mac is protected")
+        XCTAssertEqual(hero.title, "Protected")
     }
 
     func test_sensitiveSystemExtensionCommandsRemainNeedsActionInBothModes() throws {
@@ -490,6 +493,9 @@ final class SimpleActivityFeedTests: XCTestCase {
             unreviewedFindings: advancedActionable.count
         )
         let hero = HomeHero.make(
+            presentation: ProtectionStatusPresentation(
+                status: ProtectionStatus(state: .attentionNeeded, count: 1)
+            ),
             incident: nil,
             issues: issues,
             websitesProtected: true,
