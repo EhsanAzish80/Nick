@@ -125,11 +125,18 @@ final class SignatureValidator: @unchecked Sendable {
     ) -> Bool {
         let teamCharacters = CharacterSet.uppercaseLetters.union(.decimalDigits)
         let identifierCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-"))
+        let isApplePlatformIdentity = teamID == "APPLE_PLATFORM"
         guard !teamID.isEmpty,
               !signingIdentifier.isEmpty,
-              teamID.rangeOfCharacter(from: teamCharacters.inverted) == nil,
+              isApplePlatformIdentity || teamID.rangeOfCharacter(from: teamCharacters.inverted) == nil,
               signingIdentifier.rangeOfCharacter(from: identifierCharacters.inverted) == nil
         else { return false }
+
+        if isApplePlatformIdentity {
+            guard Self.isSealedSystemBinaryPath(binaryPath) else { return false }
+            return evaluate(binaryPath: binaryPath)
+                == .signed(teamID: "APPLE_PLATFORM", signingID: signingIdentifier)
+        }
 
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: binaryPath) as CFURL, [], &code) == errSecSuccess,
@@ -156,6 +163,11 @@ final class SignatureValidator: @unchecked Sendable {
         }
         lock.unlock()
 
+        // Apple platform binaries on the sealed system volume intentionally do
+        // not carry a Developer ID TeamIdentifier/OU. Requiring the synthetic
+        // APPLE_PLATFORM marker as a certificate OU makes every genuine Apple
+        // app fail exact-identity validation. Bind those identities to both the
+        // sealed path and Apple's designated requirement instead.
         let requirementText = "identifier \"\(signingIdentifier)\" and anchor apple generic "
             + "and certificate leaf[subject.OU] = \"\(teamID)\""
         var requirement: SecRequirement?

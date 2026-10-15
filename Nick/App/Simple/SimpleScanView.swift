@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import AppKit
+import CryptoKit
 import SwiftUI
 
 // MARK: - SimpleScanView
@@ -15,6 +16,7 @@ struct SimpleScanView: View {
     private enum Job: Equatable { case quick, full, file }
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
 
     @State private var lastJob: Job?
     @State private var quickFinished = false
@@ -23,6 +25,7 @@ struct SimpleScanView: View {
     @State private var fileError: String?
     @State private var trashed: Set<String> = []
     @State private var trashError = false
+    @State private var trashErrorMessage = "It may be in use. Quit the app and try again, or leave it unopened and rescan it."
 
     private var scanner: DeepScanner { engine.deepScanner }
 
@@ -75,7 +78,7 @@ struct SimpleScanView: View {
         .alert("Nick couldn’t move it to the Trash", isPresented: $trashError) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("It may be in use. Quit the app and try again, or drag it to the Trash in Finder.")
+            Text(trashErrorMessage)
         }
     }
 
@@ -178,7 +181,14 @@ struct SimpleScanView: View {
 
     private func resultCard(_ result: SimpleScanResult, again: @escaping () -> Void) -> some View {
         let remaining = zip(result.flaggedNames, result.flaggedPaths)
-            .map { FlaggedFile(name: $0.0, path: $0.1) }
+            .map {
+                FlaggedFile(
+                    name: $0.0,
+                    path: $0.1,
+                    reviewedHash: result.reviewedHashes[$0.1] ?? "",
+                    threatName: result.threatNames[$0.1] ?? "Detected threat"
+                )
+            }
             .filter { !trashed.contains($0.path) }
         let tone: ResultTone = result.verdict == .clear ? .good : (result.verdict == .harmful ? .danger : .warning)
         return VStack(alignment: .leading, spacing: 14) {
@@ -202,7 +212,7 @@ struct SimpleScanView: View {
                                 NSWorkspace.shared.selectFile(file.path, inFileViewerRootedAtPath: "")
                             }
                             .buttonStyle(.link)
-                            Button("Move to Trash") { moveToTrash(file.path) }
+                            Button("Move to Trash") { moveToTrash(file) }
                         }
                         .padding(.vertical, 8)
                         Divider().opacity(0.5)
@@ -229,6 +239,8 @@ struct SimpleScanView: View {
     private struct FlaggedFile: Identifiable {
         let name: String
         let path: String
+        let reviewedHash: String
+        let threatName: String
         var id: String { path }
     }
 
@@ -316,7 +328,15 @@ struct SimpleScanView: View {
             do {
                 let matches = try await engine.scanFile(at: url)
                 let result = await Task.detached(priority: .utility) {
-                    SimpleScanResult.fileCheck(target: url, matches: matches)
+                    let paths = Set(matches.map(\.filePath))
+                    let hashes = Dictionary(uniqueKeysWithValues: paths.compactMap { path in
+                        Self.sha256(path: path).map { (path, $0) }
+                    })
+                    return SimpleScanResult.fileCheck(
+                        target: url,
+                        matches: matches,
+                        reviewedHashes: hashes
+                    )
                 }.value
                 if fileTarget == url { fileResult = result }
             } catch {
@@ -327,12 +347,35 @@ struct SimpleScanView: View {
         }
     }
 
-    private func moveToTrash(_ path: String) {
+    private func moveToTrash(_ file: FlaggedFile) {
+        xpcClient.requestQuarantineFile(
+            path: file.path,
+            expectedThreatName: file.threatName,
+            expectedSHA256: file.reviewedHash
+        ) { result in
+            switch result {
+            case .success:
+                trashed.insert(file.path)
+            case .failure(let failure):
+                trashErrorMessage = failure.statusLine + ". " + failure.guidance
+                trashError = true
+            }
+        }
+    }
+
+    nonisolated private static func sha256(path: String) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
         do {
-            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
-            trashed.insert(path)
+            while true {
+                let data = try handle.read(upToCount: 1_048_576) ?? Data()
+                if data.isEmpty { break }
+                hasher.update(data: data)
+            }
+            return hasher.finalize().map { String(format: "%02x", $0) }.joined()
         } catch {
-            trashError = true
+            return nil
         }
     }
 }

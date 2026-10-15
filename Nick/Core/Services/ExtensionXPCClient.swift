@@ -20,6 +20,27 @@ enum PersistedThreatIngestOutcome: Equatable {
     }
 }
 
+#if DEBUG
+public enum DebugAuthorizationHarnessResult: Equatable, Sendable {
+    case refused
+    case unexpectedlyAccepted
+    case unavailable(String)
+
+    var statusText: String {
+        switch self {
+        case .refused:
+            "Passed: the unapproved form was refused"
+        case .unexpectedlyAccepted:
+            "FAILED: the unapproved form was accepted"
+        case .unavailable(let reason):
+            "UNAVAILABLE: \(reason)"
+        }
+    }
+
+    var passed: Bool { self == .refused }
+}
+#endif
+
 private final class UpdateLeaseReplyBox: @unchecked Sendable {
     private let lock = NSLock()
     private var stored = false
@@ -915,6 +936,7 @@ public final class ExtensionXPCClient: NSObject {
     public func requestQuarantineFile(
         path: String,
         expectedThreatName: String,
+        expectedSHA256: String = "",
         completion: @escaping (Result<QuarantineRecord, QuarantineFailure>) -> Void
     ) {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
@@ -925,7 +947,11 @@ public final class ExtensionXPCClient: NSObject {
             )))
             return
         }
-        proxy.requestQuarantineFile(path: path, expectedThreatName: expectedThreatName) {
+        proxy.requestQuarantineFile(
+            path: path,
+            expectedThreatName: expectedThreatName,
+            expectedSHA256: expectedSHA256
+        ) {
             [weak self] success, message, recordData in
             Task { @MainActor [weak self] in
                 if success,
@@ -1057,28 +1083,40 @@ public final class ExtensionXPCClient: NSObject {
 
 #if DEBUG
     public func debugSendNeverAuthorizedProtectionCall(
-        completion: @escaping (Bool) -> Void
+        completion: @escaping @MainActor @Sendable (DebugAuthorizationHarnessResult) -> Void
     ) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
-            completion(false)
+        guard let connection else {
+            completion(.unavailable("Real-Time Protection is not connected"))
+            return
+        }
+        let errorHandler: @Sendable (Error) -> Void = { error in
+            Task { @MainActor in
+                completion(.unavailable("XPC request failed: \(error.localizedDescription)"))
+            }
+        }
+        guard let proxy = connection.remoteObjectProxyWithErrorHandler(errorHandler)
+            as? NickExtensionXPCProtocol else {
+            completion(.unavailable("the extension proxy is unavailable"))
             return
         }
         var authorization: AuthorizationRef?
-        guard AuthorizationCreate(nil, nil, [], &authorization) == errAuthorizationSuccess,
+        let createStatus = AuthorizationCreate(nil, nil, [], &authorization)
+        guard createStatus == errAuthorizationSuccess,
               let authorization else {
-            completion(false)
+            completion(.unavailable("AuthorizationCreate failed (\(createStatus))"))
             return
         }
         var external = AuthorizationExternalForm()
-        guard AuthorizationMakeExternalForm(authorization, &external) == errAuthorizationSuccess else {
+        let externalStatus = AuthorizationMakeExternalForm(authorization, &external)
+        guard externalStatus == errAuthorizationSuccess else {
             AuthorizationFree(authorization, [.destroyRights])
-            completion(false)
+            completion(.unavailable("AuthorizationMakeExternalForm failed (\(externalStatus))"))
             return
         }
         let form = withUnsafeBytes(of: external) { Data($0) }
         proxy.debugValidateProtectionAuthorization(authorizationExternalForm: form) { accepted in
             AuthorizationFree(authorization, [.destroyRights])
-            completion(accepted)
+            completion(accepted ? .unexpectedlyAccepted : .refused)
         }
     }
 #endif

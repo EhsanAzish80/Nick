@@ -45,6 +45,7 @@ final class NetworkProtectionManager {
     private var storeChangeCount = 0
     private(set) var reloadSummaryCount = 0
     var deliveredEventCount: Int { deliveredEventIDs.count }
+    var inFlightEventCount: Int { inFlightEventIDs.count }
 
     init(eventsURLProvider: @escaping () -> URL? = {
         NetworkProtectionSharedStore.eventsURL()

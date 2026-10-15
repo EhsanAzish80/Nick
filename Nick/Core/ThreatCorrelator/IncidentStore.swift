@@ -573,6 +573,7 @@ final class IncidentStore {
                     : prior.alert.mergingOccurrence(candidate)
                 incidents[index].evidence = incomingEvidence
                 recordAutomaticRemediationAction(from: candidate, at: index)
+                let learnedConfirmationCount = learningConfirmationCount(for: candidate)
                 if isCaptureInactive {
                     incidents[index].state = .resolved
                     incidents[index].isVisible = true
@@ -611,6 +612,22 @@ final class IncidentStore {
                         // superseding write delivers the final count once.
                         newlyActionable.append(incidents[index].alert)
                         notificationIncidentIDs.insert(incidents[index].alert.id)
+                    }
+                } else if let learnedConfirmationCount,
+                          prior.state == .allowed || prior.state == .reviewed {
+                    // A learning candidate must remain reachable for its second
+                    // distinct occurrence. Once active, later matches remain in
+                    // history at informational priority without notifying.
+                    incidents[index].state = learnedConfirmationCount >= 2 ? .reviewed : .new
+                    incidents[index].isVisible = true
+                    if learnedConfirmationCount >= 2 {
+                        incidents[index].alert = incidents[index].alert.with(severity: .info)
+                    }
+                    recordAction(.reopened, actor: .automatic, at: index)
+                    if learnedConfirmationCount < 2, !Self.isSilentReview(candidate) {
+                        newlyActionable.append(incidents[index].alert)
+                        notificationIncidentIDs.insert(incidents[index].alert.id)
+                        notificationSignalIDs.formUnion(candidateSignalIDs)
                     }
                 } else if escalated && !Self.isSilentReview(candidate) {
                     incidents[index].state = .new
@@ -703,6 +720,13 @@ final class IncidentStore {
             incidents[index].state = .new
         }
         persist()
+    }
+
+    /// Whether an authenticated review decision can contribute to local
+    /// verdict learning. Callers use this to avoid installing a suppression
+    /// rule that would make the required second occurrence unreachable.
+    func isEligibleForVerdictLearning(_ alert: ThreatAlert) -> Bool {
+        verdictLearningEnabled && learningKey(for: alert) != nil
     }
 
     @discardableResult
@@ -1073,13 +1097,25 @@ final class IncidentStore {
         return alert.with(severity: .info)
     }
 
+    private func learningConfirmationCount(for alert: ThreatAlert) -> Int? {
+        guard verdictLearningEnabled, let key = learningKey(for: alert) else { return nil }
+        return learnedReviewEntries.first(where: {
+            $0.expiresAt > now()
+                && $0.identityKey == key.identityKey
+                && $0.ruleID == key.ruleID
+                && $0.contextKey == key.contextKey
+        })?.confirmationCount
+    }
+
     private func recordLearning(from incident: SecurityIncident, action: IncidentActionKind) {
         guard let key = learningKey(for: incident.alert) else { return }
         let timestamp = now()
         if let index = learnedReviewEntries.firstIndex(where: {
             $0.identityKey == key.identityKey && $0.ruleID == key.ruleID && $0.contextKey == key.contextKey
         }) {
-            let inserted = learnedReviewEntries[index].confirmedIncidentIDs.insert(incident.id).inserted
+            let confirmationID = incident.alert.contributingSignals
+                .max(by: { $0.timestamp < $1.timestamp })?.id ?? incident.id
+            let inserted = learnedReviewEntries[index].confirmedIncidentIDs.insert(confirmationID).inserted
             guard inserted else { return }
             learnedReviewEntries[index].lastConfirmedAt = timestamp
             learnedReviewEntries[index].expiresAt = timestamp.addingTimeInterval(Self.learnedEntryLifetime)
@@ -1094,7 +1130,8 @@ final class IncidentStore {
                 createdAt: timestamp,
                 lastConfirmedAt: timestamp,
                 expiresAt: timestamp.addingTimeInterval(Self.learnedEntryLifetime),
-                confirmedIncidentIDs: [incident.id]
+                confirmedIncidentIDs: [incident.alert.contributingSignals
+                    .max(by: { $0.timestamp < $1.timestamp })?.id ?? incident.id]
             ))
         }
         enforceLearnedEntryCap(for: key.identityKey)
@@ -1106,6 +1143,10 @@ final class IncidentStore {
         let evidence = alert.contributingSignals.map(Evidence.init(signal:))
         guard !evidence.isEmpty,
               evidence.allSatisfy({ $0.ruleTier == .review }),
+              evidence.allSatisfy({ item in
+                  item.source != .avCapture
+                      || item.metadata["attributionConfidence"] == "authoritative"
+              }),
               let first = evidence.first,
               let identity = first.signingIdentity,
               identity.kind == .signed,

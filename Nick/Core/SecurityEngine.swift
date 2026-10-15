@@ -997,20 +997,29 @@ final class SecurityEngine {
             }
             let name = process.name
             let signedIdentity = "\(teamID)|\(signingID)"
-            suppressionRules.append(SuppressionRule(
-                type: .signedProcess,
-                value: signedIdentity,
-                note: "Accepted \(name) for this behavior",
-                behaviorContext: SuppressionRule.contextFingerprint(for: alert),
-                expiresAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
-            ))
             SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-            // Remove only repeats of this same behavior. Different activity from
-            // the same app remains visible and reviewable.
-            configureIncidentStore()
+            let contributesToLearning = incidentStore.isEligibleForVerdictLearning(alert)
             incidentStore.performAuthenticatedUserAction(.alwaysAllowed, alertID: alertID)
+            if !contributesToLearning {
+                suppressionRules.append(SuppressionRule(
+                    type: .signedProcess,
+                    value: signedIdentity,
+                    note: "Accepted \(name) for this behavior",
+                    behaviorContext: SuppressionRule.contextFingerprint(for: alert),
+                    expiresAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
+                ))
+                // Remove only repeats of this same behavior. Different activity
+                // from the same app remains visible and reviewable.
+                configureIncidentStore()
+            }
             syncAlertsFromStore()
         }
+    }
+
+    /// Whether this review action feeds the two-occurrence local learning
+    /// flow instead of installing an immediate seven-day suppression rule.
+    func contributesToVerdictLearning(_ alert: ThreatAlert) -> Bool {
+        incidentStore.isEligibleForVerdictLearning(alert)
     }
 
     /// Removes a resolved alert (threat was killed / deleted) without adding its

@@ -13,9 +13,12 @@ start/end time, raw counts, severity counts, failures, and links or paths to
 the retained output. Use the same Mac and workload for comparisons. A failed
 or interrupted run is evidence, not a pass.
 
-The YARA gate is reported consistently as the **~17k files (cap 120k)** benign
-corpus. YARA lint always runs. The full corpus runs under the repository's
-approved path policy and at the final release gate.
+The YARA gate is reported as the **benign executable corpus (cap 120k)** and
+always includes the exact candidate count selected on that machine. The count
+varies with the installed macOS and application inventory; do not reuse a
+historical approximate count as if it were a threshold. YARA lint always runs.
+The full corpus runs under the repository's approved path policy and at the
+final release gate.
 
 ## YARA dependency verification
 
@@ -54,7 +57,7 @@ an evidence path; a checkmark without evidence is not a result.
 | 16 | **5.0 learning off.** Install the accepted updated 5.0 candidate, prove active versions again, keep learning off, and repeat the identical workload. | Pending |
 | 17 | **5.0 learning on, pending.** Enable learning with authorization but with no active learned entry; repeat the workload. Protected evidence must be unchanged. | Pending |
 | 18 | **5.0 learning active.** Activate one eligible review-tier pattern using two authenticated decisions from different incidents; repeat the workload. Only that review-tier pattern may be de-prioritized, never hidden. | Pending |
-| 19 | **Automated final gate and closeout.** On the exact final candidate run unit/detection tests, repository validation, YARA lint, documentation drift and the **~17k files (cap 120k)** benign corpus. Record final checksums and every failure. | Pending |
+| 19 | **Automated final gate and closeout.** On the exact final candidate run unit/detection tests, repository validation, YARA lint, documentation drift and the **benign executable corpus (cap 120k)**. Record the exact selected-file count, final checksums and every failure. | Pending |
 
 ## Active-enforcement upgrade matrix
 

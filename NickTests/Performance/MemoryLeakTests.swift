@@ -90,18 +90,17 @@ final class MemoryLeakTests: XCTestCase {
 
     // MARK: - SignatureValidator Cache
 
-    func test_signatureValidator_repeatedEvaluations_doNotAllocateUnboundedly() {
-        let validator = SignatureValidator.shared
-        validator.clearCache()
+    func test_signatureValidator_repeatedEvaluations_doNotAllocateUnboundedly() async {
+        let count = await Task.detached(priority: .utility) {
+            let validator = SignatureValidator.shared
+            validator.clearCache()
+            for _ in 0..<1_000 {
+                _ = validator.evaluate(binaryPath: "/bin/ls")
+            }
+            return validator.cacheCount
+        }.value
 
-        let path = "/bin/ls"
-        // Evaluate the same path 1000 times — should all hit the cache after the first.
-        for _ in 0..<1_000 {
-            _ = validator.evaluate(binaryPath: path)
-        }
-
-        // The cache should have exactly 1 entry for /bin/ls
-        XCTAssertEqual(validator.cacheCount, 1,
+        XCTAssertEqual(count, 1,
             "Repeated evaluations of the same path must not create multiple cache entries")
     }
 

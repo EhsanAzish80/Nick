@@ -340,6 +340,13 @@ enum EvidenceRulePolicy {
         "system_hardening",
         "endpoint_management_observed",
         "network_scamGuardian",
+        // A validated GUI app using camera or microphone is a reviewable
+        // privacy observation. Contextual foreground guesses remain ineligible
+        // in IncidentStore.learningKey.
+        "capture_device_active",
+        // The matching inactive transition must retain the same review tier so
+        // it can resolve the active incident without appearing to escalate it.
+        "capture_device_inactive",
         // Compatibility with incidents created before management observations
         // used their stable reason as the rule identifier.
         "System extension management observed",

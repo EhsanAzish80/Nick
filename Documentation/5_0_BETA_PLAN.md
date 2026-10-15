@@ -26,7 +26,7 @@ the diagnostics they choose to share.
 ## Round sequence
 
 1. Freeze the candidate commit and record its version, build and checksums.
-2. Pass automated tests, YARA lint and the ~17k files (cap 120k) benign corpus.
+2. Pass automated tests, YARA lint and the benign executable corpus (cap 120k), recording the exact selected-file count for that machine.
 3. Complete the consolidated checklist in `5_0_VALIDATION_PLAN.md` on the
    maintainer Mac.
 4. Distribute the manual beta package privately with install, rollback and

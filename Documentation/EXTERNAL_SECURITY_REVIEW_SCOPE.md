@@ -94,7 +94,7 @@ rollback.
 - Architecture and data-flow documents matched to the candidate commit.
 - Entitlements, Info.plists, signing requirements and authorization-right
   definitions for every shipping target.
-- Focused unit/adversarial results, full CI, ~17k files (cap 120k) benign-corpus
+- Focused unit/adversarial results, full CI, benign executable corpus (cap 120k, with the exact selected-file count)
   report, physical-Mac checklist, latency/event-loss/resource measurements,
   SBOM and dependency/provenance manifests.
 - Signed/notarized candidate checksums and expected verification output.

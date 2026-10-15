@@ -323,11 +323,15 @@ private struct AlertRow: View {
                     .help("Mutes only this exact behavior for 24 hours. Different, critical, persistence, and malware activity still alerts.")
 
                     if trustEligibleProcess != nil {
-                        Button("Allow This Behavior for 7 Days") {
+                        Button(engine.contributesToVerdictLearning(alert) ? "Confirm Expected Activity" : "Allow This Behavior for 7 Days") {
                             engine.alwaysAllowBehavior(from: alert.id)
                         }
                         .buttonStyle(.nickSecondary)
-                        .help("Allows this signed app only for the same behavior for 7 days. New, critical, persistence, and malware activity still alerts.")
+                        .help(
+                            engine.contributesToVerdictLearning(alert)
+                                ? "Records this review decision. A second distinct occurrence must be confirmed before matching review-only findings are lowered to Info; detections are never hidden."
+                                : "Allows this signed app only for the same behavior for 7 days. New, critical, persistence, and malware activity still alerts."
+                        )
                     }
                 }
 

@@ -79,21 +79,22 @@ final class ScanPerformanceTests: XCTestCase {
 
     // MARK: - Signature Validator Cache
 
-    func test_signatureValidator_cacheHit_isFastEnough() {
+    func test_signatureValidator_cacheHit_isFastEnough() async {
         // Warm the cache
         let path = "/usr/bin/swift"
         guard FileManager.default.fileExists(atPath: path) else {
             // swift binary may not be at this path in all CI environments
             return
         }
-        _ = SignatureValidator.shared.evaluate(binaryPath: path)
-
-        // Measure cache hit — 100 evaluations should complete in < 100ms total
-        let start = Date()
-        for _ in 0..<100 {
+        let duration = await Task.detached(priority: .utility) {
             _ = SignatureValidator.shared.evaluate(binaryPath: path)
-        }
-        XCTAssertLessThan(Date().timeIntervalSince(start), 0.1, "100 cache hits exceeded 100ms budget")
+            let start = Date()
+            for _ in 0..<100 {
+                _ = SignatureValidator.shared.evaluate(binaryPath: path)
+            }
+            return Date().timeIntervalSince(start)
+        }.value
+        XCTAssertLessThan(duration, 0.1, "100 cache hits exceeded 100ms budget")
     }
 
     // MARK: - ThreatCorrelator

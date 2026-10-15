@@ -64,7 +64,23 @@ final class SignatureValidatorPolicyTests: XCTestCase {
         )
     }
 
-    func test_verifiedBuiltInIdentitiesMatchInstalledAppleBinaries() {
+    func test_applePlatformIdentityValidatesWithoutSyntheticTeamOU() async {
+        let valid = await Task.detached(priority: .utility) {
+            SignatureValidator.shared.validatesDeveloperIdentity(
+                binaryPath: "/bin/zsh",
+                teamID: "APPLE_PLATFORM",
+                signingIdentifier: "com.apple.zsh"
+            )
+        }.value
+        XCTAssertTrue(valid)
+        XCTAssertFalse(SignatureValidator.shared.validatesDeveloperIdentity(
+            binaryPath: "/private/tmp/not-a-sealed-apple-binary",
+            teamID: "APPLE_PLATFORM",
+            signingIdentifier: "com.apple.zsh"
+        ))
+    }
+
+    func test_verifiedBuiltInIdentitiesMatchInstalledAppleBinaries() async {
         let verified: [(String, SigningIdentity)] = [
             (
                 "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
@@ -81,12 +97,13 @@ final class SignatureValidatorPolicyTests: XCTestCase {
         ]
 
         XCTAssertEqual(TrustedProcessList.builtInIdentities, Set(verified.map(\.1)))
-        for (path, expectedIdentity) in verified {
-            XCTAssertEqual(
-                SigningIdentity(status: SignatureValidator.shared.evaluate(binaryPath: path)),
-                expectedIdentity,
-                "Unexpected installed signature for \(path)"
-            )
+        let observed = await Task.detached(priority: .utility) {
+            verified.map { path, _ in
+                SigningIdentity(status: SignatureValidator.shared.evaluate(binaryPath: path))
+            }
+        }.value
+        for ((path, expectedIdentity), actualIdentity) in zip(verified, observed) {
+            XCTAssertEqual(actualIdentity, expectedIdentity, "Unexpected installed signature for \(path)")
         }
     }
 
