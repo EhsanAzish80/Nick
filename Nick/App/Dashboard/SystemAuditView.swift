@@ -72,32 +72,39 @@ struct SystemAuditView: View {
     }
 
     var body: some View {
+        let presentation = SystemAuditProtectionStatusModel(
+            status: engine.protectionStatus
+        ).presentation
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 14) {
+                    IconTile(
+                        systemImage: presentation.systemImage,
+                        tint: presentation.tone.statusColor,
+                        size: 56
+                    )
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("System Audit")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Color.textPrimary)
+                        Text(presentation.displayText)
+                            .font(.system(size: 13))
+                            .foregroundStyle(presentation.tone.statusColor)
+                        if !engine.auditResults.isEmpty {
+                            Text("\(passCount) settings verified")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 16)
+
                 if engine.auditResults.isEmpty {
                     emptyState
                 } else {
-                    // Hero row
-                    HStack(spacing: 14) {
-                        IconTile(
-                            systemImage: issueCount > 0 ? "exclamationmark.shield.fill" : "checkmark.shield.fill",
-                            tint: issueCount > 0 ? .orange : .green,
-                            size: 56
-                        )
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("System Audit")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(Color.textPrimary)
-                            Text(heroSubtitle)
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.textSecondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
-                    .padding(.bottom, 16)
-
                     // Security Score section
                     scoreSection
 
@@ -558,11 +565,6 @@ struct SystemAuditView: View {
     }
 
     // MARK: - Helpers
-
-    private var heroSubtitle: String {
-        guard !engine.auditResults.isEmpty else { return "Run a scan to check your system." }
-        return "\(engine.protectionStatus.state.rawValue) · \(passCount) settings verified · \(engine.protectionStatus.count) item\(engine.protectionStatus.count == 1 ? "" : "s") need review."
-    }
 
     private func xprotectRows(from result: SystemCheckResult) -> [(label: String, value: String)] {
         // currentValue format: "Version 5345 (updated 9d ago)" or "Unreadable"

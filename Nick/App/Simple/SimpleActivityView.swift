@@ -30,21 +30,26 @@ struct SimpleActivityView: View {
         )
     }
 
-    private var subtitle: String {
-        let count = engine.protectionStatus.count
-        switch count {
-        case 0:  return "Nothing needs your attention"
-        case 1:  return "1 thing needs your attention"
-        default: return "\(count) things need your attention"
-        }
+    private var statusModel: SimpleActivityProtectionStatusModel {
+        SimpleActivityProtectionStatusModel(status: engine.protectionStatus)
     }
 
     var body: some View {
         let all = items
         let days = SimpleActivityFeed.days(all.filter(filter.includes))
+        let presentation = statusModel.presentation
 
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 8) {
+                    Image(systemName: presentation.systemImage)
+                        .accessibilityHidden(true)
+                    Text(presentation.displayText)
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .foregroundStyle(presentation.tone.statusColor)
+                .accessibilityElement(children: .combine)
+
                 NotificationPermissionRow()
 
                 filterBar(all)
@@ -65,7 +70,7 @@ struct SimpleActivityView: View {
         }
         .background(Color.nickWindow)
         .navigationTitle("Activity")
-        .navigationSubtitle(subtitle)
+        .navigationSubtitle(statusModel.presentation.displayText)
         .sheet(item: $presentedAlert) { alert in
             AlertDetailView(alert: alert)
                 .environment(engine)

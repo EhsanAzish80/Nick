@@ -58,6 +58,94 @@ struct ProtectionStatus: Equatable, Sendable {
     }
 }
 
+/// The only user-facing presentation of a top-level protection status.
+///
+/// This type deliberately depends on `ProtectionStatus` alone. Individual
+/// screens may add contextual detail below it, but they must not reinterpret
+/// the state, invent a count, or select their own severity treatment.
+struct ProtectionStatusPresentation: Equatable, Sendable {
+    enum Tone: Equatable, Sendable {
+        case protected
+        case attention
+        case critical
+        case unavailable
+    }
+
+    let state: ProtectionStatus.State
+    let headlineText: String
+    let countText: String?
+    let tone: Tone
+    let systemImage: String
+
+    init(status: ProtectionStatus, locale: Locale = .current) {
+        state = status.state
+        let count = DisplayNumber.count(max(0, status.count), locale: locale)
+        switch status.state {
+        case .protected:
+            headlineText = "Protected"
+            countText = nil
+            tone = .protected
+            systemImage = "checkmark.shield.fill"
+        case .attentionNeeded:
+            headlineText = "Attention needed"
+            countText = "\(count) items need review"
+            tone = .attention
+            systemImage = "exclamationmark.shield.fill"
+        case .threatBlocked:
+            headlineText = "Threat blocked"
+            countText = "\(count) items"
+            tone = .critical
+            systemImage = "hand.raised.fill"
+        case .remediationNeeded:
+            headlineText = "Remediation needed"
+            countText = "\(count) items"
+            tone = .critical
+            systemImage = "exclamationmark.triangle.fill"
+        case .sensorProblem:
+            headlineText = "Protection component unavailable"
+            countText = nil
+            tone = .unavailable
+            systemImage = "exclamationmark.triangle.fill"
+        }
+    }
+
+    var displayText: String {
+        guard let countText else { return headlineText }
+        return "\(headlineText) · \(countText)"
+    }
+}
+
+/// Small, named adapters keep all five status surfaces testable without
+/// allowing any of them to add local headline/count logic.
+protocol ProtectionStatusPresenting: Sendable {
+    var presentation: ProtectionStatusPresentation { get }
+}
+
+struct SimpleHomeProtectionStatusModel: ProtectionStatusPresenting {
+    let presentation: ProtectionStatusPresentation
+    init(status: ProtectionStatus) { presentation = .init(status: status) }
+}
+
+struct SimpleActivityProtectionStatusModel: ProtectionStatusPresenting {
+    let presentation: ProtectionStatusPresentation
+    init(status: ProtectionStatus) { presentation = .init(status: status) }
+}
+
+struct AdvancedOverviewProtectionStatusModel: ProtectionStatusPresenting {
+    let presentation: ProtectionStatusPresentation
+    init(status: ProtectionStatus) { presentation = .init(status: status) }
+}
+
+struct SmartScanProtectionStatusModel: ProtectionStatusPresenting {
+    let presentation: ProtectionStatusPresentation
+    init(status: ProtectionStatus) { presentation = .init(status: status) }
+}
+
+struct SystemAuditProtectionStatusModel: ProtectionStatusPresenting {
+    let presentation: ProtectionStatusPresentation
+    init(status: ProtectionStatus) { presentation = .init(status: status) }
+}
+
 enum DisplayNumber {
     static func identifier<T: BinaryInteger>(_ value: T) -> String { String(value) }
 

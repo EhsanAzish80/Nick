@@ -212,7 +212,7 @@ struct HomeIncident: Identifiable, Equatable, Sendable {
             guard user.severity == .critical else { continue }
             candidates.append(HomeIncident(
                 source: .alert(alert.id),
-                title: "Nick found a threat",
+                title: "Security finding detected",
                 body: user.explanation.isEmpty ? user.headline : user.explanation,
                 date: alert.lastSeen
             ))
@@ -245,21 +245,26 @@ struct HomeHero: Equatable {
     let secondaryTitle: String
     let meta: String
 
-    /// Priority: blocked > attention > protected.
     static func make(
+        presentation: ProtectionStatusPresentation,
         incident: HomeIncident?,
         issues: [AttentionIssue],
         websitesProtected: Bool,
         lastCheck: Date?,
         hadRecentWarnings: Bool,
-        protectionStatus: ProtectionStatus? = nil,
         now: Date = Date()
     ) -> HomeHero {
+        let state: State = switch presentation.state {
+        case .protected: .protected
+        case .threatBlocked: .blocked
+        case .attentionNeeded, .remediationNeeded, .sensorProblem: .attention
+        }
+
         if let incident {
             return HomeHero(
-                state: incident.wasQuarantined ? .blocked : .attention,
-                eyebrow: incident.wasQuarantined ? "THREAT QUARANTINED" : "DETECTED",
-                title: incident.title,
+                state: state,
+                eyebrow: presentation.headlineText.uppercased(),
+                title: presentation.displayText,
                 body: incident.body,
                 primaryTitle: "See What Happened",
                 secondaryTitle: incident.wasQuarantined ? "Delete It" : "View Activity",
@@ -270,25 +275,25 @@ struct HomeHero: Equatable {
             let others = issues.count - 1
             let more = others > 0 ? " …and \(others) more thing\(others == 1 ? "" : "s")." : ""
             return HomeHero(
-                state: .attention,
-                eyebrow: "NEEDS ATTENTION",
-                title: first.simpleTitle,
+                state: state,
+                eyebrow: presentation.headlineText.uppercased(),
+                title: presentation.displayText,
                 body: first.simpleBody + more,
                 primaryTitle: "Fix It",
                 secondaryTitle: "Why This Matters",
                 meta: lastCheckText(lastCheck, now: now)
             )
         }
-        if let protectionStatus, protectionStatus.state != .protected {
-            let body = protectionStatus.state == .sensorProblem && protectionStatus.count == 0
+        if presentation.state != .protected {
+            let body = presentation.state == .sensorProblem
                 ? "Open Protection to restore the paused sensor. There are no incident items waiting for review."
-                : "Open Activity to review the \(protectionStatus.count) item\(protectionStatus.count == 1 ? "" : "s") included in this status."
+                : "Open Activity to review the items included in this status."
             return HomeHero(
-                state: protectionStatus.state == .threatBlocked ? .blocked : .attention,
-                eyebrow: protectionStatus.state.rawValue.uppercased(),
-                title: protectionStatus.state.rawValue,
+                state: state,
+                eyebrow: presentation.headlineText.uppercased(),
+                title: presentation.displayText,
                 body: body,
-                primaryTitle: protectionStatus.state == .sensorProblem && protectionStatus.count == 0 ? "View Protection" : "View Activity",
+                primaryTitle: presentation.state == .sensorProblem ? "View Protection" : "View Activity",
                 secondaryTitle: "Why This Matters",
                 meta: lastCheckText(lastCheck, now: now)
             )
@@ -300,9 +305,9 @@ struct HomeHero: Equatable {
             ? "Everything Nick found recently has been handled."
             : "Nothing has needed your attention in the last 7 days."
         return HomeHero(
-            state: .protected,
-            eyebrow: "ALL GOOD",
-            title: "Your Mac is protected",
+            state: state,
+            eyebrow: presentation.headlineText.uppercased(),
+            title: presentation.displayText,
             body: "Nick is checking \(covered) in the background. \(quiet)",
             primaryTitle: "Run Quick Check",
             secondaryTitle: "Scan a File…",
@@ -537,7 +542,7 @@ struct HomeActivityLine: Identifiable, Equatable {
             case .critical:
                 lines.append(HomeActivityLine(
                     id: "a-\(alert.id.uuidString)",
-                    text: "Found a threat: \(user.headline)",
+                    text: "Detected: \(user.headline)",
                     date: alert.lastSeen, tone: .danger, icon: "xmark.shield"
                 ))
             }

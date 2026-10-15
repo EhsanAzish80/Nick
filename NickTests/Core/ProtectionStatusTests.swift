@@ -2,6 +2,58 @@ import XCTest
 @testable import Nick
 
 final class ProtectionStatusTests: XCTestCase {
+    func test_everyViewModelProducesIdenticalPresentationForEveryState() {
+        let cases: [(ProtectionStatus.State, Int, String, String?)] = [
+            (.protected, 0, "Protected", nil),
+            (.attentionNeeded, 2, "Attention needed", "2 items need review"),
+            (.threatBlocked, 2, "Threat blocked", "2 items"),
+            (.remediationNeeded, 2, "Remediation needed", "2 items"),
+            (.sensorProblem, 0, "Protection component unavailable", nil),
+        ]
+
+        for (state, count, headline, countText) in cases {
+            let status = ProtectionStatus(state: state, count: count)
+            let models: [any ProtectionStatusPresenting] = [
+                SimpleHomeProtectionStatusModel(status: status),
+                SimpleActivityProtectionStatusModel(status: status),
+                AdvancedOverviewProtectionStatusModel(status: status),
+                SmartScanProtectionStatusModel(status: status),
+                SystemAuditProtectionStatusModel(status: status),
+            ]
+            let presentations = models.map(\.presentation)
+
+            XCTAssertTrue(
+                presentations.dropFirst().allSatisfy { $0 == presentations[0] },
+                "Mismatch for \(state)"
+            )
+            XCTAssertEqual(presentations[0].headlineText, headline)
+            XCTAssertEqual(presentations[0].countText, countText)
+        }
+    }
+
+    func test_appTargetDoesNotContainFoundAThreatCopy() throws {
+        let testsURL = URL(fileURLWithPath: #filePath)
+        let projectRoot = testsURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appRoot = projectRoot.appendingPathComponent("Nick", isDirectory: true)
+        let enumerator = FileManager.default.enumerator(
+            at: appRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        var matches: [String] = []
+        while let url = enumerator?.nextObject() as? URL {
+            guard ["swift", "strings", "plist"].contains(url.pathExtension.lowercased()),
+                  let contents = try? String(contentsOf: url, encoding: .utf8),
+                  contents.localizedCaseInsensitiveContains("found a threat")
+            else { continue }
+            matches.append(url.path)
+        }
+        XCTAssertTrue(matches.isEmpty, "Legacy copy remains in: \(matches)")
+    }
+
     func test_sameInputsProduceSameStatusAndCountForEveryConsumer() {
         let alert = makeAlert(metadata: ["reason": "review_only"])
         let expected = ProtectionStatus.evaluate(

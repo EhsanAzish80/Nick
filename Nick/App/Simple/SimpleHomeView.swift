@@ -76,13 +76,17 @@ struct SimpleHomeView: View {
     private var hero: HomeHero {
         let weekAgo = Date().addingTimeInterval(-7 * 24 * 60 * 60)
         return HomeHero.make(
+            presentation: statusModel.presentation,
             incident: incident,
             issues: issues,
             websitesProtected: networkProtection.isEnabled,
             lastCheck: engine.lastScanDate,
-            hadRecentWarnings: engine.alerts.contains { $0.lastSeen >= weekAgo },
-            protectionStatus: engine.protectionStatus
+            hadRecentWarnings: engine.alerts.contains { $0.lastSeen >= weekAgo }
         )
+    }
+
+    private var statusModel: SimpleHomeProtectionStatusModel {
+        SimpleHomeProtectionStatusModel(status: engine.protectionStatus)
     }
 
     private var cards: [ProtectionCard] {
@@ -129,16 +133,7 @@ struct SimpleHomeView: View {
     }
 
     private var subtitle: String {
-        let current = self.hero
-        switch current.state {
-        case .protected: return "Protected · \(current.meta.lowercasedFirst)"
-        case .attention:
-            let count = engine.protectionStatus.count
-            if engine.protectionStatus.state == .sensorProblem && count == 0 { return "Sensor problem" }
-            return count == 1 ? "1 thing needs your attention" : "\(count) things need your attention"
-        case .blocked:
-            return incident?.wasQuarantined == true ? "Threat stopped · your files are safe" : "Something needs a look"
-        }
+        statusModel.presentation.displayText
     }
 
     // MARK: Body

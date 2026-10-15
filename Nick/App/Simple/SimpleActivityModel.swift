@@ -199,7 +199,7 @@ enum SimpleActivityFeed {
                 id: "a-\(alert.id.uuidString)",
                 source: .alert(alert.id),
                 title: alert.headline,
-                detail: alert.level == .critical ? "Nick found a threat"
+                detail: alert.level == .critical ? "Nick detected activity"
                     : (alert.level == .warning ? "Nick warned you" : "Nick observed activity"),
                 date: alert.date,
                 status: status
