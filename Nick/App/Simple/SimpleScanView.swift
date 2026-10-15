@@ -24,8 +24,8 @@ struct SimpleScanView: View {
     @State private var fileResult: SimpleScanResult?
     @State private var fileError: String?
     @State private var trashed: Set<String> = []
-    @State private var trashError = false
-    @State private var trashErrorMessage = "It may be in use. Quit the app and try again, or leave it unopened and rescan it."
+    @State private var quarantineError = false
+    @State private var quarantineErrorMessage = "It may be in use. Quit the app and try again, or leave it unopened and rescan it."
 
     private var scanner: DeepScanner { engine.deepScanner }
 
@@ -75,10 +75,10 @@ struct SimpleScanView: View {
         .onChange(of: engine.isScanning) { wasScanning, isScanning in
             if lastJob == .quick, wasScanning, !isScanning { quickFinished = true }
         }
-        .alert("Nick couldn’t move it to the Trash", isPresented: $trashError) {
+        .alert("Nick couldn’t quarantine it", isPresented: $quarantineError) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(trashErrorMessage)
+            Text(quarantineErrorMessage)
         }
     }
 
@@ -212,7 +212,7 @@ struct SimpleScanView: View {
                                 NSWorkspace.shared.selectFile(file.path, inFileViewerRootedAtPath: "")
                             }
                             .buttonStyle(.link)
-                            Button("Move to Trash") { moveToTrash(file) }
+                            Button("Quarantine") { quarantine(file) }
                         }
                         .padding(.vertical, 8)
                         Divider().opacity(0.5)
@@ -347,7 +347,7 @@ struct SimpleScanView: View {
         }
     }
 
-    private func moveToTrash(_ file: FlaggedFile) {
+    private func quarantine(_ file: FlaggedFile) {
         xpcClient.requestQuarantineFile(
             path: file.path,
             expectedThreatName: file.threatName,
@@ -357,8 +357,8 @@ struct SimpleScanView: View {
             case .success:
                 trashed.insert(file.path)
             case .failure(let failure):
-                trashErrorMessage = failure.statusLine + ". " + failure.guidance
-                trashError = true
+                quarantineErrorMessage = failure.statusLine + ". " + failure.guidance
+                quarantineError = true
             }
         }
     }

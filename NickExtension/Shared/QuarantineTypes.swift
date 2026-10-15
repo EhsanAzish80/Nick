@@ -19,21 +19,27 @@ public struct QuarantineFailure: Codable, Sendable, Equatable, Error {
     public let errorDomain: String
     public let errorCode: Int
     public let volumeName: String?
+    /// A bounded, user-facing explanation supplied by the protection service
+    /// when no more specific structured failure reason applies.
+    public let message: String?
 
     public init(
         reason: QuarantineFailureReason,
         errorDomain: String,
         errorCode: Int,
-        volumeName: String? = nil
+        volumeName: String? = nil,
+        message: String? = nil
     ) {
         self.reason = reason
         self.errorDomain = errorDomain
         self.errorCode = errorCode
         self.volumeName = volumeName
+        self.message = message
     }
 
     public var statusLine: String {
-        switch reason {
+        if let message, !message.isEmpty { return message }
+        return switch reason {
         case .readOnlyVolume: "Quarantine failed — the file is on a read-only disk image"
         case .permissionDenied: "Quarantine failed — macOS denied permission to move the file"
         case .fileGone: "The file is no longer present"

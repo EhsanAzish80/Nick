@@ -966,14 +966,19 @@ public final class ExtensionXPCClient: NSObject {
                    let failure = try? JSONDecoder().decode(QuarantineFailure.self, from: recordData) {
                     completion(.failure(failure))
                 } else {
-                    completion(.failure(QuarantineFailure(
-                        reason: .protectionDisconnected,
-                        errorDomain: NSCocoaErrorDomain,
-                        errorCode: CocoaError.Code.xpcConnectionReplyInvalid.rawValue
-                    )))
+                    completion(.failure(Self.unstructuredQuarantineFailure(message: message)))
                 }
             }
         }
+    }
+
+    nonisolated static func unstructuredQuarantineFailure(message: String?) -> QuarantineFailure {
+        QuarantineFailure(
+            reason: message == nil ? .protectionDisconnected : .other,
+            errorDomain: NSCocoaErrorDomain,
+            errorCode: CocoaError.Code.xpcConnectionReplyInvalid.rawValue,
+            message: message.map { String($0.prefix(512)) }
+        )
     }
 
     public func requestAllowFileOnce(

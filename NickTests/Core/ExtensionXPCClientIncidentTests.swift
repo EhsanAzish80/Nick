@@ -173,6 +173,18 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         wait(for: [completed], timeout: 1)
     }
 
+    func test_unstructuredQuarantineReplyPreservesServiceMessage() {
+        let failure = ExtensionXPCClient.unstructuredQuarantineFailure(
+            message: "Nick re-scanned the file and could not confirm the detection. The file was not moved."
+        )
+
+        XCTAssertEqual(
+            failure.statusLine,
+            "Nick re-scanned the file and could not confirm the detection. The file was not moved."
+        )
+        XCTAssertNotEqual(failure.reason, .protectionDisconnected)
+    }
+
     @MainActor
     func test_automaticEROFSUsesSharedWordingAndNotifiesOnce() throws {
         let failure = QuarantineFailure(
