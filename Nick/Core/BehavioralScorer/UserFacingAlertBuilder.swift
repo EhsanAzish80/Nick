@@ -23,6 +23,9 @@ final class UserFacingAlertBuilder: Sendable {
     /// Builds a `UserFacingAlert` from a correlated `ThreatAlert`.
     func build(from alert: ThreatAlert) -> UserFacingAlert {
         let pattern = detectPattern(from: alert)
+        let actions = pattern.actions.filter {
+            $0 != .quarantine || alert.remediableFilePath != nil
+        }
 
         return UserFacingAlert(
             id:              alert.id,
@@ -31,7 +34,7 @@ final class UserFacingAlertBuilder: Sendable {
             assessment:      pattern.assessment,
             recommendedAction: pattern.recommendedAction,
             severity:        pattern.severity ?? mapSeverity(alert.severity),
-            actions:         pattern.actions,
+            actions:         actions,
             technicalDetail: alert,
             timestamp:       alert.timestamp
         )
@@ -253,7 +256,7 @@ final class UserFacingAlertBuilder: Sendable {
                     ? "Download-to-shell command detected"
                     : "Sensitive system-tool command detected",
                 explanation: isDownloadPipe
-                    ? "A shell was launched with a command that pipes downloaded content into an interpreter. Nick recorded the launch; it did not block it."
+                    ? "Nick saw a shell run a command that sends downloaded content directly to a shell interpreter. Nick recorded the launch; it did not block it."
                     : "A system tool was launched with arguments associated with a security-sensitive change. Nick recorded the launch; it did not block it.",
                 assessment: "Potentially dangerous",
                 recommendedAction: "Review the initiating app and command context. If you did not run it, stop the related process and investigate how it started.",

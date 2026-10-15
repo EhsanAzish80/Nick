@@ -302,11 +302,12 @@ struct ProcessScanner {
                     processesByPID: pidToProcess,
                     trustedProcessList: trustedProcessList
                 )
-                let hasPipeAttack = Self.hasExplicitPipeDownloadExecution(
-                    commandLine: Self.parentCommandLine(for: proc.parentPID) ?? "",
-                    parentName: rawParentName
+                let pipeFinding = LOLBinExecutionPolicy.finding(
+                    executablePath: proc.path,
+                    arguments: proc.arguments
                 )
-                if hasPipeAttack {
+                if let pipeFinding,
+                   pipeFinding.reason == "curl_pipe_shell" || pipeFinding.reason == "wget_pipe_shell" {
                     // Strong evidence is never hidden merely because a familiar app
                     // launched the shell.
                     signals.append(ThreatSignal(
@@ -314,7 +315,17 @@ struct ProcessScanner {
                         severity: .critical,
                         title: "Shell piped from download tool",
                         description: "'\(proc.name)' (PID \(proc.pid)) is running from an explicit download-to-shell pipeline under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a download-to-shell pipe attack.",
-                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "curl_pipe_shell", "parent": rawParentName])
+                        context: ThreatSignalContext(
+                            processInfo: Self.resolvingSigningStatus(proc),
+                            metadata: [
+                                "reason": pipeFinding.reason,
+                                "rule": pipeFinding.reason,
+                                "class": "behavior",
+                                "detectionKind": "lolbin-behavior",
+                                "parent": rawParentName,
+                                "matchedCommand": pipeFinding.matchedCommand ?? ""
+                            ]
+                        )
                     ))
                 } else if !hasTerminalParent {
                     signals.append(ThreatSignal(
@@ -465,17 +476,28 @@ struct ProcessScanner {
                     processesByPID: pidToProcess,
                     trustedProcessList: trustedProcessList
                 )
-                let hasPipeAttack = Self.hasExplicitPipeDownloadExecution(
-                    commandLine: Self.parentCommandLine(for: proc.parentPID) ?? "",
-                    parentName: rawParentName
+                let pipeFinding = LOLBinExecutionPolicy.finding(
+                    executablePath: proc.path,
+                    arguments: proc.arguments
                 )
-                if hasPipeAttack {
+                if let pipeFinding,
+                   pipeFinding.reason == "curl_pipe_shell" || pipeFinding.reason == "wget_pipe_shell" {
                     results.append(ThreatSignal(
                         source: .process,
                         severity: .critical,
                         title: "Shell piped from download tool",
                         description: "'\(proc.name)' (PID \(proc.pid)) appeared from an explicit download-to-shell pipeline under parent '\(rawParentName.isEmpty ? "unknown" : rawParentName)', indicating a pipe attack.",
-                        context: ThreatSignalContext(processInfo: proc, metadata: ["reason": "curl_pipe_shell", "parent": rawParentName])
+                        context: ThreatSignalContext(
+                            processInfo: Self.resolvingSigningStatus(proc),
+                            metadata: [
+                                "reason": pipeFinding.reason,
+                                "rule": pipeFinding.reason,
+                                "class": "behavior",
+                                "detectionKind": "lolbin-behavior",
+                                "parent": rawParentName,
+                                "matchedCommand": pipeFinding.matchedCommand ?? ""
+                            ]
+                        )
                     ))
                 } else if !hasTerminalParent {
                     results.append(ThreatSignal(
@@ -493,7 +515,8 @@ struct ProcessScanner {
     }
 
     private static func resolvingSigningStatus(_ process: NickProcessInfo) -> NickProcessInfo {
-        guard process.signingStatus == .pending, !process.path.isEmpty else { return process }
+        guard process.signingStatus == .pending || process.signingStatus == .unknown,
+              !process.path.isEmpty else { return process }
         return NickProcessInfo(
             pid: process.pid, path: process.path, name: process.name,
             parentPID: process.parentPID, parentName: process.parentName,

