@@ -20,7 +20,7 @@ struct SimpleActivityItem: Identifiable, Equatable {
 
     enum Status: String, Equatable {
         case informational = "Observed"
-        case needsAction = "Needs action"
+        case needsAction = "Needs review"
         case threat = "Threat"
         case warning = "Warning"
         case blocked = "Blocked"
@@ -130,8 +130,11 @@ enum SimpleActivityFeed {
     ) -> [AlertInput] {
         alerts.compactMap { alert in
             let user = builder.build(from: alert)
+            let behavior = BehaviorIncidentPresentation(alert: alert)
             let level: AlertInput.Level
-            if !alert.isActionableUserFinding {
+            if behavior.status == .needsReview {
+                level = .critical
+            } else if !alert.isActionableUserFinding {
                 level = .informational
             } else {
                 switch user.severity {
@@ -148,7 +151,8 @@ enum SimpleActivityFeed {
                     : (user.severity == .safe ? "Security finding needs review" : user.headline),
                 level: level,
                 date: alert.lastSeen,
-                needsAction: alert.isActionableUserFinding && actionable.contains(alert.id),
+                needsAction: (behavior.status == .needsReview || alert.isActionableUserFinding)
+                    && actionable.contains(alert.id),
                 isBlocked: alert.isBlockedTamperEvidence
             )
         }

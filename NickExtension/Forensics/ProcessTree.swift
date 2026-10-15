@@ -3,7 +3,130 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import Security
+import Darwin
 import os
+
+struct ResponsibleAppIdentity: Equatable, Sendable {
+    enum Signing: String, Equatable, Sendable {
+        case applePlatform = "Apple platform"
+        case signed = "Signed"
+        case unsigned = "Unsigned"
+        case unknown = "Unknown"
+    }
+
+    let name: String
+    let bundleID: String?
+    let teamID: String?
+    let signing: Signing
+    let path: String
+}
+
+struct ResponsibleAppAttribution: Equatable, Sendable {
+    let app: ResponsibleAppIdentity?
+    let chain: [String]
+
+    var displayName: String { app?.name ?? "Unknown app" }
+    var displayLine: String {
+        guard chain.count > 1 else { return "\(displayName) ran this" }
+        return "\(displayName) ran this · via \(chain.dropFirst().joined(separator: " → "))"
+    }
+
+    var metadata: [String: String] {
+        var values = [
+            "responsibleAppName": displayName,
+            "responsibleAppSigning": app?.signing.rawValue ?? ResponsibleAppIdentity.Signing.unknown.rawValue,
+            "responsibleChain": chain.prefix(5).joined(separator: " → ")
+        ]
+        if let app {
+            values["responsibleAppPath"] = app.path
+            values["responsibleAppBundleID"] = app.bundleID ?? ""
+            values["responsibleAppTeamID"] = app.teamID ?? ""
+        }
+        return values
+    }
+}
+
+protocol ResponsibleProcessIdentityResolving: Sendable {
+    func identity(pid: Int32, pathHint: String?) -> ResponsibleAppIdentity?
+}
+
+/// Reads the running process's kernel-selected code object and validates it
+/// before exposing bundle/team attribution. Caller-supplied identifiers are
+/// never trusted.
+final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentityResolving, @unchecked Sendable {
+    static let shared = SecCodeResponsibleProcessIdentityResolver()
+
+    func identity(pid: Int32, pathHint: String?) -> ResponsibleAppIdentity? {
+        let path = executablePath(pid: pid) ?? pathHint
+        guard let path, !path.isEmpty else { return nil }
+        let appURL = Self.appBundleURL(for: path)
+        let bundle = appURL.flatMap(Bundle.init(url:))
+        let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? URL(fileURLWithPath: path).lastPathComponent
+
+        let attributes: [CFString: Any] = [kSecGuestAttributePid: pid]
+        var code: SecCode?
+        let copyStatus = SecCodeCopyGuestWithAttributes(nil, attributes as CFDictionary, [], &code)
+        guard copyStatus == errSecSuccess, let code else {
+            return ResponsibleAppIdentity(
+                name: name, bundleID: bundle?.bundleIdentifier, teamID: nil,
+                signing: .unknown, path: appURL?.path ?? path
+            )
+        }
+        var staticCode: SecStaticCode?
+        let staticStatus = SecCodeCopyStaticCode(code, [], &staticCode)
+        var information: CFDictionary?
+        let infoStatus = staticCode.map {
+            SecCodeCopySigningInformation(
+                $0, SecCSFlags(rawValue: kSecCSSigningInformation), &information
+            )
+        } ?? errSecCSUnsigned
+        let valid = SecCodeCheckValidity(code, [], nil) == errSecSuccess
+        guard staticStatus == errSecSuccess,
+              infoStatus == errSecSuccess,
+              let info = information as? [String: Any] else {
+            return ResponsibleAppIdentity(
+                name: name, bundleID: bundle?.bundleIdentifier, teamID: nil,
+                signing: valid ? .signed : .unsigned, path: appURL?.path ?? path
+            )
+        }
+        let identifier = info[kSecCodeInfoIdentifier as String] as? String
+        let teamID = info[kSecCodeInfoTeamIdentifier as String] as? String
+        let flags = (info[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
+        let platformFlag = UInt32(0x0400_0000) // CS_PLATFORM_BINARY
+        let signing: ResponsibleAppIdentity.Signing
+        if valid, flags & platformFlag != 0 {
+            signing = .applePlatform
+        } else if valid, identifier != nil {
+            signing = .signed
+        } else {
+            signing = .unsigned
+        }
+        return ResponsibleAppIdentity(
+            name: name,
+            bundleID: bundle?.bundleIdentifier ?? identifier,
+            teamID: teamID,
+            signing: signing,
+            path: appURL?.path ?? path
+        )
+    }
+
+    private func executablePath(pid: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4_096)
+        let count = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard count > 0 else { return nil }
+        let bytes = buffer.prefix(Int(count)).map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    static func appBundleURL(for executablePath: String) -> URL? {
+        let components = URL(fileURLWithPath: executablePath).pathComponents
+        guard let index = components.lastIndex(where: { $0.hasSuffix(".app") }) else { return nil }
+        return URL(fileURLWithPath: NSString.path(withComponents: Array(components.prefix(index + 1))))
+    }
+}
 
 // MARK: - ProcessTree
 
@@ -154,6 +277,56 @@ final class ProcessTree: @unchecked Sendable {
         }
     }
 
+    /// Resolves attribution while the actor and its ancestry are still live.
+    /// The ES responsible process wins when it identifies an application.
+    /// Otherwise ancestry is walked from actor to root, skipping command-line
+    /// intermediaries even when their binary happens to live inside an app.
+    func responsibleApp(
+        actorPID: Int32,
+        responsiblePID: Int32?,
+        resolver: ResponsibleProcessIdentityResolving
+    ) -> ResponsibleAppAttribution {
+        let chain = attackChain(pid: actorPID)
+        let nodeByPID = Dictionary(uniqueKeysWithValues: chain.map { ($0.pid, $0) })
+        let responsible = responsiblePID.flatMap {
+            resolver.identity(pid: $0, pathHint: nodeByPID[$0]?.path)
+        }
+        let responsibleApp = responsible.flatMap { identity in
+            Self.isApplicationIdentity(identity, executablePath: nodeByPID[responsiblePID ?? -1]?.path)
+                ? identity : nil
+        }
+
+        let selected = responsibleApp ?? chain.reversed().lazy.compactMap { node -> ResponsibleAppIdentity? in
+            guard !Self.isCommandLineTool(node.path),
+                  SecCodeResponsibleProcessIdentityResolver.appBundleURL(for: node.path) != nil else { return nil }
+            return resolver.identity(pid: node.pid, pathHint: node.path)
+        }.first
+
+        guard let selected else { return ResponsibleAppAttribution(app: nil, chain: []) }
+        let selectedIndex = chain.firstIndex { node in
+            let appPath = SecCodeResponsibleProcessIdentityResolver.appBundleURL(for: node.path)?.path
+            return appPath == selected.path || node.pid == responsiblePID
+        }
+        let suffix = selectedIndex.map { Array(chain[$0...]) } ?? Array(chain.suffix(4))
+        var labels = [selected.name]
+        for node in suffix.dropFirst() {
+            let label = Self.chainLabel(for: node.path)
+            if labels.last != label { labels.append(label) }
+        }
+        if labels.count == 1, let actor = chain.last {
+            let actorLabel = Self.chainLabel(for: actor.path)
+            if actorLabel != labels[0] { labels.append(actorLabel) }
+        }
+        // Terminal is itself the user-visible launcher. A lone shell beneath it
+        // adds noise; deeper tool chains remain visible (for example an app,
+        // its embedded CLI, then zsh).
+        if selected.name == "Terminal", labels.count == 2,
+           let actor = chain.last, Self.isShellOrInterpreter(actor.path) {
+            labels.removeLast()
+        }
+        return ResponsibleAppAttribution(app: selected, chain: Array(labels.prefix(5)))
+    }
+
     /// Returns `pid` and all of its descendants (breadth-first).
     func subtree(pid: Int32) -> [ProcessNode] {
         lock.withLock {
@@ -254,6 +427,41 @@ final class ProcessTree: @unchecked Sendable {
             }
         }
         return result
+    }
+
+    private static let commandLineTools: Set<String> = [
+        "bash", "sh", "zsh", "python", "python3", "node", "osascript", "curl", "wget",
+        "codex", "codexcli", "systemextensionsctl", "shove"
+    ]
+
+    private static func isApplicationIdentity(
+        _ identity: ResponsibleAppIdentity,
+        executablePath: String?
+    ) -> Bool {
+        guard identity.path.hasSuffix(".app") else { return false }
+        return !isCommandLineTool(executablePath ?? identity.name)
+    }
+
+    private static func isCommandLineTool(_ path: String) -> Bool {
+        commandLineTools.contains(URL(fileURLWithPath: path).lastPathComponent.lowercased())
+    }
+
+    private static func isShellOrInterpreter(_ path: String) -> Bool {
+        let name = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        return ["zsh", "bash", "sh", "python", "python3", "node", "osascript"].contains(name)
+    }
+
+    private static func chainLabel(for path: String) -> String {
+        let value = URL(fileURLWithPath: path).lastPathComponent
+        switch value.lowercased() {
+        case "codexcli", "codex": return "Codex CLI"
+        case "zsh": return "zsh"
+        case "bash": return "bash"
+        case "sh": return "sh"
+        case "systemextensionsctl": return "systemextensionsctl"
+        case "shove": return "shove"
+        default: return value.replacingOccurrences(of: ".app", with: "")
+        }
     }
 
     private func evictOldestBenignNodeIfNeeded() {

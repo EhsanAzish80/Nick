@@ -107,6 +107,7 @@ final class ESEventHandler {
             let targetIdentity = FileIdentity(stat: target.executable.pointee.stat)
             let targetTeamID = esOptionalString(target.team_id)
             let targetSigningID = esOptionalString(target.signing_id)
+            let responsiblePID = audit_token_to_pid(target.responsible_audit_token)
             let execArguments: [String] = withUnsafePointer(to: &msg.event.exec) { event in
                 (0..<es_exec_arg_count(event)).map { esString(es_exec_arg(event, $0)) }
             }
@@ -155,7 +156,8 @@ final class ESEventHandler {
                         verdict: verdict,
                         teamID: targetTeamID,
                         signingID: targetSigningID,
-                        arguments: execArguments
+                        arguments: execArguments,
+                        responsiblePID: responsiblePID > 0 ? responsiblePID : nil
                     )
                 }
             }
@@ -928,7 +930,8 @@ final class ESEventHandler {
         verdict: ScanCache.Entry?,
         teamID: String?,
         signingID: String?,
-        arguments: [String]
+        arguments: [String],
+        responsiblePID: Int32?
     ) {
         var verdict = verdict
         // Skip the content scan only for identity-signed code outside
@@ -977,6 +980,13 @@ final class ESEventHandler {
                     ]
                     if let matchedCommand = finding.matchedCommand {
                         metadata["matchedCommand"] = matchedCommand
+                    }
+                    if let attribution = processTree?.responsibleApp(
+                        actorPID: pid,
+                        responsiblePID: responsiblePID,
+                        resolver: SecCodeResponsibleProcessIdentityResolver.shared
+                    ) {
+                        metadata.merge(attribution.metadata) { current, _ in current }
                     }
                     return metadata
                 }
@@ -1092,6 +1102,13 @@ final class ESEventHandler {
             "response": shouldTerminate ? "terminated" : "alert-only",
             "indicators": alert.indicators.joined(separator: "; ")
         ]
+        if let attribution = processTree?.responsibleApp(
+            actorPID: pid,
+            responsiblePID: nil,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        ) {
+            ransomwareMetadata.merge(attribution.metadata) { current, _ in current }
+        }
         if developmentBuild { ransomwareMetadata["developmentContext"] = "repository-build" }
         if let burst = alert.renameBurst {
             ransomwareMetadata["renameExtension"] = burst.newExtension

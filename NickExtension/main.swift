@@ -213,6 +213,10 @@ tamperProtection.onTamperAttempt = { attempt in
     let event: ESEvent
     switch attempt {
     case .deleteProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
+        let attribution = processTree.responsibleApp(
+            actorPID: pid, responsiblePID: nil,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
         event = ESEvent(
             eventType: .notifyWrite,
             processPath: actorPath,
@@ -231,11 +235,15 @@ tamperProtection.onTamperAttempt = { attempt in
                 metadata: [
                     "tamperOperation": operation.rawValue,
                     "tamperTarget": path
-                ]
+                ].merging(attribution.metadata) { current, _ in current }
             )
         )
     case .renameProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
         let isDocumentedUninstall = disposition == .documentedUninstall
+        let attribution = processTree.responsibleApp(
+            actorPID: pid, responsiblePID: nil,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
         event = ESEvent(
             eventType: .notifyWrite,
             processPath: actorPath,
@@ -258,10 +266,14 @@ tamperProtection.onTamperAttempt = { attempt in
                 metadata: [
                     "tamperOperation": operation.rawValue,
                     "tamperTarget": path
-                ]
+                ].merging(attribution.metadata) { current, _ in current }
             )
         )
     case .systemExtensionsCtlExec(let pid, let isSensitive):
+        let attribution = processTree.responsibleApp(
+            actorPID: pid, responsiblePID: nil,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
         event = ESEvent(
             eventType: .authExec,
             processPath: "/usr/bin/systemextensionsctl",
@@ -272,7 +284,8 @@ tamperProtection.onTamperAttempt = { attempt in
                 threatName: isSensitive
                     ? "System extension removal command observed"
                     : "System extension management observed",
-                threatFamily: isSensitive ? "tamper" : "endpoint-management"
+                threatFamily: isSensitive ? "tamper" : "endpoint-management",
+                metadata: attribution.metadata
             )
         )
     }

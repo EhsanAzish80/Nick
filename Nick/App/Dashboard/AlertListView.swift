@@ -119,6 +119,10 @@ private struct AlertRow: View {
         UserFacingAlertBuilder.shared.build(from: alert)
     }
 
+    private var behaviorPresentation: BehaviorIncidentPresentation {
+        BehaviorIncidentPresentation(alert: alert)
+    }
+
     private var displaySeverity: SignalSeverity {
         guard simpleAlertMode else { return alert.severity }
         switch userAlert.severity {
@@ -202,12 +206,25 @@ private struct AlertRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if behaviorPresentation.isBehavior || behaviorPresentation.responsibleAppName != "Unknown app" {
+                ResponsibleAppLine(presentation: behaviorPresentation)
+            }
+
             // Line 2 — badge · confidence · timestamp
             HStack(spacing: NickSpacing.xs) {
                 if simpleAlertMode {
-                    AssessmentBadge(text: userAlert.assessment, severity: displaySeverity)
+                    AssessmentBadge(
+                        text: behaviorPresentation.isBehavior
+                            ? behaviorPresentation.status.rawValue
+                            : userAlert.assessment,
+                        severity: displaySeverity
+                    )
                 } else {
-                    SeverityBadge(severity: alert.severity)
+                    if behaviorPresentation.isBehavior {
+                        AssessmentBadge(text: behaviorPresentation.status.rawValue, severity: displaySeverity)
+                    } else {
+                        SeverityBadge(severity: alert.severity)
+                    }
                 }
                 Text("·")
                     .font(.nickCaption)
@@ -270,6 +287,22 @@ private struct AlertRow: View {
             // Contributing signals — only in technical mode
             if !simpleAlertMode, !alert.contributingSignals.isEmpty {
                 VStack(alignment: .leading, spacing: NickSpacing.sm) {
+                    if behaviorPresentation.isBehavior || behaviorPresentation.responsibleAppName != "Unknown app" {
+                        technicalDetail("Responsible app", [
+                            behaviorPresentation.responsibleAppName,
+                            behaviorPresentation.bundleID,
+                            behaviorPresentation.teamID,
+                            behaviorPresentation.signing
+                        ].compactMap { $0 }.joined(separator: " · "))
+                        technicalDetail("Chain", behaviorPresentation.chain)
+                        technicalDetail(
+                            "Shell / actor",
+                            "\(behaviorPresentation.actor) · \(behaviorPresentation.actorSigning)"
+                        )
+                        if let command = behaviorPresentation.matchedCommand {
+                            technicalDetail("Matched command", command)
+                        }
+                    }
                     ForEach(alert.contributingSignals.prefix(5)) { signal in
                         HStack(alignment: .top, spacing: NickSpacing.sm) {
                             Text("▸")
@@ -523,6 +556,18 @@ private struct AlertRow: View {
             Button("OK") { approvalError = nil }
         } message: {
             Text(approvalError ?? "")
+        }
+    }
+
+    private func technicalDetail(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.nickCaption)
+                .foregroundStyle(Color.textSecondary)
+            Text(value)
+                .font(.nickMonoSmall)
+                .foregroundStyle(Color.textTertiary)
+                .textSelection(.enabled)
         }
     }
 

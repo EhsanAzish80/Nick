@@ -46,6 +46,9 @@ struct SimpleAlertSheet: View {
             fileStillPresent: fileStillPresent
         )
     }
+    private var behaviorPresentation: BehaviorIncidentPresentation {
+        BehaviorIncidentPresentation(alert: alert)
+    }
 
     private var trustEligibleProcess: NickProcessInfo? { TrustedProcessList.eligibleProcess(in: alert) }
     private var networkDomain: String? { TrustedProcessList.networkDomain(in: alert) }
@@ -159,6 +162,10 @@ struct SimpleAlertSheet: View {
                 Text(copy.subline)
                     .font(.system(size: 13))
                     .foregroundStyle(Color.nickSecondaryText)
+                if behaviorPresentation.isBehavior || behaviorPresentation.responsibleAppName != "Unknown app" {
+                    ResponsibleAppLine(presentation: behaviorPresentation)
+                        .padding(.top, 4)
+                }
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 12)
@@ -267,6 +274,10 @@ struct SimpleAlertSheet: View {
 struct AlertTechnicalDetails: View {
     let alert: ThreatAlert
 
+    private var behavior: BehaviorIncidentPresentation {
+        BehaviorIncidentPresentation(alert: alert)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
@@ -284,6 +295,18 @@ struct AlertTechnicalDetails: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Color.nickSecondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+            if behavior.isBehavior || behavior.responsibleAppName != "Unknown app" {
+                technicalValue(
+                    "Responsible app",
+                    [behavior.responsibleAppName, behavior.bundleID, behavior.teamID, behavior.signing]
+                        .compactMap { $0 }.joined(separator: " · ")
+                )
+                technicalValue("Chain", behavior.chain)
+                technicalValue("Shell / actor", "\(behavior.actor) · \(behavior.actorSigning)")
+                if let matchedCommand = behavior.matchedCommand {
+                    technicalValue("Matched command", matchedCommand)
+                }
+            }
             ForEach(alert.contributingSignals) { signal in
                 VStack(alignment: .leading, spacing: 3) {
                     Text(signal.title)
@@ -318,6 +341,16 @@ struct AlertTechnicalDetails: View {
         }
     }
 
+    private func technicalValue(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.system(size: 11, weight: .semibold))
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color.nickSecondaryText)
+                .textSelection(.enabled)
+        }
+    }
+
     private func copyJSON() {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -326,5 +359,28 @@ struct AlertTechnicalDetails: View {
               let string = String(data: data, encoding: .utf8) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(string, forType: .string)
+    }
+}
+
+struct ResponsibleAppLine: View {
+    let presentation: BehaviorIncidentPresentation
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let path = presentation.appPath {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                    .resizable()
+                    .frame(width: 18, height: 18)
+                    .accessibilityHidden(true)
+            } else {
+                Image(systemName: "app.dashed")
+                    .frame(width: 18, height: 18)
+                    .accessibilityHidden(true)
+            }
+            Text(presentation.responsibleLine)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.nickSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
