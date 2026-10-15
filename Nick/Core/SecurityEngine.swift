@@ -389,6 +389,16 @@ final class SecurityEngine {
         alerts.filter(\.isActionableUserFinding)
     }
 
+    /// Canonical status/count consumed by every top-level protection surface.
+    var protectionStatus: ProtectionStatus {
+        ProtectionStatus.evaluate(
+            actionableAlerts: activeActionableAlerts,
+            incidents: incidentStore.incidents,
+            auditIssueCount: auditResults.filter { $0.status != .pass && $0.status != .unknown }.count,
+            sensorRunning: activePipelineStatus == .running
+        )
+    }
+
     // MARK: - Private
 
     private let auditor    = SystemAuditor()
@@ -632,19 +642,15 @@ final class SecurityEngine {
     }
 #endif
 
-    /// Clears all stored threat alerts, resets threat counters, and removes all
-    /// dismissed-alert suppression so every alert type can fire again.
-    ///
-    /// Monitoring continues uninterrupted. This only affects historical display data.
-    func clearAlertHistory() {
+    /// Removes incident history only. Learning, dismissals, suppression rules,
+    /// trusted processes, expected cooldowns, and settings remain unchanged.
+    func clearIncidentHistory() {
         alerts = []
         totalThreatsDetected = 0
-        dismissedAlertKeys = []
         UserDefaults.standard.set(0, forKey: "nickTotalThreatsDetected")
-        UserDefaults.standard.removeObject(forKey: "nickDismissedAlertKeys")
-        UserDefaults.standard.removeObject(forKey: "nickExpectedAlertCooldowns")
         UserDefaults.standard.removeObject(forKey: "nickPersistedAlerts")
-        incidentStore.clear()
+        incidentStore.clearIncidentHistory()
+        syncAlertsFromStore()
     }
 
     /// Launches a full security scan as an independent, stored task.
@@ -934,7 +940,7 @@ final class SecurityEngine {
         incidentStore.resetLearnedEntry(id: id)
     }
 
-    func resetAllLearnedEntries() {
+    func resetLearnedDecisions() {
         incidentStore.resetAllLearnedEntries()
     }
 
@@ -956,7 +962,7 @@ final class SecurityEngine {
     }
 
     /// Removes a single alert by ID and persists its `deduplicationKey` so it
-    /// is suppressed on all future scans until `clearAlertHistory()` is called.
+    /// is suppressed on future scans until that dismissal is reset.
     func dismissAlert(_ id: UUID) {
         performAuthenticatedIncidentAction(.dismissed, alertID: id) { [weak self] alert in
             SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)

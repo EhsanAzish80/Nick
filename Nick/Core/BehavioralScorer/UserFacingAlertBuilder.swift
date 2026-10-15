@@ -128,6 +128,17 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
+        if title.contains("eicar") {
+            return AlertPattern(
+                headline: "EICAR test file",
+                explanation: "This file matches the standard harmless EICAR antivirus test signature.",
+                assessment: "Test detection",
+                recommendedAction: "Use it only to verify security software, then remove or quarantine it.",
+                severity: .warning,
+                actions: [.quarantine, .showDetails, .dismiss]
+            )
+        }
+
         if let tamper = signals.first(where: {
             $0.metadata["reason"] == "endpoint_tamper_observed"
         }) {

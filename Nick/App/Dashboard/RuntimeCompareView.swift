@@ -30,6 +30,8 @@ struct RuntimeCompareView: View {
                     Button(action: importComparison) {
                         Label("Import Comparison", systemImage: "square.and.arrow.down")
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Import Comparison")
                     Button {
                         showingNewComparison = true
                     } label: {

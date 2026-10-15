@@ -39,7 +39,7 @@ struct PerformanceView: View {
             }
             .padding(NickSpacing.xxl)
         }
-        .navigationTitle("Performance")
+        .navigationTitle("Storage")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {

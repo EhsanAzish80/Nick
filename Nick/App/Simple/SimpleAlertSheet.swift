@@ -298,7 +298,7 @@ struct AlertTechnicalDetails: View {
                             .textSelection(.enabled)
                     }
                     if let process = signal.processInfo {
-                        Text("PID \(process.pid) · \(process.name)")
+                        Text("PID \(String(process.pid)) · \(process.name)")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Color.nickSecondaryText)
                     }

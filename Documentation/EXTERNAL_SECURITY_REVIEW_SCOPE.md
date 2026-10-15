@@ -43,6 +43,10 @@ local learning cannot affect protected detections or privileged actions.
    - Untrusted-string delimiting, output isolation from decisions, validated
      actor identity, root-controlled enablement, two-incident activation,
      expiration/caps and review-tier-only influence.
+8. **Protected evidence lifecycle**
+   - Review deletion authorization and the invariants governing recurrence,
+     retention, coalescing, prior evidence and dismissal history. The private
+     review packet contains the concrete write-path table and proposed policy.
 
 ## Primary code map
 

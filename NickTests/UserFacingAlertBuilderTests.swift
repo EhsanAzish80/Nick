@@ -7,6 +7,25 @@ import XCTest
 
 final class UserFacingAlertBuilderTests: XCTestCase {
 
+    func test_eicarDetectionUsesExplicitTestFileLabel() {
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: AlertContent(
+                title: "EICAR Anti-Malware Test File",
+                description: "Exact hash match",
+                severity: .high,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: []
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(result.headline, "EICAR test file")
+        XCTAssertEqual(result.assessment, "Test detection")
+        XCTAssertTrue(result.explanation.contains("harmless EICAR antivirus test signature"))
+    }
+
     func test_legacyShazamdAttribution_isInformational() {
         let alert = makeCaptureAlert(
             processName: "shazamd",
