@@ -1178,15 +1178,17 @@ struct ExtensionFinding: Sendable {
         } else {
             severity = .high
         }
-        let signingStatus: SigningStatus
-        if let teamID = event.teamID, !teamID.isEmpty {
-            signingStatus = .signed(teamID: teamID, signingID: event.signingID)
-        } else {
-            signingStatus = .unknown
-        }
         let actorPath = isLOLBinBehavior
             ? (event.metadata?["execTargetPath"] ?? filePath)
             : event.processPath
+        let signingStatus: SigningStatus
+        if let teamID = event.teamID, !teamID.isEmpty {
+            signingStatus = .signed(teamID: teamID, signingID: event.signingID)
+        } else if SignatureValidator.isSealedSystemBinaryPath(actorPath) {
+            signingStatus = SignatureValidator.shared.evaluate(binaryPath: actorPath)
+        } else {
+            signingStatus = .unknown
+        }
         let process = NickProcessInfo(
             pid: event.pid,
             path: actorPath,
@@ -1244,7 +1246,7 @@ struct ExtensionFinding: Sendable {
                 // suspicious content at its executable path. Treating the
                 // platform-binary path as file evidence would incorrectly
                 // promote an explicitly allow-listed review rule to protected.
-                fileInfo: isAuditEvent ? nil : FileInfo(
+                fileInfo: (isAuditEvent || isLOLBinBehavior || isRansomwareBehavior) ? nil : FileInfo(
                     path: filePath,
                     sha256Hash: event.sha256,
                     entropy: nil,

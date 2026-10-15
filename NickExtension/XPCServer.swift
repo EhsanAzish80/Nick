@@ -460,6 +460,14 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         }
 
         let standardPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard !LOLBinExecutionPolicy.isProtectedSystemPath(standardPath) else {
+            reply(false, "Nick will not move a protected macOS system executable.", nil)
+            return
+        }
+        guard !Self.isAppleSystemExecutable(at: standardPath) else {
+            reply(false, "Nick will not move an Apple-signed system executable.", nil)
+            return
+        }
         var isDirectory: ObjCBool = false
         guard standardPath.hasPrefix("/"),
               FileManager.default.fileExists(atPath: standardPath, isDirectory: &isDirectory),
@@ -511,6 +519,20 @@ extension ESXPCServer: NickExtensionXPCProtocol {
                 reply(false, failure.statusLine + ". " + failure.guidance, try? JSONEncoder().encode(failure))
             }
         }
+    }
+
+    private static func isAppleSystemExecutable(at path: String) -> Bool {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code else { return false }
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        return SecStaticCodeCheckValidity(
+            code,
+            SecCSFlags(rawValue: UInt32(kSecCSDoNotValidateResources)),
+            requirement
+        ) == errSecSuccess
     }
 
     func requestAllowFileOnce(

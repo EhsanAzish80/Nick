@@ -944,7 +944,7 @@ final class ESEventHandler {
             pid: pid, processPath: processPath,
             eventType: .processExec, detail: targetPath
         )
-        processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: [])
+        processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: arguments)
         tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid, args: arguments)
 
         let lolbinFinding = LOLBinExecutionPolicy.finding(
@@ -966,18 +966,19 @@ final class ESEventHandler {
                 isCodeSigned: trustedSigner,
                 teamID: teamID,
                 signingID: signingID,
-                metadata: lolbinFinding.map {
-                    [
-                        "reason": $0.reason,
-                        "rule": $0.reason,
+                metadata: lolbinFinding.map { finding in
+                    var metadata = [
+                        "reason": finding.reason,
+                        "rule": finding.reason,
                         "ruleTier": "protected",
                         "detectionKind": "lolbin-behavior",
-                        "signalSeverity": $0.severity,
-                        // Keep the executable identity needed by incident and
-                        // trust policy without persisting argv, which can
-                        // contain credentials or other sensitive values.
+                        "signalSeverity": finding.severity,
                         "execTargetPath": targetPath
                     ]
+                    if let matchedCommand = finding.matchedCommand {
+                        metadata["matchedCommand"] = matchedCommand
+                    }
+                    return metadata
                 }
             )
         ))

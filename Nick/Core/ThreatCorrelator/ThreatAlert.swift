@@ -121,6 +121,30 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         return nil
     }
 
+    /// File remediation is deliberately narrower than general on-disk evidence.
+    /// Behavior findings describe an execution, not suspicious contents at the
+    /// executable path, and must never turn a platform binary into a Trash target.
+    var remediableFilePath: String? {
+        for signal in contributingSignals {
+            let isBehavior = signal.metadata["class"] == "behavior"
+                || signal.metadata["detectionKind"]?.hasSuffix("-behavior") == true
+            guard !isBehavior, let file = signal.fileInfo else { continue }
+            let path = URL(fileURLWithPath: file.path).standardizedFileURL.path
+            guard !LOLBinExecutionPolicy.isProtectedSystemPath(path) else { continue }
+            if case .signed(let teamID, _) = file.signingStatus, teamID == "APPLE_PLATFORM" {
+                continue
+            }
+            if let process = signal.processInfo,
+               process.path == path,
+               case .signed(let teamID, _) = process.signingStatus,
+               teamID == "APPLE_PLATFORM" {
+                continue
+            }
+            return path
+        }
+        return nil
+    }
+
     /// Evidence protected by policy must remain visible even when consumer copy
     /// would otherwise classify a familiar developer or system workflow as safe.
     var hasProtectedEvidence: Bool {

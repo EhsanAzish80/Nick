@@ -631,7 +631,10 @@ final class UnifiedSourceFindingTests: XCTestCase {
         XCTAssertEqual(finding.signal.severity, .critical)
         XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
         XCTAssertEqual(finding.signal.fileInfo?.path, "/private/tmp/eicar.com")
-        XCTAssertEqual(finding.signal.processInfo?.signingStatus, .unknown)
+        XCTAssertEqual(
+            finding.signal.processInfo?.signingStatus,
+            .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.open")
+        )
     }
 
     func test_lolbinExecEventMapsToProtectedCriticalEvidenceAndHonestWording() throws {

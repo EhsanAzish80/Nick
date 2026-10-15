@@ -26,7 +26,7 @@ struct SimpleAlertSheet: View {
 
     private var user: UserFacingAlert { UserFacingAlertBuilder.shared.build(from: alert) }
 
-    private var filePath: String? { alert.detectedFilePath }
+    private var filePath: String? { alert.remediableFilePath }
 
     private var quarantineRecord: QuarantineRecord? {
         guard let path = filePath else { return nil }
@@ -225,7 +225,7 @@ struct SimpleAlertSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-            } else if copy.tone == .danger, fileStillPresent {
+            } else if copy.tone == .danger, fileStillPresent, user.actions.contains(.quarantine) {
                 Button("Close") { dismiss() }
                 Button("Move to Trash") { confirmsTrash = true }
                     .keyboardShortcut(.defaultAction)

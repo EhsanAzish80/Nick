@@ -27,7 +27,7 @@ final class ProcessTree: @unchecked Sendable {
         let pid: Int32
         let ppid: Int32
         let path: String
-        let args: [String]
+        var args: [String]
         let startTime: Date
         var exitTime: Date?
         var exitCode: Int32?
@@ -65,6 +65,13 @@ final class ProcessTree: @unchecked Sendable {
     private var nodes: [Int32: ProcessNode] = [:]
     private let lock = NSLock()
 
+    /// ES argv is untrusted input. Keep both each node and the benign tree
+    /// bounded while retaining protected attack-chain nodes.
+    static let maximumArgumentCount = 64
+    static let maximumArgumentBytes = 4_096
+    static let maximumBenignNodeCount = 4_096
+    private static let truncationMarker = "<truncated>"
+
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
         category: "ProcessTree"
@@ -75,8 +82,9 @@ final class ProcessTree: @unchecked Sendable {
     /// Records an `exec` event. Called from `ES_EVENT_TYPE_NOTIFY_EXEC`.
     func recordExec(pid: Int32, ppid: Int32, path: String, args: [String]) {
         lock.withLock {
+            evictOldestBenignNodeIfNeeded()
             let node = ProcessNode(
-                pid: pid, ppid: ppid, path: path, args: args,
+                pid: pid, ppid: ppid, path: path, args: Self.boundedArguments(args),
                 startTime: Date(), exitTime: nil, exitCode: nil,
                 childPids: [], filesAccessed: [], networkConnections: [],
                 isThreat: false
@@ -91,6 +99,9 @@ final class ProcessTree: @unchecked Sendable {
         lock.withLock {
             nodes[pid]?.exitTime = Date()
             nodes[pid]?.exitCode = exitCode
+            // Command evidence needed by incidents is copied into signal
+            // metadata before exit. Release the potentially large argv now.
+            nodes[pid]?.args.removeAll(keepingCapacity: false)
         }
     }
 
@@ -199,5 +210,64 @@ final class ProcessTree: @unchecked Sendable {
     /// Total number of tracked processes.
     var count: Int {
         lock.withLock { nodes.count }
+    }
+
+    /// Test/diagnostic visibility for the retained argv budget.
+    var retainedArgumentBytes: Int {
+        lock.withLock {
+            nodes.values.reduce(into: 0) { total, node in
+                total += node.args.reduce(0) { $0 + $1.utf8.count }
+            }
+        }
+    }
+
+    private static func boundedArguments(_ arguments: [String]) -> [String] {
+        var result: [String] = []
+        result.reserveCapacity(min(arguments.count, maximumArgumentCount))
+        let markerBytes = truncationMarker.utf8.count
+        var remainingBytes = maximumArgumentBytes - markerBytes
+        var truncated = arguments.count > maximumArgumentCount
+
+        for argument in arguments.prefix(maximumArgumentCount) {
+            guard remainingBytes > 0 else {
+                truncated = true
+                break
+            }
+            let bytes = Array(argument.utf8)
+            if bytes.count <= remainingBytes {
+                result.append(argument)
+                remainingBytes -= bytes.count
+                continue
+            }
+
+            result.append(String(decoding: bytes.prefix(remainingBytes), as: UTF8.self))
+            remainingBytes = 0
+            truncated = true
+            break
+        }
+
+        if truncated {
+            if result.count == maximumArgumentCount, let last = result.popLast() {
+                result.append(last + truncationMarker)
+            } else {
+                result.append(truncationMarker)
+            }
+        }
+        return result
+    }
+
+    private func evictOldestBenignNodeIfNeeded() {
+        guard nodes.count >= Self.maximumBenignNodeCount else { return }
+        let candidate = nodes.values
+            .filter { !$0.isThreat }
+            .min { lhs, rhs in
+                if (lhs.exitTime != nil) != (rhs.exitTime != nil) {
+                    return lhs.exitTime != nil
+                }
+                return lhs.startTime < rhs.startTime
+            }
+        guard let candidate else { return }
+        nodes.removeValue(forKey: candidate.pid)
+        nodes[candidate.ppid]?.childPids.removeAll { $0 == candidate.pid }
     }
 }
