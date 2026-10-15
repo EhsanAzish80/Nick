@@ -365,6 +365,10 @@ final class IncidentStore {
     private(set) var incidents: [SecurityIncident]
     private var trustedProcessList: TrustedProcessList
     private var suppressionRules: [SuppressionRule]
+
+    /// Current policy configuration. Exposed read-only so callers and tests can
+    /// verify that incident-history maintenance does not rewrite user policy.
+    var configuredSuppressionRules: [SuppressionRule] { suppressionRules }
     private var expectedCooldowns: [String: TimeInterval]
     private var dismissalTombstones: [IncidentDismissalTombstone]
     private(set) var evictedIncidentCount = 0
@@ -760,16 +764,11 @@ final class IncidentStore {
         return persist()
     }
 
-    func clear() {
+    /// Removes incident records only. Policy, review-learning, dismissal and
+    /// cooldown state deliberately survive a history clear.
+    func clearIncidentHistory() {
         incidents.removeAll()
-        dismissalTombstones.removeAll()
-        expectedCooldowns.removeAll()
-        evictedIncidentCount = 0
-        learnedReviewEntries.removeAll()
-        legacyTestDefaults?.removeObject(forKey: Self.persistenceKey)
-        legacyTestDefaults?.removeObject(forKey: Self.dismissalPersistenceKey)
         legacyTestDefaults?.removeObject(forKey: "nickPersistedAlerts")
-        legacyTestDefaults?.removeObject(forKey: "nickExpectedAlertCooldowns")
         persist()
     }
 

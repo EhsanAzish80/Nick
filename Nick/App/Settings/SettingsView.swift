@@ -1021,23 +1021,24 @@ struct SettingsView: View {
             LabeledTile(
                 icon: "exclamationmark.triangle.fill", tint: .red,
                 title: "Clear alert history",
-                subtitle: "Remove all stored threat alerts and reset the threats-detected counter. Monitoring continues uninterrupted."
+                subtitle: "Remove incident history and reset its counter. Keeps learned decisions, dismissals, suppression rules, trusted processes, cooldowns, quarantine records, and settings."
             ) {
                 Button("Clear…", role: .destructive) {
                     showClearAlertsConfirmation = true
                 }
                 .controlSize(.small)
             }
-            .confirmationDialog(
-                "Clear all alert history?",
-                isPresented: $showClearAlertsConfirmation,
-                titleVisibility: .visible
+            .alert(
+                "Remove incident history?",
+                isPresented: $showClearAlertsConfirmation
             ) {
-                Button("Clear", role: .destructive) { engine.clearAlertHistory() }
+                Button("Remove Incident History", role: .destructive) { engine.clearIncidentHistory() }
                 
                 Button("Cancel", role: .cancel) {
                     // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
                 }
+            } message: {
+                Text("Removes incident history and resets its counter. Learned decisions, dismissals, suppression rules, trusted processes, cooldowns, quarantine records, and settings stay unchanged.")
             }
 
             LabeledTile(
@@ -1473,6 +1474,7 @@ private struct LearnedReviewEntriesView: View {
     @Environment(SecurityEngine.self) private var engine
     @Environment(\.dismiss) private var dismiss
     @State private var entries: [LearnedReviewEntry] = []
+    @State private var confirmsResetAll = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1526,10 +1528,7 @@ private struct LearnedReviewEntriesView: View {
             HStack {
                 Button("Export…") { exportEntries() }
                     .disabled(entries.isEmpty)
-                Button("Reset All", role: .destructive) {
-                    engine.resetAllLearnedEntries()
-                    refresh()
-                }
+                Button("Reset learned decisions…", role: .destructive) { confirmsResetAll = true }
                 .disabled(entries.isEmpty)
                 Spacer()
                 Text("Stored in Nick's root-owned incident store")
@@ -1540,6 +1539,18 @@ private struct LearnedReviewEntriesView: View {
         .padding(24)
         .frame(minWidth: 720, minHeight: 540)
         .onAppear(perform: refresh)
+        .alert(
+            "Reset learned decisions?",
+            isPresented: $confirmsResetAll
+        ) {
+            Button("Reset Learned Decisions", role: .destructive) {
+                engine.resetLearnedDecisions()
+                refresh()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes learned review entries only. Incident history, dismissals, suppression rules, trusted processes, cooldowns, quarantine records, and settings stay unchanged.")
+        }
     }
 
     private func refresh() {

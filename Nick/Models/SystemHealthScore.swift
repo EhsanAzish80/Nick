@@ -104,7 +104,7 @@ struct SystemHealthScore: Sendable {
         let threatPenalty = min(threatsBlocked24h * 6, 31)
         let threatPoints  = 31 - threatPenalty
         let threatDesc    = threatsBlocked24h == 0
-            ? "No threats detected in the last 24 hours"
+            ? "No blocked events recorded in the last 24 hours"
             : "\(threatsBlocked24h) threat(s) blocked in the last 24 hours"
 
         // ── Component 3: File integrity (19 points) ────────────────────────
@@ -127,7 +127,7 @@ struct SystemHealthScore: Sendable {
 
         let summary: String
         switch grade {
-        case .a: summary = "Your Mac is fully protected"
+        case .a: summary = "Security checks are currently healthy"
         case .b: summary = "Protection is good with minor issues"
         case .c: summary = "Some security issues need attention"
         case .d: summary = "Significant security risks detected"

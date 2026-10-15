@@ -561,11 +561,7 @@ struct SystemAuditView: View {
 
     private var heroSubtitle: String {
         guard !engine.auditResults.isEmpty else { return "Run a scan to check your system." }
-        if issueCount == 0 {
-            return "\(passCount) settings verified. All hardened."
-        } else {
-            return "\(passCount) settings verified · \(issueCount) issue\(issueCount == 1 ? "" : "s") found."
-        }
+        return "\(engine.protectionStatus.state.rawValue) · \(passCount) settings verified · \(engine.protectionStatus.count) item\(engine.protectionStatus.count == 1 ? "" : "s") need review."
     }
 
     private func xprotectRows(from result: SystemCheckResult) -> [(label: String, value: String)] {

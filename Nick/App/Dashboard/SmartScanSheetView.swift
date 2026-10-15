@@ -45,12 +45,10 @@ struct SmartScanContentView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Smart Scan")
                         .font(.title2.bold())
-                    if let status {
-                        Text(status.issueCount == 0
-                             ? "This Mac is fully protected"
-                             : "\(status.issueCount) issue\(status.issueCount == 1 ? "" : "s") found")
+                    if status != nil {
+                        Text(engine.protectionStatus.state.rawValue)
                             .font(.subheadline)
-                            .foregroundStyle(status.issueCount == 0 ? Color.statusGreen : Color.statusOrange)
+                            .foregroundStyle(engine.protectionStatus.state == .protected ? Color.statusGreen : Color.statusOrange)
                     }
                 }
                 Spacer()

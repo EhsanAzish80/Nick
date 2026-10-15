@@ -106,6 +106,22 @@ final class SimpleHomeModelTests: XCTestCase {
         XCTAssertEqual(hero.primaryTitle, "Fix It")
     }
 
+    func test_sensorProblemWithNoIncidentsPointsToProtectionWithoutInventingWork() {
+        let hero = HomeHero.make(
+            incident: nil,
+            issues: [],
+            websitesProtected: false,
+            lastCheck: nil,
+            hadRecentWarnings: false,
+            protectionStatus: ProtectionStatus(state: .sensorProblem, count: 0),
+            now: now
+        )
+        XCTAssertEqual(hero.state, .attention)
+        XCTAssertEqual(hero.title, "Sensor problem")
+        XCTAssertEqual(hero.primaryTitle, "View Protection")
+        XCTAssertTrue(hero.body.contains("no incident items"))
+    }
+
     func test_protectedFindingCannotProduceProtectedHomeState() {
         let signal = ThreatSignal(
             source: .persistence,

@@ -31,7 +31,7 @@ struct SimpleActivityView: View {
     }
 
     private var subtitle: String {
-        let count = engine.activeActionableAlerts.count
+        let count = engine.protectionStatus.count
         switch count {
         case 0:  return "Nothing needs your attention"
         case 1:  return "1 thing needs your attention"

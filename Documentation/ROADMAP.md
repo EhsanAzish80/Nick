@@ -123,6 +123,13 @@ gates pass, not on a fixed date. Planned capabilities:
 
 ## Version 5.1: trusted rule and signature updates
 
+### Deferred 5.0 interface work
+
+- Join related shell events into one incident chain.
+- Reorganize Settings in both Simple and Advanced modes.
+- Expand the Advanced Storage screen and place the JunkYard cleaner App Store
+  link in Advanced/About. Storage promotion does not belong on Simple Home.
+
 - Publish Nick-maintained, signed YARA, network-rule and hash bundles.
 - Add staged rollout, expiry, rollback, and last-known-good recovery.
 - Display rule source, version, signing status, and last successful update.

@@ -80,7 +80,8 @@ struct SimpleHomeView: View {
             issues: issues,
             websitesProtected: networkProtection.isEnabled,
             lastCheck: engine.lastScanDate,
-            hadRecentWarnings: engine.alerts.contains { $0.lastSeen >= weekAgo }
+            hadRecentWarnings: engine.alerts.contains { $0.lastSeen >= weekAgo },
+            protectionStatus: engine.protectionStatus
         )
     }
 
@@ -132,7 +133,9 @@ struct SimpleHomeView: View {
         switch current.state {
         case .protected: return "Protected · \(current.meta.lowercasedFirst)"
         case .attention:
-            return issues.count == 1 ? "1 thing needs your attention" : "\(issues.count) things need your attention"
+            let count = engine.protectionStatus.count
+            if engine.protectionStatus.state == .sensorProblem && count == 0 { return "Sensor problem" }
+            return count == 1 ? "1 thing needs your attention" : "\(count) things need your attention"
         case .blocked:
             return incident?.wasQuarantined == true ? "Threat stopped · your files are safe" : "Something needs a look"
         }
@@ -329,6 +332,10 @@ struct SimpleHomeView: View {
             userStartedCheck = true
             engine.runFullScan()
         case .attention:
+            if engine.protectionStatus.state == .sensorProblem, issues.isEmpty {
+                selection = .protection
+                return
+            }
             guard let fix = issues.first?.simpleFix else { return }
             switch fix {
             case .openURL(let string):

@@ -227,7 +227,7 @@ private struct AlertRow: View {
                     Text("·")
                         .font(.nickCaption)
                         .foregroundStyle(Color.textTertiary)
-                    Text("Seen \(alert.occurrenceCount) times")
+                    Text("Seen \(DisplayNumber.count(alert.occurrenceCount)) times")
                         .font(.nickCaption)
                         .foregroundStyle(Color.textSecondary)
                 }
@@ -291,7 +291,7 @@ private struct AlertRow: View {
                                         .truncationMode(.middle)
                                 }
                                 if let pid = signal.processInfo?.pid {
-                                    Text("PID \(pid)")
+                                    Text("PID \(String(pid))")
                                         .font(.nickMonoSmall)
                                         .foregroundStyle(Color.textTertiary)
                                 }

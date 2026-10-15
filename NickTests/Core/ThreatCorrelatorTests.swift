@@ -981,6 +981,68 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertTrue(store.learnedReviewEntries.isEmpty)
     }
 
+    func test_clearIncidentHistoryKeepsLearningDismissalsCooldownsAndSuppressionRules() throws {
+        let store = IncidentStore(
+            defaults: isolatedDefaults(),
+            identityValidator: { _, _, _ in true }
+        )
+        store.configure(
+            trustedProcessList: TrustedProcessList(), suppressionRules: [], verdictLearningEnabled: true
+        )
+
+        let learnedAlert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([learnedAlert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: learnedAlert.id)
+
+        let dismissedAlert = makeAlert(signal: makeSignal(
+            metadata: ["reason": "dismiss_me", "path": "/Users/test/dismiss-me"]
+        ))
+        _ = store.ingest([dismissedAlert])
+        store.performAuthenticatedUserAction(.dismissed, alertID: dismissedAlert.id)
+        let learnedBefore = store.learnedReviewEntries
+        let dismissedBefore = store.dismissedAlertDeduplicationKeys
+
+        let suppressed = makeAlert(signal: makeSignal(
+            metadata: ["reason": "suppressed_rule", "path": "/Users/test/suppressed"]
+        ))
+        let suppression = SuppressionRule(type: .ruleName, value: suppressed.title)
+        store.configure(
+            trustedProcessList: TrustedProcessList(),
+            suppressionRules: [suppression],
+            verdictLearningEnabled: true
+        )
+
+        store.clearIncidentHistory()
+
+        XCTAssertTrue(store.incidents.isEmpty)
+        XCTAssertEqual(store.learnedReviewEntries, learnedBefore)
+        XCTAssertEqual(store.dismissedAlertDeduplicationKeys, dismissedBefore)
+        XCTAssertEqual(store.configuredSuppressionRules, [suppression])
+    }
+
+    func test_resetLearnedDecisionsRemovesOnlyLearnedEntries() throws {
+        let store = IncidentStore(
+            defaults: isolatedDefaults(),
+            identityValidator: { _, _, _ in true }
+        )
+        store.configure(
+            trustedProcessList: TrustedProcessList(), suppressionRules: [], verdictLearningEnabled: true
+        )
+        let learnedAlert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
+        _ = store.ingest([learnedAlert])
+        store.performAuthenticatedUserAction(.alwaysAllowed, alertID: learnedAlert.id)
+        let retainedAlert = makeAlert(signal: makeSignal(
+            metadata: ["reason": "retained", "path": "/Users/test/retained"]
+        ))
+        _ = store.ingest([retainedAlert])
+        let incidentCount = store.incidents.count
+
+        store.resetAllLearnedEntries()
+
+        XCTAssertTrue(store.learnedReviewEntries.isEmpty)
+        XCTAssertEqual(store.incidents.count, incidentCount)
+    }
+
     func test_verdictLearningRequiresValidatedIdentityWhenRecordingAndApplying() throws {
         let alert = makeAlert(signal: makeSignedSignal(reason: "system_hardening"))
         let rejectingStore = IncidentStore(

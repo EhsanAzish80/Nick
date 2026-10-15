@@ -217,7 +217,7 @@ struct AlertDetailView: View {
                                     .truncationMode(.middle)
                             }
                             if let pid = signal.processInfo?.pid {
-                                Text("PID \(pid)")
+                                Text("PID \(String(pid))")
                                     .font(.nickMonoSmall)
                                     .foregroundStyle(Color.textTertiary)
                             }

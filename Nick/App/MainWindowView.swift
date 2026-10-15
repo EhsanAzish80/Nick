@@ -49,7 +49,7 @@ struct MainWindowView: View {
 
     // Count only alerts that the consumer-facing assessment considers actionable.
     private var activeAlertCount: Int {
-        engine.activeActionableAlerts.count
+        engine.protectionStatus.count
     }
 
     var body: some View {
@@ -286,7 +286,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case persistence = "Persistence"
     case diagnostics = "Diagnostics"
     case runtimeCompare = "Runtime Compare"
-    case performance = "Performance"
+    case performance = "Storage"
     case settings    = "Settings"
 
     var id: String { rawValue }
@@ -537,11 +537,11 @@ struct OverviewDetailView: View {
     private var statusHeader: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
-                Image(systemName: totalIssues == 0 ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                Image(systemName: engine.protectionStatus.state == .protected ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
                     .font(.title2)
-                    .foregroundStyle(totalIssues == 0 ? Color.nickAccent : Color.nickWarningText)
+                    .foregroundStyle(engine.protectionStatus.state == .protected ? Color.nickAccent : Color.nickWarningText)
                     .accessibilityHidden(true)
-                Text(totalIssues == 0 ? "Your Mac is protected" : Self.issuesHeadline(totalIssues))
+                Text(engine.protectionStatus.state.rawValue)
                     .font(.title2.bold())
             }
             Text(statusLine)
@@ -703,7 +703,7 @@ struct OverviewDetailView: View {
                             section: .systemAudit, subtitle: privSub,  state: guardState),
             FeatureTileItem(name: "Email Guard",          icon: "envelope.badge.shield.half.filled",
                             section: .alerts,      subtitle: emailSub, state: guardState),
-            FeatureTileItem(name: "Performance",          icon: "gauge.medium",
+            FeatureTileItem(name: "Storage",              icon: "gauge.medium",
                             section: .performance, subtitle: perfSub,  state: .info("Scan")),
             FeatureTileItem(name: "Quarantine",           icon: "archivebox",
                             section: .quarantine,  subtitle: qSub,
@@ -814,7 +814,7 @@ struct OverviewDetailView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(entry.repeatCount > 1 ? "\(entry.repeatCount.formatted())×" : "")
+            Text(entry.repeatCount > 1 ? "Seen \(DisplayNumber.count(entry.repeatCount)) times" : "")
                 .font(.system(size: 11))
                 .monospacedDigit()
                 .foregroundStyle(Color.nickSecondaryText)
@@ -1127,6 +1127,7 @@ struct PersistenceDetailView: View {
     @State private var selectedItems = Set<PersistenceItem.ID>()
     @State private var itemToDelete: PersistenceItem? = nil
     @State private var showDeleteConfirmation = false
+    @State private var showsStaleEntries = false
 
     enum PFilter: String, CaseIterable {
         case all      = "All"
@@ -1149,7 +1150,12 @@ struct PersistenceDetailView: View {
         case .missing:  segmented = base.filter { PersistenceDetailView.status(for: $0) == .missing }
         case .broken:   segmented = base.filter { PersistenceDetailView.status(for: $0) == .broken }
         }
-        return segmented.sorted(using: sortOrder)
+        return segmented.filter { !Self.isStale($0) && !Self.isUUIDOnlyHistorical($0) }
+            .sorted(using: sortOrder)
+    }
+
+    private var staleEntries: [PersistenceItem] {
+        engine.persistenceItems.filter(Self.isStale).sorted { $0.name < $1.name }
     }
 
     // Hero subtitle counts
@@ -1194,7 +1200,27 @@ struct PersistenceDetailView: View {
             if engine.persistenceItems.isEmpty {
                 emptyState
             } else {
-                persistenceTable
+                VStack(spacing: 0) {
+                    if !staleEntries.isEmpty {
+                        DisclosureGroup(isExpanded: $showsStaleEntries) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("These records refer to files that are no longer on disk and are usually harmless historical evidence.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                ForEach(staleEntries) { item in
+                                    Text(item.name).font(.caption.monospaced())
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 8)
+                        } label: {
+                            Text("Stale entries (file no longer on disk) · \(DisplayNumber.count(staleEntries.count))")
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 10)
+                    }
+                    persistenceTable
+                }
             }
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "Filter persistence items…")
@@ -1357,6 +1383,18 @@ struct PersistenceDetailView: View {
         guard let signing = item.signingStatus else { return .missing }
         if signing.isSuspicious { return .unsigned }
         return .verified
+    }
+
+    static func isStale(_ item: PersistenceItem) -> Bool {
+        let fm = FileManager.default
+        let sourceMissing = !fm.fileExists(atPath: item.path)
+        let executableMissing = item.executablePath.map { !fm.fileExists(atPath: $0) } ?? true
+        return sourceMissing && executableMissing
+    }
+
+    static func isUUIDOnlyHistorical(_ item: PersistenceItem) -> Bool {
+        UUID(uuidString: item.name) != nil
+            || UUID(uuidString: URL(fileURLWithPath: item.path).deletingPathExtension().lastPathComponent) != nil
     }
 
     private var emptyState: some View {
@@ -2142,7 +2180,7 @@ private struct ResultRow: View {
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: NickSpacing.xs) {
                 HStack(spacing: NickSpacing.sm) {
-                    Text(count > 1 ? "\(match.ruleName) (×\(count))" : match.ruleName)
+                    Text(count > 1 ? "\(match.ruleName) (Seen \(DisplayNumber.count(count)) times)" : match.ruleName)
                         .font(.nickBodyMedium)
                         .foregroundStyle(Color.textPrimary)
                     Spacer()

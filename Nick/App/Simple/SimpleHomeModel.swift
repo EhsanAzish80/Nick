@@ -252,12 +252,13 @@ struct HomeHero: Equatable {
         websitesProtected: Bool,
         lastCheck: Date?,
         hadRecentWarnings: Bool,
+        protectionStatus: ProtectionStatus? = nil,
         now: Date = Date()
     ) -> HomeHero {
         if let incident {
             return HomeHero(
-                state: .blocked,
-                eyebrow: incident.wasQuarantined ? "THREAT STOPPED" : "THREAT FOUND",
+                state: incident.wasQuarantined ? .blocked : .attention,
+                eyebrow: incident.wasQuarantined ? "THREAT QUARANTINED" : "DETECTED",
                 title: incident.title,
                 body: incident.body,
                 primaryTitle: "See What Happened",
@@ -274,6 +275,20 @@ struct HomeHero: Equatable {
                 title: first.simpleTitle,
                 body: first.simpleBody + more,
                 primaryTitle: "Fix It",
+                secondaryTitle: "Why This Matters",
+                meta: lastCheckText(lastCheck, now: now)
+            )
+        }
+        if let protectionStatus, protectionStatus.state != .protected {
+            let body = protectionStatus.state == .sensorProblem && protectionStatus.count == 0
+                ? "Open Protection to restore the paused sensor. There are no incident items waiting for review."
+                : "Open Activity to review the \(protectionStatus.count) item\(protectionStatus.count == 1 ? "" : "s") included in this status."
+            return HomeHero(
+                state: protectionStatus.state == .threatBlocked ? .blocked : .attention,
+                eyebrow: protectionStatus.state.rawValue.uppercased(),
+                title: protectionStatus.state.rawValue,
+                body: body,
+                primaryTitle: protectionStatus.state == .sensorProblem && protectionStatus.count == 0 ? "View Protection" : "View Activity",
                 secondaryTitle: "Why This Matters",
                 meta: lastCheckText(lastCheck, now: now)
             )
