@@ -728,10 +728,8 @@ struct SettingsView: View {
     private var debugValidationSection: some View {
         Section("DEBUG Validation") {
             Button("Test Refused Authorization Form") {
-                xpcClient.debugSendNeverAuthorizedProtectionCall { accepted in
-                    authorizationHarnessStatus = accepted
-                        ? "FAILED: the unapproved form was accepted"
-                        : "Passed: the unapproved form was refused"
+                xpcClient.debugSendNeverAuthorizedProtectionCall { result in
+                    authorizationHarnessStatus = result.statusText
                 }
             }
             .buttonStyle(.bordered)

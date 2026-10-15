@@ -2,6 +2,36 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+#if DEBUG
+    @MainActor
+    func test_debugAuthorizationHarnessReportsDisconnectedAsUnavailableNotPassed() {
+        let client = ExtensionXPCClient()
+        let completed = expectation(description: "debug authorization harness result")
+
+        client.debugSendNeverAuthorizedProtectionCall { result in
+            XCTAssertEqual(result, .unavailable("Real-Time Protection is not connected"))
+            XCTAssertFalse(result.passed)
+            XCTAssertTrue(result.statusText.hasPrefix("UNAVAILABLE:"))
+            completed.fulfill()
+        }
+
+        wait(for: [completed], timeout: 1)
+    }
+
+    func test_debugAuthorizationHarnessStatusDistinguishesRefusalFromAcceptance() {
+        XCTAssertTrue(DebugAuthorizationHarnessResult.refused.passed)
+        XCTAssertEqual(
+            DebugAuthorizationHarnessResult.refused.statusText,
+            "Passed: the unapproved form was refused"
+        )
+        XCTAssertFalse(DebugAuthorizationHarnessResult.unexpectedlyAccepted.passed)
+        XCTAssertEqual(
+            DebugAuthorizationHarnessResult.unexpectedlyAccepted.statusText,
+            "FAILED: the unapproved form was accepted"
+        )
+    }
+#endif
+
     @MainActor
     func test_preStoreThreatWaitsThenDeliversAndAcknowledgesExactlyOnce() async throws {
         let client = ExtensionXPCClient()
