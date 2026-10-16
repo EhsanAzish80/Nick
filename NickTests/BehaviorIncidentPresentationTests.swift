@@ -25,17 +25,17 @@ final class BehaviorIncidentPresentationTests: XCTestCase {
         )
     }
 
-    func test_protectedUnblockedBehaviorUsesNeedsReviewInListAndDetail() {
+    func test_protectedUnblockedBehaviorUsesNeedsReviewInListAndDetail() throws {
         let alert = behaviorAlert(metadata: baseMetadata)
         let presentation = BehaviorIncidentPresentation(alert: alert)
         let user = UserFacingAlertBuilder.shared.build(from: alert)
         let detail = SimpleAlertCopy.make(
             alert: alert, user: user, isQuarantined: false, fileStillPresent: false
         )
-        let input = try! XCTUnwrap(SimpleActivityFeed.alertInputs(
+        let input = try XCTUnwrap(SimpleActivityFeed.alertInputs(
             from: [alert], actionable: [alert.id]
         ).first)
-        let row = try! XCTUnwrap(SimpleActivityFeed.items(
+        let row = try XCTUnwrap(SimpleActivityFeed.items(
             alerts: [input], quarantine: [], blocked: []
         ).first)
 

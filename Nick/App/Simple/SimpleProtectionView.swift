@@ -89,7 +89,9 @@ struct SimpleProtectionView: View {
         .task { await networkProtection.refresh() }
         .task { await refreshHealth() }
         .alert("Nick couldn’t set up ransomware watch", isPresented: $setupFailed) {
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel) {
+                // SwiftUI dismisses this informational alert for its cancel role.
+            }
         } message: {
             Text("Make sure Nick’s security extension is allowed, then try again.")
         }

@@ -234,7 +234,9 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         let snapshot = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [], dismissalTombstones: [], expectedCooldowns: [:]
         ))
-        try store.installPrivilegedSnapshot(snapshot) { _, _ in }
+        try store.installPrivilegedSnapshot(snapshot) { _, _ in
+            // This in-memory store test does not need an external persistence sink.
+        }
         client.findingHandler = { finding in
             let alert = ThreatAlert(
                 score: finding.score,
@@ -276,7 +278,9 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         let snapshot = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [], dismissalTombstones: [], expectedCooldowns: [:]
         ))
-        try store.installPrivilegedSnapshot(snapshot) { _, _ in }
+        try store.installPrivilegedSnapshot(snapshot) { _, _ in
+            // This in-memory store test does not need an external persistence sink.
+        }
         client.findingHandler = { finding in
             let alert = ThreatAlert(
                 id: finding.signal.id,

@@ -509,8 +509,12 @@ final class RuntimeConnectionObserverTests: XCTestCase {
                 if attempts == 2 { return .failure(TestError.sampleFailed) }
                 return .success(attempts)
             },
-            sleep: { _ in },
-            progress: { _ in }
+            sleep: { _ in
+                // Keep this unit test deterministic without wall-clock delays.
+            },
+            progress: { _ in
+                // Progress values are outside this result-aggregation assertion.
+            }
         )
 
         XCTAssertEqual(result.elapsedSeconds, 2)
@@ -525,7 +529,9 @@ final class RuntimeConnectionObserverTests: XCTestCase {
                 intervalSeconds: 5,
                 sample: { .success(1) },
                 sleep: { _ in try await Task.sleep(for: .seconds(30)) },
-                progress: { _ in }
+                progress: { _ in
+                    // Cancellation, rather than progress reporting, is under test.
+                }
             )
         }
         task.cancel()

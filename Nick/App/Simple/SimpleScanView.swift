@@ -76,7 +76,9 @@ struct SimpleScanView: View {
             if lastJob == .quick, wasScanning, !isScanning { quickFinished = true }
         }
         .alert("Nick couldn’t quarantine it", isPresented: $quarantineError) {
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel) {
+                // SwiftUI dismisses this informational alert for its cancel role.
+            }
         } message: {
             Text(quarantineErrorMessage)
         }

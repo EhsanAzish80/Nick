@@ -119,7 +119,9 @@ private struct QuarantineRowView: View {
                     actionFailed = !success
                 }
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                // SwiftUI dismisses a confirmation dialog for its cancel role.
+            }
         } message: {
             Text("This cannot be undone. The original file will not be recoverable.")
         }

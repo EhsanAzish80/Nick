@@ -523,7 +523,9 @@ private struct AlertRow: View {
             Button("Quarantine File", role: .destructive) {
                 quarantineDetectedFile()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                // SwiftUI dismisses a confirmation dialog for its cancel role.
+            }
         } message: {
             if let path = detectedFilePath {
                 Text("Nick will re-scan \(URL(fileURLWithPath: path).lastPathComponent), then isolate it so it cannot run. You can restore it later from Quarantine.")

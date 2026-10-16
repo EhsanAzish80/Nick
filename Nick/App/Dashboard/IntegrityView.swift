@@ -13,6 +13,7 @@ struct IntegrityView: View {
 
     @Environment(ExtensionXPCClient.self) private var xpcClient
     @State private var baselineStatus: String?
+    @State private var acknowledgementFailed = false
 
     var body: some View {
         Group {
@@ -25,12 +26,24 @@ struct IntegrityView: View {
             } else {
                 List(xpcClient.integrityViolations) { violation in
                     IntegrityRowView(violation: violation) {
-                        xpcClient.acknowledgeFIMViolation(id: violation.id) { _ in }
+                        xpcClient.acknowledgeFIMViolation(id: violation.id) { accepted in
+                            guard !accepted else { return }
+                            Task { @MainActor in
+                                acknowledgementFailed = true
+                            }
+                        }
                     }
                 }
             }
         }
         .navigationTitle("File Integrity")
+        .alert("Couldn’t acknowledge change", isPresented: $acknowledgementFailed) {
+            Button("OK", role: .cancel) {
+                acknowledgementFailed = false
+            }
+        } message: {
+            Text("Real-Time Protection did not accept the acknowledgement. Check protection status, then try again.")
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Rebuild Baseline") {
