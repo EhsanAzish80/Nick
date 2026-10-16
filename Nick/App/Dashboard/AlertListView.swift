@@ -120,7 +120,7 @@ private struct AlertRow: View {
     }
 
     private var behaviorPresentation: BehaviorIncidentPresentation {
-        BehaviorIncidentPresentation(alert: alert)
+        BehaviorIncidentPresentation(alert: alert, incident: engine.incident(for: alert))
     }
 
     private var displaySeverity: SignalSeverity {
@@ -212,20 +212,7 @@ private struct AlertRow: View {
 
             // Line 2 — badge · confidence · timestamp
             HStack(spacing: NickSpacing.xs) {
-                if simpleAlertMode {
-                    AssessmentBadge(
-                        text: behaviorPresentation.isBehavior
-                            ? behaviorPresentation.status.rawValue
-                            : userAlert.assessment,
-                        severity: displaySeverity
-                    )
-                } else {
-                    if behaviorPresentation.isBehavior {
-                        AssessmentBadge(text: behaviorPresentation.status.rawValue, severity: displaySeverity)
-                    } else {
-                        SeverityBadge(severity: alert.severity)
-                    }
-                }
+                AssessmentBadge(text: behaviorPresentation.status.rawValue, severity: displaySeverity)
                 Text("·")
                     .font(.nickCaption)
                     .foregroundStyle(Color.textTertiary)

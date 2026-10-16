@@ -43,11 +43,12 @@ struct SimpleAlertSheet: View {
             alert: alert,
             user: user,
             isQuarantined: quarantineRecord != nil,
-            fileStillPresent: fileStillPresent
+            fileStillPresent: fileStillPresent,
+            incident: incident
         )
     }
     private var behaviorPresentation: BehaviorIncidentPresentation {
-        BehaviorIncidentPresentation(alert: alert)
+        BehaviorIncidentPresentation(alert: alert, incident: incident)
     }
 
     private var trustEligibleProcess: NickProcessInfo? { TrustedProcessList.eligibleProcess(in: alert) }
@@ -220,7 +221,7 @@ struct SimpleAlertSheet: View {
                 }
                 .buttonStyle(.link)
                 .tint(Color.nickAccent)
-            } else if copy.status != .info, trustEligibleProcess != nil {
+            } else if copy.status != .observed, trustEligibleProcess != nil {
                 Button("I trust this app…") { confirmsTrust = true }
                     .buttonStyle(.link)
                     .tint(Color.nickAccent)

@@ -55,7 +55,7 @@ final class SimpleHomeModelTests: XCTestCase {
         let hero = HomeHero.make(presentation: presentation(.threatBlocked, count: 1), incident: incident, issues: issues, websitesProtected: true,
                                  lastCheck: nil, hadRecentWarnings: true, now: now)
         XCTAssertEqual(hero.state, .blocked)
-        XCTAssertEqual(hero.title, "Threat blocked · 1 items")
+        XCTAssertEqual(hero.title, "Threat blocked · 1 item")
         XCTAssertEqual(hero.secondaryTitle, "Delete It")
         XCTAssertTrue(hero.body.contains("PDF Converter Pro.app"))
         XCTAssertFalse(hero.body.contains("before it could do anything"))
@@ -165,7 +165,7 @@ final class SimpleHomeModelTests: XCTestCase {
             now: now
         )
         XCTAssertEqual(hero.state, .attention)
-        XCTAssertEqual(hero.title, "Attention needed · 1 items need review")
+        XCTAssertEqual(hero.title, "Attention needed · 1 item needs review")
     }
 
     func test_advancedCopyIsUnchanged() {

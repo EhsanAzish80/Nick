@@ -35,18 +35,18 @@ final class SimpleAlertCopyTests: XCTestCase {
         )
     }
 
-    func test_quarantinedAlertReadsAsBlocked() {
+    func test_quarantinedAlertReadsAsQuarantined() {
         let copy = SimpleAlertCopy.make(alert: alert(severity: .critical), user: user(.critical),
                                         isQuarantined: true, fileStillPresent: false)
-        XCTAssertEqual(copy.status, .blocked)
+        XCTAssertEqual(copy.status, .quarantined)
         XCTAssertEqual(copy.title, "Nick stopped a harmful app")
         XCTAssertTrue(copy.whatNickDid.contains("Quarantine"))
     }
 
-    func test_unquarantinedCriticalIsAThreatNotBlocked() {
+    func test_unquarantinedCriticalNeedsReviewAndIsNotBlocked() {
         let copy = SimpleAlertCopy.make(alert: alert(severity: .critical), user: user(.critical),
                                         isQuarantined: false, fileStillPresent: true)
-        XCTAssertEqual(copy.status, .threat)
+        XCTAssertEqual(copy.status, .needsReview)
         XCTAssertFalse(copy.whatNickDid.localizedCaseInsensitiveContains("blocked"))
         XCTAssertEqual(copy.whatToDo, "Move it to the Trash.")
     }

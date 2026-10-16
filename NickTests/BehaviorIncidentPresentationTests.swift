@@ -46,6 +46,50 @@ final class BehaviorIncidentPresentationTests: XCTestCase {
         XCTAssertTrue(detail.subline.contains("command has finished"))
     }
 
+    func test_ended1152IncidentHasOneNeedsReviewStatusAndFiveViewHeadlineParity() throws {
+        let alert = behaviorAlert(metadata: baseMetadata).withOccurrenceCount(1)
+        let incident = SecurityIncident(
+            key: "curl_pipe_shell|/bin/zsh|11:52",
+            alert: alert,
+            evidence: [],
+            state: .new
+        )
+        let presentation = BehaviorIncidentPresentation(alert: alert, incident: incident)
+        let user = UserFacingAlertBuilder.shared.build(from: alert)
+        let detail = SimpleAlertCopy.make(
+            alert: alert,
+            user: user,
+            isQuarantined: false,
+            fileStillPresent: false,
+            incident: incident
+        )
+        let input = try XCTUnwrap(SimpleActivityFeed.alertInputs(
+            from: [alert], actionable: [alert.id], incidents: [incident]
+        ).first)
+        let row = try XCTUnwrap(SimpleActivityFeed.items(
+            alerts: [input], quarantine: [], blocked: []
+        ).first)
+
+        XCTAssertEqual(alert.evidenceState(processIsRunning: { _ in false }), .processEnded)
+        XCTAssertEqual(presentation.status, .needsReview)
+        XCTAssertEqual(detail.status, .needsReview)
+        XCTAssertEqual(row.status.rawValue, IncidentDisplayStatus.needsReview.rawValue)
+
+        let status = ProtectionStatus.evaluate(
+            actionableAlerts: [], incidents: [incident], auditIssueCount: 0, sensorRunning: true
+        )
+        let models: [any ProtectionStatusPresenting] = [
+            SimpleHomeProtectionStatusModel(status: status),
+            SimpleActivityProtectionStatusModel(status: status),
+            AdvancedOverviewProtectionStatusModel(status: status),
+            SmartScanProtectionStatusModel(status: status),
+            SystemAuditProtectionStatusModel(status: status),
+        ]
+        XCTAssertTrue(models.allSatisfy {
+            $0.presentation.displayText == "Attention needed · 1 item needs review"
+        })
+    }
+
     func test_behaviorTechnicalPresentationShowsAttributionActorAndMatchedCommand() {
         var metadata = baseMetadata
         metadata.merge([
