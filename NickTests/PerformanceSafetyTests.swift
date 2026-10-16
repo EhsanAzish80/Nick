@@ -3,6 +3,17 @@ import XCTest
 
 final class PerformanceSafetyTests: XCTestCase {
 
+    func test_fseventsQueueCoalescesAndReportsOverflow() {
+        var queue = BoundedPathQueue(capacity: 2)
+        XCTAssertTrue(queue.enqueue("/tmp/a"))
+        XCTAssertTrue(queue.enqueue("/tmp/a"), "Duplicate paths must coalesce without consuming capacity")
+        XCTAssertTrue(queue.enqueue("/tmp/b"))
+        XCTAssertFalse(queue.enqueue("/tmp/c"), "A full queue must report overflow to the caller")
+        XCTAssertEqual(queue.dequeue(), "/tmp/a")
+        XCTAssertEqual(queue.dequeue(), "/tmp/b")
+        XCTAssertNil(queue.dequeue())
+    }
+
     func testRealtimeWatcherDoesNotObserveWholeHomeOrApplicationSupport() {
         let paths = FileSystemWatcher.defaultMonitoredDirectories
 
@@ -27,11 +38,16 @@ final class PerformanceSafetyTests: XCTestCase {
 
         defaults.set(30, forKey: key)
         let engine = SecurityEngine()
-        let coordinator = MonitorCoordinator(
-            engine: engine,
-            correlator: ThreatCorrelator()
-        )
+        let coordinator = MonitorCoordinator(engine: engine)
 
         XCTAssertEqual(coordinator.deepScanInterval, 300)
+    }
+
+    @MainActor
+    func testMonitorCoordinatorUsesSecurityEngineCorrelator() {
+        let engine = SecurityEngine()
+        let coordinator = MonitorCoordinator(engine: engine)
+
+        XCTAssertTrue(coordinator.usesEngineCorrelator)
     }
 }

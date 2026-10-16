@@ -21,27 +21,39 @@ struct SimpleActivityView: View {
     private var items: [SimpleActivityItem] {
         let actionable = Set(engine.activeActionableAlerts.map(\.id))
         return SimpleActivityFeed.items(
-            alerts: SimpleActivityFeed.alertInputs(from: engine.alerts, actionable: actionable),
+            alerts: SimpleActivityFeed.alertInputs(
+                from: engine.alerts,
+                actionable: actionable,
+                incidents: engine.incidentStore.incidents
+            ),
             quarantine: xpcClient.quarantineRecords,
-            blocked: SimpleActivityFeed.blockedInputs(from: xpcClient.events)
+            blocked: SimpleActivityFeed.blockedInputs(
+                from: xpcClient.events,
+                failedThreatEventIDs: xpcClient.failedThreatEventIDs
+            )
         )
     }
 
-    private var subtitle: String {
-        let count = engine.activeActionableAlerts.count
-        switch count {
-        case 0:  return "Nothing needs your attention"
-        case 1:  return "1 thing needs your attention"
-        default: return "\(count) things need your attention"
-        }
+    private var statusModel: SimpleActivityProtectionStatusModel {
+        SimpleActivityProtectionStatusModel(status: engine.protectionStatus)
     }
 
     var body: some View {
         let all = items
         let days = SimpleActivityFeed.days(all.filter(filter.includes))
+        let presentation = statusModel.presentation
 
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 8) {
+                    Image(systemName: presentation.systemImage)
+                        .accessibilityHidden(true)
+                    Text(presentation.displayText)
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .foregroundStyle(presentation.tone.statusColor)
+                .accessibilityElement(children: .combine)
+
                 NotificationPermissionRow()
 
                 filterBar(all)
@@ -62,7 +74,7 @@ struct SimpleActivityView: View {
         }
         .background(Color.nickWindow)
         .navigationTitle("Activity")
-        .navigationSubtitle(subtitle)
+        .navigationSubtitle(statusModel.presentation.displayText)
         .sheet(item: $presentedAlert) { alert in
             AlertDetailView(alert: alert)
                 .environment(engine)
@@ -73,6 +85,10 @@ struct SimpleActivityView: View {
                 presentedQuarantine = nil
             }
             .environment(xpcClient)
+        }
+        .onAppear(perform: presentPendingNotificationAlert)
+        .onChange(of: engine.pendingNotificationAlertID) { _, _ in
+            presentPendingNotificationAlert()
         }
     }
 
@@ -176,12 +192,21 @@ struct SimpleActivityView: View {
     private func open(_ item: SimpleActivityItem) {
         switch item.source {
         case .alert(let id):
+            engine.markIncidentSeen(id)
             presentedAlert = engine.alerts.first { $0.id == id }
         case .quarantine(let id):
             presentedQuarantine = xpcClient.quarantineRecords.first { $0.id == id }
         case .blocked:
             break
         }
+    }
+
+    private func presentPendingNotificationAlert() {
+        guard let id = engine.pendingNotificationAlertID,
+              let alert = engine.alerts.first(where: { $0.id == id }) else { return }
+        engine.markIncidentSeen(id)
+        presentedAlert = alert
+        engine.pendingNotificationAlertID = nil
     }
 }
 
@@ -193,10 +218,10 @@ struct SimpleActivityRow: View {
 
     private var colors: (Color, Color) {
         switch item.status {
-        case .needsAction, .threat, .quarantined, .blocked:
+        case .informational:
+            (.nickSecondaryText, Color.nickSecondaryText.opacity(0.12))
+        case .needsAction, .quarantined, .blocked:
             (.nickDangerText, .nickDangerBackground)
-        case .warning:
-            (.nickWarningText, .nickWarningBackground)
         }
     }
 

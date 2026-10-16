@@ -1,11 +1,14 @@
 import AppKit
+import Darwin
 import Foundation
 import NetworkExtension
 import Observation
+import OSLog
 
 @MainActor
 @Observable
 final class NetworkProtectionManager {
+    static let observationNotification = Notification.Name("com.ehsanazish.nick.network-observation")
     enum State: Equatable {
         case loading
         case disabled
@@ -20,6 +23,49 @@ final class NetworkProtectionManager {
     private(set) var temporaryAllowedDomains: [String: Date] = [:]
     private(set) var temporaryAllowedAppIdentifiers: [String: Date] = [:]
     private(set) var blockEvents: [NetworkBlockEvent] = []
+    var findingHandler: ((NetworkFinding) async -> IncidentIngestOutcome)? {
+        didSet {
+            guard findingHandler != nil else { return }
+            ingestEvents(blockEvents)
+        }
+    }
+    /// Confirms that the root-owned incident-store snapshot covering a live
+    /// finding was durably accepted. Network events are not claimed until this
+    /// succeeds, matching the Endpoint Security delivery contract.
+    var incidentPersistenceHandler: ((UInt64) async -> (UInt64, Bool)?)?
+    private var observationToken: NSObjectProtocol?
+    private var eventDirectorySource: DispatchSourceFileSystemObject?
+    private var deliveredEventIDs: Set<UUID> = []
+    private var inFlightEventIDs: Set<UUID> = []
+    private let eventsURLProvider: () -> URL?
+    private let logger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "NetworkIngest"
+    )
+    private var storeChangeCount = 0
+    private(set) var reloadSummaryCount = 0
+    var deliveredEventCount: Int { deliveredEventIDs.count }
+    var inFlightEventCount: Int { inFlightEventIDs.count }
+
+    init(eventsURLProvider: @escaping () -> URL? = {
+        NetworkProtectionSharedStore.eventsURL()
+    }) {
+        self.eventsURLProvider = eventsURLProvider
+        observationToken = DistributedNotificationCenter.default().addObserver(
+            forName: Self.observationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.storeDidChange(trigger: "distributed-notification")
+            }
+        }
+        // Event delivery must not depend on a view appearing or on the async
+        // system-extension refresh completing. Start observing the production
+        // store as soon as AppDelegate creates this manager; refresh retries if
+        // the support directory was not available yet.
+        startEventDirectoryWatcher()
+    }
 
     var isEnabled: Bool { state == .enabled }
 
@@ -50,9 +96,11 @@ final class NetworkProtectionManager {
                 )
             }
             loadEvents()
+            startEventDirectoryWatcher()
         } catch {
             state = .failed(error.localizedDescription)
             loadEvents()
+            startEventDirectoryWatcher()
         }
     }
 
@@ -189,20 +237,70 @@ final class NetworkProtectionManager {
     }
 
     func clearEvents() {
-        guard let url = NetworkProtectionSharedStore.eventsURL() else { return }
+        guard let url = eventsURLProvider() else { return }
         try? FileManager.default.removeItem(at: url)
         blockEvents = []
     }
 
     func loadEvents() {
-        guard let url = NetworkProtectionSharedStore.eventsURL(),
-              let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([NetworkBlockEvent].self, from: data)
-        else {
+        loadEvents(trigger: "explicit-reload")
+    }
+
+    private func loadEvents(trigger: String) {
+        guard let url = eventsURLProvider() else {
+            logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=no-url")
             blockEvents = []
             return
         }
-        blockEvents = decoded.sorted { $0.timestamp > $1.timestamp }
+        guard let data = try? Data(contentsOf: url) else {
+            logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=read-failed")
+            blockEvents = []
+            return
+        }
+        guard let decoded = Self.decodeEvents(data) else {
+            logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=decode-failed")
+            blockEvents = []
+            return
+        }
+        ingestEvents(decoded)
+    }
+
+    static func decodeEvents(_ data: Data) -> [NetworkBlockEvent]? {
+        try? JSONDecoder().decode([NetworkBlockEvent].self, from: data)
+    }
+
+    /// The app-side entry point for the filter's shared-store payload. Event
+    /// identifiers are claimed only after a consumer is installed; otherwise
+    /// an event arriving during app startup could be marked delivered and then
+    /// permanently skipped when the live-finding handler is attached.
+    func ingestEvents(_ decoded: [NetworkBlockEvent]) {
+        let sorted = decoded.sorted { $0.timestamp > $1.timestamp }
+        blockEvents = sorted
+        let skippedAlreadyDelivered = sorted.lazy.filter {
+            self.deliveredEventIDs.contains($0.id)
+        }.count
+        let newEvents = sorted.filter {
+            !self.deliveredEventIDs.contains($0.id) && !self.inFlightEventIDs.contains($0.id)
+        }
+        reloadSummaryCount += 1
+        logger.info(
+            "reload summary decoded=\(sorted.count, privacy: .public) new=\(newEvents.count, privacy: .public) skipped-already-delivered=\(skippedAlreadyDelivered, privacy: .public)"
+        )
+        guard let findingHandler else {
+            logger.info("event delivery skipped reason=handler-absent count=\(newEvents.count, privacy: .public)")
+            return
+        }
+        for event in newEvents {
+            inFlightEventIDs.insert(event.id)
+            let finding = NetworkFinding(event: event)
+            logger.info(
+                "finding built id=\(event.id.uuidString, privacy: .public) reason=\(event.reason, privacy: .public) decision=\(event.decision.rawValue, privacy: .public)"
+            )
+            Task {
+                let outcome = await findingHandler(finding)
+                await self.finishDelivery(outcome: outcome, eventID: event.id)
+            }
+        }
     }
 
     func openNetworkExtensionSettings() {
@@ -210,6 +308,68 @@ final class NetworkProtectionManager {
             string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
         ) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func startEventDirectoryWatcher() {
+        guard eventDirectorySource == nil,
+              let directory = eventsURLProvider()?.deletingLastPathComponent()
+        else { return }
+        let descriptor = open(directory.path, O_EVTONLY)
+        guard descriptor >= 0 else {
+            logger.error("store watcher unavailable reason=open-failed")
+            return
+        }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .extend, .rename, .delete],
+            queue: .main
+        )
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                self?.storeDidChange(trigger: "filesystem")
+            }
+        }
+        source.setCancelHandler { close(descriptor) }
+        source.resume()
+        eventDirectorySource = source
+    }
+
+    private func storeDidChange(trigger: String) {
+        storeChangeCount += 1
+        logger.info(
+            "store change observed trigger=\(trigger, privacy: .public) count=\(self.storeChangeCount, privacy: .public)"
+        )
+        loadEvents(trigger: trigger)
+    }
+
+    private func finishDelivery(outcome: IncidentIngestOutcome, eventID: UUID) async {
+        defer { inFlightEventIDs.remove(eventID) }
+        switch outcome {
+        case .persisted(let generation), .coalesced(let generation):
+            let persistence = await incidentPersistenceHandler?(generation)
+            guard let (confirmedGeneration, succeeded) = persistence,
+                  confirmedGeneration == generation,
+                  succeeded else {
+                logger.error(
+                    "ingest outcome id=\(eventID.uuidString, privacy: .public) result=failed reason=durability-unconfirmed generation=\(generation, privacy: .public)"
+                )
+                return
+            }
+            deliveredEventIDs.insert(eventID)
+            let result = if case .persisted = outcome { "persisted" } else { "coalesced" }
+            logger.info(
+                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=\(result, privacy: .public) generation=\(generation, privacy: .public) durable=yes"
+            )
+        case .suppressedByPolicy(let reason):
+            deliveredEventIDs.insert(eventID)
+            logger.info(
+                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=suppressed reason=\(reason, privacy: .public)"
+            )
+        case .failed:
+            logger.error(
+                "ingest outcome id=\(eventID.uuidString, privacy: .public) result=failed"
+            )
+        }
     }
 
     private func saveAllowlist(
@@ -225,7 +385,6 @@ final class NetworkProtectionManager {
                 ?? NEFilterProviderConfiguration()
             let configuration = NetworkProtectionConfiguration(
                 protectionEnabled: true,
-                blockingEnabled: false,
                 allowedDomains: domains,
                 allowedAppIdentifiers: apps,
                 temporaryAllowedDomains: temporaryDomains,
@@ -263,5 +422,55 @@ final class NetworkProtectionManager {
 
     private static func timestamps(_ values: [String: Date]) -> [String: TimeInterval] {
         values.mapValues(\.timeIntervalSince1970)
+    }
+}
+
+struct NetworkFinding: Sendable {
+    let signal: ThreatSignal
+    let score: Double
+    let recommendedAction: String
+
+    init(event: NetworkBlockEvent) {
+        let reason = NetworkObservationReason(rawValue: event.reason)
+        let destinationKind = NetworkEventContext.destinationKind(for: event.host)
+        let destinationClass: String = switch destinationKind {
+        case .localDevice, .localNetworkAddress: "local"
+        case .website, .internetAddress:
+            reason == .knownThreat || reason == .scamGuardian ? "suspicious" : "external"
+        }
+        let severity: SignalSeverity
+        let score: Double
+        switch reason {
+        case .knownThreat:
+            severity = .high
+            score = 0.9
+        case .scamGuardian:
+            severity = .medium
+            score = 0.7
+        case .connectionRate, .unusualPort, .none:
+            severity = .medium
+            score = 0.5
+        }
+        self.score = score
+        signal = ThreatSignal(
+            id: event.id,
+            source: .network,
+            severity: severity,
+            timestamp: event.timestamp,
+            title: event.reasonTitle,
+            description: NetworkEventContext(event: event).explanation,
+            context: ThreatSignalContext(metadata: [
+                "reason": "network_extension_\(event.reason)",
+                "rule": "network_\(event.reason)",
+                "ruleTier": reason == .knownThreat ? "protected" : "review",
+                "destination": event.host,
+                "destinationClass": destinationClass,
+                "appIdentifier": event.appIdentifier ?? "unknown",
+                "port": event.port.map(String.init) ?? "unknown"
+            ])
+        )
+        recommendedAction = reason == .scamGuardian
+            ? "Review the attempted destination and quit the app if you did not expect it."
+            : "Review the attempted destination and the application responsible."
     }
 }

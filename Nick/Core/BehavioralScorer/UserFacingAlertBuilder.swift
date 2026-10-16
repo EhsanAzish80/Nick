@@ -23,6 +23,9 @@ final class UserFacingAlertBuilder: Sendable {
     /// Builds a `UserFacingAlert` from a correlated `ThreatAlert`.
     func build(from alert: ThreatAlert) -> UserFacingAlert {
         let pattern = detectPattern(from: alert)
+        let actions = pattern.actions.filter {
+            $0 != .quarantine || alert.remediableFilePath != nil
+        }
 
         return UserFacingAlert(
             id:              alert.id,
@@ -31,7 +34,7 @@ final class UserFacingAlertBuilder: Sendable {
             assessment:      pattern.assessment,
             recommendedAction: pattern.recommendedAction,
             severity:        pattern.severity ?? mapSeverity(alert.severity),
-            actions:         pattern.actions,
+            actions:         actions,
             technicalDetail: alert,
             timestamp:       alert.timestamp
         )
@@ -85,7 +88,16 @@ final class UserFacingAlertBuilder: Sendable {
         let processName    = firstProcess?.name ?? signals.compactMap { $0.metadata["process"] }.first
         let displayProcess = userReadableProcessName(processName)
         let parentName     = firstProcess?.parentName.flatMap(userReadableProcessName)
-        let isDeveloperWorkflow = signals.contains(where: isDeveloperWorkflowSignal)
+        let protectedCommandReasons: Set<String> = [
+            "curl_pipe_shell", "wget_pipe_shell", "osascript_shell",
+            "quarantine_removal", "base64_payload", "launchctl_tmp",
+            "crontab_modify", "mktemp_execute"
+        ]
+        let hasProtectedCommandEvidence = signals.contains {
+            protectedCommandReasons.contains($0.metadata["reason"] ?? "")
+        }
+        let isDeveloperWorkflow = !hasProtectedCommandEvidence
+            && signals.contains(where: isDeveloperWorkflowSignal)
 
         // Alerts persisted by an older development build can include Nick's own
         // unsigned Xcode products. They are build artifacts, not user threats.
@@ -102,13 +114,93 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
+        if signals.contains(where: { $0.metadata["remediationStatus"] == "quarantine-failed" }) {
+            let legacyReason = signals.compactMap { $0.metadata["remediationFailureReason"] }
+                .first(where: { !$0.isEmpty })
+            let status = signals.compactMap { $0.metadata["remediationStatusLine"] }
+                .first(where: { !$0.isEmpty }) ?? legacyReason.map { "Quarantine failed — \($0)" } ?? "Quarantine failed"
+            let guidance = signals.compactMap { $0.metadata["remediationGuidance"] }
+                .first(where: { !$0.isEmpty }) ?? alert.recommendedAction
+            return AlertPattern(
+                headline: alert.title,
+                explanation: "\(status). The file is still present at its original location.",
+                assessment: "Needs your attention",
+                recommendedAction: guidance,
+                severity: .critical,
+                actions: [.quarantine, .showDetails]
+            )
+        }
+
+        if title.contains("eicar") {
+            return AlertPattern(
+                headline: "EICAR test file",
+                explanation: "This file matches the standard harmless EICAR antivirus test signature.",
+                assessment: "Test detection",
+                recommendedAction: "Use it only to verify security software, then remove or quarantine it.",
+                severity: .warning,
+                actions: [.quarantine, .showDetails, .dismiss]
+            )
+        }
+
+        if let tamper = signals.first(where: {
+            $0.metadata["reason"] == "endpoint_tamper_observed"
+        }) {
+            let recordedOperation = tamper.metadata["tamperOperation"]
+            let operation = Self.userFacingTamperOperation(recordedOperation)
+            let actor = userReadableProcessName(tamper.processInfo?.name) ?? "an unknown process"
+            let outcomeRecorded = tamper.metadata["tamperDisposition"] == "blocked"
+            return AlertPattern(
+                headline: outcomeRecorded
+                    ? "Nick blocked an attempt to \(operation) its files (\(actor))"
+                    : "Tamper attempt — outcome not recorded",
+                explanation: outcomeRecorded
+                    ? "Nick refused the \(operation) operation by \(actor) before it could change the protected target."
+                    : "An older Nick build recorded a protected-path tamper attempt by \(actor), but did not store whether the operation was blocked or allowed.",
+                assessment: outcomeRecorded ? "Blocked" : "Protected evidence",
+                recommendedAction: outcomeRecorded
+                    ? "No file change was allowed. Review the actor and operation if you did not run them."
+                    : "Review the actor and target. Nick has kept this record visible because the older event did not include its outcome.",
+                severity: .critical,
+                actions: [.showDetails]
+            )
+        }
+
         // --- Camera / microphone ---
         if hasCapture {
             let mediaType = signals.compactMap { $0.metadata["mediaType"] }.first ?? "camera or microphone"
             let device = signals.compactMap { $0.metadata["deviceName"] }.first ?? mediaType
+            let isInactive = signals.allSatisfy {
+                $0.metadata["reason"] == "capture_device_inactive"
+            }
             let isSimulatorActivity = signals.contains(where: isSimulatorCapture)
             let hasAuthoritativeAttribution = signals.allSatisfy {
                 $0.metadata["attributionConfidence"] == "authoritative"
+            }
+            let hasContextualAttribution = signals.contains {
+                $0.metadata["attributionConfidence"] == "contextual"
+            }
+
+            if isInactive {
+                return AlertPattern(
+                    headline: "\(device) became inactive",
+                    explanation: "Nick observed that the \(mediaType) stopped streaming.",
+                    assessment: "No longer active",
+                    recommendedAction: "No action is needed.",
+                    severity: .safe,
+                    actions: [.showDetails, .dismiss]
+                )
+            }
+
+            if hasContextualAttribution {
+                let foregroundApp = displayProcess ?? "another app"
+                return AlertPattern(
+                    headline: "\(device) became active while \(foregroundApp) was frontmost",
+                    explanation: "Nick observed \(mediaType) activity while \(foregroundApp) was the foreground app. This is useful context, but it is not proof that \(foregroundApp) owned the capture session.",
+                    assessment: "Informational activity",
+                    recommendedAction: "If this matches what you were doing, no action is needed. If it is unexpected, check the macOS privacy indicator and review \(mediaType) permissions in System Settings → Privacy & Security.",
+                    severity: .safe,
+                    actions: [.showDetails, .dismiss]
+                )
             }
 
             if !hasAuthoritativeAttribution {
@@ -146,6 +238,29 @@ final class UserFacingAlertBuilder: Sendable {
                 assessment: isUntrusted ? "Potentially dangerous" : "Needs your review",
                 recommendedAction: "If you expected this, keep the app. If not, quit it and remove its \(mediaType) permission in System Settings → Privacy & Security.",
                 severity: isUntrusted ? .critical : .warning,
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
+        // --- Protected dual-use command behavior ---
+        // Exec-time evidence from the system extension is stronger than the
+        // periodic process inventory's generic developer-tool heuristic. Keep
+        // the wording factual: Nick observed the launch; it did not prove that
+        // a payload ran successfully and it did not block the command.
+        if hasProtectedCommandEvidence {
+            let reason = signals.compactMap { $0.metadata["reason"] }
+                .first(where: protectedCommandReasons.contains) ?? ""
+            let isDownloadPipe = reason == "curl_pipe_shell" || reason == "wget_pipe_shell"
+            return AlertPattern(
+                headline: isDownloadPipe
+                    ? "Download-to-shell command detected"
+                    : "Sensitive system-tool command detected",
+                explanation: isDownloadPipe
+                    ? "Nick saw a shell run a command that sends downloaded content directly to a shell interpreter. Nick recorded the launch; it did not block it."
+                    : "A system tool was launched with arguments associated with a security-sensitive change. Nick recorded the launch; it did not block it.",
+                assessment: "Potentially dangerous",
+                recommendedAction: "Review the initiating app and command context. If you did not run it, stop the related process and investigate how it started.",
+                severity: signals.contains(where: { $0.severity == .critical }) ? .critical : .warning,
                 actions: [.showDetails, .dismiss]
             )
         }
@@ -238,13 +353,40 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
-        // --- C2 / suspicious network ---
+        // --- Network extension findings ---
         if hasNetwork && !features.contains("shell") {
+            if let known = signals.first(where: {
+                $0.metadata["reason"] == "network_extension_knownThreat"
+            }) {
+                let app = NetworkEventContext.displayName(for: known.metadata["appIdentifier"])
+                let domain = known.metadata["destination"] ?? "the destination"
+                return AlertPattern(
+                    headline: "Known dangerous destination",
+                    explanation: "\(app) tried to connect to \(domain), a known dangerous destination. Nick recorded the attempt; it did not block it.",
+                    assessment: "Known threat",
+                    recommendedAction: "Review the attempted destination and quit the app if you did not expect it.",
+                    severity: .critical,
+                    actions: [.showDetails, .dismiss]
+                )
+            }
+            if let heuristic = signals.first(where: {
+                $0.metadata["reason"] == "network_extension_scamGuardian"
+            }) {
+                let app = NetworkEventContext.displayName(for: heuristic.metadata["appIdentifier"])
+                let domain = heuristic.metadata["destination"] ?? "the destination"
+                return AlertPattern(
+                    headline: "Possible phishing destination",
+                    explanation: "\(app) tried to connect to \(domain), which matched a phishing heuristic. Nick recorded the attempt; it did not block it.",
+                    assessment: "Needs your review",
+                    recommendedAction: "Review the attempted destination and quit the app if you did not expect it.",
+                    actions: [.showDetails, .dismiss]
+                )
+            }
             return AlertPattern(
                 headline: "An app made an unusual network connection",
                 explanation: "An app tried to connect to a server that Nick flagged as potentially dangerous. "
                     + "This can be malware communication, but raw IP addresses and uncommon ports are also used by legitimate software. "
-                    + "Nick observed this connection; passive monitoring does not block it.",
+                    + "Nick recorded the attempt; passive monitoring did not block it.",
                 assessment: "Needs your review",
                 recommendedAction: "Keep the app if you recognize it and expected network activity. Otherwise, quit it and review the destination in Details.",
                 actions: [.showDetails, .dismiss]
@@ -253,8 +395,9 @@ final class UserFacingAlertBuilder: Sendable {
 
         // --- File integrity violation ---
         if hasFilesystem {
+            let pendingFIM = signals.contains { $0.metadata["fimStatus"] == "pending" }
             return AlertPattern(
-                headline: "System file change detected",
+                headline: pendingFIM ? "File integrity change needs review" : "System file change detected",
                 explanation: "A file that controls how your Mac operates was modified. "
                     + "This can happen after a legitimate update, but it's also how malware hides. "
                     + "Review the change to make sure it's expected.",
@@ -284,6 +427,20 @@ final class UserFacingAlertBuilder: Sendable {
             recommendedAction: cleanRecommendation(alert.recommendedAction),
             actions: [.showDetails, .dismiss]
         )
+    }
+
+    static func userFacingTamperOperation(_ operation: String?) -> String {
+        switch operation {
+        case "unlink": "delete"
+        case "rename-source", "rename-destination": "move or rename"
+        case "open-for-write", "truncate": "modify"
+        case "create": "create"
+        case "link": "link"
+        case "clone": "clone"
+        case "copyfile": "copy"
+        case .some(let value) where !value.isEmpty: value
+        default: "change"
+        }
     }
 
     private func isSimulatorCapture(_ signal: ThreatSignal) -> Bool {
@@ -318,7 +475,7 @@ final class UserFacingAlertBuilder: Sendable {
             || path.hasPrefix("/System/")
         let signingStatus = signal.fileInfo?.signingStatus ?? signal.processInfo?.signingStatus
         guard installedPath, let signingStatus else { return false }
-        if case .signed(let teamID) = signingStatus { return !teamID.isEmpty }
+        if case .signed(let teamID, _) = signingStatus { return !teamID.isEmpty }
         return false
     }
 

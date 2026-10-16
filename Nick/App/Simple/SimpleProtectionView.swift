@@ -233,7 +233,8 @@ struct SimpleProtectionView: View {
                 Task { @MainActor in
                     settingUpRansomwareWatch = false
                     if success {
-                        endpointHealth = await EndpointHealth.load()
+                        await xpcClient.refreshExtensionHealth()
+                        endpointHealth = xpcClient.extensionHealth
                     } else {
                         setupFailed = true
                     }
@@ -244,7 +245,8 @@ struct SimpleProtectionView: View {
 
     private func refreshHealth() async {
         while !Task.isCancelled {
-            endpointHealth = await EndpointHealth.load()
+            await xpcClient.refreshExtensionHealth()
+            endpointHealth = xpcClient.extensionHealth
             healthLoaded = true
             try? await Task.sleep(for: .seconds(5))
         }

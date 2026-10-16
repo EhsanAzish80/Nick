@@ -20,6 +20,10 @@ import SystemExtensions
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
+    /// Time-boxed 5.0 policy: the filter remains an honest observation surface,
+    /// while durable network-to-incident cursoring is completed for 5.0.1.
+    static let networkIncidentIngestionEnabledFor5_0 = false
+
     // MARK: - Shared State
 
     /// Single SecurityEngine instance shared across all scenes. This must stay
@@ -37,12 +41,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let mainWindowDelegate = MainWindowDelegate()
     private var coordinator: MonitorCoordinator?
     private var endpointExtensionManager: ExtensionManager?
+    private var endpointBootstrapTask: Task<Void, Never>?
     private var updaterController: SPUStandardUpdaterController?
+    private var updateBadgeVisible = false
     private let updateLogger = Logger(
         subsystem: "com.ehsanazish.nick",
         category: "Updates"
     )
+    private let incidentStoreLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "IncidentStore"
+    )
+    private let networkIngestLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "NetworkIngest"
+    )
+    private let esIngestLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "ESIngest"
+    )
+    private let launchUptime = ProcessInfo.processInfo.systemUptime
     private var receivedUpdateCheckResult = false
+    /// Sparkle must be allowed to terminate Nick after the user accepts an
+    /// update, even when Nick's main window is hidden. Otherwise the installer
+    /// waits forever for the menu-bar app to exit.
+    private var sparkleInstallationInProgress = false
+    private var sparkleUpdateLeaseFailed = false
     private var uninstallPreparationInProgress = false
     private let uninstallLogger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -80,9 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         traceUninstall("Nick launched; maintenance mode: \(CommandLine.arguments.contains("--prepare-uninstall"))")
         if CommandLine.arguments.contains("--prepare-uninstall") {
             traceUninstall("Maintenance mode detected in applicationDidFinishLaunching")
-            prepareForUninstall(
-                markerPath: uninstallArgumentValue(after: "--result")
-            )
+            prepareForUninstall()
             return
         }
 
@@ -113,32 +135,169 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: self,
-            userDriverDelegate: nil
+            userDriverDelegate: self
         )
         setupStatusItem()
-        Task { @MainActor in
-            let endpointManager = ExtensionManager()
-            endpointExtensionManager = endpointManager
-            endpointManager.ensureBundledVersionIsActive()
-            // A healthy older Network Filter is not sufficient after an app
-            // update. Submit a replacement request once per bundled build so
-            // macOS runs the provider shipped with this version of Nick.
-            await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()
-            await networkProtection.refresh()
-            xpcClient.connect()
-            let coord = MonitorCoordinator(engine: engine, correlator: ThreatCorrelator())
-            coordinator = coord
-            // The coordinator's first tick performs the initial full scan.
-            // Starting another scan here duplicates process signature validation
-            // and can saturate a CPU core during launch.
-            coord.startRealTimePipeline()
-            NotificationManager.shared.setup()
-            NSApp.servicesProvider = NickServicesProvider()
-            NSUpdateDynamicServices()
-            configureMainWindowDelegate()
-            checkPendingFinderScan()
-            checkScheduledDeepScan()
+        let endpointManager = ExtensionManager()
+        endpointExtensionManager = endpointManager
+        endpointBootstrapTask = beginEndpointBootstrap {
+            await endpointManager.ensureBundledVersionIsActive()
         }
+        installApplicationLifecycleObserver()
+    }
+
+    /// Installs every live-finding consumer before extension activation starts.
+    /// Activation can wait indefinitely for macOS approval or replacement; it
+    /// must never create an interval where already-running providers have no
+    /// incident consumer.
+    @discardableResult
+    func beginEndpointBootstrap(
+        ensureActive: @escaping @MainActor () async -> Void
+    ) -> Task<Void, Never> {
+        wireLiveFindingHandlers()
+        return Task { @MainActor [weak self] in
+            guard let self else { return }
+            await ensureActive()
+            guard !Task.isCancelled else { return }
+            let legacyPayload = engine.prepareLegacyIncidentMigration()
+            xpcClient.connect(legacyIncidentPayload: legacyPayload) { [weak self] record, _ in
+                guard let self else { return }
+                if let record {
+                    do {
+                        self.xpcClient.incidentPersistenceConfirmationHandler = { [weak self] generation in
+                            self?.engine.confirmIncidentStorePersistence(generation: generation)
+                        }
+                        try self.engine.installPrivilegedIncidentStore(
+                            payload: record.payload,
+                            persistence: { [weak self] payload, generation, authorization in
+                                self?.xpcClient.persistIncidentStore(
+                                    payload,
+                                    generation: generation,
+                                    authorizationExternalForm: authorization
+                                )
+                            },
+                            authorizer: { [weak self] id, action in
+                                guard let self else { return .protectionDisconnected }
+                                return await self.xpcClient.validateIncidentVerdictTarget(id: id, action: action)
+                            },
+                            removeLegacyState: true
+                        )
+                        self.xpcClient.incidentStoreDidBecomeReady()
+#if DEBUG
+                        self.runRequestedRetentionValidation()
+#endif
+                    } catch {
+                        self.incidentStoreLogger.error(
+                            "Could not load root-owned incident store: \(error.localizedDescription)"
+                        )
+                    }
+                }
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let legacySettings = self.engine.prepareLegacySecuritySettingsMigration()
+                    if let privilegedSettings = await self.xpcClient.bootstrapSecuritySettings(
+                        legacyPayload: legacySettings
+                    ) {
+                        do {
+                            try self.engine.installPrivilegedSecuritySettings(
+                                payload: privilegedSettings,
+                                persistence: { [weak self] payload, authorization in
+                                    self?.xpcClient.persistSecuritySettings(
+                                        payload,
+                                        authorizationExternalForm: authorization
+                                    )
+                                }
+                            )
+                        } catch {
+                            self.incidentStoreLogger.error(
+                                "Could not load root-owned security settings: \(error.localizedDescription)"
+                            )
+                        }
+                    }
+                    self.startMonitoringAfterIncidentStoreBootstrap()
+                }
+            }
+
+            // Network Filter replacement/configuration is independent of the
+            // Endpoint Security XPC bootstrap. A system-extension request can
+            // remain pending while macOS waits for approval or provider health;
+            // it must never delay loading or migrating the incident store.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await NetworkFilterInstaller.shared.ensureBundledVersionIsActive()
+                await self.networkProtection.refresh()
+            }
+        }
+    }
+
+#if DEBUG
+    private func runRequestedRetentionValidation() {
+        guard let mode = ProcessInfo.processInfo.environment["NICK_DEBUG_RETENTION_HARNESS"] else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let initial = mode == "cleanup"
+                ? engine.debugCleanRetentionFlood()
+                : engine.debugRunRetentionFlood()
+            try? await Task.sleep(for: .seconds(2))
+            let result = initial + " | " + engine.debugRetentionFloodPersistenceStatus()
+            try? result.write(
+                to: URL(fileURLWithPath: "/private/tmp/nick-retention-harness-result.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+    }
+#endif
+
+    private func wireLiveFindingHandlers() {
+        if Self.networkIncidentIngestionEnabledFor5_0 {
+            networkProtection.findingHandler = { [weak self] finding in
+                guard let self, self.engine.incidentStoreReady else { return .failed }
+                return await self.engine.ingestLiveFinding(
+                    finding.signal,
+                    score: finding.score,
+                    recommendedAction: finding.recommendedAction
+                )
+            }
+            networkProtection.incidentPersistenceHandler = { [weak self] generation in
+                guard let self else { return nil }
+                return await self.xpcClient.awaitIncidentStorePersistence(generation: generation)
+            }
+            networkIngestLogger.info(
+                "handler attached elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
+            )
+        } else {
+            networkProtection.findingHandler = nil
+            networkProtection.incidentPersistenceHandler = nil
+            networkIngestLogger.info("incident delivery disabled release=5.0")
+        }
+        xpcClient.incidentStoreReadyProvider = { [weak self] in
+            self?.engine.incidentStoreReady == true
+        }
+        xpcClient.findingHandler = { [weak self] finding in
+            guard let self, self.engine.incidentStoreReady else { return .failed }
+            return await self.engine.ingestLiveFinding(
+                finding.signal,
+                score: finding.score,
+                recommendedAction: finding.recommendedAction
+            )
+        }
+        esIngestLogger.info(
+            "handler attached kind=finding elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
+        )
+        xpcClient.integrityAcknowledgementHandler = { [weak self] id in
+            self?.engine.resolveAcknowledgedFIMIncident(id)
+        }
+        esIngestLogger.info(
+            "handler attached kind=integrity-ack elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
+        )
+    }
+
+    private var launchElapsedMilliseconds: Int {
+        max(0, Int((ProcessInfo.processInfo.systemUptime - launchUptime) * 1_000))
+    }
+
+    private func installApplicationLifecycleObserver() {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(applicationWillBecomeActive),
@@ -147,11 +306,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    @MainActor
+    private func startMonitoringAfterIncidentStoreBootstrap() {
+        guard coordinator == nil else { return }
+        let coord = MonitorCoordinator(engine: engine)
+        coordinator = coord
+        // The coordinator's first tick performs the initial full scan.
+        // Starting another scan here duplicates process signature validation
+        // and can saturate a CPU core during launch.
+        coord.startRealTimePipeline()
+        NotificationManager.shared.setup()
+        NSApp.servicesProvider = NickServicesProvider()
+        NSUpdateDynamicServices()
+        configureMainWindowDelegate()
+        checkPendingFinderScan()
+        checkScheduledDeepScan()
+    }
+
     /// Runs only when the bundled uninstaller launches Nick with
     /// `--prepare-uninstall`. These APIs must execute from Nick's own bundle:
     /// NetworkExtension preferences and ServiceManagement registrations are
     /// scoped to the app that created them.
-    private func prepareForUninstall(markerPath requestedMarkerPath: String?) {
+    private func prepareForUninstall() {
         guard !uninstallPreparationInProgress else {
             uninstallLogger.notice("Ignoring duplicate uninstall preparation request")
             traceUninstall("Ignored duplicate preparation request")
@@ -160,8 +336,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         uninstallPreparationInProgress = true
         NSApp.setActivationPolicy(.prohibited)
 
-        let markerPath = requestedMarkerPath
-            ?? Self.uninstallResultURL.path
+        // Never let a command-line argument choose a privileged app's write
+        // destination. The bundled uninstaller and Nick independently derive
+        // the same per-user, fixed receipt path.
+        let markerPath = Self.uninstallResultURL.path
         uninstallLogger.notice("Preparing Nick for removal")
         traceUninstall("Preparation started; result path: \(markerPath)")
 
@@ -337,13 +515,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func uninstallArgumentValue(after flag: String) -> String? {
-        guard let index = CommandLine.arguments.firstIndex(of: flag) else { return nil }
-        let valueIndex = CommandLine.arguments.index(after: index)
-        guard valueIndex < CommandLine.arguments.endIndex else { return nil }
-        return CommandLine.arguments[valueIndex]
-    }
-
     /// Keep Nick alive in the background when the last window closes.
     /// The app only quits via the right-click menu or ⌘Q while the window is visible.
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
@@ -357,9 +528,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // XCTest owns the lifecycle of its host process. Never apply Nick's
         // menu-bar "stay alive while hidden" policy to a test host, otherwise
         // xcodebuild waits forever after the final test has completed.
-        if isRunningTests { return .terminateNow }
-        if forceQuit { return .terminateNow }
         let windowVisible = NSApp.nickMainWindow?.isVisible ?? false
+        return Self.terminationReply(
+            isRunningTests: isRunningTests,
+            forceQuit: forceQuit,
+            sparkleInstallationInProgress: sparkleInstallationInProgress,
+            sparkleUpdateLeaseFailed: sparkleUpdateLeaseFailed,
+            windowVisible: windowVisible
+        )
+    }
+
+    static func terminationReply(
+        isRunningTests: Bool,
+        forceQuit: Bool,
+        sparkleInstallationInProgress: Bool,
+        sparkleUpdateLeaseFailed: Bool = false,
+        windowVisible: Bool
+    ) -> NSApplication.TerminateReply {
+        if sparkleUpdateLeaseFailed && !isRunningTests && !forceQuit {
+            return .terminateCancel
+        }
+        if isRunningTests || forceQuit || sparkleInstallationInProgress {
+            return .terminateNow
+        }
         return windowVisible ? .terminateNow : .terminateCancel
     }
 
@@ -399,18 +590,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch state {
         case .protected:
-            button.image = statusImage(color: .systemGreen, description: "Nick is protected")
-            button.toolTip = "Nick: Protected"
+            button.image = statusImage(color: .systemGreen, description: "Nick is protected", showsUpdateBadge: updateBadgeVisible)
+            button.toolTip = updateBadgeVisible ? "Nick: Update available" : "Nick: Protected"
         case .review:
-            button.image = statusImage(color: .systemOrange, description: "Nick needs your review")
-            button.toolTip = "Nick: Review needed"
+            button.image = statusImage(color: .systemOrange, description: "Nick needs your review", showsUpdateBadge: updateBadgeVisible)
+            button.toolTip = updateBadgeVisible ? "Nick: Review needed · Update available" : "Nick: Review needed"
         case .urgent:
-            button.image = statusImage(color: .systemRed, description: "Nick needs immediate attention")
-            button.toolTip = "Nick: Immediate attention needed"
+            button.image = statusImage(color: .systemRed, description: "Nick needs immediate attention", showsUpdateBadge: updateBadgeVisible)
+            button.toolTip = updateBadgeVisible ? "Nick: Immediate attention needed · Update available" : "Nick: Immediate attention needed"
         }
     }
 
-    private func statusImage(color: NSColor, description: String) -> NSImage? {
+    private func statusImage(
+        color: NSColor,
+        description: String,
+        showsUpdateBadge: Bool = false
+    ) -> NSImage? {
         let configuration = NSImage.SymbolConfiguration(paletteColors: [color])
         guard let symbol = NSImage(
             systemSymbolName: "shield.fill",
@@ -423,6 +618,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in
             symbol.draw(in: rect)
+            if showsUpdateBadge {
+                let badgeRect = NSRect(x: 12, y: 11, width: 6, height: 6)
+                NSColor.controlBackgroundColor.setFill()
+                NSBezierPath(ovalIn: badgeRect.insetBy(dx: -1, dy: -1)).fill()
+                NSColor.systemBlue.setFill()
+                NSBezierPath(ovalIn: badgeRect).fill()
+            }
             return true
         }
         image.isTemplate = false
@@ -580,7 +782,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func postUpdateCheckStatus(_ status: String) {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "nickUpdateLastCheckTime")
+        UserDefaults.standard.set(status, forKey: "nickUpdateLastCheckResult")
         NotificationCenter.default.post(name: .nickUpdateCheckStatus, object: status)
+    }
+
+    private func setUpdateBadge(visible: Bool) {
+        updateBadgeVisible = visible
+        updateStatusItemAppearance()
     }
 
     // MARK: - Finder Sync Integration
@@ -642,14 +851,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Sparkle diagnostics
 
 extension AppDelegate: SPUUpdaterDelegate {
+    func updater(_: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        let sourceBuild = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+            .flatMap(Int.init) ?? 0
+        let destinationBuild = Int(item.versionString) ?? 0
+        let leasePrepared = xpcClient.prepareUpdateLeaseSynchronously(
+            sourceBuild: sourceBuild,
+            destinationBuild: destinationBuild
+        )
+        sparkleInstallationInProgress = leasePrepared
+        sparkleUpdateLeaseFailed = !leasePrepared
+        if leasePrepared {
+            updateLogger.info("Sparkle prepared an authorised update lease for build=\(item.versionString, privacy: .public)")
+        } else {
+            updateLogger.error("Sparkle update stopped because Nick could not prepare an authorised update lease")
+            postUpdateCheckStatus("Nick could not authorize this update. The installed version was not changed; try again.")
+        }
+    }
+
+    func feedURLString(for updater: SPUUpdater) -> String? {
+#if DEBUG
+        let value = Bundle.main.object(forInfoDictionaryKey: "NickDebugUpdateFeedURL") as? String
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let url = URL(string: trimmed), url.scheme == "https" {
+            return trimmed
+        }
+#endif
+        return nil
+    }
+
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         receivedUpdateCheckResult = true
+        sparkleUpdateLeaseFailed = false
+        UserDefaults.standard.set(true, forKey: "nickUpdateAvailable")
+        UserDefaults.standard.set(item.displayVersionString, forKey: "nickUpdateAvailableVersion")
         updateLogger.info("Sparkle found update version=\(item.displayVersionString, privacy: .public) build=\(item.versionString, privacy: .public)")
         postUpdateCheckStatus("Nick \(item.displayVersionString) is available.")
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
         receivedUpdateCheckResult = true
+        UserDefaults.standard.set(false, forKey: "nickUpdateAvailable")
+        UserDefaults.standard.removeObject(forKey: "nickUpdateAvailableVersion")
+        setUpdateBadge(visible: false)
         updateLogger.info("Sparkle found no update: \(error.localizedDescription, privacy: .public)")
         postUpdateCheckStatus("Nick is up to date.")
     }
@@ -659,9 +903,12 @@ extension AppDelegate: SPUUpdaterDelegate {
         didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
         error: Error?
     ) {
+        sparkleInstallationInProgress = false
         if let error {
-            updateLogger.error("Sparkle update cycle failed: \(error.localizedDescription, privacy: .public)")
-            if !receivedUpdateCheckResult {
+            if receivedUpdateCheckResult {
+                updateLogger.info("Sparkle update cycle completed with a handled result: \(error.localizedDescription, privacy: .public)")
+            } else {
+                updateLogger.error("Sparkle update cycle failed: \(error.localizedDescription, privacy: .public)")
                 postUpdateCheckStatus("Update check failed: \(error.localizedDescription)")
             }
         } else {
@@ -671,6 +918,39 @@ extension AppDelegate: SPUUpdaterDelegate {
             }
         }
         receivedUpdateCheckResult = false
+    }
+}
+
+extension AppDelegate: @preconcurrency SPUStandardUserDriverDelegate {
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(
+        _ update: SUAppcastItem,
+        andInImmediateFocus immediateFocus: Bool
+    ) -> Bool {
+        immediateFocus
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool,
+        forUpdate update: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        guard !state.userInitiated, !handleShowingUpdate else { return }
+        setUpdateBadge(visible: true)
+        Task {
+            await NotificationManager.shared.sendUpdateAvailable(
+                version: update.displayVersionString
+            )
+        }
+    }
+
+    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
+        setUpdateBadge(visible: false)
+    }
+
+    func standardUserDriverWillFinishUpdateSession() {
+        setUpdateBadge(visible: false)
     }
 }
 

@@ -12,6 +12,7 @@ import SwiftUI
 struct IntegrityView: View {
 
     @Environment(ExtensionXPCClient.self) private var xpcClient
+    @State private var baselineStatus: String?
 
     var body: some View {
         Group {
@@ -23,7 +24,9 @@ struct IntegrityView: View {
                 )
             } else {
                 List(xpcClient.integrityViolations) { violation in
-                    IntegrityRowView(violation: violation)
+                    IntegrityRowView(violation: violation) {
+                        xpcClient.acknowledgeFIMViolation(id: violation.id) { _ in }
+                    }
                 }
             }
         }
@@ -31,9 +34,23 @@ struct IntegrityView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Rebuild Baseline") {
-                    // Phase 4: route through XPCClient → extension requestRebuildBaseline()
+                    xpcClient.requestRebuildFIMBaseline { accepted in
+                        Task { @MainActor in
+                            baselineStatus = accepted
+                                ? "Baseline rebuilt."
+                                : "Review and acknowledge pending changes before rebuilding."
+                        }
+                    }
                 }
                 .help("Clears the current FIM baseline and rebuilds it from the current system state.")
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let baselineStatus {
+                Text(baselineStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
             }
         }
     }
@@ -44,6 +61,7 @@ struct IntegrityView: View {
 private struct IntegrityRowView: View {
 
     let violation: IntegrityViolation
+    let acknowledge: () -> Void
 
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -87,6 +105,9 @@ private struct IntegrityRowView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 }
+
+                Button("Acknowledge Change", action: acknowledge)
+                    .buttonStyle(.link)
             }
         }
         .padding(.vertical, 3)

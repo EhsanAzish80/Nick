@@ -57,6 +57,56 @@ final class SignatureValidatorPolicyTests: XCTestCase {
         XCTAssertTrue(SignatureValidator.isSealedSystemBinaryPath("/sbin/mount"))
     }
 
+    func test_sealedSystemBinaryPreservesSigningIdentifier() {
+        XCTAssertEqual(
+            SignatureValidator.shared.evaluate(binaryPath: "/bin/zsh"),
+            .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+    }
+
+    func test_applePlatformIdentityValidatesWithoutSyntheticTeamOU() async {
+        let valid = await Task.detached(priority: .utility) {
+            SignatureValidator.shared.validatesDeveloperIdentity(
+                binaryPath: "/bin/zsh",
+                teamID: "APPLE_PLATFORM",
+                signingIdentifier: "com.apple.zsh"
+            )
+        }.value
+        XCTAssertTrue(valid)
+        XCTAssertFalse(SignatureValidator.shared.validatesDeveloperIdentity(
+            binaryPath: "/private/tmp/not-a-sealed-apple-binary",
+            teamID: "APPLE_PLATFORM",
+            signingIdentifier: "com.apple.zsh"
+        ))
+    }
+
+    func test_verifiedBuiltInIdentitiesMatchInstalledAppleBinaries() async {
+        let verified: [(String, SigningIdentity)] = [
+            (
+                "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+                SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal")
+            ),
+            (
+                "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+                SigningIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.finder")
+            ),
+            (
+                "/Applications/Xcode.app/Contents/MacOS/Xcode",
+                SigningIdentity(teamID: "59GAB85EFG", signingID: "com.apple.dt.Xcode")
+            )
+        ]
+
+        XCTAssertEqual(TrustedProcessList.builtInIdentities, Set(verified.map(\.1)))
+        let observed = await Task.detached(priority: .utility) {
+            verified.map { path, _ in
+                SigningIdentity(status: SignatureValidator.shared.evaluate(binaryPath: path))
+            }
+        }.value
+        for ((path, expectedIdentity), actualIdentity) in zip(verified, observed) {
+            XCTAssertEqual(actualIdentity, expectedIdentity, "Unexpected installed signature for \(path)")
+        }
+    }
+
     func test_writableAndThirdPartyLocationsStillRequireValidation() {
         XCTAssertFalse(SignatureValidator.isSealedSystemBinaryPath(
             "/Applications/Example.app/Contents/MacOS/Example"

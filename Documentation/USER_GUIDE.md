@@ -44,6 +44,19 @@ pre-launch check. New YARA findings are normally reported after the launch or
 file operation has already been allowed, so a YARA alert is evidence to review,
 not a claim that execution was prevented.
 
+Nick 5.0 ships a 25-entry offline hash catalog dated October
+9, 2026: 24 macOS malware indicators curated from ESET's BSD-licensed research
+repository and one low-severity EICAR test entry. This small snapshot provides
+day-one exact matches but does not replace current platform protections or a
+maintained antivirus feed. Diagnostics shows the bundled entry count and date.
+Settings → Acknowledgements shows the bundled ESET BSD-2-Clause notice.
+
+Real-time completed-write exact-hash checks are bounded to files of 100 MiB or
+less written into Downloads, Desktop, or Mail Downloads. Custom browser
+download folders are not covered by this 5.0 completed-write path. A future
+5.1 update may use a preserved `com.apple.quarantine` tag as a
+location-independent trigger; 5.0 does not claim that coverage.
+
 Expected behavior can be accepted for the specific app and behavior so repeated
 benign events do not create alerts. This is a local trust decision, not a global
 malware exclusion.
@@ -71,10 +84,27 @@ Build 416 also contains no Network Extension traffic-drop path.
 ## Local analysis and network access
 
 Nick has no hosted detection service. File scanning, signal correlation,
-Runtime Compare, and Apple Foundation Models alert explanations run locally.
+Runtime Compare, and deterministic alert explanations run locally.
 Nick still uses the network for explicit product functions: Sparkle update
 checks, an optional webhook configured in Settings, and links the user opens.
 Exports remain local until the user chooses where to save or share them.
+
+### Optional verdict learning
+
+Settings → Data includes **Learn from my review decisions**, which is off by
+default and requires password or Touch ID approval to enable. Dismiss or
+Always Allow decisions from two different incidents are required before an
+entry becomes active. Until then it is shown as pending. A later exact match
+for the same validated signed app, review rule, and bounded context can be
+lowered to informational priority, but the finding remains visible. Hash,
+signature, YARA,
+persistence, high-risk-path, unsigned, ad-hoc, interpreter, and command-tool
+findings are never affected.
+
+Use **What Nick learned** to see each local entry, why it exists, when it
+expires, and how often it was confirmed. Entries can be reset individually,
+reset together, or exported to a file you choose. They are stored locally in
+Nick's root-owned incident store and are not uploaded.
 
 ## Email Guard
 
@@ -146,9 +176,12 @@ network traffic, or send fleet telemetry.
 
 ## Uninstall
 
-Use Nick Uninstaller from `/Applications`. Do not drag Nick to the Trash while
-its system extensions or network filter are active. The uninstaller disables
-protection, removes generated data and settings, and deletes Nick and itself.
+Use Settings → Uninstall Nick, or open Nick Uninstaller from `/Applications`,
+for a complete removal. The uninstaller disables protection, removes generated
+data and settings, and deletes Nick and itself. Finder can move Nick.app to the
+Trash, but that removes only the app bundle; it does not clean up protection
+components or generated data. Nick shows an informational notification when
+this Finder-only removal starts.
 
 After removal, macOS may retain a disabled Full Disk Access entry with no
 executable behind it. That privacy-list row is maintained by macOS and can be

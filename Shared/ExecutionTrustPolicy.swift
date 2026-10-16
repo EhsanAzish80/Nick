@@ -9,8 +9,9 @@ import Foundation
 ///
 /// `CS_VALID` alone is not trust: every arm64 binary is at least ad-hoc signed,
 /// and ad-hoc signatures carry no identity. Only platform binaries and
-/// Apple-issued certificates (non-empty Team ID under a valid, non-ad-hoc
-/// signature) establish who produced the code.
+/// platform-binary status establishes who produced the code at this boundary.
+/// A Team ID copied from the executable is only a claim until Security.framework
+/// validates its certificate chain and revocation state.
 enum ExecutionTrustPolicy {
 
     // <kern/cs_blobs.h>
@@ -22,8 +23,8 @@ enum ExecutionTrustPolicy {
     /// process image (`codesigning_flags`, `is_platform_binary`, `team_id`).
     static func hasTrustedSigner(codesigningFlags flags: UInt32, isPlatformBinary: Bool, teamID: String?) -> Bool {
         guard flags & csValid != 0, flags & csAdhoc == 0 else { return false }
-        if isPlatformBinary || flags & csPlatformBinary != 0 { return true }
-        return !(teamID ?? "").isEmpty
+        _ = teamID // never trust a self-asserted Team ID at the ES fast path
+        return isPlatformBinary || flags & csPlatformBinary != 0
     }
 
     /// Paths on the sealed system volume. They cannot be modified without

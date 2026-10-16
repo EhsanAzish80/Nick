@@ -25,41 +25,40 @@ final class BehavioralScorerTests: XCTestCase {
         XCTAssertFalse(scorer.isModelAvailable)
     }
 
-    func test_withModelURL_isModelAvailableReturnsTrue() {
-        // Use a placeholder URL — availability only checks for non-nil URL
+    func test_placeholderModelURL_isNotAvailable() {
         let url = URL(fileURLWithPath: "/tmp/ThreatScorer.mlmodel")
         let scorer = BehavioralScorer(modelURL: url)
-        XCTAssertTrue(scorer.isModelAvailable)
+        XCTAssertFalse(scorer.isModelAvailable)
     }
 
     // MARK: - Error handling
 
-    func test_noModel_scoreThrowsModelNotFound() {
+    func test_noModel_scoreRefusesToInfluence() {
         let scorer = BehavioralScorer(modelURL: nil)
         XCTAssertThrowsError(try scorer.score(features: FeatureVector())) { error in
-            guard case BehavioralScorerError.modelNotFound = error else {
-                XCTFail("Expected modelNotFound, got \(error)")
+            guard case BehavioralScorerError.modelNotProduction = error else {
+                XCTFail("Expected modelNotProduction, got \(error)")
                 return
             }
         }
     }
 
-    func test_missingModelFile_scoreThrowsModelLoadFailed() {
+    func test_missingModelFile_scoreRefusesToInfluence() {
         let badURL = URL(fileURLWithPath: "/nonexistent/ThreatScorer.mlmodelc")
         let scorer = BehavioralScorer(modelURL: badURL)
         XCTAssertThrowsError(try scorer.score(features: FeatureVector())) { error in
-            guard case BehavioralScorerError.modelLoadFailed = error else {
-                XCTFail("Expected modelLoadFailed, got \(error)")
+            guard case BehavioralScorerError.modelNotProduction = error else {
+                XCTFail("Expected modelNotProduction, got \(error)")
                 return
             }
         }
     }
 
-    func test_noModel_scoreWithExplanationThrowsModelNotFound() {
+    func test_noModel_scoreWithExplanationRefusesToInfluence() {
         let scorer = BehavioralScorer(modelURL: nil)
         XCTAssertThrowsError(try scorer.scoreWithExplanation(features: FeatureVector())) { error in
-            guard case BehavioralScorerError.modelNotFound = error else {
-                XCTFail("Expected modelNotFound, got \(error)")
+            guard case BehavioralScorerError.modelNotProduction = error else {
+                XCTFail("Expected modelNotProduction, got \(error)")
                 return
             }
         }
@@ -71,6 +70,7 @@ final class BehavioralScorerTests: XCTestCase {
         let errors: [BehavioralScorerError] = [
             .modelNotFound,
             .modelLoadFailed(underlying: NSError(domain: "test", code: 1)),
+            .modelNotProduction,
             .inferenceFailed(underlying: NSError(domain: "test", code: 2)),
             .unexpectedOutput,
         ]

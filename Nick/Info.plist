@@ -28,6 +28,8 @@
 	<true/>
 	<key>SUFeedURL</key>
 	<string>https://3nsofts.com/nick/appcast.xml</string>
+	<key>NickDebugUpdateFeedURL</key>
+	<string>$(NICK_DEBUG_UPDATE_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>E6zQr5EZrhFKhIni4yUt6dq8+bVJhiszfBcdd/6IcNo=</string>
 	<key>SUEnableAutomaticChecks</key>

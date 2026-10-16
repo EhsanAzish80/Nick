@@ -156,3 +156,23 @@ extension SignalSeverity {
         }
     }
 }
+
+extension ProtectionStatusPresentation.Tone {
+    var statusColor: Color {
+        switch self {
+        case .protected:   .statusGreen
+        case .attention:   .statusOrange
+        case .critical:    .statusRed
+        case .unavailable: .statusRed
+        }
+    }
+
+    var statusBackground: Color {
+        switch self {
+        case .protected:   .statusGreenBg
+        case .attention:   .statusOrangeBg
+        case .critical:    .statusRedBg
+        case .unavailable: .statusRedBg
+        }
+    }
+}

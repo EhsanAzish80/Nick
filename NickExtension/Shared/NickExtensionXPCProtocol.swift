@@ -3,6 +3,309 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import Security
+
+enum ProtectionAuthorizationExternalFormVerifier {
+    static func verify(_ data: Data?, rightName: String) -> Bool {
+        guard let data, data.count == MemoryLayout<AuthorizationExternalForm>.size else {
+            return false
+        }
+        var external = AuthorizationExternalForm()
+        _ = withUnsafeMutableBytes(of: &external) { data.copyBytes(to: $0) }
+        var authorization: AuthorizationRef?
+        guard AuthorizationCreateFromExternalForm(&external, &authorization) == errAuthorizationSuccess,
+              let authorization else { return false }
+        defer { AuthorizationFree(authorization, []) }
+        return rightName.withCString { name in
+            var item = AuthorizationItem(name: name, valueLength: 0, value: nil, flags: 0)
+            return withUnsafeMutablePointer(to: &item) { pointer in
+                var rights = AuthorizationRights(count: 1, items: pointer)
+                return AuthorizationCopyRights(
+                    authorization,
+                    &rights,
+                    nil,
+                    [.extendRights],
+                    nil
+                ) == errAuthorizationSuccess
+            }
+        }
+    }
+}
+
+enum PersistentTrustEligibilityPolicy {
+    static let forbiddenSigningIDs: Set<String> = [
+        "com.apple.bash", "com.apple.zsh", "com.apple.sh", "com.apple.osascript",
+        "com.apple.curl", "com.apple.ssh", "com.apple.python3", "com.apple.ruby",
+        "com.apple.tclsh", "com.apple.dt.xcode_select.tool-shim-public",
+        "org.nodejs.node", "org.python.python"
+    ]
+    static let forbiddenSigningIDPrefixes = ["com.apple.perl"]
+    static let forbiddenExecutableNames: Set<String> = [
+        "bash", "zsh", "sh", "dash", "fish", "ksh", "csh", "python", "python3",
+        "ruby", "perl", "osascript", "curl", "wget", "node", "deno", "bun",
+        "env", "swift", "tclsh", "awk", "xargs", "find", "open", "launchctl",
+        "xattr", "crontab", "mktemp", "php", "lua", "pwsh", "java"
+    ]
+
+    static func isEligible(name: String, path: String, signingID: String?) -> Bool {
+        guard let signingID, !signingID.isEmpty else { return false }
+        let normalizedID = signingID.lowercased()
+        let executable = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        let normalizedName = name.lowercased()
+        return !forbiddenSigningIDs.contains(normalizedID)
+            && !forbiddenSigningIDPrefixes.contains(where: { normalizedID.hasPrefix($0) })
+            && !forbiddenExecutableNames.contains(executable)
+            && !forbiddenExecutableNames.contains(normalizedName)
+    }
+}
+
+/// Durable envelope for security findings produced by the system extension.
+/// The payload remains the original JSON representation so older records can
+/// be migrated without coupling the privileged store to app-only models.
+public struct PersistedExtensionFinding: Codable, Sendable, Identifiable {
+    public enum Kind: String, Codable, Sendable {
+        case endpointEvent
+        case threat
+        case remediation
+        case integrityViolation
+        case privacyAlert
+        case usbThreat
+    }
+
+    public let id: UUID
+    public let kind: Kind
+    public let timestamp: Date
+    public let payload: Data
+
+    public init(id: UUID = UUID(), kind: Kind, timestamp: Date = Date(), payload: Data) {
+        self.id = id
+        self.kind = kind
+        self.timestamp = timestamp
+        self.payload = payload
+    }
+}
+
+/// Opaque, versioned transport for the app's incident/evidence state. The
+/// extension owns the file and revision; the app owns the payload schema.
+public struct PrivilegedIncidentStoreRecord: Codable, Sendable, Equatable {
+    public static let currentSchemaVersion = 1
+
+    public let schemaVersion: Int
+    public let revision: UInt64
+    public let payload: Data
+
+    public init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        revision: UInt64,
+        payload: Data
+    ) {
+        self.schemaVersion = schemaVersion
+        self.revision = revision
+        self.payload = payload
+    }
+}
+
+enum IncidentVerdictValidationPolicy {
+    private static let allowedActions: Set<String> = [
+        "reviewed", "hidden", "dismissed", "resolved", "allowedOnce", "alwaysAllowed"
+    ]
+
+    static func result(
+        alertID: String,
+        action: String,
+        existingAlertIDs: Set<String>,
+        persistentTrustEligible: Bool = true,
+        hasProtectionAuthorization: Bool
+    ) -> IncidentVerdictValidationResult {
+        guard UUID(uuidString: alertID) != nil,
+              allowedActions.contains(action) else { return .invalidRequest }
+        guard existingAlertIDs.contains(alertID) else { return .targetMissing }
+        if action == "alwaysAllowed", !persistentTrustEligible { return .invalidRequest }
+        let protectionReducingActions: Set<String> = ["dismissed", "allowedOnce", "alwaysAllowed"]
+        guard protectionReducingActions.contains(action) else { return .accepted }
+        return hasProtectionAuthorization ? .accepted : .authorizationRequired
+    }
+}
+
+enum IncidentVerdictValidationResult: String, Equatable {
+    case accepted
+    case authorizationRequired
+    case targetMissing
+    case invalidRequest
+}
+
+enum IncidentStoreAlertIDPolicy {
+    static func alertIDs(from encodedRecord: Data) -> Set<String> {
+        guard let record = try? JSONDecoder().decode(
+            PrivilegedIncidentStoreRecord.self,
+            from: encodedRecord
+        ),
+        let object = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
+        let incidents = object["incidents"] as? [[String: Any]] else { return [] }
+        return Set(incidents.compactMap { incident in
+            (incident["alert"] as? [String: Any])?["id"] as? String
+        })
+    }
+}
+
+enum IncidentStoreTrustEligibilityPolicy {
+    static func isEligible(alertID: String, encodedRecord: Data) -> Bool {
+        guard let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: encodedRecord),
+              let root = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
+              let incidents = root["incidents"] as? [[String: Any]],
+              let incident = incidents.first(where: {
+                  (($0["alert"] as? [String: Any])?["id"] as? String) == alertID
+              }),
+              let alert = incident["alert"] as? [String: Any],
+              let signals = alert["contributingSignals"] as? [[String: Any]],
+              let actorSignal = signals.first,
+              let process = actorSignal["processInfo"] as? [String: Any],
+              let status = process["signingStatus"] as? [String: Any],
+              status["type"] as? String == "signed",
+              let teamID = status["teamID"] as? String, !teamID.isEmpty else { return false }
+
+        // The first signal is the detected operation. Never fall through to a
+        // signed parent/context process when the primary actor is ineligible.
+        return PersistentTrustEligibilityPolicy.isEligible(
+            name: process["name"] as? String ?? "",
+            path: process["path"] as? String ?? "",
+            signingID: status["signingID"] as? String
+        )
+    }
+}
+
+enum ProtectionAuthorizationRightPolicy {
+    static func isExpected(_ dictionary: [String: Any]) -> Bool {
+        let value = dictionary["rule"]
+        let rules = (value as? [String]) ?? (value as? String).map { [$0] } ?? []
+        guard dictionary["class"] as? String == "rule",
+              rules == ["authenticate-session-owner-or-admin"] else { return false }
+
+        // Authorization Services normalises rules and omits these keys when it
+        // reads the rule back. Validate them when present, but do not mistake
+        // authd's canonical representation for tampering.
+        if let timeout = dictionary["timeout"] as? NSNumber, timeout.intValue != 120 {
+            return false
+        }
+        if let shared = dictionary["shared"] as? NSNumber, shared.boolValue {
+            return false
+        }
+        return true
+    }
+
+    static let expectedSummary = "class=rule; rule=authenticate-session-owner-or-admin; timeout=120; shared=false"
+
+    static func observedSummary(_ dictionary: [String: Any]) -> String {
+        let ruleValue = dictionary["rule"]
+        let rules = (ruleValue as? [String]) ?? (ruleValue as? String).map { [$0] } ?? []
+        let timeout = (dictionary["timeout"] as? NSNumber).map { String($0.intValue) } ?? "authd-default"
+        let shared = (dictionary["shared"] as? NSNumber).map { String($0.boolValue) } ?? "authd-default"
+        return "class=\(dictionary["class"] as? String ?? "missing"); rule=\(rules.joined(separator: ",")); timeout=\(timeout); shared=\(shared)"
+    }
+}
+
+enum SecuritySettingsWritePolicy {
+    static func requiresAuthorization(previousRecord: Data, proposedPayload: Data) -> Bool {
+        guard let record = try? JSONDecoder().decode(
+            PrivilegedIncidentStoreRecord.self,
+            from: previousRecord
+        ),
+              let old = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any],
+              let new = try? JSONSerialization.jsonObject(with: proposedPayload) as? [String: Any]
+        else { return true }
+
+        func strings(_ key: String, _ object: [String: Any]) -> Set<String> {
+            Set((object[key] as? [String]) ?? [])
+        }
+        func objectFingerprints(_ key: String, _ object: [String: Any]) -> Set<String> {
+            guard let values = object[key] as? [Any] else { return [] }
+            return Set(values.compactMap { value in
+                guard JSONSerialization.isValidJSONObject(value),
+                      let data = try? JSONSerialization.data(
+                          withJSONObject: value,
+                          options: [.sortedKeys]
+                      ) else { return nil }
+                return String(decoding: data, as: UTF8.self)
+            })
+        }
+        if !strings("trustedNames", new).isSubset(of: strings("trustedNames", old)) { return true }
+        if !strings("ignoredPaths", new).isSubset(of: strings("ignoredPaths", old)) { return true }
+        if !strings("approvedDevelopmentRoots", new).isSubset(of: strings("approvedDevelopmentRoots", old)) {
+            return true
+        }
+        if !objectFingerprints("trustedEntries", new).isSubset(of: objectFingerprints("trustedEntries", old)) {
+            return true
+        }
+        if !objectFingerprints("suppressionRules", new).isSubset(of: objectFingerprints("suppressionRules", old)) {
+            return true
+        }
+        let oldThreshold = old["notificationThresholdRaw"] as? Int ?? 3
+        let newThreshold = new["notificationThresholdRaw"] as? Int ?? 3
+        if newThreshold > oldThreshold { return true }
+        let oldLearning = old["verdictLearningEnabled"] as? Bool ?? false
+        let newLearning = new["verdictLearningEnabled"] as? Bool ?? false
+        return !oldLearning && newLearning
+    }
+}
+
+enum IncidentStoreWritePolicy {
+    static func requiresAuthorization(previousPayload: Data, proposedPayload: Data) -> Bool {
+        guard let old = try? JSONSerialization.jsonObject(with: previousPayload) as? [String: Any],
+              let new = try? JSONSerialization.jsonObject(with: proposedPayload) as? [String: Any] else {
+            return true
+        }
+        let oldIncidents = (old["incidents"] as? [[String: Any]]) ?? []
+        let newIncidents = (new["incidents"] as? [[String: Any]]) ?? []
+        let oldByID = Dictionary(uniqueKeysWithValues: oldIncidents.compactMap { incident -> (String, [String: Any])? in
+            guard let id = incident["id"] as? String else { return nil }
+            return (id, incident)
+        })
+        func protectedActions(_ incident: [String: Any]) -> Set<String> {
+            let reducing: Set<String> = ["dismissed", "allowedOnce", "alwaysAllowed"]
+            let actions = (incident["actions"] as? [[String: Any]]) ?? []
+            return Set(actions.compactMap { $0["action"] as? String }).intersection(reducing)
+        }
+        for incident in newIncidents {
+            guard let id = incident["id"] as? String else { return true }
+            guard let previous = oldByID[id] else {
+                if incident["state"] as? String == "allowed"
+                    || incident["permanentlyDismissed"] as? Bool == true
+                    || !protectedActions(incident).isEmpty {
+                    return true
+                }
+                continue
+            }
+            if incident["state"] as? String == "allowed",
+               previous["state"] as? String != "allowed" { return true }
+            if incident["permanentlyDismissed"] as? Bool == true,
+               previous["permanentlyDismissed"] as? Bool != true { return true }
+            if !protectedActions(incident).isSubset(of: protectedActions(previous)) { return true }
+        }
+        func tombstoneKeys(_ object: [String: Any]) -> Set<String> {
+            let values = (object["dismissalTombstones"] as? [[String: Any]]) ?? []
+            return Set(values.compactMap { value in
+                guard let incidentKey = value["incidentKey"] as? String else { return nil }
+                return incidentKey + "|" + (value["alertDeduplicationKey"] as? String ?? "")
+            })
+        }
+        if !tombstoneKeys(new).isSubset(of: tombstoneKeys(old)) { return true }
+        func learnedEntries(_ object: [String: Any]) -> Set<String> {
+            let values = (object["learnedReviewEntries"] as? [[String: Any]]) ?? []
+            return Set(values.compactMap { value in
+                guard let id = value["id"] as? String,
+                      let teamID = value["teamID"] as? String,
+                      let signingID = value["signingIdentifier"] as? String,
+                      let ruleID = value["ruleID"] as? String,
+                      let context = value["contextKey"] as? String,
+                      let expiry = value["expiresAt"] as? Double,
+                      let incidentIDs = value["confirmedIncidentIDs"] as? [String] else { return nil }
+                return ([id, teamID, signingID, ruleID, context, String(expiry)]
+                    + incidentIDs.sorted()).joined(separator: "|")
+            })
+        }
+        return !learnedEntries(new).isSubset(of: learnedEntries(old))
+    }
+}
 
 // MARK: - NickExtensionXPCProtocol (Container App → Extension)
 
@@ -18,17 +321,26 @@ import Foundation
     /// Returns whether the ES client is initialised and actively subscribed.
     func getStatus(reply: @escaping (Bool) -> Void)
 
+    /// Returns the root-published health snapshot. The app never reads the
+    /// privileged health file directly.
+    func getExtensionHealth(reply: @escaping (Data) -> Void)
+
     /// Re-scans and moves a confirmed threat into Nick's protected vault.
     /// The encoded record lets the app update Quarantine immediately.
     func requestQuarantineFile(
         path: String,
         expectedThreatName: String,
+        expectedSHA256: String,
         reply: @escaping (Bool, String?, Data?) -> Void
     )
 
     /// Clears a stale cached denial and permits the next authorization for the
     /// selected file. This is deliberately one-shot.
-    func requestAllowFileOnce(path: String, reply: @escaping (Bool) -> Void)
+    func requestAllowFileOnce(
+        path: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
 
     /// Promotes a reviewed heuristic finding to an explicit user block.
     func requestBlockReviewedFile(path: String, reply: @escaping (Bool) -> Void)
@@ -37,19 +349,95 @@ import Foundation
     /// container app was closed.
     func getPersistedEvents(reply: @escaping (Data) -> Void)
 
+    /// Removes threat events only after the app has durably ingested them.
+    /// Event UUIDs make retries idempotent across XPC interruptions.
+    func acknowledgePersistedThreats(eventIDs: [String])
+
+    /// Returns the root-owned incident/evidence snapshot. An empty Data value
+    /// means no privileged store has been created yet.
+    func getIncidentStore(reply: @escaping (Data) -> Void)
+
+    /// Creates the privileged store only when none exists. Repeating the call
+    /// returns the existing record without overwriting it.
+    func migrateIncidentStore(_ payload: Data, reply: @escaping (Bool, Data) -> Void)
+
+    /// Replaces the privileged snapshot if the caller's revision is current.
+    /// The reply always includes the authoritative record when available.
+    func replaceIncidentStore(
+        _ payload: Data,
+        expectedRevision: UInt64,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool, Data) -> Void
+    )
+
+    /// Root-owned security preferences. The payload schema belongs to the app;
+    /// the extension authenticates the caller and owns persistence/revisions.
+    func getSecuritySettings(reply: @escaping (Data) -> Void)
+    func migrateSecuritySettings(_ payload: Data, reply: @escaping (Bool, Data) -> Void)
+    func replaceSecuritySettings(
+        _ payload: Data,
+        expectedRevision: UInt64,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool, Data) -> Void
+    )
+
+    /// Validates the canonical alert ID in the privileged incident store.
+    /// Security-reducing verdicts return `authorizationRequired` before the app
+    /// prompts, then require a verified right on the second call.
+    func validateIncidentVerdictTarget(
+        alertID: String,
+        action: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (String) -> Void
+    )
+
+    /// Creates one short-lived, single-use lease for a strictly newer signed
+    /// Nick update. The extension verifies the protection right and binds the
+    /// lease to the current console user before persisting it root-owned.
+    func requestUpdateLease(
+        sourceBuild: Int,
+        destinationBuild: Int,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
+
     /// Instructs the extension to rebuild the FIM baseline from the current
     /// state of monitored paths. Used by the "Rebuild Baseline" button in
     /// `IntegrityView`.
     func requestRebuildFIMBaseline(reply: @escaping (Bool) -> Void)
+
+    /// Returns the authoritative root-owned set of pending integrity changes.
+    /// This rehydrates the UI after either side of the XPC connection restarts.
+    func getPendingFIMViolations(reply: @escaping (Data) -> Void)
+
+    /// Accepts one durable FIM violation and advances its baseline only when
+    /// the current file still matches the reviewed evidence.
+    func acknowledgeFIMViolation(
+        id: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
 
     /// Instructs the extension to deploy ransomware canary files into the
     /// user's common directories (Desktop, Documents, Downloads, Pictures).
     /// Useful when the user manually enables the Ransomware Shield from Smart Scan.
     func requestDeployCanaries(reply: @escaping (Bool) -> Void)
 
-    func requestRestoreQuarantinedFile(id: String, reply: @escaping (Bool) -> Void)
+    func requestRestoreQuarantinedFile(
+        id: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
 
     func requestDeleteQuarantinedFile(id: String, reply: @escaping (Bool) -> Void)
+
+#if DEBUG
+    /// Test hook: verifies that a form which was never granted Nick's right is refused.
+    func debugValidateProtectionAuthorization(
+        authorizationExternalForm: Data,
+        reply: @escaping (Bool) -> Void
+    )
+#endif
 }
 
 // MARK: - NickAppXPCProtocol (Extension → Container App)

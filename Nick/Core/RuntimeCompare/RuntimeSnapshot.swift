@@ -267,7 +267,7 @@ enum RuntimeIdentity {
 
 extension SigningStatus {
     var runtimeTeamID: String? {
-        if case .signed(let teamID) = self { return teamID }
+        if case .signed(let teamID, _) = self { return teamID }
         return nil
     }
 }

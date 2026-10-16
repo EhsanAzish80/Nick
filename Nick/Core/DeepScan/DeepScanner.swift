@@ -57,6 +57,9 @@ final class DeepScanner {
     var discoveredFiles:    Int          = 0
     /// The location currently being walked, for progress text.
     var indexingLocation:   String       = ""
+    var skippedFiles:       Int          = 0
+    var timeBudgetExceeded: Bool         = false
+    var bundleIntegrityFailures: [String] = []
 
     // MARK: - Private
 
@@ -64,6 +67,8 @@ final class DeepScanner {
     private var activeScanID: UUID?
     private var storedOnlyOnPower = false
     private var ignoredPaths: Set<String> = []
+    private var approvedDevelopmentRoots: Set<String> = []
+    private var scanTimeBudget: TimeInterval = 20 * 60
     /// Weak reference to the engine used to ingest YARA signals during a deep scan.
     /// Set by the caller (e.g. `ScannerDetailView`) before calling `start()`.
     weak var engine: SecurityEngine?
@@ -84,6 +89,8 @@ final class DeepScanner {
     func start(
         onlyOnPower: Bool,
         ignoredPaths: Set<String> = [],
+        approvedDevelopmentRoots: Set<String> = [],
+        timeBudget: TimeInterval = 20 * 60,
         candidateFiles: [String]? = nil,
         scanFile: @escaping @Sendable (String) async throws -> [YARAMatch]
     ) {
@@ -91,6 +98,8 @@ final class DeepScanner {
         let scanID = UUID()
         storedOnlyOnPower = onlyOnPower
         self.ignoredPaths = Set(ignoredPaths.map(Self.canonicalPath))
+        self.approvedDevelopmentRoots = Set(approvedDevelopmentRoots.map(Self.canonicalPath))
+        scanTimeBudget = max(0.01, timeBudget)
         activeScanID = scanID
         progress = 0
         totalFiles = 0
@@ -105,6 +114,9 @@ final class DeepScanner {
         isScanning = true
         isCancelling = false
         hasCompletedScan = false
+        skippedFiles = 0
+        timeBudgetExceeded = false
+        bundleIntegrityFailures = []
         scanTask = Task { [weak self] in
             await self?.performDeepScan(
                 scanID: scanID,
@@ -137,6 +149,9 @@ final class DeepScanner {
         results = []
         resultVerdicts = [:]
         hasCompletedScan = false
+        skippedFiles = 0
+        timeBudgetExceeded = false
+        bundleIntegrityFailures = []
     }
 
     // MARK: - Private Implementation
@@ -149,6 +164,7 @@ final class DeepScanner {
         let startTime = Date()
         results       = []
         resultVerdicts = [:]
+        bundleIntegrityFailures = []
         threatsFound  = 0
         currentFile   = "Indexing files…"
 
@@ -177,17 +193,26 @@ final class DeepScanner {
         let workerCount = Self.workerCount()
         var completed = 0
         var lastPublish = Date.distantPast
+        let deadline = startTime.addingTimeInterval(scanTimeBudget)
 
         await withTaskGroup(of: FileOutcome.self) { group in
             var inFlight = 0
             var exhausted = false
 
             while true {
+                if Date() >= deadline {
+                    timeBudgetExceeded = true
+                    exhausted = true
+                    enumeration.cancel()
+                }
                 // Keep every worker busy while candidates are available.
                 fill: while !exhausted, inFlight < workerCount, !Task.isCancelled {
                     switch queue.pop() {
                     case .item(let candidate):
-                        group.addTask { await Self.scan(candidate, with: scanFile) }
+                        let roots = approvedDevelopmentRoots
+                        group.addTask {
+                            await Self.scan(candidate, approvedDevelopmentRoots: roots, with: scanFile)
+                        }
                         inFlight += 1
                     case .finished:
                         exhausted = true
@@ -239,12 +264,14 @@ final class DeepScanner {
 
         guard !Task.isCancelled else { return finishCancelledScan(scanID: scanID) }
 
-        totalFiles = queue.snapshot().discovered
+        let finalState = queue.snapshot()
+        totalFiles = finalState.discovered
+        skippedFiles = timeBudgetExceeded ? max(finalState.remaining, totalFiles - completed) : 0
         Self.log.info("DeepScanner: \(self.totalFiles) files scanned")
 
         // Finalise only a scan that genuinely reached the end.
         progress     = 1.0
-        scannedFiles = totalFiles
+        scannedFiles = completed
         isScanning   = false
         isPaused     = false
         isCancelling = false
@@ -254,14 +281,15 @@ final class DeepScanner {
             scanTask = nil
             activeScanID = nil
         }
-        engine?.recordDeepScan(fileCount: totalFiles)
-        Self.log.info("DeepScanner: complete — \(self.threatsFound) actionable finding(s)")
+        engine?.recordDeepScan(fileCount: completed)
+        Self.log.info("DeepScanner: complete — \(self.threatsFound) actionable finding(s), \(self.skippedFiles) skipped")
     }
 
     /// Result of scanning and classifying one file in a worker task.
     private struct FileOutcome: Sendable {
         let path: String
         let classified: [(YARAMatch, ThreatVerdict)]
+        let nickBundleSignatureFailure: Bool
     }
 
     nonisolated private static func workerCount() -> Int {
@@ -272,25 +300,40 @@ final class DeepScanner {
 
     nonisolated private static func scan(
         _ candidate: Candidate,
+        approvedDevelopmentRoots: Set<String>,
         with scanFile: @escaping @Sendable (String) async throws -> [YARAMatch]
     ) async -> FileOutcome {
         let file = candidate.path
+        if candidate.kind == .nickBundleSignatureFailure {
+            return FileOutcome(path: file, classified: [], nickBundleSignatureFailure: true)
+        }
         // Extensionless files are sniffed here, in parallel, rather than
         // during the walk: reading a header for every cache blob serially was
         // most of the indexing time.
         if candidate.needsContentCheck,
            !ScanCandidatePolicy.isExecutableContent(ScanCandidatePolicy.kind(atPath: file)) {
-            return FileOutcome(path: file, classified: [])
+            return FileOutcome(path: file, classified: [], nickBundleSignatureFailure: false)
         }
         guard let matches = try? await scanFile(file), !matches.isEmpty else {
-            return FileOutcome(path: file, classified: [])
+            return FileOutcome(path: file, classified: [], nickBundleSignatureFailure: false)
         }
         let unique = uniqueMatches(matches)
-        return FileOutcome(path: file, classified: unique.map { ($0, classify(match: $0)) })
+        return FileOutcome(path: file, classified: unique.map {
+            ($0, classify(match: $0, approvedDevelopmentRoots: approvedDevelopmentRoots))
+        }, nickBundleSignatureFailure: false)
     }
 
     /// Records one file's findings and forwards actionable ones to the correlator.
     private func merge(_ outcome: FileOutcome) async {
+        if outcome.nickBundleSignatureFailure {
+            bundleIntegrityFailures.append(outcome.path)
+            threatsFound += 1
+            guard let eng = engine else { return }
+            let signal = Self.nickBundleIntegrityFailureSignal(bundlePath: outcome.path)
+            let alerts = await eng.ingestSignals([signal])
+            for alert in alerts { await NotificationManager.shared.send(for: alert) }
+            return
+        }
         guard !outcome.classified.isEmpty else { return }
         results.append(contentsOf: outcome.classified.map { $0.0 })
         for (match, verdict) in outcome.classified {
@@ -337,12 +380,26 @@ final class DeepScanner {
                 )
             )
         }
-        await eng.correlator.ingest(signals)
-        let alerts = await eng.correlator.correlateNew()
+        let alerts = await eng.ingestSignals(signals)
         for alert in alerts {
-            eng.addAlert(alert)
             await NotificationManager.shared.send(for: alert)
         }
+    }
+
+    nonisolated static func nickBundleIntegrityFailureSignal(bundlePath: String) -> ThreatSignal {
+        ThreatSignal(
+            source: .systemAudit,
+            severity: .critical,
+            title: "Nick's app bundle failed signature validation",
+            description: "Nick's installed app failed strict Developer ID and nested-code validation. Reinstall Nick from the official package.",
+            context: ThreatSignalContext(metadata: [
+                "rule": "nick_app_signature_validation_failed",
+                "class": "integrity",
+                "bundle_path": bundlePath,
+                "remediation": "reinstall-official-package",
+                "quarantineEligible": "false",
+            ])
+        )
     }
 
     /// Publishes scan progress. While locations are still being walked the
@@ -383,8 +440,20 @@ final class DeepScanner {
     /// A file to scan. `needsContentCheck` marks extensionless files whose
     /// header decides whether they are scanned at all.
     struct Candidate: Sendable, Equatable {
+        enum Kind: Sendable, Equatable {
+            case file
+            case nickBundleSignatureFailure
+        }
+
         let path: String
         let needsContentCheck: Bool
+        let kind: Kind
+
+        init(path: String, needsContentCheck: Bool, kind: Kind = .file) {
+            self.path = path
+            self.needsContentCheck = needsContentCheck
+            self.kind = kind
+        }
     }
 
     /// What the walk decided about one file.
@@ -427,13 +496,20 @@ final class DeepScanner {
     /// Walks the standard macOS scan paths and streams candidates into
     /// `queue`. Media, document, archive, and font files are skipped.
     /// Runs inside `Task.detached`; stops early when that task is cancelled.
-    nonisolated static func enumerateCandidates(into queue: CandidateQueue) {
+    nonisolated static func enumerateCandidates(
+        into queue: CandidateQueue,
+        scanRoots: [String] = standardScanRoots,
+        nickBundleValidator: (String) -> SignatureValidator.NickAppBundleValidation = {
+            SignatureValidator.shared.validateNickAppBundle(atPath: $0)
+        }
+    ) {
         defer { queue.finish() }
         let fm  = FileManager.default
         let log = Logger(subsystem: "com.ehsanazish.nick", category: "DeepScanner")
         var walkedRoots = Set<String>()
+        var bundleValidationCache: [BundleValidationCacheKey: SignatureValidator.NickAppBundleValidation] = [:]
 
-        for scanPath in standardScanRoots {
+        for scanPath in scanRoots {
             guard !Task.isCancelled else { return }
             // /tmp and /private/tmp are the same directory; walk it once.
             let root = canonicalPath(scanPath)
@@ -462,6 +538,25 @@ final class DeepScanner {
                     forKeys: [.isExecutableKey, .isRegularFileKey, .isDirectoryKey]
                 ) else { continue }
                 if res.isDirectory == true {
+                    if url.pathExtension.caseInsensitiveCompare("app") == .orderedSame {
+                        let validation = cachedNickBundleValidation(
+                            for: url,
+                            cache: &bundleValidationCache,
+                            validator: nickBundleValidator
+                        )
+                        switch validation {
+                        case .valid:
+                            enumerator.skipDescendants()
+                        case .invalid:
+                            queue.push(Candidate(
+                                path: url.path,
+                                needsContentCheck: false,
+                                kind: .nickBundleSignatureFailure
+                            ))
+                        case .notNick:
+                            break
+                        }
+                    }
                     if prunedDirectoryNames.contains(url.lastPathComponent) {
                         enumerator.skipDescendants()
                     }
@@ -485,6 +580,34 @@ final class DeepScanner {
             }
             log.info("DeepScan: \(count) candidates from \(scanPath, privacy: .public)")
         }
+    }
+
+    struct BundleValidationCacheKey: Hashable, Sendable {
+        let path: String
+        let device: UInt64
+        let inode: UInt64
+        let modifiedNanoseconds: Int64
+    }
+
+    nonisolated private static func cachedNickBundleValidation(
+        for url: URL,
+        cache: inout [BundleValidationCacheKey: SignatureValidator.NickAppBundleValidation],
+        validator: (String) -> SignatureValidator.NickAppBundleValidation
+    ) -> SignatureValidator.NickAppBundleValidation {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let device = (attributes?[.systemNumber] as? NSNumber)?.uint64Value ?? 0
+        let inode = (attributes?[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let key = BundleValidationCacheKey(
+            path: canonicalPath(url.path),
+            device: device,
+            inode: inode,
+            modifiedNanoseconds: Int64(modified * 1_000_000_000)
+        )
+        if let cached = cache[key] { return cached }
+        let validation = validator(url.path)
+        cache[key] = validation
+        return validation
     }
 
     /// Decides a file's fate from metadata alone (no I/O).
@@ -527,7 +650,8 @@ final class DeepScanner {
     /// signing. Attacker-controlled directory names never downgrade concrete rules.
     nonisolated static func classify(
         match: YARAMatch,
-        cellarRoots: [String] = ["/opt/homebrew/Cellar", "/usr/local/Cellar"]
+        cellarRoots: [String] = ["/opt/homebrew/Cellar", "/usr/local/Cellar"],
+        approvedDevelopmentRoots: Set<String> = []
     ) -> ThreatVerdict {
         let path = match.filePath.lowercased()
 
@@ -559,7 +683,7 @@ final class DeepScanner {
         // source checkout, test fixture, package-manager cache, or documentation corpus,
         // those strings are evidence about source text rather than executed behavior.
         // Keep them in the completed report, but do not turn them into active threats.
-        if isVerifiedDevelopmentContext(path) {
+        if isVerifiedDevelopmentContext(match.filePath, approvedRoots: approvedDevelopmentRoots) {
             return .developmentArtifact
         }
 
@@ -708,11 +832,16 @@ final class DeepScanner {
     /// Downloads, Desktop, and Application Support into "source code".
     nonisolated static func isVerifiedDevelopmentContext(
         _ path: String,
-        homeDirectory: String = NSHomeDirectory()
+        homeDirectory: String = NSHomeDirectory(),
+        approvedRoots: Set<String> = []
     ) -> Bool {
         let canonical = canonicalPath(path)
         guard !isDevelopmentDowngradeForbidden(canonical) else { return false }
         let home = canonicalPath(homeDirectory)
+        let approved = Set(approvedRoots.map(canonicalPath))
+        guard approved.contains(where: { canonical == $0 || canonical.hasPrefix($0 + "/") }) else {
+            return false
+        }
         let boundaries: Set<String> = [
             "/", "/Users", "/Volumes", "/private", "/private/tmp", "/private/var",
             "/private/var/tmp", "/private/var/folders", home,
@@ -775,7 +904,7 @@ final class DeepScanner {
         // Anywhere else — notably temporary directories — a build-layout name
         // is attacker-choosable. Require the metadata Xcode writes into a
         // derived-data root, or a verified repository.
-        return hasXcodeDerivedDataRoot(canonical) || isVerifiedDevelopmentContext(canonical)
+        return hasXcodeDerivedDataRoot(canonical)
     }
 
     /// Xcode writes `info.plist` with a `WorkspacePath` key into every
@@ -989,6 +1118,7 @@ final class CandidateQueue: Sendable {
         let discovered: Int
         let location: String
         let finished: Bool
+        let remaining: Int
     }
 
     private struct State: Sendable {
@@ -1033,6 +1163,13 @@ final class CandidateQueue: Sendable {
     }
 
     func snapshot() -> Snapshot {
-        state.withLock { Snapshot(discovered: $0.discovered, location: $0.location, finished: $0.finished) }
+        state.withLock {
+            Snapshot(
+                discovered: $0.discovered,
+                location: $0.location,
+                finished: $0.finished,
+                remaining: max(0, $0.items.count - $0.head)
+            )
+        }
     }
 }

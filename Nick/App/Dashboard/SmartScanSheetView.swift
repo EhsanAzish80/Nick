@@ -39,19 +39,22 @@ struct SmartScanContentView: View {
     }
 
     var body: some View {
+        let presentation = SmartScanProtectionStatusModel(
+            status: engine.protectionStatus
+        ).presentation
         VStack(spacing: 0) {
             // ── Header ──────────────────────────────────────────────────
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Smart Scan")
                         .font(.title2.bold())
-                    if let status {
-                        Text(status.issueCount == 0
-                             ? "This Mac is fully protected"
-                             : "\(status.issueCount) issue\(status.issueCount == 1 ? "" : "s") found")
-                            .font(.subheadline)
-                            .foregroundStyle(status.issueCount == 0 ? Color.statusGreen : Color.statusOrange)
+                    HStack(spacing: 6) {
+                        Image(systemName: presentation.systemImage)
+                            .accessibilityHidden(true)
+                        Text(presentation.displayText)
                     }
+                    .font(.subheadline)
+                    .foregroundStyle(presentation.tone.statusColor)
                 }
                 Spacer()
                 if showDismiss {
@@ -109,7 +112,6 @@ struct SmartScanContentView: View {
             checker.securityEngine = engine
             checker.xpcClient = xpcClient
             checker.extensionManager = extensionManager
-            xpcClient.connect()
             if status == nil {
                 await checker.refreshLiveProtectionState()
                 status = checker.runScan()

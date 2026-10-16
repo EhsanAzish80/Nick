@@ -47,9 +47,10 @@ struct MainWindowView: View {
         }
     }
 
-    // Count only alerts that the consumer-facing assessment considers actionable.
+    // Badges represent unseen incidents. ProtectionStatus separately represents
+    // findings that still need a review decision.
     private var activeAlertCount: Int {
-        engine.activeActionableAlerts.count
+        engine.unseenIncidentCount
     }
 
     var body: some View {
@@ -163,6 +164,12 @@ struct MainWindowView: View {
             selectedSection = .scan
             simpleSelection = .scan
         }
+        .onReceive(NotificationCenter.default.publisher(for: .nickNavigateToAlert)) { note in
+            guard let alertID = note.userInfo?["alertID"] as? UUID else { return }
+            engine.pendingNotificationAlertID = alertID
+            selectedSection = .alerts
+            simpleSelection = .activity
+        }
         // Switching modes keeps the user on the equivalent page.
         .onChange(of: interfaceMode) { _, newMode in
             switch newMode {
@@ -171,6 +178,15 @@ struct MainWindowView: View {
             case .advanced:
                 selectedSection = InterfaceModeRouting.advancedSection(for: simpleSelection)
             }
+        }
+        .alert("Action not applied", isPresented: Binding(
+            get: { engine.incidentActionRetryMessage != nil },
+            set: { if !$0 { engine.cancelPendingIncidentAction() } }
+        )) {
+            Button("Retry") { engine.retryPendingIncidentAction() }
+            Button("Cancel", role: .cancel) { engine.cancelPendingIncidentAction() }
+        } message: {
+            Text(engine.incidentActionRetryMessage ?? "Retry when protection reconnects.")
         }
     }
 
@@ -214,6 +230,7 @@ struct MainWindowView: View {
             }
 
             Section("DIAGNOSTICS") {
+                SidebarNavItem(section: .diagnostics, isSelected: selectedSection == .diagnostics).tag(SidebarSection.diagnostics)
                 SidebarNavItem(section: .runtimeCompare, isSelected: selectedSection == .runtimeCompare).tag(SidebarSection.runtimeCompare)
                 SidebarNavItem(section: .performance, isSelected: selectedSection == .performance).tag(SidebarSection.performance)
             }
@@ -237,6 +254,7 @@ struct MainWindowView: View {
         case .network:     NetworkConnectionsView()
         case .processes:   ProcessListView()
         case .persistence: PersistenceDetailView()
+        case .diagnostics: DiagnosticsView()
         case .runtimeCompare: RuntimeCompareView()
         case .performance: PerformanceView()
         case .settings:    SettingsView()
@@ -252,6 +270,7 @@ struct MainWindowView: View {
         case .scan:       SimpleScanView()
         case .activity:   SimpleActivityView()
         case .protection: SimpleProtectionView()
+        case .storage:    PerformanceView()
         case .settings:   SettingsView()
         }
     }
@@ -267,8 +286,9 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case network     = "Network"
     case processes   = "Processes"
     case persistence = "Persistence"
+    case diagnostics = "Diagnostics"
     case runtimeCompare = "Runtime Compare"
-    case performance = "Performance"
+    case performance = "Storage"
     case settings    = "Settings"
 
     var id: String { rawValue }
@@ -286,6 +306,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .network:     return "network"
         case .processes:   return "cpu"
         case .persistence: return "arrow.triangle.2.circlepath"
+        case .diagnostics: return "stethoscope"
         case .runtimeCompare: return "square.split.2x1"
         case .performance: return "gauge.medium"
         case .settings:    return "gearshape.fill"
@@ -304,6 +325,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .network:     return .nickAccent
         case .processes:   return .purple
         case .persistence: return .orange
+        case .diagnostics: return .cyan
         case .runtimeCompare: return .indigo
         case .performance: return .mint
         case .settings:    return Color(NSColor.systemGray)
@@ -458,18 +480,10 @@ struct OverviewDetailView: View {
     /// times during every view evaluation.
     @State private var endpointExtensionHealth: [String: Any]?
 
-    private static let endpointHealthPath =
-        "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
-
     private func refreshEndpointHealth() async {
-        let path = Self.endpointHealthPath
         while !Task.isCancelled {
-            let data = await Task.detached(priority: .utility) {
-                FileManager.default.contents(atPath: path)
-            }.value
-            endpointExtensionHealth = data.flatMap {
-                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-            }
+            await xpcClient.refreshExtensionHealth()
+            endpointExtensionHealth = xpcClient.extensionHealth
             try? await Task.sleep(for: .seconds(5))
         }
     }
@@ -517,19 +531,17 @@ struct OverviewDetailView: View {
 
     // MARK: - Section 1: Status Header
 
-    /// "1 issue needs attention" / "3 issues need attention".
-    nonisolated static func issuesHeadline(_ count: Int) -> String {
-        count == 1 ? "1 issue needs attention" : "\(count) issues need attention"
-    }
-
     private var statusHeader: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let presentation = AdvancedOverviewProtectionStatusModel(
+            status: engine.protectionStatus
+        ).presentation
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
-                Image(systemName: totalIssues == 0 ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                Image(systemName: presentation.systemImage)
                     .font(.title2)
-                    .foregroundStyle(totalIssues == 0 ? Color.nickAccent : Color.nickWarningText)
+                    .foregroundStyle(presentation.tone.statusColor)
                     .accessibilityHidden(true)
-                Text(totalIssues == 0 ? "Your Mac is protected" : Self.issuesHeadline(totalIssues))
+                Text(presentation.displayText)
                     .font(.title2.bold())
             }
             Text(statusLine)
@@ -691,7 +703,7 @@ struct OverviewDetailView: View {
                             section: .systemAudit, subtitle: privSub,  state: guardState),
             FeatureTileItem(name: "Email Guard",          icon: "envelope.badge.shield.half.filled",
                             section: .alerts,      subtitle: emailSub, state: guardState),
-            FeatureTileItem(name: "Performance",          icon: "gauge.medium",
+            FeatureTileItem(name: "Storage",              icon: "gauge.medium",
                             section: .performance, subtitle: perfSub,  state: .info("Scan")),
             FeatureTileItem(name: "Quarantine",           icon: "archivebox",
                             section: .quarantine,  subtitle: qSub,
@@ -802,7 +814,7 @@ struct OverviewDetailView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(entry.repeatCount > 1 ? "\(entry.repeatCount.formatted())×" : "")
+            Text(entry.repeatCount > 1 ? "Seen \(DisplayNumber.count(entry.repeatCount)) times" : "")
                 .font(.system(size: 11))
                 .monospacedDigit()
                 .foregroundStyle(Color.nickSecondaryText)
@@ -1115,6 +1127,7 @@ struct PersistenceDetailView: View {
     @State private var selectedItems = Set<PersistenceItem.ID>()
     @State private var itemToDelete: PersistenceItem? = nil
     @State private var showDeleteConfirmation = false
+    @State private var showsStaleEntries = false
 
     enum PFilter: String, CaseIterable {
         case all      = "All"
@@ -1137,7 +1150,12 @@ struct PersistenceDetailView: View {
         case .missing:  segmented = base.filter { PersistenceDetailView.status(for: $0) == .missing }
         case .broken:   segmented = base.filter { PersistenceDetailView.status(for: $0) == .broken }
         }
-        return segmented.sorted(using: sortOrder)
+        return segmented.filter { !Self.isStale($0) && !Self.isUUIDOnlyHistorical($0) }
+            .sorted(using: sortOrder)
+    }
+
+    private var staleEntries: [PersistenceItem] {
+        engine.persistenceItems.filter(Self.isStale).sorted { $0.name < $1.name }
     }
 
     // Hero subtitle counts
@@ -1182,7 +1200,27 @@ struct PersistenceDetailView: View {
             if engine.persistenceItems.isEmpty {
                 emptyState
             } else {
-                persistenceTable
+                VStack(spacing: 0) {
+                    if !staleEntries.isEmpty {
+                        DisclosureGroup(isExpanded: $showsStaleEntries) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("These records refer to files that are no longer on disk and are usually harmless historical evidence.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                ForEach(staleEntries) { item in
+                                    Text(item.name).font(.caption.monospaced())
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 8)
+                        } label: {
+                            Text("Stale entries (file no longer on disk) · \(DisplayNumber.count(staleEntries.count))")
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 10)
+                    }
+                    persistenceTable
+                }
             }
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "Filter persistence items…")
@@ -1347,6 +1385,18 @@ struct PersistenceDetailView: View {
         return .verified
     }
 
+    static func isStale(_ item: PersistenceItem) -> Bool {
+        let fm = FileManager.default
+        let sourceMissing = !fm.fileExists(atPath: item.path)
+        let executableMissing = item.executablePath.map { !fm.fileExists(atPath: $0) } ?? true
+        return sourceMissing && executableMissing
+    }
+
+    static func isUUIDOnlyHistorical(_ item: PersistenceItem) -> Bool {
+        UUID(uuidString: item.name) != nil
+            || UUID(uuidString: URL(fileURLWithPath: item.path).deletingPathExtension().lastPathComponent) != nil
+    }
+
     private var emptyState: some View {
         ScrollView {
             VStack(spacing: 20) {
@@ -1387,6 +1437,7 @@ enum ThreatVerdict: String, Sendable {
 struct ScannerDetailView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
 
     // MARK: - Deep scan state
     @State private var onlyOnPower  = false
@@ -1404,12 +1455,8 @@ struct ScannerDetailView: View {
     @State private var showFileScanSheet: Bool          = false
 
     // MARK: - Ignore list (newline-delimited paths persisted in UserDefaults)
-    @AppStorage("deepScanIgnoredPaths") private var ignoredPathsRaw: String = ""
-
     private var ignoredPaths: Set<String> {
-        Set(ignoredPathsRaw.split(separator: "\n").map {
-            DeepScanner.canonicalPath(String($0))
-        })
+        engine.deepScanIgnoredPaths
     }
 
     // MARK: - Body
@@ -1744,9 +1791,11 @@ struct ScannerDetailView: View {
     }
 
     private func addIgnored(_ path: String) {
+        guard let authorization = xpcClient.requestProtectionModificationAuthorization() else { return }
+        engine.authorizeNextSecuritySettingsWrite(with: authorization)
         var paths = ignoredPaths
         paths.insert(DeepScanner.canonicalPath(path))
-        ignoredPathsRaw = paths.sorted().joined(separator: "\n")
+        engine.deepScanIgnoredPaths = paths
     }
 
     // MARK: - Scan File helpers
@@ -2131,7 +2180,7 @@ private struct ResultRow: View {
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: NickSpacing.xs) {
                 HStack(spacing: NickSpacing.sm) {
-                    Text(count > 1 ? "\(match.ruleName) (×\(count))" : match.ruleName)
+                    Text(count > 1 ? "\(match.ruleName) (Seen \(DisplayNumber.count(count)) times)" : match.ruleName)
                         .font(.nickBodyMedium)
                         .foregroundStyle(Color.textPrimary)
                     Spacer()

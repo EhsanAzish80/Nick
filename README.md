@@ -102,6 +102,10 @@ review rather than silently blocked.
 
 - Vendored libyara 4.5.5 with Nick's macOS behaviour heuristics and family
   signatures from vetted, redistributable sources (`Rules/families`).
+- Nick 5.0 includes a deliberately small offline exact-hash
+  catalog: 25 entries retrieved on October 9, 2026 (24 macOS malware IOCs from
+  ESET's BSD-licensed research repository plus the low-severity EICAR test
+  hash). It is a curated snapshot, not a comprehensive malware database.
 - On-demand, real-time, email attachment, and external-volume scanning.
 - Confidence-aware results: heuristic matches are shown for review; only
   actionable matches can be blocked or quarantined.
@@ -346,11 +350,12 @@ excluded from SonarCloud ownership and coverage calculations.
 
 ## Uninstalling
 
-Run `/Applications/Nick Uninstaller.app`. The uninstaller guides removal of
-active protection, application data, preferences, installed components, and
-both application bundles. macOS can retain a disabled privacy-list row after
-the executable is removed; that row is system-owned UI state and does not mean
-the extension remains installed.
+Use Settings → Uninstall Nick or run `/Applications/Nick Uninstaller.app` for
+complete removal of active protection, application data, preferences, installed
+components, and both application bundles. Finder can move Nick.app to the
+Trash, but that removes only the app bundle. macOS can retain a disabled
+privacy-list row after the executable is removed; that row is system-owned UI
+state and does not mean the extension remains installed.
 
 ## Documentation
 
@@ -381,4 +386,7 @@ Nick is licensed under the
 ## Acknowledgments
 
 Nick uses YARA and builds on public macOS security research, including the work
-of the Objective-See Foundation and the wider macOS security community.
+of the Objective-See Foundation and the wider macOS security community. Its
+small bundled macOS hash catalog includes ESET malware-ioc data under the
+BSD-2-Clause licence; the complete notice is shipped in the app and shown in
+Settings → Acknowledgements.

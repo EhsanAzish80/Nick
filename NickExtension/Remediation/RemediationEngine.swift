@@ -5,7 +5,43 @@
 import CryptoKit
 import Darwin
 import Foundation
+import Security
 import os
+
+/// Validates a third-party actor against Apple's Developer ID Application
+/// anchor off the Endpoint Security authorization path. Results are cached by
+/// cdhash, never by a caller-supplied Team ID.
+final class DeveloperIDTrustValidator: @unchecked Sendable {
+    static let shared = DeveloperIDTrustValidator()
+    private let lock = NSLock()
+    private var cache: [Data: Bool] = [:]
+
+    func isValidated(path: String) -> Bool {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code else { return false }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any],
+              let cdhash = dict[kSecCodeInfoUnique as String] as? Data else { return false }
+        if let cached = lock.withLock({ cache[cdhash] }) { return cached }
+
+        var requirement: SecRequirement?
+        let text = "anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        // Security exposes these CSCommon flags to C but not Swift in every SDK.
+        // Values are stable API constants: revocation 1<<30, expiration 1<<31.
+        let enforceRevocation = UInt32(1) << 30
+        let considerExpiration = UInt32(1) << 31
+        let rawFlags = UInt32(kSecCSDoNotValidateResources)
+            | enforceRevocation
+            | considerExpiration
+        let valid = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: rawFlags), requirement) == errSecSuccess
+        lock.withLock { cache[cdhash] = valid }
+        return valid
+    }
+}
 
 // MARK: - RemediationEngine
 
@@ -44,18 +80,19 @@ final class RemediationEngine {
         threatName:  String,
         processPath: String,
         pid:         Int32,
+        processIdentity: ProcessInstanceIdentity? = nil,
         terminateProcess: Bool = true
     ) -> RemediationReport {
         var actions: [RemediationAction] = []
 
         // 1. Kill the offending process immediately
         if terminateProcess {
-            actions.append(killProcess(pid: pid))
+            actions.append(killProcess(pid: pid, expectedIdentity: processIdentity))
         }
 
         // 2. Quarantine the threat file. Never delete as a fallback: a failed
         // quarantine must remain recoverable and visible to the user.
-        let record = quarantineManager.quarantine(
+        let quarantineResult = quarantineManager.quarantine(
             filePath:    threatPath,
             hash:        hash,
             threatName:  threatName,
@@ -63,13 +100,24 @@ final class RemediationEngine {
             processPath: processPath,
             pid:         pid
         )
+        let record: QuarantineRecord?
+        let quarantineFailure: QuarantineFailure?
+        switch quarantineResult {
+        case .success(let value):
+            record = value
+            quarantineFailure = nil
+        case .failure(let failure):
+            record = nil
+            quarantineFailure = failure
+        }
         actions.append(RemediationAction(
             type:    .quarantineFile,
             target:  threatPath,
             success: record != nil,
             detail:  record != nil
                 ? "Moved to quarantine vault"
-                : "Failed to quarantine — file was not deleted"
+                : (quarantineFailure?.statusLine ?? "Failed to quarantine — file was not deleted"),
+            quarantineFailure: quarantineFailure
         ))
 
         // 3. Remove persistence mechanisms that reference the threat
@@ -90,12 +138,21 @@ final class RemediationEngine {
 
     // MARK: - Private Steps
 
-    private func killProcess(pid: Int32) -> RemediationAction {
+    private func killProcess(pid: Int32, expectedIdentity: ProcessInstanceIdentity?) -> RemediationAction {
         // Never kill init (PID 1) or the extension itself
         guard pid > 1 else {
             return RemediationAction(
                 type: .killProcess, target: "PID \(pid)",
                 success: false, detail: "Refused to kill PID ≤ 1"
+            )
+        }
+        guard RansomwareTerminationPolicy.maySignalKill(
+            expected: expectedIdentity,
+            current: ProcessInstanceIdentity.capture(pid: pid)
+        ) else {
+            return RemediationAction(
+                type: .killProcess, target: "PID \(pid)",
+                success: false, detail: "Process identity changed; refused to signal reused PID"
             )
         }
         let result = Darwin.kill(pid, SIGKILL)
@@ -130,7 +187,7 @@ final class RemediationEngine {
                     ))
                     continue
                 }
-                let record = quarantineManager.quarantine(
+                let result = quarantineManager.quarantine(
                     filePath: plistPath,
                     hash: hash,
                     threatName: "Persistence linked to quarantined threat",
@@ -138,13 +195,20 @@ final class RemediationEngine {
                     processPath: threatPath,
                     pid: 0
                 )
+                let succeeded: Bool
+                let failure: QuarantineFailure?
+                switch result {
+                case .success: succeeded = true; failure = nil
+                case .failure(let value): succeeded = false; failure = value
+                }
                 actions.append(RemediationAction(
                     type: .removeLaunchItem,
                     target: plistPath,
-                    success: record != nil,
-                    detail: record != nil
+                    success: succeeded,
+                    detail: succeeded
                         ? "Persistence plist moved to quarantine"
-                        : "Failed to quarantine plist; left unchanged"
+                        : "Failed to quarantine plist; left unchanged",
+                    quarantineFailure: failure
                 ))
             }
         }

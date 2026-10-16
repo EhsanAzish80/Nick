@@ -24,6 +24,7 @@ let scanCache    = ScanCache()
 /// is running. The container app treats this as stale after 30 seconds, so a
 /// crashed or stopped extension can never leave Smart Scan falsely green.
 func writeExtensionHealth() {
+    let esMetrics = EndpointSecurityClient.healthMetrics.snapshot()
     let fullDiskAccessReady: Bool = {
         guard let handle = FileHandle(
             forReadingAtPath: "/Library/Application Support/com.apple.TCC/TCC.db"
@@ -33,7 +34,7 @@ func writeExtensionHealth() {
         try? handle.close()
         return true
     }()
-    let health: [String: Any] = [
+    var health: [String: Any] = [
         "active": true,
         "xpcListener": xpcServer.listenerConfigurationStatus,
         "updatedAt": Date().timeIntervalSince1970,
@@ -45,10 +46,24 @@ func writeExtensionHealth() {
         "emailScannerReady": yaraRulesReady,
         "yaraRulesReady": yaraRulesReady,
         "signatureCount": signatureDB.count,
+        "signatureCatalogEntries": signatureDB.bundledCatalogEntryCount,
+        "signatureCatalogDate": signatureDB.bundledCatalogRetrievedAt ?? "unavailable",
         "fullDiskAccessReady": fullDiskAccessReady,
         "fimBaselineCount": fileIntegrityMonitor.baselineCount,
-        "canaryCount": ransomwareDetector.canaryManager.canaryPaths.count
+        "fimPendingViolationCount": fileIntegrityMonitor.pendingViolationCount,
+        "canaryCount": ransomwareDetector.canaryManager.canaryPaths.count,
+        "eventsPerSecond": esMetrics.eventsPerSecond,
+        "deadlineMissCount": esMetrics.deadlineMisses
     ]
+    if let lastDeadlineMissAt = esMetrics.lastDeadlineMissAt {
+        health["lastDeadlineMissAt"] = lastDeadlineMissAt.timeIntervalSince1970
+    }
+    if let p50 = esMetrics.authResponseP50Milliseconds {
+        health["authResponseP50Milliseconds"] = p50
+    }
+    if let p99 = esMetrics.authResponseP99Milliseconds {
+        health["authResponseP99Milliseconds"] = p99
+    }
 
     do {
         try FileManager.default.createDirectory(
@@ -59,7 +74,7 @@ func writeExtensionHealth() {
         let data = try JSONSerialization.data(withJSONObject: health, options: [.sortedKeys])
         try data.write(to: URL(fileURLWithPath: healthPath), options: .atomic)
         try FileManager.default.setAttributes(
-            [.posixPermissions: 0o644],
+            [.posixPermissions: 0o600],
             ofItemAtPath: healthPath
         )
     } catch {
@@ -115,7 +130,11 @@ let quarantineManager    = QuarantineManager(supportDir: supportDir)
 let remediationEngine    = RemediationEngine(quarantineManager: quarantineManager)
 
 let fimBaselinePath      = (supportDir as NSString).appendingPathComponent("fim_baseline.json")
-let fileIntegrityMonitor = FileIntegrityMonitor(baselinePath: fimBaselinePath)
+let fimPendingPath       = (supportDir as NSString).appendingPathComponent("fim_pending.json")
+let fileIntegrityMonitor = FileIntegrityMonitor(
+    baselinePath: fimBaselinePath,
+    pendingViolationsPath: fimPendingPath
+)
 
 // Build FIM baseline on first run (baseline file absent means first launch)
 if !FileManager.default.fileExists(atPath: fimBaselinePath) {
@@ -135,6 +154,12 @@ ransomwareDetector.canaryManager.deployCanaries()
 
 let privacyGuard = PrivacyGuard()
 let usbScanner   = USBScanner(fileScanner: fileScanner)
+
+// MARK: Phase 6 — genealogy and self-protection
+
+let processTree = ProcessTree()
+let tamperProtection = TamperProtection()
+let updateLeaseManager = NickUpdateLeaseManager()
 
 // MARK: Phase 6 — Email attachment monitoring
 
@@ -156,7 +181,118 @@ eventHandler.behaviorTracker         = behaviorTracker
 eventHandler.ransomwareDetector      = ransomwareDetector
 eventHandler.privacyGuard            = privacyGuard
 eventHandler.usbScanner              = usbScanner
+eventHandler.processTree             = processTree
 eventHandler.emailAttachmentMonitor  = emailAttachmentMonitor
+eventHandler.tamperProtection        = tamperProtection
+eventHandler.updateLeaseManager      = updateLeaseManager
+xpcServer.updateLeaseManager         = updateLeaseManager
+
+updateLeaseManager.onAudit = { audit in
+    let event = ESEvent(
+        eventType: .notifyWrite,
+        processPath: Bundle.main.executableURL?.path ?? "",
+        pid: 0,
+        parentPid: 0,
+        filePath: "/Applications/Nick.app",
+        decision: .notApplicable,
+        threat: .init(
+            threatName: "Nick update authorization \(audit.action.rawValue)",
+            threatFamily: "nick-update-lease",
+            metadata: [
+                "leaseID": audit.leaseID?.uuidString ?? "none",
+                "detail": audit.detail
+            ]
+        )
+    )
+    if let data = try? JSONEncoder().encode(event) {
+        xpcServer.sendThreatToApp(data)
+    }
+}
+
+tamperProtection.onTamperAttempt = { attempt in
+    let event: ESEvent
+    switch attempt {
+    case .deleteProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
+        let attribution = processTree.responsibleApp(
+            actorPID: pid, responsiblePID: nil,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
+        event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: actorPath,
+            pid: pid,
+            parentPid: 0,
+            filePath: path,
+            decision: disposition == .blocked ? .deny : .allow,
+            threat: .init(
+                threatName: disposition == .blocked
+                    ? "Nick protected path change blocked"
+                    : "Nick maintenance updated protected files",
+                threatFamily: disposition == .blocked ? "tamper" : "nick-maintenance",
+                isCodeSigned: identity.isValidIdentitySignature,
+                teamID: identity.teamID,
+                signingID: identity.signingID,
+                metadata: [
+                    "tamperOperation": operation.rawValue,
+                    "tamperTarget": path
+                ].merging(attribution.metadata) { current, _ in current }
+            )
+        )
+    case .renameProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
+        let isDocumentedUninstall = disposition == .documentedUninstall
+        let attribution = processTree.responsibleApp(
+            actorPID: pid, responsiblePID: nil,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
+        event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: actorPath,
+            pid: pid,
+            parentPid: 0,
+            filePath: path,
+            decision: disposition == .blocked ? .deny : .allow,
+            threat: .init(
+                threatName: disposition == .blocked
+                    ? "Nick protected path change blocked"
+                    : (isDocumentedUninstall
+                        ? "Nick is being moved to the Trash"
+                        : "Nick maintenance updated protected files"),
+                threatFamily: disposition == .blocked
+                    ? "tamper"
+                    : (isDocumentedUninstall ? "nick-documented-uninstall" : "nick-maintenance"),
+                isCodeSigned: identity.isValidIdentitySignature,
+                teamID: identity.teamID,
+                signingID: identity.signingID,
+                metadata: [
+                    "tamperOperation": operation.rawValue,
+                    "tamperTarget": path
+                ].merging(attribution.metadata) { current, _ in current }
+            )
+        )
+    case .systemExtensionsCtlExec(let pid, let isSensitive):
+        let attribution = processTree.responsibleApp(
+            actorPID: pid, responsiblePID: nil,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
+        event = ESEvent(
+            eventType: .authExec,
+            processPath: "/usr/bin/systemextensionsctl",
+            pid: pid,
+            parentPid: 0,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: isSensitive
+                    ? "System extension removal command observed"
+                    : "System extension management observed",
+                threatFamily: isSensitive ? "tamper" : "endpoint-management",
+                metadata: attribution.metadata
+            )
+        )
+    }
+    if let data = try? JSONEncoder().encode(event) {
+        xpcServer.sendThreatToApp(data)
+    }
+}
 
 // Wire USB threat callback through XPC
 usbScanner.onThreatFound = { threat in
@@ -172,6 +308,23 @@ ESXPCServer.ransomwareDetectorRef = ransomwareDetector
 // Expose quarantine operations to the app's Quarantine view.
 ESXPCServer.quarantineManagerRef = quarantineManager
 ESXPCServer.fileScannerRef = fileScanner
+quarantineManager.onReviewedFileSwap = { path in
+    let event = ESEvent(
+        eventType: .notifyWrite,
+        processPath: "",
+        pid: 0,
+        parentPid: 0,
+        filePath: path,
+        decision: .notApplicable,
+        threat: .init(
+            threatName: "Quarantine target changed during review",
+            threatFamily: "tamper"
+        )
+    )
+    if let data = try? JSONEncoder().encode(event) {
+        xpcServer.sendThreatToApp(data)
+    }
+}
 
 // Start XPC listener first — container app can connect as soon as the extension launches
 xpcServer.start()
@@ -194,6 +347,9 @@ let phase4Events: [es_event_type_t] = [
     ES_EVENT_TYPE_AUTH_MMAP,         // block mapping a previously scanned threat
     ES_EVENT_TYPE_AUTH_COPYFILE,     // block copying a previously scanned threat
     ES_EVENT_TYPE_AUTH_CREATE,       // block suspicious creation chains
+    ES_EVENT_TYPE_AUTH_TRUNCATE,     // protect Nick bundle files from truncation
+    ES_EVENT_TYPE_AUTH_LINK,         // protect Nick bundle destinations from hard links
+    ES_EVENT_TYPE_AUTH_CLONE,        // protect Nick bundle destinations from clones
     ES_EVENT_TYPE_AUTH_RENAME,       // protect Nick files from replacement
     ES_EVENT_TYPE_AUTH_UNLINK,       // protect Nick files from deletion
 
@@ -224,6 +380,11 @@ let healthTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
 healthTimer.schedule(deadline: .now() + 10, repeating: 10)
 healthTimer.setEventHandler(handler: writeExtensionHealth)
 healthTimer.resume()
+
+let processTreeTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+processTreeTimer.schedule(deadline: .now() + 3600, repeating: 3600)
+processTreeTimer.setEventHandler { processTree.pruneExited() }
+processTreeTimer.resume()
 
 logger.info("NickExtension Phase 5 running — privacy monitoring, USB scanning, network filter active")
 xpcServer.sendStatusChange(isActive: true)

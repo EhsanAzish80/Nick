@@ -26,10 +26,10 @@ final class SimpleHomeModelTests: XCTestCase {
     // MARK: Hero
 
     func test_heroIsProtectedWithoutIssuesOrIncidents() {
-        let hero = HomeHero.make(incident: nil, issues: [], websitesProtected: true,
+        let hero = HomeHero.make(presentation: presentation(.protected), incident: nil, issues: [], websitesProtected: true,
                                  lastCheck: now.addingTimeInterval(-7_200), hadRecentWarnings: false, now: now)
         XCTAssertEqual(hero.state, .protected)
-        XCTAssertEqual(hero.title, "Your Mac is protected")
+        XCTAssertEqual(hero.title, "Protected")
         XCTAssertEqual(hero.primaryTitle, "Run Quick Check")
         XCTAssertTrue(hero.body.contains("websites"))
     }
@@ -39,10 +39,10 @@ final class SimpleHomeModelTests: XCTestCase {
             endpointProtectionActive: false, auditIssues: 2,
             persistenceIssues: 0, processIssues: 1, networkIssues: 0
         )
-        let hero = HomeHero.make(incident: nil, issues: issues, websitesProtected: true,
+        let hero = HomeHero.make(presentation: presentation(.attentionNeeded, count: 3), incident: nil, issues: issues, websitesProtected: true,
                                  lastCheck: nil, hadRecentWarnings: false, now: now)
         XCTAssertEqual(hero.state, .attention)
-        XCTAssertEqual(hero.title, "Protection is paused")
+        XCTAssertEqual(hero.title, "Attention needed · 3 items need review")
         XCTAssertTrue(hero.body.hasSuffix("…and 2 more things."))
         XCTAssertEqual(hero.primaryTitle, "Fix It")
         XCTAssertEqual(issues.first?.simpleFix, .openURL("x-apple.systempreferences:com.apple.LoginItems-Settings.extension"))
@@ -52,12 +52,13 @@ final class SimpleHomeModelTests: XCTestCase {
         let record = quarantine("PDF Converter Pro.app", hoursAgo: 1)
         let incident = HomeIncident.latest(alerts: [], quarantine: [record], seen: [], now: now)
         let issues = [AttentionIssue(kind: .realTimeProtection, count: 1)]
-        let hero = HomeHero.make(incident: incident, issues: issues, websitesProtected: true,
+        let hero = HomeHero.make(presentation: presentation(.threatBlocked, count: 1), incident: incident, issues: issues, websitesProtected: true,
                                  lastCheck: nil, hadRecentWarnings: true, now: now)
         XCTAssertEqual(hero.state, .blocked)
-        XCTAssertEqual(hero.title, "Nick stopped a harmful app")
+        XCTAssertEqual(hero.title, "Threat blocked · 1 item")
         XCTAssertEqual(hero.secondaryTitle, "Delete It")
         XCTAssertTrue(hero.body.contains("PDF Converter Pro.app"))
+        XCTAssertFalse(hero.body.contains("before it could do anything"))
     }
 
     func test_incidentsExpireAfterADayAndOnceSeen() {
@@ -74,7 +75,7 @@ final class SimpleHomeModelTests: XCTestCase {
 
     func test_simpleCopyNeverContainsTechnicalTerms() {
         let banned = ["PID", "Team ID", "YARA", "rule", "signature", "%", "/Users/", "persistence", "process"]
-        for kind in [AttentionIssue.Kind.realTimeProtection, .systemAudit, .persistence, .processes, .network] {
+        for kind in [AttentionIssue.Kind.realTimeProtection, .systemAudit, .persistence, .processes, .network, .findings] {
             let issue = AttentionIssue(kind: kind, count: 3)
             for text in [issue.simpleTitle, issue.simpleBody, issue.whyItMatters] {
                 for term in banned {
@@ -84,11 +85,101 @@ final class SimpleHomeModelTests: XCTestCase {
         }
     }
 
+    func test_unreviewedFindingPreventsProtectedHomeState() {
+        let issues = AttentionIssue.issues(
+            endpointProtectionActive: true,
+            auditIssues: 0,
+            persistenceIssues: 0,
+            processIssues: 0,
+            networkIssues: 0,
+            unreviewedFindings: 1
+        )
+        let hero = HomeHero.make(
+            presentation: presentation(.attentionNeeded, count: 1),
+            incident: nil,
+            issues: issues,
+            websitesProtected: true,
+            lastCheck: now,
+            hadRecentWarnings: false,
+            now: now
+        )
+        XCTAssertEqual(hero.state, .attention)
+        XCTAssertEqual(hero.primaryTitle, "Fix It")
+    }
+
+    func test_sensorProblemWithNoIncidentsPointsToProtectionWithoutInventingWork() {
+        let hero = HomeHero.make(
+            presentation: presentation(.sensorProblem),
+            incident: nil,
+            issues: [],
+            websitesProtected: false,
+            lastCheck: nil,
+            hadRecentWarnings: false,
+            now: now
+        )
+        XCTAssertEqual(hero.state, .attention)
+        XCTAssertEqual(hero.title, "Protection component unavailable")
+        XCTAssertEqual(hero.primaryTitle, "View Protection")
+        XCTAssertTrue(hero.body.contains("no incident items"))
+    }
+
+    func test_protectedFindingCannotProduceProtectedHomeState() {
+        let signal = ThreatSignal(
+            source: .persistence,
+            severity: .medium,
+            title: "Launch item with missing executable",
+            description: "A startup item references a missing executable.",
+            context: ThreatSignalContext(metadata: [
+                "reason": "persist_executable_missing",
+                "path": "/Users/test/Library/LaunchAgents/com.example.missing.plist",
+            ])
+        )
+        let alert = ThreatAlert(
+            score: 0.45,
+            content: AlertContent(
+                title: "Startup item points to a missing file",
+                description: "A startup configuration references a missing file.",
+                severity: .medium,
+                recommendedAction: "Review the startup item."
+            ),
+            contributingSignals: [signal],
+            timestamp: now
+        )
+        XCTAssertTrue(alert.isUserVisibleFinding)
+
+        let issues = AttentionIssue.issues(
+            endpointProtectionActive: true,
+            auditIssues: 0,
+            persistenceIssues: 0,
+            processIssues: 0,
+            networkIssues: 0,
+            unreviewedFindings: alert.isUserVisibleFinding ? 1 : 0
+        )
+        let hero = HomeHero.make(
+            presentation: presentation(.attentionNeeded, count: 1),
+            incident: nil,
+            issues: issues,
+            websitesProtected: true,
+            lastCheck: now,
+            hadRecentWarnings: true,
+            now: now
+        )
+        XCTAssertEqual(hero.state, .attention)
+        XCTAssertEqual(hero.title, "Attention needed · 1 item needs review")
+    }
+
     func test_advancedCopyIsUnchanged() {
         let issue = AttentionIssue(kind: .systemAudit, count: 1)
         XCTAssertEqual(issue.advancedTitle, "System Security needs attention")
         XCTAssertEqual(issue.advancedDetail, "1 system setting did not pass the latest audit.")
         XCTAssertEqual(issue.advancedSection, .systemAudit)
+    }
+
+    private func presentation(
+        _ state: ProtectionStatus.State,
+        count: Int = 0
+    ) -> ProtectionStatusPresentation {
+        ProtectionStatusPresentation(status: ProtectionStatus(state: state, count: count))
     }
 
     // MARK: Cards
@@ -100,10 +191,10 @@ final class SimpleHomeModelTests: XCTestCase {
         XCTAssertTrue(cards.allSatisfy { !$0.status.rawValue.isEmpty })
     }
 
-    func test_emailPausedIsCalledOutWhenScamIsOn() {
+    func test_attachmentChecksPausedIsCalledOutWhenDestinationChecksAreOn() {
         let cards = ProtectionCard.cards(endpointActive: false, networkState: .enabled, ransomwareShieldActive: false)
         XCTAssertEqual(cards[1].status, .on)
-        XCTAssertEqual(cards[1].detail, "Scam site warnings are on. Email checks are paused.")
+        XCTAssertEqual(cards[1].detail, "Destination checks are on. Attachment checks are paused.")
     }
 
     // MARK: Mac settings

@@ -9,19 +9,11 @@ import Foundation
 /// line, the status word, the one-line technical summary) without changing
 /// how alerts are built or scored.
 struct SimpleAlertCopy: Equatable {
-
-    enum Status: String, Equatable {
-        case blocked = "Blocked"
-        case threat = "Threat"
-        case warning = "Warning"
-        case info = "Info"
-    }
-
     enum Tone: Equatable { case danger, warning, safe }
 
     let title: String
     let subline: String
-    let status: Status
+    let status: IncidentDisplayStatus
     let tone: Tone
     let whatHappened: String
     let whatNickDid: String
@@ -34,29 +26,37 @@ struct SimpleAlertCopy: Equatable {
         user: UserFacingAlert,
         isQuarantined: Bool,
         fileStillPresent: Bool,
+        incident: SecurityIncident? = nil,
         now: Date = Date()
     ) -> SimpleAlertCopy {
         let when = HomeFormatting.dayAndTime(alert.lastSeen, now: now)
+        let behavior = BehaviorIncidentPresentation(alert: alert, incident: incident)
 
-        let status: Status
+        let status = isQuarantined ? IncidentDisplayStatus.quarantined : behavior.status
         let tone: Tone
         let title: String
         let reassurance: String
-        switch (isQuarantined, user.severity) {
-        case (true, _):
-            status = .blocked; tone = .danger
+        switch (isQuarantined, behavior.status, user.severity) {
+        case (true, _, _):
+            tone = .danger
             title = "Nick stopped a harmful app"
             reassurance = "It can’t run from Quarantine"
-        case (false, .critical):
-            status = .threat; tone = .danger
+        case (false, .needsReview, _):
+            tone = .danger
             title = user.headline
-            reassurance = fileStillPresent ? "Take a look now" : "It’s no longer on your Mac"
-        case (false, .warning):
-            status = .warning; tone = .warning
+            reassurance = alert.evidenceState() == .processActive ? "Still running" : "The command has finished"
+        case (false, _, .critical):
+            tone = .danger
+            title = user.headline
+            reassurance = behavior.isBehavior
+                ? (alert.evidenceState() == .processActive ? "Still running" : "The command has finished")
+                : (fileStillPresent ? "Take a look now" : "It’s no longer on your Mac")
+        case (false, _, .warning):
+            tone = .warning
             title = user.headline
             reassurance = "Probably fine, but worth a look"
-        case (false, .safe):
-            status = .info; tone = .safe
+        case (false, _, .safe):
+            tone = .safe
             title = user.headline
             reassurance = "No action needed"
         }
@@ -104,7 +104,7 @@ struct SimpleAlertCopy: Equatable {
         let confidence = "\(Int((alert.score * 100).rounded()))%"
         let signer: String
         switch alert.contributingSignals.lazy.compactMap(\.processInfo).first?.signingStatus {
-        case .signed(let teamID)?: signer = teamID == "APPLE_PLATFORM" ? "Apple" : "Team \(teamID)"
+        case .signed(let teamID, _)?: signer = teamID == "APPLE_PLATFORM" ? "Apple" : "Team \(teamID)"
         case .adHoc?:              signer = "ad-hoc"
         case .unsigned?:           signer = "unsigned"
         case .invalid?:            signer = "invalid signature"

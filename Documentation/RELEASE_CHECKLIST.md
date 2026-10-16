@@ -3,6 +3,9 @@
 ## Source and product
 
 - [ ] Marketing version and build number are consistent across all targets.
+- [ ] The installable build number is higher than every active Nick extension;
+      Diagnostics shows matching app and active-extension builds, and the gate
+      record includes the complete `systemextensionsctl list` output.
 - [ ] Release notes describe user-visible changes accurately.
 - [ ] `ARCHITECTURE.md`, `README.md`, `ROADMAP.md`, and the current-status table
       in `SECURITY_AUDIT.md` have been reviewed against the live code paths for
@@ -16,6 +19,12 @@
       but durable pending evidence and acknowledgement-controlled rebaselining
       remain tracked for Nick 5.0.
 - [ ] The full test suite passes with coverage.
+- [ ] The measurement and consolidated physical-Mac gates in
+      `5_0_VALIDATION_PLAN.md` pass with evidence recorded for the exact build.
+- [ ] The benign executable corpus is capped at **120k files** and reports the exact selected-file count for the candidate machine; the cap
+      is not misreported as the number of files scanned.
+- [ ] The independent review scope in `EXTERNAL_SECURITY_REVIEW_SCOPE.md` was
+      reviewed at the exact candidate commit; blocking findings are resolved.
 - [ ] `git diff --check` passes.
 
 ## Runtime Compare (4.1)
@@ -72,10 +81,17 @@
 - [ ] Idle CPU, memory, and log volume remain acceptable for ten minutes.
 - [ ] Update from the previous public build succeeds through Sparkle, for
       both a manual Check for Updates and a scheduled check.
+- [ ] With the previous public release's Endpoint Security extension active,
+      upgrades to this exact candidate succeed through Installer.app, the
+      command-line `installer` tool, and Sparkle; protection is never disabled
+      merely to make the test pass. MDM/Intune deployment is not supported in
+      5.0 and must not be presented as a verified release channel.
 - [ ] The live appcast at `https://3nsofts.com/nick/appcast.xml` is fetched
       after upload and matches `Packaging/Release/<version>/appcast.xml`.
-- [ ] Uninstall restores normal networking and removes both applications,
-      system extensions, configuration, and generated files.
+- [ ] Uninstall deactivates both system extensions before deleting Nick.app or
+      user data. If macOS requires a restart, the app and data remain until the
+      post-restart retry; final `systemextensionsctl list` contains no Nick
+      extension entries.
 
 ## Publication
 

@@ -30,14 +30,15 @@ struct SettingsView: View {
 
     @Environment(SecurityEngine.self) private var engine
     @Environment(NetworkProtectionManager.self) private var networkProtection
+    @Environment(ExtensionXPCClient.self) private var xpcClient
 
     // MARK: App Storage
 
-    @AppStorage("notificationThresholdRaw") private var notificationThresholdRaw: Int = SignalSeverity.high.rawValue
     @AppStorage("deepScanIntervalSeconds") private var deepScanIntervalSeconds: Int = 300
     @AppStorage("logFormatter") private var logFormatter: String = "kv"
     @AppStorage("fileLoggingEnabled") private var fileLoggingEnabled: Bool = false
     @AppStorage("stdoutLoggingEnabled") private var stdoutLoggingEnabled: Bool = false
+    @AppStorage("allowInsecureLocalWebhook") private var allowInsecureLocalWebhook: Bool = false
     @AppStorage("scheduledDeepScanInterval") private var scheduledDeepScanInterval: Int = 0
     @AppStorage("telemetryEnabled") private var telemetryEnabled: Bool = false
     @AppStorage("appAppearance") private var appAppearance: AppAppearance = .system
@@ -47,7 +48,7 @@ struct SettingsView: View {
 
     // MARK: Private State
 
-    @State private var webhookURLString: String = UserDefaults.standard.url(forKey: "webhookURL")?.absoluteString ?? ""
+    @State private var webhookURLString: String = ""
     @State private var webhookTestStatus: String? = nil
     @State private var newSuppressionType: SuppressionType = .processName
     @State private var newSuppressionValue: String = ""
@@ -59,6 +60,11 @@ struct SettingsView: View {
             ?? ["/Users", "/Applications", "/Library", "/private/tmp"]
     }()
     @State private var newProcessName: String = ""
+    @State private var trustedProcessStatus: String?
+#if DEBUG
+    @State private var authorizationHarnessStatus: String?
+    @State private var retentionHarnessStatus: String?
+#endif
     @State private var newAllowedDomain: String = ""
     @State private var newAllowedApp: String = ""
     @State private var showRemoveProcessConfirmation = false
@@ -67,6 +73,14 @@ struct SettingsView: View {
     @State private var showResetHistoryConfirmation = false
     @State private var showRemoveHelperConfirmation = false
     @State private var updateCheckStatus: String?
+    @State private var showsAcknowledgements = false
+    @State private var showsLearnedReviewEntries = false
+    @State private var showsLegacyDismissals = false
+    @State private var verdictLearningStatus: String?
+    @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
+    @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
+    @AppStorage("nickUpdateAvailable") private var updateAvailable = false
+    @AppStorage("nickUpdateAvailableVersion") private var updateAvailableVersion = ""
     /// Simple mode keeps the technical sections behind this disclosure.
     @State private var showsAdvancedSettings = false
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates: Bool = true
@@ -91,6 +105,7 @@ struct SettingsView: View {
                     dataSection
                     updatesSection
                     maintenanceSection
+                    acknowledgementsSection
                     if interfaceMode == .simple {
                         advancedSettingsDisclosure
                         if showsAdvancedSettings {
@@ -107,10 +122,24 @@ struct SettingsView: View {
             .frame(maxWidth: 720)
             .frame(maxWidth: .infinity)
         }
-        .onAppear(perform: refreshLaunchAtLogin)
+        .onAppear {
+            refreshLaunchAtLogin()
+            webhookURLString = engine.webhookURLString ?? ""
+        }
         .task { await networkProtection.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshLaunchAtLogin()
+        }
+        .sheet(isPresented: $showsAcknowledgements) {
+            AcknowledgementsView()
+        }
+        .sheet(isPresented: $showsLearnedReviewEntries) {
+            LearnedReviewEntriesView()
+                .environment(engine)
+        }
+        .sheet(isPresented: $showsLegacyDismissals) {
+            LegacyDismissalsView()
+                .environment(engine)
         }
     }
 
@@ -149,6 +178,9 @@ struct SettingsView: View {
         integrationsSection
         monitoredDirectoriesSection
         trustedProcessesSection
+#if DEBUG
+        debugValidationSection
+#endif
         suppressionRulesSection
     }
 
@@ -225,7 +257,20 @@ struct SettingsView: View {
                 icon: "bell.fill", tint: .red,
                 title: "Minimum severity"
             ) {
-                Picker("", selection: $notificationThresholdRaw) {
+                Picker("", selection: Binding(
+                    get: { engine.notificationThreshold.rawValue },
+                    set: { newValue in
+                        guard let severity = SignalSeverity(rawValue: newValue) else { return }
+                        // Raising the threshold hides more notifications and is
+                        // therefore a protection-reducing change.
+                        if severity > engine.notificationThreshold {
+                            guard let authorization = xpcClient.requestProtectionModificationAuthorization()
+                            else { return }
+                            engine.authorizeNextSecuritySettingsWrite(with: authorization)
+                        }
+                        engine.notificationThreshold = severity
+                    }
+                )) {
                     ForEach(SignalSeverity.allCases.filter { $0 != .info }, id: \.rawValue) { sev in
                         Text(sev.displayName).tag(sev.rawValue)
                     }
@@ -273,13 +318,39 @@ struct SettingsView: View {
                 .labelsHidden()
                 .frame(width: 120)
             }
+            DisclosureGroup("Approved development repositories (\(engine.approvedDevelopmentRoots.count))") {
+                ForEach(engine.approvedDevelopmentRoots.sorted(), id: \.self) { path in
+                    HStack {
+                        Text(path).font(.caption).textSelection(.enabled)
+                        Spacer()
+                        Button("Remove", role: .destructive) {
+                            engine.approvedDevelopmentRoots.remove(path)
+                        }
+                    }
+                }
+                Button("Add Repository…", action: approveDevelopmentRepository)
+            }
         } header: {
             Text("Scanning")
         } footer: {
-            Text("How often Nick performs a background sweep. Scheduled Deep Scan runs a full YARA scan; results are notified if threats are found.")
+            Text("How often Nick performs a background sweep. Approved repositories keep unsigned build tools alert-only; protected detections remain visible and are never suppressed.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func approveDevelopmentRepository() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Approve Repository"
+        guard panel.runModal() == .OK, let selected = panel.url else { return }
+        let root = selected.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: root.appendingPathComponent(".git").path),
+              let authorization = xpcClient.requestProtectionModificationAuthorization() else { return }
+        engine.authorizeNextSecuritySettingsWrite(with: authorization)
+        engine.approvedDevelopmentRoots.insert(root.path)
     }
 
     private var networkProtectionSection: some View {
@@ -488,7 +559,7 @@ struct SettingsView: View {
                                 .font(.system(size: 14, weight: .regular))
                                 .foregroundStyle(.white)
                         )
-                    Text("HTTP endpoint")
+                    Text("Webhook endpoint")
                         .font(.system(size: 13))
                     Spacer()
                 }
@@ -517,6 +588,17 @@ struct SettingsView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.15), value: webhookURLString)
+                if webhookUsesRejectedHTTP {
+                    Text("HTTP webhooks are disabled. Use HTTPS, or enable HTTP for localhost only.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.orange)
+                }
+                Toggle("Allow HTTP for localhost only", isOn: $allowInsecureLocalWebhook)
+                    .font(.system(size: 11.5))
+                    .onChange(of: allowInsecureLocalWebhook) { _, _ in saveWebhookURL() }
+                Text("Remote webhook endpoints must use HTTPS.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
                 if isValidWebhookURL {
                     HStack(spacing: 8) {
                         Button("Send test alert") {
@@ -607,41 +689,22 @@ struct SettingsView: View {
                     .background(Color.green, in: RoundedRectangle(cornerRadius: 6))
                 TextField("Process name (e.g. MyApp)", text: $newProcessName)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit { addProcess() }
-                Button("Add", action: addProcess)
+                    .onSubmit { authorizeAndAddProcess() }
+                Button("Add") { authorizeAndAddProcess() }
                     .disabled(newProcessName.trimmingCharacters(in: .whitespaces).isEmpty)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
             }
 
-            userListContent
-
-            DisclosureGroup {
-                LazyVGrid(
-                    columns: [GridItem(.flexible()), GridItem(.flexible())],
-                    alignment: .leading, spacing: 4
-                ) {
-                    ForEach(TrustedProcessList.builtIn.sorted(), id: \.self) { name in
-                        HStack(spacing: 6) {
-                            Image(systemName: "lock.fill")
-                                .foregroundStyle(.tertiary)
-                                .imageScale(.small)
-                            Text(name)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(.top, 6)
-            } label: {
-                HStack(spacing: 4) {
-                    Text("Built-in Trusted Processes")
-                        .font(.system(size: 12.5))
-                    Text("(\(TrustedProcessList.builtIn.count))")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
+            if let trustedProcessStatus {
+                Text(trustedProcessStatus)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
             }
+
+            legacyTrustedProcessContent
+
+            userListContent
             .confirmationDialog(
                 "Remove \"\(nameToRemove ?? "")\" from trusted processes?",
                 isPresented: $showRemoveProcessConfirmation,
@@ -650,39 +713,105 @@ struct SettingsView: View {
                 Button("Remove", role: .destructive) {
                     if let n = nameToRemove { removeProcess(n) }
                 }
-               
-                Button("Cancel", role: .cancel) {
-                     // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
-                }
+                Button("Cancel", role: .cancel) {}
             }
         } header: {
             Text("Trusted Processes")
         } footer: {
-            Text("Alerts where all contributing processes are trusted are downgraded to Info severity and suppressed from notifications.")
+            Text("Add a currently running, signed process. Trust is bound to its exact Team ID and signing identifier; its name alone is never trusted.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
         }
     }
 
+#if DEBUG
+    private var debugValidationSection: some View {
+        Section("DEBUG Validation") {
+            Button("Test Refused Authorization Form") {
+                xpcClient.debugSendNeverAuthorizedProtectionCall { result in
+                    authorizationHarnessStatus = result.statusText
+                }
+            }
+            .buttonStyle(.bordered)
+            if let authorizationHarnessStatus {
+                Text(authorizationHarnessStatus)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(authorizationHarnessStatus.hasPrefix("Passed") ? .green : .red)
+            }
+            Button("Run Retention Flood Harness") {
+                retentionHarnessStatus = engine.debugRunRetentionFlood()
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    retentionHarnessStatus = (retentionHarnessStatus ?? "")
+                        + " | " + engine.debugRetentionFloodPersistenceStatus()
+                }
+            }
+            .buttonStyle(.bordered)
+            Button("Clean Retention Flood Harness") {
+                retentionHarnessStatus = engine.debugCleanRetentionFlood()
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2))
+                    retentionHarnessStatus = (retentionHarnessStatus ?? "")
+                        + " | " + engine.debugRetentionFloodPersistenceStatus()
+                }
+            }
+            .buttonStyle(.bordered)
+            if let retentionHarnessStatus {
+                Text(retentionHarnessStatus)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(retentionHarnessStatus.contains("FAILED") ? .red : .green)
+            }
+        }
+    }
+#endif
+
+    @ViewBuilder
+    private var legacyTrustedProcessContent: some View {
+        let names = engine.trustedProcessList.userTrustedNames()
+        if !names.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Previous name-only trust entries need approval", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.orange)
+                Text("Names alone are no longer trusted. Run each app, then approve its verified signing identity.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                ForEach(names, id: \.self) { name in
+                    HStack {
+                        Text(name).font(.system(size: 12.5))
+                        Spacer()
+                        Button("Re-approve") { reapproveLegacyProcess(name) }
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
     @ViewBuilder
     private var userListContent: some View {
-        let userNames = engine.trustedProcessList.userTrustedNames()
-        if userNames.isEmpty {
+        let entries = engine.trustedProcessList.userTrustedEntries()
+        if entries.isEmpty {
             Text("No user-added entries yet.")
                 .font(.system(size: 12))
                 .italic()
                 .foregroundStyle(.secondary)
         } else {
-            ForEach(userNames, id: \.self) { name in
+            ForEach(entries, id: \.self) { entry in
                 HStack(spacing: 10) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .imageScale(.small)
-                    Text(name)
-                        .font(.system(size: 12.5))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(entry.displayName).font(.system(size: 12.5))
+                        Text("\(entry.identity.teamID) · \(entry.identity.signingID)")
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Button {
-                        nameToRemove = name
+                        nameToRemove = entry.displayName
                         showRemoveProcessConfirmation = true
                     } label: {
                         Image(systemName: "trash")
@@ -698,6 +827,11 @@ struct SettingsView: View {
 
     private var suppressionRulesSection: some View {
         Section {
+            ForEach(engine.suppressionRuleMigrationNotices, id: \.self) { notice in
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.orange)
+            }
             if !engine.suppressionRules.isEmpty {
                 ForEach(engine.suppressionRules) { rule in
                     HStack(spacing: 10) {
@@ -754,7 +888,7 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: .infinity)
 
-                    Button("Add Rule") { addSuppressionRule() }
+                    Button("Add Rule") { authorizeAndAddSuppressionRule() }
                         .disabled(newSuppressionValue.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -773,13 +907,15 @@ struct SettingsView: View {
         case .processName: return "e.g. xcodebuild"
         case .path:        return "e.g. /usr/local/bin/tool"
         case .ruleName:    return "e.g. raw_ip_outbound"
-        case .signedProcess: return "Team ID | executable path"
+        case .signedProcess: return "Team ID | signing identifier"
         }
     }
 
-    private func addSuppressionRule() {
+    private func authorizeAndAddSuppressionRule() {
+        guard let authorization = xpcClient.requestProtectionModificationAuthorization() else { return }
         let trimmed = newSuppressionValue.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        engine.authorizeNextSecuritySettingsWrite(with: authorization)
         let rule = SuppressionRule(
             type: newSuppressionType,
             value: trimmed,
@@ -829,6 +965,41 @@ struct SettingsView: View {
     private var dataSection: some View {
         Section("Data") {
             LabeledTile(
+                icon: "brain.head.profile", tint: .purple,
+                title: "Learn from my review decisions",
+                subtitle: "Lower the priority of matching review-only findings on this Mac. Malware signatures and protected detections are never affected."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { engine.verdictLearningEnabled },
+                    set: { updateVerdictLearning($0) }
+                ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            if let verdictLearningStatus {
+                Text(verdictLearningStatus)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            LabeledTile(
+                icon: "list.bullet.rectangle", tint: .purple,
+                title: "What Nick learned",
+                subtitle: "Review, export, or reset local verdict-learning entries."
+            ) {
+                Button("View…") { showsLearnedReviewEntries = true }
+                    .controlSize(.small)
+            }
+            if !engine.legacyDismissalTombstones.isEmpty {
+                LabeledTile(
+                    icon: "clock.arrow.circlepath", tint: .orange,
+                    title: "Dismissed in Nick 4.x",
+                    subtitle: "Review or reset dismissals imported during the upgrade."
+                ) {
+                    Button("View…") { showsLegacyDismissals = true }
+                        .controlSize(.small)
+                }
+            }
+            LabeledTile(
                 icon: "brain", tint: .blue,
                 title: "Contribute to detection improvements",
                 subtitle: "Locally records dismissed/confirmed alerts as training data. Never transmitted — export manually to contribute."
@@ -850,23 +1021,24 @@ struct SettingsView: View {
             LabeledTile(
                 icon: "exclamationmark.triangle.fill", tint: .red,
                 title: "Clear alert history",
-                subtitle: "Remove all stored threat alerts and reset the threats-detected counter. Monitoring continues uninterrupted."
+                subtitle: "Remove incident history and reset its counter. Keeps learned decisions, dismissals, suppression rules, trusted processes, cooldowns, quarantine records, and settings."
             ) {
                 Button("Clear…", role: .destructive) {
                     showClearAlertsConfirmation = true
                 }
                 .controlSize(.small)
             }
-            .confirmationDialog(
-                "Clear all alert history?",
-                isPresented: $showClearAlertsConfirmation,
-                titleVisibility: .visible
+            .alert(
+                "Remove incident history?",
+                isPresented: $showClearAlertsConfirmation
             ) {
-                Button("Clear", role: .destructive) { engine.clearAlertHistory() }
+                Button("Remove Incident History", role: .destructive) { engine.clearIncidentHistory() }
                 
                 Button("Cancel", role: .cancel) {
                     // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
                 }
+            } message: {
+                Text("Removes incident history and resets its counter. Learned decisions, dismissals, suppression rules, trusted processes, cooldowns, quarantine records, and settings stay unchanged.")
             }
 
             LabeledTile(
@@ -893,10 +1065,38 @@ struct SettingsView: View {
         }
     }
 
+    private func updateVerdictLearning(_ enabled: Bool) {
+        if enabled {
+            guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
+                verdictLearningStatus = "Approval was cancelled. Learning remains off."
+                return
+            }
+            engine.setVerdictLearningEnabled(true, authorizationExternalForm: authorization)
+            verdictLearningStatus = "Enabled with user approval."
+        } else {
+            engine.setVerdictLearningEnabled(false)
+            verdictLearningStatus = "Learning is off. Existing entries remain available to review or reset."
+        }
+    }
+
     // MARK: Updates Section
 
     private var updatesSection: some View {
         Section {
+            if updateAvailable {
+                LabeledTile(
+                    icon: "arrow.down.circle.fill", tint: .blue,
+                    title: updateAvailableVersion.isEmpty
+                        ? "A Nick update is available"
+                        : "Nick \(updateAvailableVersion) is available",
+                    subtitle: "Open the updater to review and install it."
+                ) {
+                    Button("View Update") {
+                        _ = (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                    }
+                    .controlSize(.small)
+                }
+            }
             LabeledTile(
                 icon: "arrow.down.circle.fill", tint: .blue,
                 title: "Automatically check for updates",
@@ -919,10 +1119,25 @@ struct SettingsView: View {
                 }
                 .controlSize(.small)
             }
+            if updateLastCheckTime > 0 {
+                Text("Last checked \(Date(timeIntervalSince1970: updateLastCheckTime).formatted(date: .abbreviated, time: .shortened)): \(updateLastCheckResult)")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            Button("Copy Update Diagnostics") {
+                let version = "\(appVersion) (\(appBuild))"
+                let checked = updateLastCheckTime > 0
+                    ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(.iso8601)
+                    : "never"
+                let text = "Nick \(version)\nFeed: \(updateFeedURL)\nLast check: \(checked)\nResult: \(updateLastCheckResult)\nUpdate available: \(updateAvailable)"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            .controlSize(.small)
         } header: {
             Text("Updates")
         } footer: {
-            Text("Update feed: https://3nsofts.com/nick/appcast.xml")
+            Text("Update feed: \(updateFeedURL)")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
             if let updateCheckStatus {
@@ -980,6 +1195,19 @@ struct SettingsView: View {
         }
     }
 
+    private var acknowledgementsSection: some View {
+        Section("About") {
+            LabeledTile(
+                icon: "doc.text.fill", tint: .gray,
+                title: "Acknowledgements",
+                subtitle: "Open-source software and detection-data licences included with Nick."
+            ) {
+                Button("View…") { showsAcknowledgements = true }
+                    .controlSize(.small)
+            }
+        }
+    }
+
     // MARK: Footer
 
     private var appVersion: String {
@@ -988,6 +1216,16 @@ struct SettingsView: View {
 
     private var appBuild: String {
         Bundle.main.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String ?? "Unknown"
+    }
+
+    private var updateFeedURL: String {
+#if DEBUG
+        if let value = Bundle.main.object(forInfoDictionaryKey: "NickDebugUpdateFeedURL") as? String,
+           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return value
+        }
+#endif
+        return Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? "Unknown"
     }
 
     private var footer: some View {
@@ -1021,12 +1259,41 @@ struct SettingsView: View {
         }
     }
 
-    private func addProcess() {
+    private func authorizeAndAddProcess() {
         let trimmed = newProcessName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        let matches = engine.processes.filter {
+            $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+                && SigningIdentity(status: $0.signingStatus) != nil
+        }
+        let identities = Set(matches.compactMap { SigningIdentity(status: $0.signingStatus) })
+        guard identities.count == 1, let process = matches.first else {
+            trustedProcessStatus = identities.isEmpty
+                ? "Run the signed app first and wait for its signature check to finish."
+                : "More than one signing identity uses that name. Enter a more specific running process name."
+            return
+        }
+        if let reason = TrustedProcessList.trustRejectionReason(for: process) {
+            trustedProcessStatus = reason
+            return
+        }
+        guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
+            trustedProcessStatus = "Approval was cancelled. Settings were not changed."
+            return
+        }
+        engine.authorizeNextSecuritySettingsWrite(with: authorization)
         @Bindable var bindableEngine = engine
-        bindableEngine.trustedProcessList.addUserTrusted(trimmed)
+        guard bindableEngine.trustedProcessList.addUserTrusted(process) else {
+            trustedProcessStatus = "Nick could not approve this process."
+            return
+        }
+        trustedProcessStatus = "Trusted \(process.name) by its verified signing identity."
         newProcessName = ""
+    }
+
+    private func reapproveLegacyProcess(_ name: String) {
+        newProcessName = name
+        authorizeAndAddProcess()
     }
 
     private func addAllowedDomain() {
@@ -1073,19 +1340,25 @@ struct SettingsView: View {
 
     private var isValidWebhookURL: Bool {
         guard !webhookURLString.isEmpty,
-              let url = URL(string: webhookURLString),
-              url.scheme == "https" || url.scheme == "http",
-              url.host != nil else { return false }
-        return true
+              let url = URL(string: webhookURLString) else { return false }
+        return WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook)
+    }
+
+    private var webhookUsesRejectedHTTP: Bool {
+        guard let url = URL(string: webhookURLString),
+              url.scheme?.lowercased() == "http" else { return false }
+        return !WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook)
     }
 
     private func saveWebhookURL() {
         let trimmed = webhookURLString.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
-            UserDefaults.standard.removeObject(forKey: "webhookURL")
-        } else if let url = URL(string: trimmed), url.scheme == "https" || url.scheme == "http" {
-            // Store as String so buildPipeline() can read it with string(forKey:)
-            UserDefaults.standard.set(trimmed, forKey: "webhookURL")
+            engine.webhookURLString = nil
+        } else if let url = URL(string: trimmed),
+                  WebhookURLPolicy.permits(url, allowInsecureLocalhost: allowInsecureLocalWebhook) {
+            engine.webhookURLString = trimmed
+        } else {
+            engine.webhookURLString = nil
         }
     }
 
@@ -1155,6 +1428,207 @@ struct SettingsView: View {
                     .stroke(Color.white.opacity(0.35), lineWidth: 0.5)
                     .blendMode(.plusLighter)
             )
+    }
+}
+
+private struct AcknowledgementsView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private var esetNotice: String {
+        guard let url = Bundle.main.url(
+            forResource: "eset",
+            withExtension: "txt",
+            subdirectory: "Rules/families/LICENSES"
+        ), let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return "The bundled ESET BSD-2-Clause notice is unavailable in this build."
+        }
+        return text
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Acknowledgements").font(.title2.weight(.semibold))
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            Text("ESET malware-ioc data")
+                .font(.headline)
+            Text("Nick includes a small, pinned set of macOS SHA-256 indicators from ESET's malware-ioc repository under the BSD-2-Clause licence.")
+                .foregroundStyle(.secondary)
+            ScrollView {
+                Text(esetNotice)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(12)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(24)
+        .frame(minWidth: 640, minHeight: 520)
+    }
+}
+
+private struct LearnedReviewEntriesView: View {
+    @Environment(SecurityEngine.self) private var engine
+    @Environment(\.dismiss) private var dismiss
+    @State private var entries: [LearnedReviewEntry] = []
+    @State private var confirmsResetAll = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("What Nick learned").font(.title2.weight(.semibold))
+                    Text("Local review decisions only. Entries lower priority; they never hide detections.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+
+            if entries.isEmpty {
+                ContentUnavailableView(
+                    "Nothing learned yet",
+                    systemImage: "brain.head.profile",
+                    description: Text("When learning is enabled, authenticated false-positive decisions can create expiring review-only entries.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(entries) { entry in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(entry.ruleID).font(.headline)
+                            Spacer()
+                            Button("Reset", role: .destructive) {
+                                engine.resetLearnedEntry(id: entry.id)
+                                refresh()
+                            }
+                            .controlSize(.small)
+                        }
+                        Text("\(entry.teamID) · \(entry.signingIdentifier)")
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                        Text(entry.reason).font(.callout)
+                        Text("Context: \(entry.contextKey)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(entry.confirmationCount < 2
+                             ? "Pending (\(entry.confirmationCount)/2) · expires \(entry.expiresAt.formatted(date: .abbreviated, time: .shortened))"
+                             : "Active · confirmed \(entry.confirmationCount) times · expires \(entry.expiresAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            HStack {
+                Button("Export…") { exportEntries() }
+                    .disabled(entries.isEmpty)
+                Button("Reset learned decisions…", role: .destructive) { confirmsResetAll = true }
+                .disabled(entries.isEmpty)
+                Spacer()
+                Text("Stored in Nick's root-owned incident store")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 720, minHeight: 540)
+        .onAppear(perform: refresh)
+        .alert(
+            "Reset learned decisions?",
+            isPresented: $confirmsResetAll
+        ) {
+            Button("Reset Learned Decisions", role: .destructive) {
+                engine.resetLearnedDecisions()
+                refresh()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes learned review entries only. Incident history, dismissals, suppression rules, trusted processes, cooldowns, quarantine records, and settings stay unchanged.")
+        }
+    }
+
+    private func refresh() {
+        entries = engine.learnedReviewEntries
+    }
+
+    private func exportEntries() {
+        guard let data = try? engine.exportLearnedEntries() else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export What Nick Learned"
+        panel.nameFieldStringValue = "nick-learned-review-entries.json"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+}
+
+private struct LegacyDismissalsView: View {
+    @Environment(SecurityEngine.self) private var engine
+    @Environment(\.dismiss) private var dismiss
+    @State private var entries: [IncidentDismissalTombstone] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Dismissed in Nick 4.x").font(.title2.weight(.semibold))
+                    Text("These review-only dismissals were imported during the upgrade. Protected detections are never hidden by them.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+
+            if entries.isEmpty {
+                ContentUnavailableView(
+                    "No imported dismissals",
+                    systemImage: "clock.arrow.circlepath",
+                    description: Text("All Nick 4.x dismissals have been reset.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(entries, id: \.incidentKey) { entry in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(displayTitle(for: entry)).font(.headline)
+                            Spacer()
+                            Button("Reset", role: .destructive) {
+                                engine.resetLegacyDismissal(incidentKey: entry.incidentKey)
+                                refresh()
+                            }
+                            .controlSize(.small)
+                        }
+                        Text(entry.alertDeduplicationKey)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Text("Imported \(entry.dismissedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 720, minHeight: 480)
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        entries = engine.legacyDismissalTombstones
+    }
+
+    private func displayTitle(for entry: IncidentDismissalTombstone) -> String {
+        let title = entry.alertDeduplicationKey.components(separatedBy: "||").first ?? "Imported dismissal"
+        return title.isEmpty ? "Imported dismissal" : title.localizedCapitalized
     }
 }
 

@@ -15,17 +15,21 @@ struct AlertDetailView: View {
 
     let alert: ThreatAlert
     @Environment(\.dismiss) private var dismiss
+    @Environment(SecurityEngine.self) private var engine
 
     // Phase 4: simple/technical mode
     @AppStorage(InterfaceMode.storageKey) private var interfaceMode: InterfaceMode = .simple
     private var simpleAlertMode: Bool { interfaceMode == .simple }
 
     var body: some View {
-        if simpleAlertMode {
-            SimpleAlertSheet(alert: alert)
-        } else {
-            technicalBody
+        Group {
+            if simpleAlertMode {
+                SimpleAlertSheet(alert: alert)
+            } else {
+                technicalBody
+            }
         }
+        .onAppear { engine.markIncidentSeen(alert.id) }
     }
 
     private var technicalBody: some View {
@@ -37,8 +41,25 @@ struct AlertDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: NickSpacing.xl) {
                     descriptionSection
+                    if alert.isTamperEvidence {
+                        tamperDetailsSection
+                    }
+                    if let dismissedAt = incident?.previouslyDismissedAt {
+                        Text("Previously dismissed \(dismissedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.nickBodyMedium)
+                            .foregroundStyle(Color.statusYellow)
+                    }
+                    if let state = incident?.reopenedAfterState,
+                       let reopenedAt = incident?.reopenedAfterAt {
+                        Text("Reopened after \(state.displayName) on \(reopenedAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.nickBodyMedium)
+                            .foregroundStyle(Color.statusYellow)
+                    }
                     if !alert.contributingSignals.isEmpty {
                         signalsSection
+                    }
+                    if !actionHistory.isEmpty {
+                        actionHistorySection
                     }
                     actionSection
                 }
@@ -53,6 +74,74 @@ struct AlertDetailView: View {
         .background(Color.backgroundPrimary)
     }
 
+    private var actionHistory: [IncidentActionRecord] {
+        incident?.actions ?? []
+    }
+
+    private var incident: SecurityIncident? {
+        engine.incident(for: alert)
+    }
+
+    private var displayStatus: IncidentDisplayStatus {
+        engine.displayStatus(for: alert)
+    }
+
+    private var tamperDetailsSection: some View {
+        let signal = alert.contributingSignals.first { $0.metadata["reason"] == "endpoint_tamper_observed" }
+        let process = signal?.processInfo
+        let signing: String = {
+            guard let process else { return "Unknown" }
+            switch process.signingStatus {
+            case .signed(let teamID, let signingID): return "\(teamID) / \(signingID ?? "unknown identifier")"
+            case .adHoc: return "Ad-hoc signed"
+            case .unsigned: return "Unsigned"
+            case .invalid: return "Invalid signature"
+            case .unknown: return "Unsigned or identity unavailable"
+            case .pending: return "Signing identity pending"
+            }
+        }()
+        return VStack(alignment: .leading, spacing: NickSpacing.xs) {
+            Text("Tamper evidence").font(.nickSubtitle)
+            Text("Operation: \(UserFacingAlertBuilder.userFacingTamperOperation(signal?.metadata["tamperOperation"]))")
+            Text("Actor: \(process?.path ?? "Unknown")")
+            Text("Signing identity: \(signing)")
+            Text("Target: \(signal?.metadata["tamperTarget"] ?? signal?.fileInfo?.path ?? "Unknown")")
+            Text("Occurrences: \(alert.occurrenceCount)")
+            Text("First seen: \(alert.firstSeen.formatted(date: .abbreviated, time: .shortened))")
+            Text("Last seen: \(alert.lastSeen.formatted(date: .abbreviated, time: .shortened))")
+        }
+        .font(.nickBodySmall)
+        .padding(NickSpacing.lg)
+        .background(Color.backgroundTertiary, in: RoundedRectangle(cornerRadius: NickLayout.cardCornerRadius))
+    }
+
+    private var actionHistorySection: some View {
+        VStack(alignment: .leading, spacing: NickSpacing.sm) {
+            Text("Action History")
+                .font(.nickSubtitle)
+                .foregroundStyle(Color.textSecondary)
+            ForEach(Array(actionHistory.enumerated()), id: \.offset) { _, record in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(record.action.rawValue.capitalized)
+                        if let detail = record.detail {
+                            Text(detail)
+                                .font(.nickCaption)
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                    Spacer()
+                    Text(record.actor.displayName)
+                        .foregroundStyle(Color.textSecondary)
+                    Text(record.timestamp.formatted(date: .abbreviated, time: .shortened))
+                        .font(.nickMonoSmall)
+                        .foregroundStyle(Color.textTertiary)
+                }
+                .font(.nickBodySmall)
+            }
+        }
+    }
+
     // MARK: - Technical Mode Header
 
     private var header: some View {
@@ -65,7 +154,12 @@ struct AlertDetailView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: NickSpacing.md) {
-                    SeverityBadge(severity: alert.severity)
+                    Text(displayStatus.rawValue)
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.statusRed)
+                        .padding(.horizontal, NickSpacing.sm)
+                        .padding(.vertical, NickSpacing.xs)
+                        .background(Color.statusRed.opacity(0.12), in: Capsule())
                     Text(String(format: "Confidence: %.0f%%", alert.score * 100))
                         .font(.nickMono)
                         .foregroundStyle(Color.textSecondary)
@@ -94,7 +188,7 @@ struct AlertDetailView: View {
             Text("Description")
                 .font(.nickSubtitle)
                 .foregroundStyle(Color.textSecondary)
-            // Prefer the Foundation Models explanation — it's tailored to the specific
+            // Prefer the stored explanation — it's tailored to the specific
             // threat. Fall back to the generic rule description if not yet generated.
             Text(alert.explanation ?? alert.description)
                 .font(.nickBody)
@@ -135,7 +229,7 @@ struct AlertDetailView: View {
                                     .truncationMode(.middle)
                             }
                             if let pid = signal.processInfo?.pid {
-                                Text("PID \(pid)")
+                                Text("PID \(String(pid))")
                                     .font(.nickMonoSmall)
                                     .foregroundStyle(Color.textTertiary)
                             }
@@ -221,7 +315,14 @@ struct AlertDetailView: View {
 
             Button("Copy JSON") { copyJSON() }
                 .buttonStyle(.nickSecondary)
-            Button("Dismiss") { dismiss() }
+            if displayStatus == .needsReview {
+                Button("Mark as reviewed") {
+                    engine.markAlertReviewed(alert.id)
+                    dismiss()
+                }
+                .buttonStyle(.nickPrimary)
+            }
+            Button("Done") { dismiss() }
                 .buttonStyle(.nickPrimary)
         }
         .padding(.horizontal, NickSpacing.xl)
@@ -281,4 +382,3 @@ private struct SignalRow: View {
         contributingSignals: []
     ))
 }
-

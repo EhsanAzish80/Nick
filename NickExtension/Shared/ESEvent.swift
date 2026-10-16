@@ -30,17 +30,26 @@ public struct ESEvent: Codable, Identifiable, Sendable {
         public let threatName: String?
         public let threatFamily: String?
         public let isCodeSigned: Bool?
+        public let teamID: String?
+        public let signingID: String?
+        public let metadata: [String: String]?
 
         public init(
             sha256: String? = nil,
             threatName: String? = nil,
             threatFamily: String? = nil,
-            isCodeSigned: Bool? = nil
+            isCodeSigned: Bool? = nil,
+            teamID: String? = nil,
+            signingID: String? = nil,
+            metadata: [String: String]? = nil
         ) {
             self.sha256 = sha256
             self.threatName = threatName
             self.threatFamily = threatFamily
             self.isCodeSigned = isCodeSigned
+            self.teamID = teamID
+            self.signingID = signingID
+            self.metadata = metadata
         }
 
         /// Convenience sentinel for events with no threat information.
@@ -84,6 +93,11 @@ public struct ESEvent: Codable, Identifiable, Sendable {
     /// `nil` when signing was not evaluated for this event type.
     public let isCodeSigned: Bool?
 
+    /// Signing identity supplied directly by Endpoint Security, when present.
+    public let teamID: String?
+    public let signingID: String?
+    public let metadata: [String: String]?
+
     // MARK: - Init
 
     public init(
@@ -107,6 +121,9 @@ public struct ESEvent: Codable, Identifiable, Sendable {
         self.threatName = threat.threatName
         self.threatFamily = threat.threatFamily
         self.isCodeSigned = threat.isCodeSigned
+        self.teamID = threat.teamID
+        self.signingID = threat.signingID
+        self.metadata = threat.metadata
     }
 }
 

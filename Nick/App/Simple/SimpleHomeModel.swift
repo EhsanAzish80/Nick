@@ -11,17 +11,6 @@ import Foundation
 
 @MainActor
 enum EndpointHealth {
-    static let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
-
-    /// Reads the extension heartbeat off the main thread.
-    static func load() async -> [String: Any]? {
-        let path = Self.path
-        let data = await Task.detached(priority: .utility) {
-            FileManager.default.contents(atPath: path)
-        }.value
-        return data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-    }
-
     static func isProtectionActive(_ health: [String: Any]?, now: Date = Date()) -> Bool {
         SmartScanChecker.isEndpointSecurityActive(
             health,
@@ -48,6 +37,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case persistence
         case processes
         case network
+        case findings
     }
 
     /// What "Fix It" does in Simple mode.
@@ -71,6 +61,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case .persistence:        "Persistence items need review"
         case .processes:          "Running processes need review"
         case .network:            "Network activity needs review"
+        case .findings:           "Security findings need review"
         }
     }
 
@@ -86,6 +77,8 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
             "\(count) process\(count == 1 ? " has" : "es have") unsigned or invalid signing evidence."
         case .network:
             "\(count) outbound shell connection\(count == 1 ? "" : "s") need context."
+        case .findings:
+            "\(count) new finding\(count == 1 ? " needs" : "s need") your review."
         }
     }
 
@@ -98,6 +91,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case .persistence:        count == 1 ? "An app set itself to start automatically" : "Some apps set themselves to start automatically"
         case .processes:          "An app is behaving unusually"
         case .network:            "An app is making unusual connections"
+        case .findings:           count == 1 ? "Something needs your review" : "Some findings need your review"
         }
     }
 
@@ -115,6 +109,8 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
             "Nick couldn’t confirm who made an app that’s running. Take a look to make sure you trust it."
         case .network:
             "A command-line program is talking to the internet. That’s normal for some tools, but worth a look."
+        case .findings:
+            "Nick found activity that needs your decision before Home can show all clear."
         }
     }
 
@@ -130,6 +126,8 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
             "Apps from real developers carry a digital stamp that proves who made them. Apps without one aren’t always harmful, but most malware has none."
         case .network:
             "Attackers sometimes use command-line tools to send data out of a Mac without an app window."
+        case .findings:
+            "Reviewing each finding lets you decide whether the activity belongs on your Mac."
         }
     }
 
@@ -138,7 +136,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case .realTimeProtection: .openURL("x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
         case .systemAudit:        .showProtection
         case .persistence:        .openURL("x-apple.systempreferences:com.apple.LoginItems-Settings.extension")
-        case .processes, .network: .showActivity
+        case .processes, .network, .findings: .showActivity
         }
     }
 
@@ -149,6 +147,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         case .persistence:        .persistence
         case .processes:          .processes
         case .network:            .network
+        case .findings:           .alerts
         }
     }
 
@@ -157,7 +156,8 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         auditIssues: Int,
         persistenceIssues: Int,
         processIssues: Int,
-        networkIssues: Int
+        networkIssues: Int,
+        unreviewedFindings: Int = 0
     ) -> [AttentionIssue] {
         var issues: [AttentionIssue] = []
         if !endpointProtectionActive { issues.append(.init(kind: .realTimeProtection, count: 1)) }
@@ -165,6 +165,7 @@ struct AttentionIssue: Identifiable, Equatable, Sendable {
         if persistenceIssues > 0 { issues.append(.init(kind: .persistence, count: persistenceIssues)) }
         if processIssues > 0 { issues.append(.init(kind: .processes, count: processIssues)) }
         if networkIssues > 0 { issues.append(.init(kind: .network, count: networkIssues)) }
+        if unreviewedFindings > 0 { issues.append(.init(kind: .findings, count: unreviewedFindings)) }
         return issues
     }
 }
@@ -211,7 +212,7 @@ struct HomeIncident: Identifiable, Equatable, Sendable {
             guard user.severity == .critical else { continue }
             candidates.append(HomeIncident(
                 source: .alert(alert.id),
-                title: "Nick found a threat",
+                title: "Security finding detected",
                 body: user.explanation.isEmpty ? user.headline : user.explanation,
                 date: alert.lastSeen
             ))
@@ -221,7 +222,7 @@ struct HomeIncident: Identifiable, Equatable, Sendable {
             candidates.append(HomeIncident(
                 source: .quarantine(record.id),
                 title: "Nick stopped a harmful app",
-                body: "“\(name)” looked harmful, so Nick moved it to Quarantine before it could do anything. It can’t run from there.",
+                body: "“\(name)” looked harmful, so Nick moved it to Quarantine. It can’t run from there.",
                 date: record.quarantinedAt
             ))
         }
@@ -244,8 +245,8 @@ struct HomeHero: Equatable {
     let secondaryTitle: String
     let meta: String
 
-    /// Priority: blocked > attention > protected.
     static func make(
+        presentation: ProtectionStatusPresentation,
         incident: HomeIncident?,
         issues: [AttentionIssue],
         websitesProtected: Bool,
@@ -253,11 +254,17 @@ struct HomeHero: Equatable {
         hadRecentWarnings: Bool,
         now: Date = Date()
     ) -> HomeHero {
+        let state: State = switch presentation.state {
+        case .protected: .protected
+        case .threatBlocked: .blocked
+        case .attentionNeeded, .remediationNeeded, .sensorProblem: .attention
+        }
+
         if let incident {
             return HomeHero(
-                state: .blocked,
-                eyebrow: incident.wasQuarantined ? "THREAT STOPPED" : "THREAT FOUND",
-                title: incident.title,
+                state: state,
+                eyebrow: presentation.headlineText.uppercased(),
+                title: presentation.displayText,
                 body: incident.body,
                 primaryTitle: "See What Happened",
                 secondaryTitle: incident.wasQuarantined ? "Delete It" : "View Activity",
@@ -268,11 +275,25 @@ struct HomeHero: Equatable {
             let others = issues.count - 1
             let more = others > 0 ? " …and \(others) more thing\(others == 1 ? "" : "s")." : ""
             return HomeHero(
-                state: .attention,
-                eyebrow: "NEEDS ATTENTION",
-                title: first.simpleTitle,
+                state: state,
+                eyebrow: presentation.headlineText.uppercased(),
+                title: presentation.displayText,
                 body: first.simpleBody + more,
                 primaryTitle: "Fix It",
+                secondaryTitle: "Why This Matters",
+                meta: lastCheckText(lastCheck, now: now)
+            )
+        }
+        if presentation.state != .protected {
+            let body = presentation.state == .sensorProblem
+                ? "Open Protection to restore the paused sensor. There are no incident items waiting for review."
+                : "Open Activity to review the items included in this status."
+            return HomeHero(
+                state: state,
+                eyebrow: presentation.headlineText.uppercased(),
+                title: presentation.displayText,
+                body: body,
+                primaryTitle: presentation.state == .sensorProblem ? "View Protection" : "View Activity",
                 secondaryTitle: "Why This Matters",
                 meta: lastCheckText(lastCheck, now: now)
             )
@@ -284,9 +305,9 @@ struct HomeHero: Equatable {
             ? "Everything Nick found recently has been handled."
             : "Nothing has needed your attention in the last 7 days."
         return HomeHero(
-            state: .protected,
-            eyebrow: "ALL GOOD",
-            title: "Your Mac is protected",
+            state: state,
+            eyebrow: presentation.headlineText.uppercased(),
+            title: presentation.displayText,
             body: "Nick is checking \(covered) in the background. \(quiet)",
             primaryTitle: "Run Quick Check",
             secondaryTitle: "Scan a File…",
@@ -356,13 +377,13 @@ struct ProtectionCard: Identifiable, Equatable {
             websites = ProtectionCard(
                 group: .websitesAndEmail, status: .on,
                 detail: endpointActive
-                    ? "Warns you about scam sites and risky attachments."
-                    : "Scam site warnings are on. Email checks are paused."
+                    ? "Observes destinations and checks accessible attachments."
+                    : "Destination checks are on. Attachment checks are paused."
             )
         case .disabled:
             websites = ProtectionCard(
                 group: .websitesAndEmail, status: .off,
-                detail: "Scam site warnings are off. Turn them on in Protection."
+                detail: "Destination checks are off. Turn them on in Protection."
             )
         case .loading:
             websites = ProtectionCard(group: .websitesAndEmail, status: .paused, detail: "Checking…")
@@ -382,7 +403,7 @@ struct ProtectionCard: Identifiable, Equatable {
             ProtectionCard(
                 group: .appsAndDownloads,
                 status: endpointActive ? .on : .paused,
-                detail: endpointActive ? "Checks every new app and download before it opens." : paused
+                detail: endpointActive ? "Monitors new and changed files for suspicious content." : paused
             ),
             websites,
             ProtectionCard(
@@ -395,7 +416,7 @@ struct ProtectionCard: Identifiable, Equatable {
             ProtectionCard(
                 group: .cameraAndMicrophone,
                 status: endpointActive ? .on : .paused,
-                detail: endpointActive ? "Tells you when an app starts using them." : paused
+                detail: endpointActive ? "Periodically checks whether either device is active." : paused
             ),
         ]
     }
@@ -521,7 +542,7 @@ struct HomeActivityLine: Identifiable, Equatable {
             case .critical:
                 lines.append(HomeActivityLine(
                     id: "a-\(alert.id.uuidString)",
-                    text: "Found a threat: \(user.headline)",
+                    text: "Detected: \(user.headline)",
                     date: alert.lastSeen, tone: .danger, icon: "xmark.shield"
                 ))
             }

@@ -28,6 +28,7 @@ final class FileScanner {
 
     struct ScanResult {
         let filePath: String
+        let identity: FileIdentity?
         let hash: String          // lowercase hex SHA-256, empty string on I/O error
         let isThreat: Bool
         /// True only for evidence strong enough to deny an Endpoint Security
@@ -93,6 +94,7 @@ final class FileScanner {
         if let entry = cache.lookup(path: filePath, identity: identity) {
             return ScanResult(
                 filePath: filePath,
+                identity: identity,
                 hash: entry.hash,
                 isThreat: entry.isThreat,
                 mayBlock: entry.mayBlock,
@@ -110,7 +112,7 @@ final class FileScanner {
         guard let hash = contents.map({ SHA256.hash(data: $0).hexString })
                 ?? computeSHA256Streaming(path: filePath) else {
             Self.logger.debug("Cannot hash \(filePath, privacy: .private) — skipping scan")
-            return ScanResult(filePath: filePath, hash: "", isThreat: false,
+            return ScanResult(filePath: filePath, identity: identity, hash: "", isThreat: false,
                               mayBlock: false, threatName: nil, threatFamily: nil)
         }
 
@@ -176,12 +178,20 @@ final class FileScanner {
 
         return ScanResult(
             filePath: filePath,
+            identity: identity,
             hash: hash,
             isThreat: isThreat,
             mayBlock: mayBlock,
             threatName: threatName,
             threatFamily: threatFamily
         )
+    }
+
+    /// Computes the current content hash for identity-bound privileged actions.
+    /// Callers invoke this only after an explicit user action; it is not part
+    /// of the normal Endpoint Security fast path.
+    func contentHash(path: String) -> String? {
+        computeSHA256Streaming(path: path)
     }
 
     /// Hash-only check that can run before a first launch is allowed.
@@ -202,6 +212,63 @@ final class FileScanner {
             threatFamily: match.family
         )
         return match
+    }
+
+    /// Performs only the curated SHA-256 lookup, without running YARA. Used
+    /// after completed writes in bounded user intake folders where extension-
+    /// based scheduling would miss a known sample saved as text or without an
+    /// executable suffix.
+    func exactSignatureMatch(path: String, identity: FileIdentity) -> ScanResult? {
+        let identityKey = ScanCandidatePolicy.completedWriteSignatureIdentityKey(
+            device: identity.device,
+            inode: identity.inode,
+            size: identity.size,
+            modificationSeconds: identity.modificationSeconds,
+            modificationNanoseconds: identity.modificationNanoseconds
+        )
+        if let cached = cache.lookup(path: identityKey, identity: identity) {
+            guard cached.isThreat else { return nil }
+            return ScanResult(
+                filePath: path,
+                identity: identity,
+                hash: cached.hash,
+                isThreat: true,
+                mayBlock: cached.mayBlock,
+                threatName: cached.threatName,
+                threatFamily: cached.threatFamily
+            )
+        }
+
+        guard let hash = computeSHA256Streaming(path: path) else { return nil }
+        let match = signatureDB.lookup(hash: hash)
+        cache.store(
+            path: identityKey,
+            identity: identity,
+            hash: hash,
+            isThreat: match != nil,
+            mayBlock: match != nil,
+            threatName: match?.name,
+            threatFamily: match?.family
+        )
+        guard let match else { return nil }
+        cache.store(
+            path: path,
+            identity: identity,
+            hash: hash,
+            isThreat: true,
+            mayBlock: true,
+            threatName: match.name,
+            threatFamily: match.family
+        )
+        return ScanResult(
+            filePath: path,
+            identity: identity,
+            hash: hash,
+            isThreat: true,
+            mayBlock: true,
+            threatName: match.name,
+            threatFamily: match.family
+        )
     }
 
     /// Whether any curated hashes are loaded. Refreshed at most once a minute

@@ -32,6 +32,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     /// Shared instance — created once and retained for the app lifetime.
     static let shared = NotificationManager()
+    var notificationThreshold: SignalSeverity = .high
 
     // MARK: - Private
 
@@ -60,8 +61,19 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             intentIdentifiers: [],
             options: []
         )
+        let updateAction = UNNotificationAction(
+            identifier: "VIEW_UPDATE",
+            title: "View Update",
+            options: [.foreground]
+        )
+        let updateCategory = UNNotificationCategory(
+            identifier: "UPDATE_AVAILABLE",
+            actions: [updateAction],
+            intentIdentifiers: [],
+            options: []
+        )
         let center = UNUserNotificationCenter.current()
-        center.setNotificationCategories([alertCategory])
+        center.setNotificationCategories([alertCategory, updateCategory])
         center.delegate = self
         // requestPermission() is NOT called here — no window is open at launch and
         // macOS will silently discard the dialog for a .accessory-policy app with no
@@ -112,7 +124,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     /// Silently returns when `alert.severity == .info` (trusted-app activity) or
     /// when the alert's severity is below the user-configured threshold.
     func send(for alert: ThreatAlert) async {
-        guard alert.severity != .info else { return }
+        let presentation = Self.presentation(for: alert)
+        guard alert.severity != .info || presentation.requiresVisibleDelivery else { return }
 
         // macOS does not throw from add() when permission is denied — it silently
         // discards the notification. Check authorization first and bail early with
@@ -129,19 +142,26 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             return
         }
 
-        let thresholdRaw = UserDefaults.standard.integer(forKey: "notificationThresholdRaw")
-        let threshold = SignalSeverity(rawValue: thresholdRaw) ?? .high
-        guard alert.severity >= threshold else {
+        let threshold = notificationThreshold
+        guard presentation.requiresVisibleDelivery || alert.severity >= threshold else {
             Self.log.debug("Alert '\(alert.title)' below threshold (\(threshold.displayName)) — suppressed")
             return
         }
 
         let content = UNMutableNotificationContent()
-        content.title = "Nick — \(alert.severity.displayName) Alert"
-        content.body = alert.title
-        content.sound = .default
-        content.interruptionLevel = .timeSensitive   // breaks through Focus / DND
-        content.categoryIdentifier = "THREAT_ALERT"
+        content.title = presentation.title ?? "Nick — \(alert.severity.displayName) Alert"
+        if let body = presentation.body {
+            content.body = body
+        } else if let tamper = alert.contributingSignals.first(where: {
+            $0.metadata["reason"] == "endpoint_tamper_observed"
+        }) {
+            content.body = Self.tamperNotificationBody(alert: alert, signal: tamper)
+        } else {
+            content.body = alert.title
+        }
+        content.sound = presentation.isDocumentedUninstall ? nil : .default
+        content.interruptionLevel = presentation.isDocumentedUninstall ? .active : .timeSensitive
+        content.categoryIdentifier = presentation.categoryIdentifier
         content.userInfo = ["alertID": alert.id.uuidString]
 
         let request = UNNotificationRequest(
@@ -158,6 +178,74 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    struct Presentation: Equatable {
+        let requiresVisibleDelivery: Bool
+        let isDocumentedUninstall: Bool
+        let title: String?
+        let body: String?
+        let categoryIdentifier: String
+    }
+
+    static func presentation(for alert: ThreatAlert) -> Presentation {
+        let isDocumentedUninstall = alert.contributingSignals.contains {
+            $0.metadata["rule"] == "nick_documented_uninstall"
+        }
+        if isDocumentedUninstall {
+            return Presentation(
+                requiresVisibleDelivery: true,
+                isDocumentedUninstall: true,
+                title: "Nick is being moved to the Trash",
+                body: "Use Nick Uninstaller later if you also want to remove protection components and generated data.",
+                categoryIdentifier: "NICK_UNINSTALL"
+            )
+        }
+
+        let isCaptureActivation = alert.contributingSignals.contains {
+            $0.source == .avCapture && $0.metadata["reason"] == "capture_device_active"
+        }
+        return Presentation(
+            requiresVisibleDelivery: isCaptureActivation,
+            isDocumentedUninstall: false,
+            title: isCaptureActivation ? alert.title : nil,
+            body: isCaptureActivation ? alert.description : nil,
+            categoryIdentifier: "THREAT_ALERT"
+        )
+    }
+
+    static func tamperNotificationBody(alert: ThreatAlert, signal: ThreatSignal) -> String {
+        let operation = UserFacingAlertBuilder.userFacingTamperOperation(
+            signal.metadata["tamperOperation"]
+        )
+        let actor = signal.processInfo?.name.isEmpty == false
+            ? signal.processInfo!.name
+            : (signal.processInfo?.path as NSString?)?.lastPathComponent ?? "unknown actor"
+        let count = alert.occurrenceCount
+        let unit = count == 1 ? "time" : "times"
+        return "\(operation.capitalized) by \(actor) — attempted \(count) \(unit)"
+    }
+
+    func sendUpdateAvailable(version: String) async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard settings.authorizationStatus == .authorized ||
+              settings.authorizationStatus == .provisional else {
+            Self.log.info("Update reminder skipped because notifications are not authorized")
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "Nick \(version) is available"
+        content.body = "Click to review and install the update."
+        content.categoryIdentifier = "UPDATE_AVAILABLE"
+        content.userInfo = ["updateVersion": version]
+        let request = UNNotificationRequest(
+            identifier: "nick-update-\(version)", content: content, trigger: nil
+        )
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+        } catch {
+            Self.log.error("Failed to deliver update reminder: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - UNUserNotificationCenterDelegate
 
     nonisolated func userNotificationCenter(
@@ -168,6 +256,16 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let userInfo = response.notification.request.content.userInfo
         let alertIDString = userInfo["alertID"] as? String
         let alertID = alertIDString.flatMap { UUID(uuidString: $0) }
+
+        if response.notification.request.content.categoryIdentifier == "UPDATE_AVAILABLE" {
+            Task { @MainActor in
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate()
+                _ = (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+            }
+            completionHandler()
+            return
+        }
 
         if response.actionIdentifier == "VIEW_ALERT" ||
            response.actionIdentifier == UNNotificationDefaultActionIdentifier {

@@ -4,14 +4,55 @@
 
 import Foundation
 import os
+import Security
+
+private enum ProtectionAuthorization {
+    fileprivate static let rightName = "com.ehsanazish.nick.modify-protection"
+    enum RightState { case valid, installed, repaired(observed: String), failed }
+
+    static func ensureRight() -> RightState {
+        var definition: CFDictionary?
+        let getStatus = rightName.withCString { AuthorizationRightGet($0, &definition) }
+        if getStatus == errAuthorizationSuccess, let dictionary = definition as? [String: Any] {
+            if ProtectionAuthorizationRightPolicy.isExpected(dictionary) { return .valid }
+            let observed = ProtectionAuthorizationRightPolicy.observedSummary(dictionary)
+            return registerRight() ? .repaired(observed: observed) : .failed
+        }
+        return registerRight() ? .installed : .failed
+    }
+
+    private static func registerRight() -> Bool {
+        var authorization: AuthorizationRef?
+        guard AuthorizationCreate(nil, nil, [], &authorization) == errAuthorizationSuccess,
+              let authorization else { return false }
+        defer { AuthorizationFree(authorization, []) }
+        let rule: [String: Any] = [
+            "class": "rule",
+            "rule": ["authenticate-session-owner-or-admin"],
+            "timeout": 120,
+            "shared": false
+        ]
+        let status = AuthorizationRightSet(
+            authorization,
+            rightName,
+            rule as CFTypeRef,
+            "Nick needs approval to reduce protection settings." as CFString,
+            nil,
+            nil
+        )
+        return status == errAuthorizationSuccess
+    }
+
+}
 
 // MARK: - ESXPCServer
 
 /// XPC listener running inside the System Extension.
 ///
 /// Listens on the Mach service name `NickExtensionConstants.machServiceName`.
-/// Accepts one connection at a time from the container app; stale connections
-/// are invalidated and replaced when a new connection arrives.
+/// Keeps each independently authenticated app connection until that connection
+/// invalidates. A second connection can never replace the first connection's
+/// event channel or inherit its lifecycle.
 ///
 /// Exposes `NickExtensionXPCProtocol` to the container app (inbound calls).
 /// Calls `NickAppXPCProtocol` on the container app (outbound event push).
@@ -25,15 +66,20 @@ final class ESXPCServer: NSObject {
     )
 
     private var listener: NSXPCListener
-    private var appConnection: NSXPCConnection?
+    private var appConnections: [ObjectIdentifier: NSXPCConnection] = [:]
     private let listenerIsConfigured: Bool
 
-    /// Serialises writes to `appConnection`.
+    /// Serialises the independently authenticated connection set.
     private let connectionLock = NSLock()
     private let eventStore = EndpointEventStore(
         path: "/Library/Application Support/com.ehsanazish.nick/events/endpoint-events.json",
         legacyPath: "/Library/Application Support/com.ehsanazish.nick/endpoint-events.json"
     )
+    private let incidentStore = PrivilegedIncidentFileStore()
+    private let settingsStore = PrivilegedIncidentFileStore(
+        fileURL: URL(fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/settings.json")
+    )
+    weak var updateLeaseManager: NickUpdateLeaseManager?
 
     // MARK: - Init
 
@@ -60,6 +106,15 @@ final class ESXPCServer: NSObject {
         self.listener = configuredListener
         self.listenerIsConfigured = configured
         super.init()
+        let rightState = ProtectionAuthorization.ensureRight()
+        switch rightState {
+        case .failed:
+            Self.logger.fault("Could not register the protection-modification authorization right")
+        case .repaired(let observed):
+            reportAuthorizationRuleTamper(observed: observed)
+        case .valid, .installed:
+            break
+        }
         listener.delegate = self
     }
 
@@ -79,11 +134,60 @@ final class ESXPCServer: NSObject {
         listenerIsConfigured ? "configured" : "missing"
     }
 
+    func approvedDevelopmentRoots() -> Set<String> {
+        guard let record = try? JSONDecoder().decode(
+            PrivilegedIncidentStoreRecord.self,
+            from: settingsStore.load()
+        ),
+              let object = try? JSONSerialization.jsonObject(with: record.payload) as? [String: Any]
+        else { return [] }
+        return Set((object["approvedDevelopmentRoots"] as? [String]) ?? [])
+    }
+
+    private func verifyProtectionAuthorization(_ data: Data?) -> Bool {
+        switch ProtectionAuthorization.ensureRight() {
+        case .repaired(let observed):
+            reportAuthorizationRuleTamper(observed: observed)
+        case .failed:
+            return false
+        case .valid, .installed:
+            break
+        }
+        return ProtectionAuthorizationExternalFormVerifier.verify(
+            data,
+            rightName: ProtectionAuthorization.rightName
+        )
+    }
+
+    private func reportAuthorizationRuleTamper(observed: String) {
+        Self.logger.fault("Protection-modification authorization rule was changed and has been restored")
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: Bundle.main.executableURL?.path ?? "/Library/SystemExtensions/com.ehsanazish.nick.NickExtension",
+            pid: 0,
+            parentPid: 0,
+            filePath: nil,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: "Nick authorization policy tampering detected",
+                threatFamily: "tamper",
+                metadata: [
+                    "observedRule": observed,
+                    "expectedRule": ProtectionAuthorizationRightPolicy.expectedSummary,
+                    "repairStatus": "restored"
+                ]
+            )
+        )
+        if let data = try? JSONEncoder().encode(event) {
+            sendThreatToApp(data)
+        }
+    }
+
     // MARK: - Outbound: Extension → Container App
 
     /// Pushes a JSON-encoded `ESEvent` to the container app.
     func sendEventToApp(_ eventData: Data) {
-        eventStore.appendIfImportant(eventData)
+        eventStore.appendIfImportant(.init(kind: .endpointEvent, payload: eventData))
         withAppProxy { proxy in
             proxy.reportEvent(eventData)
         }
@@ -91,6 +195,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded threat payload to the container app (Phase 2+).
     func sendThreatToApp(_ threatData: Data) {
+        eventStore.append(.init(kind: .threat, payload: threatData))
         withAppProxy { proxy in
             proxy.reportThreat(threatData)
         }
@@ -98,6 +203,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `RemediationReport` to the container app (Phase 3+).
     func sendRemediationToApp(_ reportData: Data) {
+        eventStore.append(.init(kind: .remediation, payload: reportData))
         withAppProxy { proxy in
             proxy.reportRemediationAction(reportData)
         }
@@ -105,6 +211,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `IntegrityViolation` to the container app (Phase 3+).
     func sendIntegrityViolationToApp(_ violationData: Data) {
+        eventStore.append(.init(kind: .integrityViolation, payload: violationData))
         withAppProxy { proxy in
             proxy.reportIntegrityViolation(violationData)
         }
@@ -112,6 +219,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `PrivacyAlert` to the container app (Phase 5+).
     func sendPrivacyAlertToApp(_ alertData: Data) {
+        eventStore.append(.init(kind: .privacyAlert, payload: alertData))
         withAppProxy { proxy in
             proxy.reportPrivacyAlert(alertData)
         }
@@ -119,6 +227,7 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded `USBThreat` to the container app (Phase 5+).
     func sendUSBThreatToApp(_ threatData: Data) {
+        eventStore.append(.init(kind: .usbThreat, payload: threatData))
         withAppProxy { proxy in
             proxy.reportUSBThreat(threatData)
         }
@@ -134,14 +243,13 @@ final class ESXPCServer: NSObject {
     // MARK: - Private Helpers
 
     private func withAppProxy(_ block: (NickAppXPCProtocol) -> Void) {
-        connectionLock.lock()
-        let conn = appConnection
-        connectionLock.unlock()
-
-        guard let proxy = conn?.remoteObjectProxy as? NickAppXPCProtocol else {
-            return
+        let connections = connectionLock.withLock { Array(appConnections.values) }
+        for connection in connections {
+            guard let proxy = connection.remoteObjectProxy as? NickAppXPCProtocol else {
+                continue
+            }
+            block(proxy)
         }
-        block(proxy)
     }
 }
 
@@ -168,10 +276,11 @@ extension ESXPCServer: NSXPCListenerDelegate {
         // The app exposes NickAppXPCProtocol for outbound event push.
         newConnection.remoteObjectInterface = NSXPCInterface(with: NickAppXPCProtocol.self)
 
+        let connectionID = ObjectIdentifier(newConnection)
         newConnection.invalidationHandler = { [weak self] in
             Self.logger.info("XPC connection invalidated")
             self?.connectionLock.withLock {
-                self?.appConnection = nil
+                self?.appConnections.removeValue(forKey: connectionID)
             }
         }
         newConnection.interruptionHandler = {
@@ -181,7 +290,7 @@ extension ESXPCServer: NSXPCListenerDelegate {
         newConnection.resume()
 
         connectionLock.withLock {
-            appConnection = newConnection
+            appConnections[connectionID] = newConnection
         }
 
         Self.logger.info("Accepted XPC connection from pid \(newConnection.processIdentifier)")
@@ -235,13 +344,113 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         reply(true)
     }
 
+    func getExtensionHealth(reply: @escaping (Data) -> Void) {
+        let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
+        reply(FileManager.default.contents(atPath: path) ?? Data())
+    }
+
     func getPersistedEvents(reply: @escaping (Data) -> Void) {
         reply(eventStore.snapshot())
+    }
+
+    func acknowledgePersistedThreats(eventIDs: [String]) {
+        eventStore.removeThreats(eventIDs: Set(eventIDs.compactMap(UUID.init(uuidString:))))
+    }
+
+    func getIncidentStore(reply: @escaping (Data) -> Void) {
+        reply(incidentStore.load())
+    }
+
+    func getSecuritySettings(reply: @escaping (Data) -> Void) {
+        reply(settingsStore.load())
+    }
+
+    func migrateSecuritySettings(_ payload: Data, reply: @escaping (Bool, Data) -> Void) {
+        let result = settingsStore.migrate(payload: payload)
+        reply(result.accepted, result.record)
+    }
+
+    func replaceSecuritySettings(
+        _ payload: Data,
+        expectedRevision: UInt64,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool, Data) -> Void
+    ) {
+        if securitySettingsReduction(from: settingsStore.load(), to: payload),
+           !verifyProtectionAuthorization(authorizationExternalForm) {
+            reply(false, settingsStore.load())
+            return
+        }
+        let result = settingsStore.replace(payload: payload, expectedRevision: expectedRevision)
+        reply(result.accepted, result.record)
+    }
+
+    func migrateIncidentStore(_ payload: Data, reply: @escaping (Bool, Data) -> Void) {
+        let result = incidentStore.migrate(payload: payload)
+        reply(result.accepted, result.record)
+    }
+
+    func replaceIncidentStore(
+        _ payload: Data,
+        expectedRevision: UInt64,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool, Data) -> Void
+    ) {
+        if incidentStoreReduction(from: incidentStore.load(), to: payload),
+           !verifyProtectionAuthorization(authorizationExternalForm) {
+            reply(false, incidentStore.load())
+            return
+        }
+        let result = incidentStore.replace(payload: payload, expectedRevision: expectedRevision)
+        reply(result.accepted, result.record)
+    }
+
+    func validateIncidentVerdictTarget(
+        alertID: String,
+        action: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (String) -> Void
+    ) {
+        reply(IncidentVerdictValidationPolicy.result(
+            alertID: alertID,
+            action: action,
+            existingAlertIDs: incidentAlertIDs(),
+            persistentTrustEligible: IncidentStoreTrustEligibilityPolicy.isEligible(
+                alertID: alertID,
+                encodedRecord: incidentStore.load()
+            ),
+            hasProtectionAuthorization: verifyProtectionAuthorization(authorizationExternalForm)
+        ).rawValue)
+    }
+
+    func requestUpdateLease(
+        sourceBuild: Int,
+        destinationBuild: Int,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    ) {
+        guard verifyProtectionAuthorization(authorizationExternalForm),
+              let manager = updateLeaseManager,
+              let consoleUser = TamperConsoleUserResolver.current(),
+              let runningBuildString = Bundle.main.object(
+                  forInfoDictionaryKey: "CFBundleVersion"
+              ) as? String,
+              let runningBuild = Int(runningBuildString),
+              sourceBuild == runningBuild else {
+            reply(false)
+            return
+        }
+        reply(manager.create(
+            consoleUID: consoleUser.uid,
+            sourceBuild: sourceBuild,
+            destinationBuild: destinationBuild
+        ))
     }
 
     func requestQuarantineFile(
         path: String,
         expectedThreatName: String,
+        expectedSHA256: String,
         reply: @escaping (Bool, String?, Data?) -> Void
     ) {
         guard let scanner = ESXPCServer.fileScannerRef,
@@ -251,6 +460,14 @@ extension ESXPCServer: NickExtensionXPCProtocol {
         }
 
         let standardPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard !LOLBinExecutionPolicy.isProtectedSystemPath(standardPath) else {
+            reply(false, "Nick will not move a protected macOS system executable.", nil)
+            return
+        }
+        guard !Self.isAppleSystemExecutable(at: standardPath) else {
+            reply(false, "Nick will not move an Apple-signed system executable.", nil)
+            return
+        }
         var isDirectory: ObjCBool = false
         guard standardPath.hasPrefix("/"),
               FileManager.default.fileExists(atPath: standardPath, isDirectory: &isDirectory),
@@ -261,6 +478,17 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
         DispatchQueue.global(qos: .userInitiated).async {
             let result = scanner.scan(filePath: standardPath)
+            let reviewedHash = expectedSHA256.lowercased()
+            if !reviewedHash.isEmpty,
+               (reviewedHash.count != 64 || result.hash.lowercased() != reviewedHash) {
+                let failure = QuarantineFailure(
+                    reason: .fileChanged,
+                    errorDomain: NSPOSIXErrorDomain,
+                    errorCode: Int(ESTALE)
+                )
+                reply(false, failure.statusLine + ". " + failure.guidance, try? JSONEncoder().encode(failure))
+                return
+            }
             guard result.isThreat else {
                 reply(
                     false,
@@ -276,22 +504,46 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
             let threatName = result.threatName
                 ?? (expectedThreatName.isEmpty ? "Detected threat" : expectedThreatName)
-            guard let record = manager.quarantine(
+            let quarantineResult = manager.quarantine(
                 filePath: standardPath,
-                hash: result.hash,
+                hash: reviewedHash.isEmpty ? result.hash : reviewedHash,
                 threatName: threatName,
                 severity: "critical",
                 processPath: "",
                 pid: 0
-            ) else {
-                reply(false, "Nick could not move this file into quarantine.", nil)
-                return
+            )
+            switch quarantineResult {
+            case .success(let record):
+                reply(true, nil, try? JSONEncoder().encode(record))
+            case .failure(let failure):
+                reply(false, failure.statusLine + ". " + failure.guidance, try? JSONEncoder().encode(failure))
             }
-            reply(true, nil, try? JSONEncoder().encode(record))
         }
     }
 
-    func requestAllowFileOnce(path: String, reply: @escaping (Bool) -> Void) {
+    private static func isAppleSystemExecutable(at path: String) -> Bool {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code else { return false }
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        return SecStaticCodeCheckValidity(
+            code,
+            SecCSFlags(rawValue: UInt32(kSecCSDoNotValidateResources)),
+            requirement
+        ) == errSecSuccess
+    }
+
+    func requestAllowFileOnce(
+        path: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    ) {
+        guard verifyProtectionAuthorization(authorizationExternalForm) else {
+            reply(false)
+            return
+        }
         guard let scanner = ESXPCServer.fileScannerRef else {
             reply(false)
             return
@@ -301,7 +553,30 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             reply(false)
             return
         }
-        scanner.cache.allowOnce(path: standardPath)
+        guard let resolvedPath = EndpointSecurityPath.canonical(standardPath),
+              let identity = FileIdentity(path: resolvedPath),
+              let currentHash = scanner.contentHash(path: resolvedPath) else {
+            reply(false)
+            return
+        }
+        let result = scanner.cache.allowOnce(
+            reviewedPath: standardPath,
+            authorizationPath: resolvedPath,
+            currentIdentity: identity,
+            currentHash: currentHash
+        )
+        switch result {
+        case .findingExpired:
+            Self.logger.warning("Allow-once refused because the reviewed finding expired")
+            reply(false)
+            return
+        case .fileChanged:
+            Self.logger.warning("Allow-once refused because reviewed file identity changed")
+            reply(false)
+            return
+        case .allowed:
+            break
+        }
         Self.logger.notice("User allowed one authorization for \(standardPath, privacy: .private)")
         reply(true)
     }
@@ -328,9 +603,61 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             return
         }
         DispatchQueue.global(qos: .utility).async {
-            monitor.buildBaseline()
-            reply(true)
+            guard monitor.pendingViolationCount == 0 else {
+                reply(false)
+                return
+            }
+            reply(monitor.buildBaseline())
         }
+    }
+
+    func getPendingFIMViolations(reply: @escaping (Data) -> Void) {
+        guard let monitor = ESXPCServer.fimMonitorRef,
+              let data = try? JSONEncoder().encode(monitor.pendingViolationSnapshot()) else {
+            reply(Data())
+            return
+        }
+        reply(data)
+    }
+
+    func acknowledgeFIMViolation(
+        id: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    ) {
+        guard let id = UUID(uuidString: id),
+              let monitor = ESXPCServer.fimMonitorRef,
+              verifyProtectionAuthorization(authorizationExternalForm) else {
+            reply(false)
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            reply(monitor.acknowledgeViolation(id: id))
+        }
+    }
+
+    /// Alert IDs are the canonical user-action target. `SecurityIncident.id`
+    /// remains an internal persistence identity and must never cross this API.
+    private func incidentAlertIDs() -> Set<String> {
+        IncidentStoreAlertIDPolicy.alertIDs(from: incidentStore.load())
+    }
+
+    private func securitySettingsReduction(from encodedRecord: Data, to payload: Data) -> Bool {
+        SecuritySettingsWritePolicy.requiresAuthorization(
+            previousRecord: encodedRecord,
+            proposedPayload: payload
+        )
+    }
+
+    private func incidentStoreReduction(from encodedRecord: Data, to payload: Data) -> Bool {
+        guard let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: encodedRecord),
+              record.schemaVersion == PrivilegedIncidentStoreRecord.currentSchemaVersion else {
+            return true
+        }
+        return IncidentStoreWritePolicy.requiresAuthorization(
+            previousPayload: record.payload,
+            proposedPayload: payload
+        )
     }
 
     func requestDeployCanaries(reply: @escaping (Bool) -> Void) {
@@ -346,8 +673,13 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
     func requestRestoreQuarantinedFile(
         id: String,
+        authorizationExternalForm: Data?,
         reply: @escaping (Bool) -> Void
     ) {
+        guard verifyProtectionAuthorization(authorizationExternalForm) else {
+            reply(false)
+            return
+        }
         guard let id = UUID(uuidString: id),
               let manager = ESXPCServer.quarantineManagerRef else {
             reply(false)
@@ -357,6 +689,15 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             reply(manager.restore(id: id))
         }
     }
+
+#if DEBUG
+    func debugValidateProtectionAuthorization(
+        authorizationExternalForm: Data,
+        reply: @escaping (Bool) -> Void
+    ) {
+        reply(verifyProtectionAuthorization(authorizationExternalForm))
+    }
+#endif
 
     func requestDeleteQuarantinedFile(
         id: String,
@@ -436,13 +777,17 @@ private final class EndpointEventStore {
         }
     }
 
-    func appendIfImportant(_ data: Data) {
-        guard let event = try? JSONDecoder().decode(ESEvent.self, from: data),
+    func appendIfImportant(_ finding: PersistedExtensionFinding) {
+        guard let event = try? JSONDecoder().decode(ESEvent.self, from: finding.payload),
               event.decision == .deny || event.threatName != nil else { return }
+        append(finding)
+    }
+
+    func append(_ finding: PersistedExtensionFinding) {
         queue.async {
             var events = self.load()
-            guard !events.contains(where: { $0.id == event.id }) else { return }
-            events.append(event)
+            guard !events.contains(where: { $0.id == finding.id }) else { return }
+            events.append(finding)
             if events.count > self.maximumCount {
                 events.removeFirst(events.count - self.maximumCount)
             }
@@ -472,8 +817,46 @@ private final class EndpointEventStore {
         }
     }
 
-    private func load() -> [ESEvent] {
+    func removeThreats(eventIDs: Set<UUID>) {
+        guard !eventIDs.isEmpty else { return }
+        queue.async {
+            var events = self.load()
+            events.removeAll { finding in
+                guard finding.kind == .threat,
+                      let event = try? JSONDecoder().decode(ESEvent.self, from: finding.payload)
+                else { return false }
+                return eventIDs.contains(event.id)
+            }
+            do {
+                let encoded = try JSONEncoder().encode(events)
+                try encoded.write(to: self.url, options: .atomic)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600],
+                    ofItemAtPath: self.url.path
+                )
+            } catch {
+                ESXPCServer.logger.error(
+                    "Could not acknowledge persisted threats: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+    }
+
+    private func load() -> [PersistedExtensionFinding] {
         guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([ESEvent].self, from: data)) ?? []
+        if let findings = try? JSONDecoder().decode([PersistedExtensionFinding].self, from: data) {
+            return findings
+        }
+        // One-time migration from the 4.6.3 ESEvent-only journal.
+        let oldEvents = (try? JSONDecoder().decode([ESEvent].self, from: data)) ?? []
+        return oldEvents.compactMap { event in
+            guard let payload = try? JSONEncoder().encode(event) else { return nil }
+            return PersistedExtensionFinding(
+                id: event.id,
+                kind: .endpointEvent,
+                timestamp: event.timestamp,
+                payload: payload
+            )
+        }
     }
 }

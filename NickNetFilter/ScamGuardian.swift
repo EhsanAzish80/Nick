@@ -24,7 +24,7 @@ final class ScamGuardian: @unchecked Sendable {
     // MARK: - Private
 
     /// Known exact phishing domains (lower-cased eTLD+1).
-    private let exactBlocklist: Set<String> = [
+    let exactBlocklist: Set<String> = [
         // Reserved, non-routable release-validation destination. Packaging QA
         // can safely verify a real filter verdict without contacting a live
         // phishing site.
@@ -72,21 +72,30 @@ final class ScamGuardian: @unchecked Sendable {
 
     /// Returns `true` if `host` appears to be a phishing or scam domain.
     func isSuspicious(host: String) -> Bool {
+        isExactMatch(host: host) || isHeuristicMatch(host: host)
+    }
+
+    func isExactMatch(host: String) -> Bool {
+        guard let lower = NetworkProtectionConfiguration.normalizedDomain(host),
+              !Self.isIPAddress(lower)
+        else { return false }
+        let registered = publicSuffixList.registrableDomain(for: lower)
+        return exactBlocklist.contains(registered)
+    }
+
+    func isHeuristicMatch(host: String) -> Bool {
         guard let lower = NetworkProtectionConfiguration.normalizedDomain(host),
               !Self.isIPAddress(lower)
         else { return false }
         let registered = publicSuffixList.registrableDomain(for: lower)
 
-        // 1. Exact blocklist
-        if exactBlocklist.contains(registered) { return true }
-
-        // 2. Brand typosquat
+        // 1. Brand typosquat
         if matchesTyposquat(domain: registered) { return true }
 
-        // 3. Structural heuristics (e.g. "secure-login-apple-update.xyz")
+        // 2. Structural heuristics (e.g. "secure-login-apple-update.xyz")
         if structuralHeuristic(domain: lower) { return true }
 
-        // 4. Explicit brand + credential-lure combinations.
+        // 3. Explicit brand + credential-lure combinations.
         if credentialLureHeuristic(domain: registered) { return true }
 
         return false

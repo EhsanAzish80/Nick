@@ -1,6 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
 
+export COPYFILE_DISABLE=1
+
 SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h}
 # Xcode's signing products must live outside the workspace's File Provider
@@ -9,14 +11,19 @@ PROJECT_DIR=${SCRIPT_DIR:h}
 # Use /private/tmp explicitly. The per-user TMPDIR lives under a managed
 # filesystem on current macOS builds and can synthesize AppleDouble sidecars
 # while pkgbuild walks signed bundles.
-BUILD_DIR=${BUILD_DIR:-"/private/tmp/NickReleaseBuild"}
-ARCHIVE_PATH=${ARCHIVE_PATH:-"${BUILD_DIR}/Nick.xcarchive"}
-DERIVED_DATA_PATH=${DERIVED_DATA_PATH:-"${BUILD_DIR}/DerivedData"}
 EXPECTED_VERSION=${EXPECTED_VERSION:-4.6.3}
 EXPECTED_BUILD=${EXPECTED_BUILD:-430}
+[[ "${EXPECTED_BUILD}" == <-> ]] || {
+  print -u2 "Release build must be a positive integer; received '${EXPECTED_BUILD}'."
+  exit 1
+}
+BUILD_DIR=${BUILD_DIR:-"/private/tmp/NickBuild-${EXPECTED_BUILD}"}
+ARCHIVE_PATH=${ARCHIVE_PATH:-"${BUILD_DIR}/Nick.xcarchive"}
+DERIVED_DATA_PATH=${DERIVED_DATA_PATH:-"${BUILD_DIR}/DerivedData"}
+EXPORT_PATH=${EXPORT_PATH:-"${BUILD_DIR}/Export"}
 OUTPUT_PATH=${OUTPUT_PATH:-"${BUILD_DIR}/Nick-${EXPECTED_VERSION}-build-${EXPECTED_BUILD}.pkg"}
 LOCAL_PACKAGE_PATH=${LOCAL_PACKAGE_PATH:-"${BUILD_DIR}/Nick-${EXPECTED_VERSION}-build-${EXPECTED_BUILD}.pkg"}
-STAGING_DIR=${STAGING_DIR:-"/private/tmp/NickReleaseStaging"}
+PAYLOAD_ROOT=${PAYLOAD_ROOT:-"${BUILD_DIR}/InstallerRoot"}
 APP_SIGNING_IDENTITY=${APP_SIGNING_IDENTITY:-"Developer ID Application: ehsan azish (UXGW5V3BY6)"}
 INSTALLER_SIGNING_IDENTITY=${INSTALLER_SIGNING_IDENTITY:-"Developer ID Installer: ehsan azish (UXGW5V3BY6)"}
 NOTARY_PROFILE=${NOTARY_PROFILE:-NickNotary}
@@ -24,12 +31,15 @@ NOTARIZE=${NOTARIZE:-1}
 SPARKLE_ACCOUNT=${SPARKLE_ACCOUNT:-nick-legacy}
 SPARKLE_BIN=${SPARKLE_BIN:-"${DERIVED_DATA_PATH}/SourcePackages/artifacts/sparkle/Sparkle/bin"}
 
+"${PROJECT_DIR}/Scripts/validate-extension-build.sh" "${EXPECTED_BUILD}"
+
 mkdir -p "${BUILD_DIR}"
 
 # A release archive must never reuse products whose resource forks or Finder
 # metadata were materialized by an earlier Xcode/File Provider build. Reusing
 # DerivedData made signing success depend on the previous local build state.
-rm -rf "${ARCHIVE_PATH}" "${DERIVED_DATA_PATH}"
+rm -rf "${ARCHIVE_PATH}" "${DERIVED_DATA_PATH}" "${EXPORT_PATH}" \
+  "${PAYLOAD_ROOT}" "${BUILD_DIR}/ExpandedPackage"
 xattr -cr \
   "${PROJECT_DIR}/Nick" \
   "${PROJECT_DIR}/NickExtension" \
@@ -43,18 +53,22 @@ xcodebuild \
   -configuration Release \
   -derivedDataPath "${DERIVED_DATA_PATH}" \
   -archivePath "${ARCHIVE_PATH}" \
+  MARKETING_VERSION="${EXPECTED_VERSION}" \
+  CURRENT_PROJECT_VERSION="${EXPECTED_BUILD}" \
   archive
 
-ARCHIVED_APP="${ARCHIVE_PATH}/Products/Applications/Nick.app"
-rm -rf "${STAGING_DIR}"
-mkdir -p "${STAGING_DIR}"
-# Sign and package from a local temporary volume. The project can live in an
-# iCloud/File Provider directory that rematerializes FinderInfo attributes
-# after `xattr -c`, which makes otherwise valid nested Sparkle code fail strict
-# signature verification.
-ditto --noextattr --noqtn "${ARCHIVED_APP}" "${STAGING_DIR}/Nick.app"
-NICK_APP="${STAGING_DIR}/Nick.app"
+xcodebuild -exportArchive \
+  -archivePath "${ARCHIVE_PATH}" \
+  -exportPath "${EXPORT_PATH}" \
+  -exportOptionsPlist "${PROJECT_DIR}/Nick/Scripts/ExportOptions.plist" \
+  -allowProvisioningUpdates
+
+EXPORTED_APP="${EXPORT_PATH}/Nick.app"
+"${SCRIPT_DIR}/stage-package-root.sh" "${EXPORTED_APP}" "${PAYLOAD_ROOT}"
+
+NICK_APP="${PAYLOAD_ROOT}/Applications/Nick.app"
 UNINSTALLER="${NICK_APP}/Contents/Applications/Nick Uninstaller.app"
+STANDALONE_UNINSTALLER="${PAYLOAD_ROOT}/Applications/Nick Uninstaller.app"
 SPARKLE_FRAMEWORK="${NICK_APP}/Contents/Frameworks/Sparkle.framework"
 
 [[ -d "${NICK_APP}" ]] || { print -u2 "Nick.app is missing from the archive."; exit 1; }
@@ -67,6 +81,25 @@ BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${NICK_APP}/Content
   print -u2 "Expected Nick ${EXPECTED_VERSION} (${EXPECTED_BUILD}), found ${VERSION} (${BUILD})."
   exit 1
 }
+
+for extension in NickExtension NickNetFilter; do
+  extension_plist="${NICK_APP}/Contents/Library/SystemExtensions/com.ehsanazish.nick.${extension}.systemextension/Contents/Info.plist"
+  extension_build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${extension_plist}")
+  [[ "${extension_build}" == "${EXPECTED_BUILD}" ]] || {
+    print -u2 "Expected ${extension} build ${EXPECTED_BUILD}, found ${extension_build}."
+    exit 1
+  }
+done
+
+for plist in \
+  "${UNINSTALLER}/Contents/Info.plist" \
+  "${STANDALONE_UNINSTALLER}/Contents/Info.plist"; do
+  component_build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "${plist}")
+  [[ "${component_build}" == "${EXPECTED_BUILD}" ]] || {
+    print -u2 "Expected every bundled component at build ${EXPECTED_BUILD}; ${plist} contains ${component_build}."
+    exit 1
+  }
+done
 
 # Remove Finder metadata before signing and packaging. Otherwise productbuild
 # can emit AppleDouble `._*` entries and noisy "write: Permission denied"
@@ -88,41 +121,63 @@ codesign --force --options runtime --timestamp \
   --sign "${APP_SIGNING_IDENTITY}" "${NICK_APP}"
 # Current macOS can attach provenance metadata to signed bundles. Do not strip
 # the signed app after this point: doing so can invalidate nested signatures.
-# Verify the exact bundle that will be handed to productbuild.
+# Verify the exact bundle that will be handed to the package builder.
 codesign --verify --deep --strict --verbose=2 "${NICK_APP}"
 
-# Build from an explicit payload root instead of asking productbuild to copy
-# signed component bundles. On some macOS/File Provider combinations,
-# productbuild's component copier serializes extended attributes as AppleDouble
-# `._*` files even when the source bundle itself is clean.
-PAYLOAD_ROOT="${BUILD_DIR}/InstallerRoot"
-rm -rf "${PAYLOAD_ROOT}"
-mkdir -p "${PAYLOAD_ROOT}/Applications"
-COPYFILE_DISABLE=1 ditto --noextattr --noqtn \
-  "${NICK_APP}" "${PAYLOAD_ROOT}/Applications/Nick.app"
-COPYFILE_DISABLE=1 ditto --noextattr --noqtn \
-  "${UNINSTALLER}" "${PAYLOAD_ROOT}/Applications/Nick Uninstaller.app"
-
-# Copying must not change the signed application that users will install.
+# Verify the exact signed application and standalone uninstaller that pkgbuild
+# will consume. There is no post-signing copy step.
 codesign --verify --deep --strict --verbose=2 \
-  "${PAYLOAD_ROOT}/Applications/Nick.app"
+  "${NICK_APP}"
+codesign --verify --deep --strict --verbose=2 \
+  "${STANDALONE_UNINSTALLER}"
 
-COPYFILE_DISABLE=1 pkgbuild \
-  --root "${PAYLOAD_ROOT}" \
-  --install-location / \
-  --identifier com.ehsanazish.nick.pkg \
-  --version "${VERSION}.${BUILD}" \
-  --ownership recommended \
-  --sign "${INSTALLER_SIGNING_IDENTITY}" \
+"${SCRIPT_DIR}/build-clean-component-package.sh" \
+  "${PAYLOAD_ROOT}" \
+  com.ehsanazish.nick.pkg \
+  "${VERSION}.${BUILD}" \
+  "${INSTALLER_SIGNING_IDENTITY}" \
   "${LOCAL_PACKAGE_PATH}"
+
+"${SCRIPT_DIR}/audit-package-payload.sh" "${LOCAL_PACKAGE_PATH}"
+
+PACKAGE_SIGNATURE=$(LC_ALL=C pkgutil --check-signature "${LOCAL_PACKAGE_PATH}" 2>&1) || {
+  print -r -- "${PACKAGE_SIGNATURE}"
+  print -u2 "Installer signature check failed; refusing release."
+  exit 1
+}
+print -r -- "${PACKAGE_SIGNATURE}"
+if print -r -- "${PACKAGE_SIGNATURE}" | grep -Eq \
+  'Status: (invalid signature|no signature)'; then
+  print -u2 "Installer signature is not valid; refusing release."
+  exit 1
+fi
+if ! print -r -- "${PACKAGE_SIGNATURE}" | grep -q \
+  'Developer ID Installer: ehsan azish (UXGW5V3BY6)'; then
+  print -u2 "Installer is not signed with the expected Developer ID Installer identity."
+  exit 1
+fi
 
 EXPANDED_PACKAGE="${BUILD_DIR}/ExpandedPackage"
 rm -rf "${EXPANDED_PACKAGE}"
 pkgutil --expand-full "${LOCAL_PACKAGE_PATH}" "${EXPANDED_PACKAGE}"
-APPLEDOUBLE_COUNT=$(find "${EXPANDED_PACKAGE}" -name '._*' -print | wc -l | tr -d ' ')
-print "Installer AppleDouble metadata entries: ${APPLEDOUBLE_COUNT}"
-if (( APPLEDOUBLE_COUNT > 0 )); then
-  print -u2 "Installer payload contains AppleDouble metadata; refusing to notarize it."
+
+# Expansion is part of the real Installer compatibility audit. Verify the
+# installer signature again afterwards so a package that only appears valid
+# before its first parse can never be released.
+POST_EXPANSION_SIGNATURE=$(LC_ALL=C pkgutil --check-signature "${LOCAL_PACKAGE_PATH}" 2>&1) || {
+  print -r -- "${POST_EXPANSION_SIGNATURE}"
+  print -u2 "Installer signature failed after expansion; refusing release."
+  exit 1
+}
+print -r -- "${POST_EXPANSION_SIGNATURE}"
+if print -r -- "${POST_EXPANSION_SIGNATURE}" | grep -Eq \
+  'Status: (invalid signature|no signature)'; then
+  print -u2 "Installer signature is not valid after expansion; refusing release."
+  exit 1
+fi
+if ! print -r -- "${POST_EXPANSION_SIGNATURE}" | grep -q \
+  'Developer ID Installer: ehsan azish (UXGW5V3BY6)'; then
+  print -u2 "Expanded installer is not signed with the expected Developer ID Installer identity."
   exit 1
 fi
 
@@ -131,9 +186,16 @@ fi
 # be serialized into the package payload itself.
 if [[ "${LOCAL_PACKAGE_PATH}" != "${OUTPUT_PATH}" ]]; then
   rm -f "${OUTPUT_PATH}"
-  COPYFILE_DISABLE=1 ditto --noextattr --noqtn \
+  ditto --norsrc --noextattr --noqtn \
     "${LOCAL_PACKAGE_PATH}" "${OUTPUT_PATH}"
 fi
+
+LOCAL_PACKAGE_SHA=$(shasum -a 256 "${LOCAL_PACKAGE_PATH}" | awk '{print $1}')
+OUTPUT_PACKAGE_SHA=$(shasum -a 256 "${OUTPUT_PATH}" | awk '{print $1}')
+[[ "${LOCAL_PACKAGE_SHA}" == "${OUTPUT_PACKAGE_SHA}" ]] || {
+  print -u2 "Release package changed while copying to its output destination."
+  exit 1
+}
 
 if [[ "${NOTARIZE}" == "1" ]]; then
   xcrun notarytool submit "${OUTPUT_PATH}" \
@@ -144,7 +206,6 @@ if [[ "${NOTARIZE}" == "1" ]]; then
   spctl -a -vv -t install "${OUTPUT_PATH}"
 else
   print "Skipping Apple notarization (NOTARIZE=${NOTARIZE})."
-  pkgutil --check-signature "${OUTPUT_PATH}"
 fi
 
 print
@@ -152,3 +213,24 @@ print "Sparkle enclosure attributes:"
 "${SPARKLE_BIN}/sign_update" --account "${SPARKLE_ACCOUNT}" "${OUTPUT_PATH}"
 print
 shasum -a 256 "${OUTPUT_PATH}"
+
+# Signature, Gatekeeper, and system-extension verdicts from the restricted
+# release-agent shell are not authoritative. Keep the in-pipeline payload and
+# expected signing-identity gates above, then hand the completed artifact to
+# Ehsan for the final verification in his Terminal.
+print
+print "Authoritative verification — run these exact commands in Ehsan's Terminal:"
+print "P=${(q)OUTPUT_PATH}"
+print 'shasum -a 256 "$P"'
+print 'pkgutil --check-signature "$P"'
+print 'D=$(mktemp -d)'
+print 'pkgutil --expand-full "$P" "$D/x"'
+print 'codesign --verify --deep --strict --verbose=2 "$D/x/Payload/Applications/Nick.app"'
+print
+print "Expected SHA-256: ${OUTPUT_PACKAGE_SHA}"
+
+if [[ "${VALIDATE_LIVE_APPCAST:-0}" == "1" ]]; then
+  "${SCRIPT_DIR}/validate-live-appcast.sh" \
+    "${LIVE_APPCAST_URL:-https://3nsofts.com/nick/appcast.xml}" \
+    "${EXPECTED_BUILD}"
+fi

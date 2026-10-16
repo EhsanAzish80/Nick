@@ -215,20 +215,6 @@ private struct NetworkBlockEventRow: View {
                             }
                         }
                     }
-                    if let app = event.appIdentifier, !app.isEmpty {
-                        AllowMenu(
-                            label: context.appActionLabel,
-                            scopeDescription: "All destinations used by \(context.appName)"
-                        ) { duration in
-                            Task {
-                                if let duration {
-                                    _ = await networkProtection.allowApp(app, for: duration)
-                                } else {
-                                    _ = await networkProtection.allowApp(app)
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }

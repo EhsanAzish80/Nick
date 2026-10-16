@@ -15,11 +15,11 @@ enum UserVerdict: String, Codable {
 
 // MARK: - SignalTelemetry
 
-/// Records signal features and user verdicts locally for optional CoreML training data export.
+/// Records signal features and user verdicts in a local, user-controlled export.
 ///
-/// Data is written to a local JSONL file in the app's Application Support directory.
-/// **No data is ever transmitted.** Users who want to contribute can export the JSONL
-/// file and submit it manually to the GitHub repo.
+/// This user-writable JSONL is never read by Nick's detection, trust, scoring,
+/// suppression, or learning paths. It is an optional export only. No data is
+/// transmitted automatically.
 ///
 /// Controlled by the `telemetryEnabled` UserDefaults key (default: false).
 final class SignalTelemetry: @unchecked Sendable {
@@ -31,8 +31,11 @@ final class SignalTelemetry: @unchecked Sendable {
     // MARK: - Private
 
     private let storageURL: URL
+    private let isEnabled: () -> Bool
+    private let maximumStorageBytes: Int
     private let queue = DispatchQueue(label: "com.ehsanazish.nick.telemetry", qos: .utility)
     private static let logger = Logger(subsystem: "com.ehsanazish.nick", category: "SignalTelemetry")
+    static let defaultMaximumStorageBytes = 5 * 1_024 * 1_024
 
     // MARK: - Init
 
@@ -40,6 +43,14 @@ final class SignalTelemetry: @unchecked Sendable {
         let appSupport = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support/com.ehsanazish.nick")
         storageURL = appSupport.appendingPathComponent("telemetry.jsonl")
+        isEnabled = { UserDefaults.standard.bool(forKey: "telemetryEnabled") }
+        maximumStorageBytes = Self.defaultMaximumStorageBytes
+    }
+
+    init(storageURL: URL, maximumStorageBytes: Int, isEnabled: @escaping () -> Bool) {
+        self.storageURL = storageURL
+        self.maximumStorageBytes = max(1, maximumStorageBytes)
+        self.isEnabled = isEnabled
     }
 
     // MARK: - Public API
@@ -52,7 +63,7 @@ final class SignalTelemetry: @unchecked Sendable {
     ///   - signals: The contributing signals from the alert.
     ///   - verdict: Whether the user considered this a real threat or a false positive.
     func record(signals: [ThreatSignal], verdict: UserVerdict) {
-        guard UserDefaults.standard.bool(forKey: "telemetryEnabled") else { return }
+        guard isEnabled() else { return }
 
         let record = TelemetryRecord(signals: signals, verdict: verdict)
         queue.async { [weak self] in
@@ -86,15 +97,23 @@ final class SignalTelemetry: @unchecked Sendable {
             return
         }
 
-        let lineWithNewline = line + "\n"
-        if FileManager.default.fileExists(atPath: storageURL.path) {
-            guard let handle = try? FileHandle(forWritingTo: storageURL) else { return }
-            handle.seekToEndOfFile()
-            handle.write(lineWithNewline.data(using: .utf8) ?? Data())
-            try? handle.close()
-        } else {
-            FileManager.default.createFile(atPath: storageURL.path, contents: lineWithNewline.data(using: .utf8))
+        guard let newLine = (line + "\n").data(using: .utf8) else { return }
+        let existing = (try? Data(contentsOf: storageURL)) ?? Data()
+        let capped = Self.cappedJSONL(existing + newLine, maximumBytes: maximumStorageBytes)
+        do {
+            try capped.write(to: storageURL, options: .atomic)
+        } catch {
+            Self.logger.error("Failed to write telemetry export: \(error.localizedDescription)")
         }
+    }
+
+    /// Keeps the newest complete JSONL records within the configured cap.
+    static func cappedJSONL(_ data: Data, maximumBytes: Int) -> Data {
+        guard data.count > maximumBytes else { return data }
+        let start = data.count - maximumBytes
+        guard let newline = data[start...].firstIndex(of: 0x0A) else { return Data() }
+        let recordStart = data.index(after: newline)
+        return Data(data[recordStart...])
     }
 }
 

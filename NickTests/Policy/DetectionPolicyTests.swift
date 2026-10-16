@@ -46,8 +46,91 @@ final class DetectionPolicyTests: XCTestCase {
         XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid | adhoc, isPlatformBinary: false, teamID: "ABCDE12345"))
         XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: false, teamID: ""))
         XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: 0, isPlatformBinary: true, teamID: nil))
-        XCTAssertTrue(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: false, teamID: "ABCDE12345"))
+        XCTAssertFalse(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: false, teamID: "ABCDE12345"))
         XCTAssertTrue(ExecutionTrustPolicy.hasTrustedSigner(codesigningFlags: valid, isPlatformBinary: true, teamID: nil))
+    }
+
+    func test_validatedDeveloperIDRansomwareSignalIsAlertOnly() {
+        XCTAssertFalse(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: true
+        ))
+        XCTAssertTrue(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: false
+        ), "A self-signed actor with a copied Team ID must not gain the exemption")
+    }
+
+    func test_validatedChromeDownloadTemporaryDestinationIsIgnored() {
+        XCTAssertTrue(BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+            destination: "/private/var/folders/a/file.crdownload",
+            developerIDValidated: true,
+            teamID: "EQHXZ8M8AV",
+            signingID: "com.google.Chrome.helper"
+        ))
+        XCTAssertFalse(BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+            destination: "/private/var/folders/a/file.crdownload",
+            developerIDValidated: false,
+            teamID: "EQHXZ8M8AV",
+            signingID: "com.google.Chrome.helper"
+        ))
+        XCTAssertFalse(BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+            destination: "/Users/a/report.docx.locked",
+            developerIDValidated: true,
+            teamID: "EQHXZ8M8AV",
+            signingID: "com.google.Chrome"
+        ))
+    }
+
+    func test_developmentBuildUnderRepositoryIsAlertOnly() {
+        let root = "/Users/a/Projects/App"
+        XCTAssertTrue(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/opt/homebrew/Cellar/cmake/4.2.0/bin/cmake",
+            destination: root + "/.build/CMakeFiles/x.make",
+            repositoryRoot: root,
+            actorValidated: false
+        ))
+        XCTAssertFalse(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: false,
+            isApprovedDevelopmentBuild: true
+        ))
+        XCTAssertFalse(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/tmp/unknown",
+            destination: root + "/.build/x.locked",
+            repositoryRoot: root,
+            actorValidated: false
+        ))
+        XCTAssertFalse(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/Users/a/x/make",
+            destination: root + "/Sources/report.locked",
+            repositoryRoot: root,
+            actorValidated: false
+        ), "A renamed unvalidated actor must still be terminated for a non-build extension")
+        XCTAssertTrue(RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: true,
+            developerIDValidated: false,
+            isApprovedDevelopmentBuild: DevelopmentBuildRansomwarePolicy.isAlertOnly(
+                processPath: "/Users/a/x/make",
+                destination: root + "/Sources/report.locked",
+                repositoryRoot: root,
+                actorValidated: false
+            )
+        ))
+        XCTAssertTrue(DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: "/Applications/Xcode.app/Contents/Developer/usr/bin/swiftc",
+            destination: root + "/.build/module.o",
+            repositoryRoot: root,
+            actorValidated: true
+        ))
+    }
+
+    func test_pidReuseCannotAuthoriseProcessTermination() {
+        let reviewed = ProcessInstanceIdentity(pid: 42, startSeconds: 100, startMicroseconds: 1)
+        let reused = ProcessInstanceIdentity(pid: 42, startSeconds: 101, startMicroseconds: 1)
+        XCTAssertTrue(RansomwareTerminationPolicy.maySignalKill(expected: reviewed, current: reviewed))
+        XCTAssertFalse(RansomwareTerminationPolicy.maySignalKill(expected: reviewed, current: reused))
+        XCTAssertFalse(RansomwareTerminationPolicy.maySignalKill(expected: nil, current: reviewed))
     }
 
     func test_highRiskLocationsCoverStagingAndPersistence() {
@@ -102,6 +185,48 @@ final class DetectionPolicyTests: XCTestCase {
         XCTAssertTrue(ScanCandidatePolicy.isExecutableContent(.machO))
     }
 
+    func test_completedWriteExactSignatureCandidatesCoverWriterMatrixWithoutBroadTextScanning() {
+        let size: Int64 = 68
+        XCTAssertTrue(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Downloads/eicar-safari.com.txt", fileSize: size))
+        XCTAssertTrue(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Desktop/eicar-finder", fileSize: size))
+        XCTAssertTrue(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/eicar-mail.txt",
+            fileSize: size))
+
+        XCTAssertFalse(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Documents/ordinary.txt", fileSize: size))
+        XCTAssertFalse(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Downloads/eicar-safari.com.txt.download", fileSize: size))
+        XCTAssertFalse(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Downloads/empty.txt", fileSize: 0))
+        XCTAssertFalse(ScanCandidatePolicy.shouldCheckExactSignatureAfterCompletedWrite(
+            path: "/Users/test/Downloads/oversized.txt",
+            fileSize: ScanCandidatePolicy.completedWriteSignatureSizeLimit + 1))
+        XCTAssertEqual(
+            ScanCandidatePolicy.completedWriteExactSignatureDecision(
+                path: "/Users/test/Downloads/oversized.txt",
+                fileSize: ScanCandidatePolicy.completedWriteSignatureSizeLimit + 1
+            ),
+            .skip(.overSizeLimit)
+        )
+    }
+
+    func test_completedWriteSignatureIdentityKeyDedupesByInodeAndModificationTime() {
+        let first = ScanCandidatePolicy.completedWriteSignatureIdentityKey(
+            device: 1, inode: 42, size: 68,
+            modificationSeconds: 100, modificationNanoseconds: 200)
+        let same = ScanCandidatePolicy.completedWriteSignatureIdentityKey(
+            device: 1, inode: 42, size: 68,
+            modificationSeconds: 100, modificationNanoseconds: 200)
+        let rewritten = ScanCandidatePolicy.completedWriteSignatureIdentityKey(
+            device: 1, inode: 42, size: 68,
+            modificationSeconds: 101, modificationNanoseconds: 0)
+        XCTAssertEqual(first, same)
+        XCTAssertNotEqual(first, rewritten)
+    }
+
     // MARK: - RansomwareRenamePolicy
 
     func test_introducedExtensionIgnoresRoutineRenames() {
@@ -118,6 +243,14 @@ final class DetectionPolicyTests: XCTestCase {
             ("/a/doc.pages", "/a/doc.sb-4c1a-abc"),
             ("/a/notes.txt", "/a/notes.txt"),
             ("/a/report.docx", "/a/report.docx.bak"),
+            (
+                "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/CMakeScratch/TryCompile-test/CMakeFiles/cmTC.dir/build",
+                "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/CMakeScratch/TryCompile-test/CMakeFiles/cmTC.dir/build.make"
+            ),
+            (
+                "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/ContinuousStart.dir/progress",
+                "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/ContinuousStart.dir/progress.make"
+            ),
         ]
         for (source, destination) in routine {
             XCTAssertNil(RansomwareRenamePolicy.introducedExtension(source: source, destination: destination), destination)

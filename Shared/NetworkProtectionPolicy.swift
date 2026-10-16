@@ -35,10 +35,9 @@ enum NetworkPolicyVerdict: Equatable, Sendable {
 }
 
 struct NetworkProtectionConfiguration: Equatable, Sendable {
-    static let configurationVersion = 5
+    static let configurationVersion = 6
 
     var protectionEnabled: Bool
-    var blockingEnabled: Bool
     var allowedDomains: Set<String>
     var allowedAppIdentifiers: Set<String>
     var temporaryAllowedDomains: [String: TimeInterval]
@@ -46,14 +45,12 @@ struct NetworkProtectionConfiguration: Equatable, Sendable {
 
     init(
         protectionEnabled: Bool = true,
-        blockingEnabled: Bool = false,
         allowedDomains: Set<String> = [],
         allowedAppIdentifiers: Set<String> = [],
         temporaryAllowedDomains: [String: TimeInterval] = [:],
         temporaryAllowedAppIdentifiers: [String: TimeInterval] = [:]
     ) {
         self.protectionEnabled = protectionEnabled
-        self.blockingEnabled = blockingEnabled
         self.allowedDomains = Set(allowedDomains.compactMap(Self.normalizedDomain))
         self.allowedAppIdentifiers = Set(
             allowedAppIdentifiers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
@@ -79,8 +76,6 @@ struct NetworkProtectionConfiguration: Equatable, Sendable {
             // An absent or stale configuration must never inherit enforcement.
             protectionEnabled: hasCurrentVersion
                 && (vendorConfiguration?["protectionEnabled"] as? Bool == true),
-            blockingEnabled: hasCurrentVersion
-                && (vendorConfiguration?["blockingEnabled"] as? Bool == true),
             allowedDomains: Set(vendorConfiguration?["allowedDomains"] as? [String] ?? []),
             allowedAppIdentifiers: Set(vendorConfiguration?["allowedAppIdentifiers"] as? [String] ?? []),
             temporaryAllowedDomains:
@@ -94,7 +89,6 @@ struct NetworkProtectionConfiguration: Equatable, Sendable {
         [
             "configurationVersion": Self.configurationVersion,
             "protectionEnabled": protectionEnabled,
-            "blockingEnabled": blockingEnabled,
             "allowedDomains": allowedDomains.sorted(),
             "allowedAppIdentifiers": allowedAppIdentifiers.sorted(),
             "temporaryAllowedDomains": temporaryAllowedDomains,
@@ -166,11 +160,7 @@ struct NetworkProtectionPolicy: Sendable {
         }) {
             return .allow
         }
-        if isBlocklisted(host) {
-            return configuration.blockingEnabled
-                ? .block(.blocklist)
-                : .observe(.knownThreat)
-        }
+        if isBlocklisted(host) { return .observe(.knownThreat) }
         // Local heuristics are valuable context, but they are not sufficient
         // evidence to interrupt basic connectivity. Only signed blocklist
         // matches are enforced; heuristic matches remain visible for review.
@@ -293,20 +283,23 @@ struct NetworkEventContext: Equatable, Sendable {
         destinationActionLabel = destinationKind == .website
             ? "Allow This Website"
             : "Allow This Destination"
-        appActionLabel = "Allow This App"
+        appActionLabel = "Allow This Domain"
 
         let purpose = portPurpose.map { " It used \($0)." } ?? ""
         switch event.decision {
         case .observed:
-            explanation = "\(appName) connected to this \(destinationLabel.lowercased()). Nick recorded it because \(event.reasonTitle.lowercased()). No connection was blocked.\(purpose)"
-            guidance = "If you recognize the app and expected this activity, no action is required. Allow this destination only to stop warnings for this address; allow this app only if you trust all of its network activity."
+            let classification = event.reason == NetworkObservationReason.knownThreat.rawValue
+                ? "a known dangerous destination"
+                : "a destination flagged as \(event.reasonTitle.lowercased())"
+            explanation = "\(appName) tried to connect to \(event.host), \(classification). Nick recorded the attempt; it did not block it.\(purpose)"
+            guidance = "If you expected this attempt, no action is required. Allow this domain only to stop warnings for this destination."
         case .blocked:
             explanation = "Nick blocked \(appName) from connecting to this \(destinationLabel.lowercased()) because \(event.reasonTitle.lowercased()).\(purpose)"
             guidance = "Review the app and destination first. Allow this destination for the narrowest exception, or allow the app only if you trust all of its network activity."
         }
     }
 
-    private static func displayName(for identifier: String?) -> String {
+    static func displayName(for identifier: String?) -> String {
         guard let identifier, !identifier.isEmpty else { return "An unidentified process" }
         let knownNames: [String: String] = [
             "com.apple.rapportd": "Apple Continuity",
@@ -330,7 +323,7 @@ struct NetworkEventContext: Equatable, Sendable {
         return spaced.isEmpty ? identifier : spaced
     }
 
-    private static func destinationKind(for rawHost: String) -> DestinationKind {
+    static func destinationKind(for rawHost: String) -> DestinationKind {
         let host = rawHost.lowercased().split(separator: "%", maxSplits: 1)
             .first.map(String.init) ?? rawHost.lowercased()
         if host.contains(":") {
@@ -354,6 +347,13 @@ struct NetworkEventContext: Equatable, Sendable {
             return .internetAddress
         }
         return .website
+    }
+
+    static func isExpectedLocalDiscovery(host: String, port: Int) -> Bool {
+        guard [.localDevice, .localNetworkAddress].contains(destinationKind(for: host)) else {
+            return false
+        }
+        return [1900, 5353, 5355, 8009, 62078].contains(port)
     }
 
     private static func destinationLabel(for kind: DestinationKind) -> String {
@@ -386,6 +386,7 @@ enum NetworkProtectionSharedStore {
     )
     static let eventsFileName = "network-block-events.json"
     static let signedRulesFileName = "network-rules-v1.json"
+    static let signedRulesVersionFileName = "network-rules-version"
     static let healthFileName = "network-filter-health.json"
     static let maximumEventCount = 500
 
@@ -395,6 +396,10 @@ enum NetworkProtectionSharedStore {
 
     static func signedRulesURL(fileManager: FileManager = .default) -> URL? {
         systemSupportDirectory.appendingPathComponent(signedRulesFileName)
+    }
+
+    static func signedRulesVersionURL(fileManager: FileManager = .default) -> URL? {
+        systemSupportDirectory.appendingPathComponent(signedRulesVersionFileName)
     }
 
     static func healthURL(fileManager: FileManager = .default) -> URL? {
@@ -485,5 +490,13 @@ enum NetworkProtectionSharedStore {
             .appendingPathComponent("com.ehsanazish.nick.NickNetFilter.systemextension")
         return Bundle(url: extensionURL)?
             .object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
+    }
+}
+
+enum NetworkRuleVersionPolicy {
+    static func accepts(candidateVersion: Int, highestAcceptedVersion: Int?) -> Bool {
+        guard candidateVersion > 0 else { return false }
+        guard let highestAcceptedVersion else { return true }
+        return candidateVersion >= highestAcceptedVersion
     }
 }

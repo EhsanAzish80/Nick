@@ -8,6 +8,49 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-10-16
+
+### Added
+
+- A shared Simple and Advanced experience for Home, Activity, Protection,
+  scanning, and Storage, while retaining the full diagnostic and monitoring
+  tools in Advanced mode.
+- One protection-status presentation used by Home, Activity, Overview, Smart
+  Scan, and System Audit so the same incident set has the same status and count.
+- Responsible-app attribution for behavior detections, including bounded
+  helper, command-line tool, and shell chains.
+- Local review learning with explicit controls to inspect, export, and reset
+  learned decisions.
+- A small, versioned offline exact-hash catalog with provenance displayed in
+  Diagnostics and acknowledgements in Settings.
+
+### Changed
+
+- Incident rows and details now share one status: Needs review, Blocked,
+  Quarantined, Remediation needed, Resolved, or informational Observed.
+- Behavior incidents use command-specific explanations and actions; file
+  quarantine is offered only when there is an actionable file-content finding.
+- Download-to-shell detection requires retained command evidence and displays
+  the redacted command that matched.
+- Ransomware rename detection distinguishes normal atomic text replacement
+  from destructive renames and high-entropy replacement behavior.
+- Clearing alert history preserves settings, suppression rules, dismissal
+  records, trusted processes, cooldowns, and learned decisions.
+- Storage is available in both interface modes and links to JunkYard Cleaner
+  for deeper storage analysis and cleanup.
+
+### Fixed
+
+- Live process ancestry is reconciled for any app, helper, CLI, and shell chain,
+  including processes that started before Nick's extension.
+- Scanning Nick's own app now relies on strict validated Developer ID identity,
+  while a damaged or impersonating bundle is scanned normally.
+- Failed remediation remains visible and actionable with an accurate reason.
+- CMake-style atomic replacements no longer produce ransomware findings, while
+  destructive write-then-swap behavior remains detectable.
+- System Audit now treats a custom System Integrity Protection configuration
+  as partially disabled instead of potentially reporting SIP as fully enabled.
+
 ## [4.6.3] - 2026-10-05
 
 ### Changed

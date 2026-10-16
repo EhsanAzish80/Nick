@@ -67,11 +67,28 @@ These monitors emit `ThreatSignal` values. `ThreatCorrelator` retains a bounded
 processes, suppression rules, stable incident identities, and temporary
 acknowledgements reduce repeated or low-confidence alerts.
 
-The main app and `MonitorCoordinator` currently own separate correlator
-instances. Endpoint Security events are displayed through the extension event
-client but are not generally converted into app-level `ThreatSignal` values.
-Nick should therefore be described as correlating app-level signals, not as
-combining every detector in one global scoring engine.
+`SecurityEngine` owns one correlator and one incident store. App monitors,
+Deep Scan, FSEvents, detector-confirmed Endpoint Security findings, privacy and
+integrity findings, USB findings, and Network Extension observations enter that
+incident boundary. The source detector still decides what its raw observation
+means; the incident store applies suppression, deduplication, lifecycle, local
+explanation and notification policy once. File-oriented bursts are coalesced
+by rule and actor identity, each rule has a bounded share of the 100 retained
+incident slots, and Diagnostics reports how many incidents retention evicted.
+
+The Endpoint Security extension denies deletion or replacement of Nick's
+protected installation paths unless the actor has one of the exact validated
+Nick/Sparkle or Apple-installer signing identities. Nick/Sparkle actors are
+resolved from the Endpoint Security audit token and checked dynamically against
+an Apple-anchored Team ID plus identifier requirement; results are cached by
+cdhash. Rename authorization checks both source and destination, and untrusted
+opens, truncates, creates, links and clones into the app bundle are denied. The bundled uninstaller is the complete removal
+path; Finder's narrow move of `/Applications/Nick.app` into the user's Trash is
+also allowed only for the console user's real Trash or a mounted volume's
+`.Trashes/<uid>` directory. It creates a visible informational notice but does
+not remove Nick's generated data or system components.
+Validated update/reinstall activity is collapsed into one informational
+maintenance incident instead of a protected-path alert burst.
 
 ### YARA and Deep Scan
 
@@ -79,14 +96,18 @@ combining every detector in one global scoring engine.
 compiled into immutable rule sets, and scanned with bounded concurrency and a
 10-second per-file timeout.
 
-`DeepScanner` streams candidate discovery and scanning concurrently. Match
+`DeepScanner` streams candidate discovery and scanning concurrently and stops
+at a bounded total time budget, reporting candidates skipped by that budget. Match
 classification considers rule class and severity, file format, verified
-development layouts, Homebrew receipts, signed application context, and code
+development layouts or repositories explicitly selected by the user, Homebrew receipts, signed application context, and code
 signing state. Concrete family signatures remain actionable regardless of
 path; broad behavior matches can remain visible without becoming alerts.
 
-An FSEvents watcher provides additional YARA coverage for newly created or
-modified executable content in selected directories.
+An FSEvents watcher provides additional post-write YARA coverage for newly
+created or modified executable content in selected directories. Its bounded,
+coalescing queue counts overload drops rather than silently discarding them.
+This is post-launch evidence; only the curated exact-hash lookup participates
+in the measured pre-launch authorization budget.
 
 ### Network observation
 
@@ -98,12 +119,14 @@ data.
 
 The shipping provider is observation-only and returns an allow verdict for all
 flows. Missing, stale, or invalid configuration also fails open. Network
-observations are stored locally in a bounded app-group record.
+observations are stored locally in a bounded app-group record. The app watches
+that record for changes and feeds new observation IDs into the shared incident
+store; replay uses the same IDs and does not create a second incident.
 
 ## Alert and response flow
 
 ```text
-local monitor signals
+local monitor and extension findings
         │
         ▼
 deterministic correlation rules
@@ -111,18 +134,32 @@ deterministic correlation rules
         ▼
 ThreatAlert ──► on-device Apple Foundation Models explanation
         │                     (text only)
+        ├──► optional local verdict learning (review tier only; visible)
         ├──► app UI and local notification
         ├──► optional local file/stdout output
         └──► optional user-configured webhook
 
-Endpoint Security findings ──► XPC event/timeline and quarantine state
-Network Extension findings  ──► local network observation store
+Endpoint Security findings ──► protected journal ──► authenticated XPC ──► incident store
+Network Extension findings  ──► local observation store ──► incident store
+Camera/microphone transitions ──► CoreMediaIO/CoreAudio callbacks ──► incident store
 ```
 
 Apple Foundation Models runs only after deterministic code has created an
 alert. Generated text cannot alter severity, scoring, Endpoint Security
 authorization, quarantine, process termination, or network policy. If model
 generation is unavailable, Nick uses a deterministic template.
+
+Verdict learning is a separate deterministic, local feature and is off by
+default. Enabling it is stored in the root-owned settings store and requires
+user-presence authorization. After authenticated Dismiss or Always Allow
+verdicts on two different incidents, Nick may activate an expiring key made
+from the Security.framework-validated signing identity, rule ID, and bounded
+context. Until then the entry is visibly pending. A later exact match in the
+explicitly reviewable tier is lowered to informational priority but remains
+visible. Protected, hash, signature, YARA,
+persistence, high-risk-path, unsigned, ad-hoc, interpreter, and command-tool
+evidence cannot create or use learned entries. The entries live with incidents
+in the root-owned store and can be inspected, exported, or reset in Settings.
 
 ## Major components
 
@@ -136,7 +173,9 @@ generation is unavailable, Nick uses a deterministic template.
 | `NickExtension` | Endpoint Security events, authorization decisions, file scanning, ransomware/FIM/privacy/email/USB monitoring, and quarantine. |
 | `NickNetFilter` | Observation-only socket-flow classification and bounded local event storage. |
 | `RuntimeCompare` | Local before-and-after snapshots, comparison, sanitization, and export. |
-| `AlertExplainer` | Human-readable explanation using Apple Foundation Models; no detection or enforcement authority. |
+| `AlertExplainer` | Human-readable explanation using Apple Foundation Models; untrusted context is bounded and delimited, and generated text has no detection or enforcement authority. |
+| `SignalTelemetry` | Optional, size-capped local JSONL export. It is off by default, user-writable, and never read as detection or learning input. |
+| `IncidentStore` verdict learning | Optional expiring review-tier priority adjustment from authenticated user verdicts. It is off by default, local, visible, capped per signing identity, and has no enforcement authority. |
 
 ## Apple frameworks and system APIs
 
@@ -146,8 +185,10 @@ Security, CryptoKit, Foundation Models, User Notifications, AVFoundation,
 CoreMediaIO, CoreAudio, IOKit, FSEvents/CoreServices, SQLite, and BSD/Darwin
 process and filesystem APIs. Sparkle supplies signed application updates.
 
-Core ML is present in inactive behavioral-scoring infrastructure; it is not used
-by the live correlation path.
+Core ML is present in inactive behavioral-scoring infrastructure. No production
+model is bundled, Release builds can load only from the signed app bundle, and
+missing or non-production models cannot return a score. The live correlation
+path does not construct or invoke the scorer.
 
 ## Privileges and permissions
 
@@ -207,7 +248,8 @@ is limited to explicit product functions:
 
 Nick has no active hosted detection service or automatic security-telemetry
 uploader. Optional training telemetry is disabled by default and stored locally
-until the user exports it.
+until the user exports it. Optional verdict learning is also entirely local;
+its export is a user-selected file operation.
 
 ## Enforcement boundaries
 
@@ -225,19 +267,25 @@ until the user exports it.
 The repository contains code that is not part of the current live product path:
 
 - `BehavioralScorer`, feature extraction, and Core ML integration: no trained
-  production model is bundled and the correlator does not invoke the scorer.
+  production model is bundled; non-production models fail closed; and the
+  correlator does not invoke the scorer.
 - `NickHelper`: the read-only helper target exists, but current builds do not
   embed its LaunchDaemon definition and the app has no live helper XPC client.
-- `CloudIntelService`: hash lookup and update code exists but is not constructed
-  or scheduled.
-- `ProcessTree` and `TamperProtection`: implementations exist but are not
-  instantiated in the Endpoint Security extension object graph.
 - Production signed-rule delivery: verification structures exist, but no
   production key/feed, staged rollout, rollback, or last-known-good recovery is
   published.
 
 See [the roadmap](Documentation/ROADMAP.md) for planned work. Code presence is
 not treated as an implemented product capability.
+
+The 5.0 development build's exact-hash intelligence is an offline, signed-bundle
+snapshot: 25 entries retrieved on October 9, 2026. Twenty-four macOS hashes come
+from four family-specific ESET IOC lists under BSD-2-Clause; EICAR remains a
+low-severity Test-family entry. The catalog enforces a 5,000-entry maximum and
+rejects malformed or duplicate entries as a whole. Its provenance manifest is
+bundled beside the catalog. There is no network lookup or automatic hash-feed
+update in this version. The ESET BSD-2-Clause notice ships inside the app and
+extension bundles and is readable in Settings → Acknowledgements.
 
 ## Known product limits
 

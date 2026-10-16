@@ -17,6 +17,7 @@ struct SimpleAlertSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(SecurityEngine.self) private var engine
     @Environment(ExtensionXPCClient.self) private var xpcClient
+    @Environment(NetworkProtectionManager.self) private var networkProtection
 
     @State private var showsTechnicalDetails = false
     @State private var confirmsTrust = false
@@ -25,7 +26,7 @@ struct SimpleAlertSheet: View {
 
     private var user: UserFacingAlert { UserFacingAlertBuilder.shared.build(from: alert) }
 
-    private var filePath: String? { alert.detectedFilePath }
+    private var filePath: String? { alert.remediableFilePath }
 
     private var quarantineRecord: QuarantineRecord? {
         guard let path = filePath else { return nil }
@@ -42,16 +43,20 @@ struct SimpleAlertSheet: View {
             alert: alert,
             user: user,
             isQuarantined: quarantineRecord != nil,
-            fileStillPresent: fileStillPresent
+            fileStillPresent: fileStillPresent,
+            incident: incident
         )
     }
+    private var behaviorPresentation: BehaviorIncidentPresentation {
+        BehaviorIncidentPresentation(alert: alert, incident: incident)
+    }
 
-    private var hasStableSignedIdentity: Bool {
-        alert.contributingSignals.contains { signal in
-            guard let process = signal.processInfo,
-                  case .signed(let teamID) = process.signingStatus else { return false }
-            return !teamID.isEmpty && !process.path.isEmpty
-        }
+    private var trustEligibleProcess: NickProcessInfo? { TrustedProcessList.eligibleProcess(in: alert) }
+    private var networkDomain: String? { TrustedProcessList.networkDomain(in: alert) }
+    private var contributesToLearning: Bool { engine.contributesToVerdictLearning(alert) }
+
+    private var incident: SecurityIncident? {
+        engine.incidentStore.incidents.first { $0.alert.id == alert.id }
     }
 
     private var toneColors: (Color, Color) {
@@ -77,6 +82,19 @@ struct SimpleAlertSheet: View {
                     row("WHAT HAPPENED", current.whatHappened)
                     row("WHAT NICK DID", current.whatNickDid)
                     row("WHAT YOU SHOULD DO", current.whatToDo)
+                    if let dismissedAt = incident?.previouslyDismissedAt {
+                        row(
+                            "HISTORY",
+                            "Previously dismissed \(dismissedAt.formatted(date: .abbreviated, time: .shortened)). This new occurrence reopened the incident."
+                        )
+                    }
+                    if let state = incident?.reopenedAfterState,
+                       let reopenedAt = incident?.reopenedAfterAt {
+                        row(
+                            "HISTORY",
+                            "Reopened after \(state.displayName) on \(reopenedAt.formatted(date: .abbreviated, time: .shortened))."
+                        )
+                    }
                     technicalDetails(current)
                         .padding(.top, 6)
                 }
@@ -92,14 +110,18 @@ struct SimpleAlertSheet: View {
         .frame(width: 720, height: 640)
         .background(Color.nickCard)
         .confirmationDialog(
-            "Trust this app?",
+            contributesToLearning ? "Confirm this expected activity?" : "Trust this app?",
             isPresented: $confirmsTrust,
             titleVisibility: .visible
         ) {
-            Button(hasStableSignedIdentity ? "Trust for 7 Days" : "Trust for 24 Hours") { trust() }
+            Button(contributesToLearning ? "Confirm Expected Activity" : "Trust for 7 Days") { trust() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Nick will stop warning about this exact behaviour. It will still warn you about anything new or harmful.")
+            if contributesToLearning {
+                Text("Nick will record this review decision. A second distinct occurrence must also be confirmed before matching review-only findings are lowered to Info. They are never hidden.")
+            } else {
+                Text("Nick will stop warning about this exact behaviour for 7 days. It will still warn you about anything new or harmful.")
+            }
         }
         .confirmationDialog(
             "Move this app to the Trash?",
@@ -141,6 +163,10 @@ struct SimpleAlertSheet: View {
                 Text(copy.subline)
                     .font(.system(size: 13))
                     .foregroundStyle(Color.nickSecondaryText)
+                if behaviorPresentation.isBehavior || behaviorPresentation.responsibleAppName != "Unknown app" {
+                    ResponsibleAppLine(presentation: behaviorPresentation)
+                        .padding(.top, 4)
+                }
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 12)
@@ -188,19 +214,34 @@ struct SimpleAlertSheet: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            if copy.status != .info {
+            if let networkDomain {
+                Button("Allow this domain") {
+                    Task { _ = await networkProtection.allowDomain(networkDomain) }
+                    dismiss()
+                }
+                .buttonStyle(.link)
+                .tint(Color.nickAccent)
+            } else if copy.status != .observed, trustEligibleProcess != nil {
                 Button("I trust this app…") { confirmsTrust = true }
                     .buttonStyle(.link)
                     .tint(Color.nickAccent)
             }
             Spacer()
+            if behaviorPresentation.status == .needsReview {
+                Button("Mark as reviewed") {
+                    engine.markAlertReviewed(alert.id)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.nickAccent)
+            }
             if quarantineRecord != nil {
                 Button("Keep in Quarantine") {
                     engine.hideAlert(alert.id)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-            } else if copy.tone == .danger, fileStillPresent {
+            } else if copy.tone == .danger, fileStillPresent, user.actions.contains(.quarantine) {
                 Button("Close") { dismiss() }
                 Button("Move to Trash") { confirmsTrash = true }
                     .keyboardShortcut(.defaultAction)
@@ -217,11 +258,8 @@ struct SimpleAlertSheet: View {
     // MARK: Actions
 
     private func trust() {
-        if hasStableSignedIdentity {
-            engine.alwaysAllowBehavior(from: alert.id)
-        } else {
-            engine.allowAlertOnce(alert.id)
-        }
+        guard trustEligibleProcess != nil else { return }
+        engine.alwaysAllowBehavior(from: alert.id)
         dismiss()
     }
 
@@ -245,6 +283,10 @@ struct SimpleAlertSheet: View {
 struct AlertTechnicalDetails: View {
     let alert: ThreatAlert
 
+    private var behavior: BehaviorIncidentPresentation {
+        BehaviorIncidentPresentation(alert: alert)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
@@ -262,6 +304,18 @@ struct AlertTechnicalDetails: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Color.nickSecondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+            if behavior.isBehavior || behavior.responsibleAppName != "Unknown app" {
+                technicalValue(
+                    "Responsible app",
+                    [behavior.responsibleAppName, behavior.bundleID, behavior.teamID, behavior.signing]
+                        .compactMap { $0 }.joined(separator: " · ")
+                )
+                technicalValue("Chain", behavior.chain)
+                technicalValue("Shell / actor", "\(behavior.actor) · \(behavior.actorSigning)")
+                if let matchedCommand = behavior.matchedCommand {
+                    technicalValue("Matched command", matchedCommand)
+                }
+            }
             ForEach(alert.contributingSignals) { signal in
                 VStack(alignment: .leading, spacing: 3) {
                     Text(signal.title)
@@ -276,7 +330,7 @@ struct AlertTechnicalDetails: View {
                             .textSelection(.enabled)
                     }
                     if let process = signal.processInfo {
-                        Text("PID \(process.pid) · \(process.name)")
+                        Text("PID \(String(process.pid)) · \(process.name)")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Color.nickSecondaryText)
                     }
@@ -296,6 +350,16 @@ struct AlertTechnicalDetails: View {
         }
     }
 
+    private func technicalValue(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.system(size: 11, weight: .semibold))
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color.nickSecondaryText)
+                .textSelection(.enabled)
+        }
+    }
+
     private func copyJSON() {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -304,5 +368,28 @@ struct AlertTechnicalDetails: View {
               let string = String(data: data, encoding: .utf8) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(string, forType: .string)
+    }
+}
+
+struct ResponsibleAppLine: View {
+    let presentation: BehaviorIncidentPresentation
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let path = presentation.appPath {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                    .resizable()
+                    .frame(width: 18, height: 18)
+                    .accessibilityHidden(true)
+            } else {
+                Image(systemName: "app.dashed")
+                    .frame(width: 18, height: 18)
+                    .accessibilityHidden(true)
+            }
+            Text(presentation.responsibleLine)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.nickSecondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

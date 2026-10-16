@@ -54,7 +54,10 @@ struct SimpleHomeView: View {
             auditIssues: engine.auditResults.filter { $0.status != .pass }.count,
             persistenceIssues: engine.persistenceItems.filter { $0.signingStatus?.isSuspicious == true }.count,
             processIssues: engine.processes.filter { $0.signingStatus == .unsigned || $0.signingStatus == .invalid }.count,
-            networkIssues: engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count
+            networkIssues: engine.connections.filter { $0.isShellProcess && $0.isOutbound }.count,
+            unreviewedFindings: engine.activeActionableAlerts.filter {
+                UserFacingAlertBuilder.shared.build(from: $0).severity != .critical
+            }.count
         )
     }
 
@@ -73,12 +76,17 @@ struct SimpleHomeView: View {
     private var hero: HomeHero {
         let weekAgo = Date().addingTimeInterval(-7 * 24 * 60 * 60)
         return HomeHero.make(
+            presentation: statusModel.presentation,
             incident: incident,
             issues: issues,
             websitesProtected: networkProtection.isEnabled,
             lastCheck: engine.lastScanDate,
             hadRecentWarnings: engine.alerts.contains { $0.lastSeen >= weekAgo }
         )
+    }
+
+    private var statusModel: SimpleHomeProtectionStatusModel {
+        SimpleHomeProtectionStatusModel(status: engine.protectionStatus)
     }
 
     private var cards: [ProtectionCard] {
@@ -125,14 +133,7 @@ struct SimpleHomeView: View {
     }
 
     private var subtitle: String {
-        let current = self.hero
-        switch current.state {
-        case .protected: return "Protected · \(current.meta.lowercasedFirst)"
-        case .attention:
-            return issues.count == 1 ? "1 thing needs your attention" : "\(issues.count) things need your attention"
-        case .blocked:
-            return incident?.wasQuarantined == true ? "Threat stopped · your files are safe" : "Something needs a look"
-        }
+        statusModel.presentation.displayText
     }
 
     // MARK: Body
@@ -326,6 +327,10 @@ struct SimpleHomeView: View {
             userStartedCheck = true
             engine.runFullScan()
         case .attention:
+            if engine.protectionStatus.state == .sensorProblem, issues.isEmpty {
+                selection = .protection
+                return
+            }
             guard let fix = issues.first?.simpleFix else { return }
             switch fix {
             case .openURL(let string):
@@ -400,6 +405,9 @@ struct SimpleHomeView: View {
     }
 
     private func markSeen(_ incident: HomeIncident) {
+        if case .alert(let id) = incident.source {
+            engine.markIncidentSeen(id)
+        }
         var ids = seenIncidentsRaw.split(separator: "\n").map(String.init)
         guard !ids.contains(incident.id) else { return }
         ids.append(incident.id)
@@ -408,7 +416,8 @@ struct SimpleHomeView: View {
 
     private func refreshHealth() async {
         while !Task.isCancelled {
-            endpointHealth = await EndpointHealth.load()
+            await xpcClient.refreshExtensionHealth()
+            endpointHealth = xpcClient.extensionHealth
             healthLoaded = true
             try? await Task.sleep(for: .seconds(5))
         }

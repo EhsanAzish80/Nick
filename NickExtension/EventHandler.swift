@@ -4,6 +4,7 @@
 
 import EndpointSecurity
 import Foundation
+import Darwin
 import os
 
 // MARK: - ESEventHandler
@@ -62,6 +63,7 @@ final class ESEventHandler {
 
     /// Phase 6 — tamper protection for Nick's own files.
     var tamperProtection: TamperProtection?
+    var updateLeaseManager: NickUpdateLeaseManager?
 
     // MARK: - Private
 
@@ -81,13 +83,23 @@ final class ESEventHandler {
     // MARK: - Public Entry Point
 
     func handle(message: UnsafePointer<es_message_t>) {
-        let msg = message.pointee
+        var msg = message.pointee
 
         // --- Extract process info synchronously (pointer only valid here) ---
         let process     = msg.process.pointee
         let processPath = esString(process.executable.pointee.path)
         let pid         = audit_token_to_pid(process.audit_token)
         let parentPid   = audit_token_to_pid(process.parent_audit_token)
+        let responsiblePid = audit_token_to_pid(process.responsible_audit_token)
+        let observedProcessGroupID = getpgid(pid)
+        let processGroupID = observedProcessGroupID > 0 ? observedProcessGroupID : pid
+        let processIdentity = ProcessInstanceIdentity.capture(pid: pid)
+        let tamperActorIdentity = TamperActorIdentity(
+            teamID: esOptionalString(process.team_id),
+            signingID: esOptionalString(process.signing_id),
+            codesigningFlags: process.codesigning_flags,
+            isPlatformBinary: process.is_platform_binary
+        )
 
         switch msg.event_type {
 
@@ -97,6 +109,12 @@ final class ESEventHandler {
             let target      = msg.event.exec.target.pointee
             let targetPath  = esString(target.executable.pointee.path)
             let targetIdentity = FileIdentity(stat: target.executable.pointee.stat)
+            let targetTeamID = esOptionalString(target.team_id)
+            let targetSigningID = esOptionalString(target.signing_id)
+            let responsiblePID = audit_token_to_pid(target.responsible_audit_token)
+            let execArguments: [String] = withUnsafePointer(to: &msg.event.exec) { event in
+                (0..<es_exec_arg_count(event)).map { esString(es_exec_arg(event, $0)) }
+            }
             // CS_VALID alone is not identity: every arm64 binary is at least
             // ad-hoc signed. Only platform binaries and Team-ID signatures
             // count as a trusted signer.
@@ -110,7 +128,11 @@ final class ESEventHandler {
             // cache before responding; hashing, behavioural analysis and XPC
             // delivery must never hold up process launch.
             let cached   = fileScanner?.cache.lookup(path: targetPath, identity: targetIdentity)
-            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(path: targetPath) ?? false
+            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
+                path: targetPath,
+                identity: targetIdentity,
+                currentHash: { fileScanner?.contentHash(path: targetPath) }
+            ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
             // First launch of an unknown, non-identity-signed binary: hash it
@@ -135,7 +157,11 @@ final class ESEventHandler {
                         trustedSigner: trustedSigner,
                         scanFirst: verdict == nil,
                         blocked: blocked,
-                        verdict: verdict
+                        verdict: verdict,
+                        teamID: targetTeamID,
+                        signingID: targetSigningID,
+                        arguments: execArguments,
+                        responsiblePID: responsiblePID > 0 ? responsiblePID : nil
                     )
                 }
             }
@@ -157,11 +183,48 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_OPEN:
             let filePath = esString(msg.event.open.file.pointee.path)
+            let isWriteOpen = msg.event.open.fflag & (FWRITE | O_TRUNC | O_APPEND) != 0
+            let isProtectedWrite = isWriteOpen && tamperProtection?.protects(path: filePath) == true
+            if isProtectedWrite {
+                var writeBlocked = tamperProtection?.shouldBlockWrite(
+                   targetPath: filePath,
+                   identity: tamperActorIdentity,
+                   nickIdentityValidated: validatedNickTamperActor(
+                       auditToken: process.audit_token,
+                       identity: tamperActorIdentity
+                   )
+                ) ?? false
+                let leaseAllowed = leasedUpdateAuthorization(
+                    targetPath: filePath,
+                    operation: .write,
+                    process: process,
+                    processPath: processPath,
+                    identity: tamperActorIdentity
+                )
+                writeBlocked = writeBlocked && !leaseAllowed
+                tamperProtection?.handleWriteEvent(
+                    targetPath: filePath,
+                    actorPath: processPath,
+                    actorPid: pid,
+                    identity: tamperActorIdentity,
+                    blocked: writeBlocked,
+                    operation: .openWrite
+                )
+                if writeBlocked {
+                    esClient?.respond(to: message, allow: false)
+                    break
+                }
+            }
+            let fileIdentity = FileIdentity(stat: msg.event.open.file.pointee.stat)
             let cached   = fileScanner?.cache.lookup(
                 path: filePath,
-                identity: FileIdentity(stat: msg.event.open.file.pointee.stat)
+                identity: fileIdentity
             )
-            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(path: filePath) ?? false
+            let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
+                path: filePath,
+                identity: fileIdentity,
+                currentHash: { fileScanner?.contentHash(path: filePath) }
+            ) ?? false
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
             esClient?.respond(to: message, allow: !shouldBlock)
@@ -196,6 +259,50 @@ final class ESEventHandler {
                 filePath = dir + "/" + name
             }
 
+            let createBlocked: Bool
+            if tamperProtection?.protects(path: filePath) == true {
+                let ordinarilyBlocked = tamperProtection?.shouldBlockWrite(
+                    targetPath: filePath,
+                    identity: tamperActorIdentity,
+                    nickIdentityValidated: validatedNickTamperActor(
+                        auditToken: process.audit_token,
+                        identity: tamperActorIdentity
+                    )
+                ) ?? false
+                let leaseAllowed = leasedUpdateAuthorization(
+                    targetPath: filePath,
+                    operation: .write,
+                    process: process,
+                    processPath: processPath,
+                    identity: tamperActorIdentity
+                )
+                createBlocked = ordinarilyBlocked && !leaseAllowed
+            } else {
+                createBlocked = false
+            }
+            if createBlocked {
+                esClient?.respond(to: message, allow: false)
+                tamperProtection?.handleWriteEvent(
+                    targetPath: filePath,
+                    actorPath: processPath,
+                    actorPid: pid,
+                    identity: tamperActorIdentity,
+                    blocked: true,
+                    operation: .create
+                )
+                break
+            }
+            if tamperProtection?.protects(path: filePath) == true {
+                tamperProtection?.handleWriteEvent(
+                    targetPath: filePath,
+                    actorPath: processPath,
+                    actorPid: pid,
+                    identity: tamperActorIdentity,
+                    blocked: false,
+                    operation: .create
+                )
+            }
+
             // This is heuristic-only: there is no file to hash yet. Observe and
             // report suspicious creates, but fail open so AirDrop, Handoff,
             // installers and developer builds cannot be disrupted.
@@ -203,6 +310,12 @@ final class ESEventHandler {
             let destSuspect    = fileScanner?.isUntrustedLocation(filePath) ?? false
             let isSuspicious   = processSuspect && destSuspect
             esClient?.respond(to: message, allow: true)
+            behaviorTracker?.recordCreate(
+                pid: pid,
+                processGroupID: processGroupID,
+                processPath: processPath,
+                path: filePath
+            )
 
             if isSuspicious {
                 guard !isTrustedPlatformActor(processPath) else { break }
@@ -215,6 +328,43 @@ final class ESEventHandler {
                     decision:     .allow
                 ))
             }
+
+        // MARK: AUTH_TRUNCATE / AUTH_LINK / AUTH_CLONE — protect Nick bundle contents
+
+        case ES_EVENT_TYPE_AUTH_TRUNCATE:
+            handleProtectedWriteAuthorization(
+                message: message,
+                targetPath: esString(msg.event.truncate.target.pointee.path),
+                process: process,
+                processPath: processPath,
+                pid: pid,
+                identity: tamperActorIdentity,
+                operation: .truncate
+            )
+
+        case ES_EVENT_TYPE_AUTH_LINK:
+            handleProtectedWriteAuthorization(
+                message: message,
+                targetPath: esString(msg.event.link.target_dir.pointee.path)
+                    + "/" + esString(msg.event.link.target_filename),
+                process: process,
+                processPath: processPath,
+                pid: pid,
+                identity: tamperActorIdentity,
+                operation: .link
+            )
+
+        case ES_EVENT_TYPE_AUTH_CLONE:
+            handleProtectedWriteAuthorization(
+                message: message,
+                targetPath: esString(msg.event.clone.target_dir.pointee.path)
+                    + "/" + esString(msg.event.clone.target_name),
+                process: process,
+                processPath: processPath,
+                pid: pid,
+                identity: tamperActorIdentity,
+                operation: .clone
+            )
 
         // MARK: AUTH_MMAP — block mapping of cached-threat files
 
@@ -232,6 +382,20 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_COPYFILE:
             let srcPath  = esString(msg.event.copyfile.source.pointee.path)
+            let copyDestination = esString(msg.event.copyfile.target_dir.pointee.path)
+                + "/" + esString(msg.event.copyfile.target_name)
+            if tamperProtection?.protects(path: copyDestination) == true {
+                handleProtectedWriteAuthorization(
+                    message: message,
+                    targetPath: copyDestination,
+                    process: process,
+                    processPath: processPath,
+                    pid: pid,
+                    identity: tamperActorIdentity,
+                    operation: .copyfile
+                )
+                break
+            }
             let cached   = fileScanner?.cache.lookup(
                 path: srcPath,
                 identity: FileIdentity(stat: msg.event.copyfile.source.pointee.stat)
@@ -248,12 +412,6 @@ final class ESEventHandler {
             // The content changed: any cached verdict describes the old bytes.
             fileScanner?.cache.invalidate(path: filePath)
             let actorIsPlatformBinary = process.is_platform_binary
-            // Apple's toolchain binaries are Apple-signed but carry no Team ID,
-            // so a valid, non-ad-hoc signature plus a toolchain location is the
-            // bar here (see isTrustedDeveloperBuild).
-            let actorHasValidSignature =
-                process.codesigning_flags & ExecutionTrustPolicy.csValid != 0
-                && process.codesigning_flags & ExecutionTrustPolicy.csAdhoc == 0
             let actorHasTrustedSigner = self.actorHasTrustedSigner(process)
 
             dispatchQueue.async { [weak self] in
@@ -268,7 +426,7 @@ final class ESEventHandler {
                 )
                 let isTrustedBuildOutput = self.isTrustedDeveloperBuild(
                     actorPath: processPath,
-                    actorHasValidSignature: actorHasValidSignature,
+                    actorIsPlatformBinary: actorIsPlatformBinary,
                     filePath: filePath
                 )
 
@@ -306,19 +464,15 @@ final class ESEventHandler {
                                     threatFamily: result.threatFamily ?? "EmailThreat"
                                 )
                             )
-                            self.pushEvent(threat)
-                            if let data = try? self.encoder.encode(threat) {
-                                self.xpcServer?.sendThreatToApp(data)
-                            }
+                            self.reportThreat(threat)
                         }
                     }
                 }
 
                 // --- File Integrity Monitoring ---
-                if let violation = self.fileIntegrityMonitor?.check(path: filePath),
-                   let data = try? JSONEncoder().encode(violation) {
-                    self.xpcServer?.sendIntegrityViolationToApp(data)
-                }
+                self.reportIntegrityViolation(
+                    at: filePath, actorPID: pid, responsiblePID: responsiblePid
+                )
 
                 // Ransomware heuristics run once at close and read at most a
                 // small prefix. Canary names and known extensions do not need
@@ -347,12 +501,28 @@ final class ESEventHandler {
                         pid: pid,
                         parentPid: parentPid,
                         processPath: processPath,
-                        filePath: filePath
+                        filePath: filePath,
+                        processIdentity: processIdentity,
+                        responsiblePID: responsiblePid
                     )
                 }
 
                 // --- Threat Detection + Remediation ---
-                guard self.shouldDeepScanModifiedFile(at: filePath) else { return }
+                let shouldDeepScan = self.shouldDeepScanModifiedFile(at: filePath)
+                let completedIdentity = FileIdentity(path: filePath)
+                let exactSignatureDecision = completedIdentity.map {
+                    ScanCandidatePolicy.completedWriteExactSignatureDecision(
+                        path: filePath,
+                        fileSize: $0.size
+                    )
+                } ?? .skip(.empty)
+                if exactSignatureDecision == .skip(.overSizeLimit) {
+                    Self.logger.info(
+                        "Completed-write exact-signature check skipped over size cap: \(filePath, privacy: .private)"
+                    )
+                }
+                let shouldCheckExactSignature = exactSignatureDecision == .check
+                guard shouldDeepScan || shouldCheckExactSignature else { return }
                 // Xcode/SwiftPM build products are rewritten constantly and
                 // legitimately contain linker/install/persistence strings that
                 // generic YARA rules match. Apple developer tools remain covered
@@ -361,58 +531,36 @@ final class ESEventHandler {
                 if isTrustedBuildOutput {
                     return
                 }
-                self.pushEvent(ESEvent(
-                    eventType: .notifyWrite,
+                guard let scanner = self.fileScanner else { return }
+                let result: FileScanner.ScanResult
+                if shouldDeepScan {
+                    self.pushEvent(ESEvent(
+                        eventType: .notifyWrite,
+                        processPath: processPath,
+                        pid: pid,
+                        parentPid: parentPid,
+                        filePath: filePath,
+                        decision: .notApplicable
+                    ))
+                    result = scanner.scan(filePath: filePath)
+                } else {
+                    guard let completedIdentity,
+                          let signatureResult = scanner.exactSignatureMatch(
+                            path: filePath,
+                            identity: completedIdentity
+                          ) else { return }
+                    result = signatureResult
+                }
+                guard result.isThreat else { return }
+                self.reportDetectedThreat(
+                    result,
                     processPath: processPath,
                     pid: pid,
                     parentPid: parentPid,
                     filePath: filePath,
-                    decision: .notApplicable
-                ))
-
-                guard let scanner = self.fileScanner else { return }
-                let result = scanner.scan(filePath: filePath)
-                guard result.isThreat else { return }
-                let hash = result.hash
-
-                // Report raw threat event
-                let threat = ESEvent(
-                    eventType:   .notifyWrite,
-                    processPath: processPath,
-                    pid:         pid,
-                    parentPid:   parentPid,
-                    filePath:    filePath,
-                    decision:    .notApplicable,
-                    threat:      ESEvent.ThreatContext(
-                        sha256:       hash,
-                        threatName:   result.threatName,
-                        threatFamily: result.threatFamily
-                    )
+                    processIdentity: processIdentity,
+                    terminateProcess: emailEvent == nil
                 )
-                self.pushEvent(threat)
-                if let data = try? self.encoder.encode(threat) {
-                    self.xpcServer?.sendThreatToApp(data)
-                }
-                // Phase 6: mark the writing process as a threat in the process tree
-                self.processTree?.markAsThreat(pid: pid)
-                // Heuristic/YARA matches are user-review findings. Automated
-                // kill/quarantine is reserved for exact curated hash evidence.
-                if result.mayBlock, let engine = self.remediationEngine {
-                    let report = engine.remediate(
-                        threatPath:  filePath,
-                        hash:        hash,
-                        threatName:  result.threatName ?? "Unknown",
-                        processPath: processPath,
-                        pid:         pid,
-                        // Mail and Outlook are delivery processes, not the
-                        // malware itself. Quarantine the confirmed attachment
-                        // without terminating the user's mail client.
-                        terminateProcess: emailEvent == nil
-                    )
-                    if let data = try? JSONEncoder().encode(report) {
-                        self.xpcServer?.sendRemediationToApp(data)
-                    }
-                }
             }
 
         // MARK: NOTIFY_RENAME — invalidate cache; track rename for ransomware detection
@@ -421,11 +569,65 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_RENAME:
             let srcPath = esString(msg.event.rename.source.pointee.path)
-            let renameBlocked = tamperProtection?.shouldBlock(
-                targetPath: srcPath, actorPath: processPath, actorPid: pid
-            ) ?? false
-            tamperProtection?.handleRenameEvent(srcPath: srcPath, actorPath: processPath, actorPid: pid)
+            let destinationPath: String
+            if msg.event.rename.destination_type == ES_DESTINATION_TYPE_EXISTING_FILE {
+                destinationPath = esString(msg.event.rename.destination.existing_file.pointee.path)
+            } else {
+                let directory = esString(msg.event.rename.destination.new_path.dir.pointee.path)
+                destinationPath = directory + "/" + esString(msg.event.rename.destination.new_path.filename)
+            }
+            let protectsRename = tamperProtection?.protects(path: srcPath) == true
+                || tamperProtection?.protects(path: destinationPath) == true
+            let consoleUser = protectsRename ? TamperConsoleUserResolver.current() : nil
+            let renameBlocked: Bool
+            if protectsRename {
+                let ordinarilyBlocked = tamperProtection?.shouldBlockRename(
+                    sourcePath: srcPath,
+                    destinationPath: destinationPath,
+                    identity: tamperActorIdentity,
+                    nickIdentityValidated: validatedNickTamperActor(
+                        auditToken: process.audit_token,
+                        identity: tamperActorIdentity
+                    ),
+                    consoleUser: consoleUser
+                ) ?? false
+                let leaseAllowed = leasedUpdateAuthorization(
+                    targetPath: destinationPath,
+                    sourcePath: srcPath,
+                    operation: .rename,
+                    process: process,
+                    processPath: processPath,
+                    identity: tamperActorIdentity
+                )
+                renameBlocked = ordinarilyBlocked && !leaseAllowed
+            } else {
+                renameBlocked = false
+            }
+            if !renameBlocked,
+               behaviorTracker?.wasRecentlyCreated(
+                path: srcPath, by: pid, processGroupID: processGroupID
+            ) == true,
+               FileManager.default.fileExists(atPath: destinationPath) {
+                let renameReplacementEvidence = BehaviorTracker.RenameReplacementEvidence(
+                    sourceData: self.boundedFileSample(at: srcPath, maximumBytes: 65_536),
+                    destinationData: self.boundedFileSample(at: destinationPath, maximumBytes: 65_536),
+                    destinationExisted: true
+                )
+                behaviorTracker?.recordRenameIntent(
+                    pid: pid, source: srcPath, destination: destinationPath,
+                    evidence: renameReplacementEvidence
+                )
+            }
             esClient?.respond(to: message, allow: !renameBlocked)
+            tamperProtection?.handleRenameEvent(
+                srcPath: srcPath,
+                destinationPath: destinationPath,
+                actorPath: processPath,
+                actorPid: pid,
+                identity: tamperActorIdentity,
+                blocked: renameBlocked,
+                consoleUser: consoleUser
+            )
             // Behaviour is recorded from NOTIFY_RENAME, which reflects only
             // renames that actually happened (recording both double-counted).
             fileScanner?.cache.invalidate(path: srcPath)
@@ -446,27 +648,84 @@ final class ESEventHandler {
             fileScanner?.cache.invalidate(path: notifyDestPath)
             let renameActorIsPlatform = process.is_platform_binary
             let renameActorTrusted = actorHasTrustedSigner(process)
+            let renameTeamID = esOptionalString(process.team_id)
+            let renameSigningID = esOptionalString(process.signing_id)
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
+                self.reportIntegrityViolation(
+                    at: notifySrcPath, actorPID: pid, responsiblePID: responsiblePid
+                )
+                self.reportIntegrityViolation(
+                    at: notifyDestPath, actorPID: pid, responsiblePID: responsiblePid
+                )
                 self.behaviorTracker?.recordRename(
-                    pid: pid, processPath: processPath,
-                    source: notifySrcPath, destination: notifyDestPath
+                    pid: pid, processGroupID: processGroupID, processPath: processPath,
+                    source: notifySrcPath, destination: notifyDestPath,
+                    replacementEvidence: self.behaviorTracker?.consumeRenameIntent(
+                        pid: pid, source: notifySrcPath, destination: notifyDestPath
+                    )
                 )
                 self.processTree?.recordFileAccess(pid: pid, path: notifySrcPath, operation: "rename")
+                let browserIdentityCandidate = BrowserDownloadRenamePolicy.shouldIgnoreDestination(
+                    destination: notifyDestPath,
+                    developerIDValidated: true,
+                    teamID: renameTeamID,
+                    signingID: renameSigningID
+                )
+                let validatedBrowserDownload = browserIdentityCandidate
+                    && DeveloperIDTrustValidator.shared.isValidated(path: processPath)
                 if let alert = self.ransomwareDetector?.evaluateRename(
                     pid: pid,
                     processPath: processPath,
                     source: notifySrcPath,
                     destination: notifyDestPath,
                     actorIsPlatformBinary: renameActorIsPlatform,
-                    actorHasTrustedSigner: renameActorTrusted
+                    actorHasTrustedSigner: renameActorTrusted,
+                    ignoreBrowserDownloadDestination: validatedBrowserDownload
                 ) {
                     self.reportRansomware(
                         alert,
                         pid: pid,
                         parentPid: parentPid,
                         processPath: processPath,
-                        filePath: notifyDestPath
+                        filePath: notifyDestPath,
+                        processIdentity: processIdentity,
+                        responsiblePID: responsiblePid,
+                        actorIsPlatformBinary: renameActorIsPlatform,
+                        teamID: renameTeamID,
+                        signingID: renameSigningID
+                    )
+                }
+
+                // Browsers and Finder commonly finish a download by renaming a
+                // temporary file. Check the final intake path by exact hash so
+                // `.txt` and extensionless known samples cannot evade the
+                // completed-write scan. Temporary suffixes are excluded by the
+                // shared policy to avoid duplicate pre-finalization findings.
+                if let scanner = self.fileScanner,
+                   let destinationIdentity = FileIdentity(path: notifyDestPath) {
+                    let signatureDecision = ScanCandidatePolicy.completedWriteExactSignatureDecision(
+                        path: notifyDestPath,
+                        fileSize: destinationIdentity.size
+                    )
+                    if signatureDecision == .skip(.overSizeLimit) {
+                        Self.logger.info(
+                            "Completed-write exact-signature check skipped over size cap after rename: \(notifyDestPath, privacy: .private)"
+                        )
+                    }
+                    guard signatureDecision == .check,
+                          let result = scanner.exactSignatureMatch(
+                            path: notifyDestPath,
+                            identity: destinationIdentity
+                          ) else { return }
+                    self.reportDetectedThreat(
+                        result,
+                        processPath: processPath,
+                        pid: pid,
+                        parentPid: parentPid,
+                        filePath: notifyDestPath,
+                        processIdentity: processIdentity,
+                        terminateProcess: true
                     )
                 }
             }
@@ -475,11 +734,35 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_UNLINK:
             let unlinkTarget = esString(msg.event.unlink.target.pointee.path)
-            let unlinkBlocked = tamperProtection?.shouldBlock(
-                targetPath: unlinkTarget, actorPath: processPath, actorPid: pid
-            ) ?? false
-            tamperProtection?.handleUnlinkEvent(targetPath: unlinkTarget, actorPath: processPath, actorPid: pid)
+            let unlinkBlocked: Bool
+            if tamperProtection?.protects(path: unlinkTarget) == true {
+                let ordinarilyBlocked = tamperProtection?.shouldBlockUnlink(
+                    targetPath: unlinkTarget,
+                    identity: tamperActorIdentity,
+                    nickIdentityValidated: validatedNickTamperActor(
+                        auditToken: process.audit_token,
+                        identity: tamperActorIdentity
+                    )
+                ) ?? false
+                let leaseAllowed = leasedUpdateAuthorization(
+                    targetPath: unlinkTarget,
+                    operation: .unlink,
+                    process: process,
+                    processPath: processPath,
+                    identity: tamperActorIdentity
+                )
+                unlinkBlocked = ordinarilyBlocked && !leaseAllowed
+            } else {
+                unlinkBlocked = false
+            }
             esClient?.respond(to: message, allow: !unlinkBlocked)
+            tamperProtection?.handleUnlinkEvent(
+                targetPath: unlinkTarget,
+                actorPath: processPath,
+                actorPid: pid,
+                identity: tamperActorIdentity,
+                blocked: unlinkBlocked
+            )
             if !unlinkBlocked {
                 fileScanner?.cache.invalidate(path: unlinkTarget)
             }
@@ -489,6 +772,11 @@ final class ESEventHandler {
         case ES_EVENT_TYPE_NOTIFY_UNLINK:
             let filePath = esString(msg.event.unlink.target.pointee.path)
             fileScanner?.cache.invalidate(path: filePath)
+            dispatchQueue.async { [weak self] in
+                self?.reportIntegrityViolation(
+                    at: filePath, actorPID: pid, responsiblePID: responsiblePid
+                )
+            }
             // Encrypt-to-new-file ransomware deletes the originals, including
             // a canary it never modified in place.
             if ransomwareDetector?.canaryManager.isCanary(path: filePath) == true,
@@ -508,7 +796,9 @@ final class ESEventHandler {
                         pid: pid,
                         parentPid: parentPid,
                         processPath: processPath,
-                        filePath: filePath
+                        filePath: filePath,
+                        processIdentity: processIdentity,
+                        responsiblePID: responsiblePid
                     )
                 }
             }
@@ -625,6 +915,7 @@ final class ESEventHandler {
         completion: @escaping (Bool, ScanCache.Entry?) -> Void
     ) {
         let retained = RetainedMessage(message)
+        let startedAt = DispatchTime.now().uptimeNanoseconds
         let budgetNanoseconds = Self.preLaunchBudgetNanoseconds(deadline: message.pointee.deadline)
         guard budgetNanoseconds > 50_000_000 else {
             _ = retained.claimResponse()
@@ -635,7 +926,8 @@ final class ESEventHandler {
 
         preLaunchQueue.asyncAfter(deadline: .now() + .nanoseconds(Int(budgetNanoseconds))) { [weak self] in
             guard retained.claimResponse() else { return }
-            Self.logger.info("Pre-launch hash exceeded budget; allowing \(path, privacy: .private)")
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+            Self.logger.info("Pre-launch hash exceeded budget after \(elapsed / 1_000_000) ms; allowing \(path, privacy: .private)")
             self?.esClient?.respond(to: retained.pointer, allow: true)
             completion(false, nil)
         }
@@ -643,6 +935,8 @@ final class ESEventHandler {
         preLaunchQueue.async { [weak self] in
             let match = scanner.preLaunchHashMatch(path: path, identity: identity)
             guard retained.claimResponse() else { return }
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
+            Self.logger.debug("Pre-launch exact-hash lookup completed in \(elapsed / 1_000_000) ms")
             self?.esClient?.respond(to: retained.pointer, allow: match == nil)
             if let match {
                 Self.logger.notice("Blocked first launch of known threat \(match.name, privacy: .public): \(path, privacy: .private)")
@@ -672,7 +966,11 @@ final class ESEventHandler {
         trustedSigner: Bool,
         scanFirst: Bool,
         blocked: Bool,
-        verdict: ScanCache.Entry?
+        verdict: ScanCache.Entry?,
+        teamID: String?,
+        signingID: String?,
+        arguments: [String],
+        responsiblePID: Int32?
     ) {
         var verdict = verdict
         // Skip the content scan only for identity-signed code outside
@@ -688,8 +986,13 @@ final class ESEventHandler {
             pid: pid, processPath: processPath,
             eventType: .processExec, detail: targetPath
         )
-        processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: [])
-        tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid)
+        processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: arguments)
+        tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid, args: arguments)
+
+        let lolbinFinding = LOLBinExecutionPolicy.finding(
+            executablePath: targetPath,
+            arguments: arguments
+        )
 
         pushEvent(ESEvent(
             eventType:   .authExec,
@@ -700,14 +1003,107 @@ final class ESEventHandler {
             decision:    blocked ? .deny : .allow,
             threat:      ESEvent.ThreatContext(
                 sha256:       verdict?.hash,
-                threatName:   verdict?.threatName,
-                threatFamily: verdict?.threatFamily,
-                isCodeSigned: trustedSigner
+                threatName:   verdict?.threatName ?? lolbinFinding?.title,
+                threatFamily: verdict?.threatFamily ?? (lolbinFinding == nil ? nil : "lolbin-behavior"),
+                isCodeSigned: trustedSigner,
+                teamID: teamID,
+                signingID: signingID,
+                metadata: lolbinFinding.map { finding in
+                    var metadata = [
+                        "reason": finding.reason,
+                        "rule": finding.reason,
+                        "ruleTier": "protected",
+                        "detectionKind": "lolbin-behavior",
+                        "signalSeverity": finding.severity,
+                        "execTargetPath": targetPath
+                    ]
+                    if let matchedCommand = finding.matchedCommand {
+                        metadata["matchedCommand"] = matchedCommand
+                    }
+                    if let attribution = processTree?.responsibleApp(
+                        actorPID: pid,
+                        responsiblePID: responsiblePID,
+                        resolver: SecCodeResponsibleProcessIdentityResolver.shared
+                    ) {
+                        metadata.merge(attribution.metadata) { current, _ in current }
+                    }
+                    return metadata
+                }
             )
         ))
     }
 
     // MARK: - Private Helpers
+
+    private func reportIntegrityViolation(
+        at path: String,
+        actorPID: Int32? = nil,
+        responsiblePID: Int32? = nil
+    ) {
+        guard let violation = fileIntegrityMonitor?.check(path: path) else { return }
+        let attribution = actorPID.flatMap {
+            processTree?.responsibleApp(
+                actorPID: $0,
+                responsiblePID: responsiblePID,
+                resolver: SecCodeResponsibleProcessIdentityResolver.shared
+            ).metadata
+        }
+        let attributed = IntegrityViolation(
+            id: violation.id,
+            path: violation.path,
+            violationType: violation.violationType,
+            expectedHash: violation.expectedHash,
+            actualHash: violation.actualHash,
+            timestamp: violation.timestamp,
+            metadata: attribution
+        )
+        guard let data = try? encoder.encode(attributed) else { return }
+        xpcServer?.sendIntegrityViolationToApp(data)
+    }
+
+    /// Emits detector-confirmed evidence and performs automatic remediation
+    /// only for an exact curated signature. Must run on `dispatchQueue`.
+    private func reportDetectedThreat(
+        _ result: FileScanner.ScanResult,
+        processPath: String,
+        pid: Int32,
+        parentPid: Int32,
+        filePath: String,
+        processIdentity: ProcessInstanceIdentity?,
+        terminateProcess: Bool
+    ) {
+        let threat = ESEvent(
+            eventType: .notifyWrite,
+            processPath: processPath,
+            pid: pid,
+            parentPid: parentPid,
+            filePath: filePath,
+            decision: .notApplicable,
+            threat: ESEvent.ThreatContext(
+                sha256: result.hash,
+                threatName: result.threatName,
+                threatFamily: result.threatFamily
+            )
+        )
+        reportThreat(threat)
+        processTree?.markAsThreat(pid: pid)
+
+        // Heuristic/YARA matches are user-review findings. Automated
+        // kill/quarantine is reserved for exact curated hash evidence.
+        guard result.mayBlock, let engine = remediationEngine else { return }
+        let report = engine.remediate(
+            threatPath: filePath,
+            hash: result.hash,
+            threatName: result.threatName ?? "Unknown",
+            processPath: processPath,
+            pid: pid,
+            processIdentity: processIdentity,
+            terminateProcess: terminateProcess
+        )
+        if let data = try? JSONEncoder().encode(report) {
+            xpcServer?.sendRemediationToApp(data)
+        }
+    }
 
     /// Reports a ransomware alert and, when the evidence allows it, stops the
     /// writer. Must run on `dispatchQueue`.
@@ -716,19 +1112,40 @@ final class ESEventHandler {
         pid: Int32,
         parentPid: Int32,
         processPath: String,
-        filePath: String
+        filePath: String,
+        processIdentity: ProcessInstanceIdentity?,
+        responsiblePID: Int32? = nil,
+        actorIsPlatformBinary: Bool = false,
+        teamID: String? = nil,
+        signingID: String? = nil
     ) {
         // One burst produces an event for every file it touches. Report a
         // process once per minute unless the evidence escalates to a block.
         let isBlock = alert.recommendation == .block
+        let developerIDValidated = DeveloperIDTrustValidator.shared.isValidated(path: processPath)
+        let repositoryRoot = Self.approvedDevelopmentRepositoryRoot(
+            containing: filePath,
+            approvedRoots: xpcServer?.approvedDevelopmentRoots() ?? []
+        )
+        let developmentBuild = DevelopmentBuildRansomwarePolicy.isAlertOnly(
+            processPath: processPath,
+            destination: filePath,
+            repositoryRoot: repositoryRoot,
+            actorValidated: actorIsPlatformBinary || developerIDValidated
+        )
+        let shouldTerminate = RansomwareTerminationPolicy.shouldTerminate(
+            isBlockRecommendation: isBlock,
+            developerIDValidated: developerIDValidated,
+            isApprovedDevelopmentBuild: developmentBuild
+        )
         let shouldReport = ransomwareReportLock.withLock { () -> Bool in
             let now = Date()
             if let previous = lastRansomwareReport[pid],
                now.timeIntervalSince(previous.date) < 60,
-               previous.blocked || !isBlock {
+               previous.blocked || !shouldTerminate {
                 return false
             }
-            lastRansomwareReport[pid] = (now, isBlock)
+            lastRansomwareReport[pid] = (now, shouldTerminate)
             if lastRansomwareReport.count > 256 {
                 lastRansomwareReport = lastRansomwareReport.filter { now.timeIntervalSince($0.value.date) < 60 }
             }
@@ -737,8 +1154,28 @@ final class ESEventHandler {
         guard shouldReport else { return }
 
         Self.logger.warning(
-            "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) action=\(String(describing: alert.recommendation))"
+            "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) terminate=\(shouldTerminate)"
         )
+        var ransomwareMetadata: [String: String] = [
+            "detectionKind": "ransomware-behavior",
+            "actorValidation": developerIDValidated ? "developer-id" : "unvalidated",
+            "response": shouldTerminate ? "terminated" : "alert-only",
+            "indicators": alert.indicators.joined(separator: "; ")
+        ]
+        if let attribution = processTree?.responsibleApp(
+            actorPID: pid,
+            responsiblePID: responsiblePID,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        ) {
+            ransomwareMetadata.merge(attribution.metadata) { current, _ in current }
+        }
+        if developmentBuild { ransomwareMetadata["developmentContext"] = "repository-build" }
+        if let burst = alert.renameBurst {
+            ransomwareMetadata["renameExtension"] = burst.newExtension
+            ransomwareMetadata["renameFileCount"] = String(burst.fileCount)
+            ransomwareMetadata["renameDirectoryCount"] = String(burst.directoryCount)
+            ransomwareMetadata["renameWindowSeconds"] = String(burst.windowSeconds)
+        }
         let ransomwareEvent = ESEvent(
             eventType: .notifyWrite,
             processPath: processPath,
@@ -747,15 +1184,18 @@ final class ESEventHandler {
             filePath: filePath,
             decision: .notApplicable,
             threat: ESEvent.ThreatContext(
-                threatName: "Possible ransomware activity",
-                threatFamily: alert.indicators.joined(separator: "; ")
+                threatName: alert.renameBurst == nil
+                    ? "Possible ransomware behavior"
+                    : "Rapid file-renaming behavior",
+                threatFamily: "ransomware-behavior",
+                isCodeSigned: developerIDValidated,
+                teamID: developerIDValidated ? teamID : nil,
+                signingID: developerIDValidated ? signingID : nil,
+                metadata: ransomwareMetadata
             )
         )
-        pushEvent(ransomwareEvent)
-        if let data = try? encoder.encode(ransomwareEvent) {
-            xpcServer?.sendThreatToApp(data)
-        }
-        guard alert.recommendation == .block, let engine = remediationEngine else { return }
+        reportThreat(ransomwareEvent)
+        guard shouldTerminate, let engine = remediationEngine else { return }
         // A deleted canary cannot be hashed; the writer is still stopped.
         let hash = fileScanner?.scan(filePath: filePath).hash ?? ""
         let report = engine.remediate(
@@ -763,11 +1203,35 @@ final class ESEventHandler {
             hash: hash,
             threatName: "Ransomware (\(alert.indicators.first ?? "unknown"))",
             processPath: processPath,
-            pid: pid
+            pid: pid,
+            processIdentity: processIdentity
         )
         if let data = try? JSONEncoder().encode(report) {
             xpcServer?.sendRemediationToApp(data)
         }
+    }
+
+    /// Returns a repository boundary for developer build output. This is used
+    /// only to prevent heuristic process termination; the protected alert is
+    /// still emitted and cannot be suppressed.
+    private static func approvedDevelopmentRepositoryRoot(
+        containing path: String,
+        approvedRoots: Set<String>
+    ) -> String? {
+        guard path.contains("/.build/") || path.contains("/CMakeFiles/")
+                || path.contains("/DerivedData/") || path.contains("/Build/Products/") else {
+            return nil
+        }
+        let destination = URL(fileURLWithPath: path).standardizedFileURL.path
+        for rawRoot in approvedRoots {
+            let root = URL(fileURLWithPath: rawRoot).standardizedFileURL
+            let rootPath = root.path
+            guard destination == rootPath || destination.hasPrefix(rootPath + "/") else { continue }
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent(".git").path) {
+                return rootPath
+            }
+        }
+        return nil
     }
 
     /// Encodes and pushes an `ESEvent` to the container app via XPC.
@@ -777,6 +1241,15 @@ final class ESEventHandler {
             guard let self, let data = try? self.encoder.encode(event) else { return }
             self.xpcServer?.sendEventToApp(data)
         }
+    }
+
+    /// Sends detector-confirmed evidence only through the acknowledged threat
+    /// channel. Sending the same event through `reportEvent` first allowed a
+    /// notification to race ahead of durable incident persistence and also
+    /// made one detection appear twice in the app.
+    private func reportThreat(_ event: ESEvent) {
+        guard let data = try? encoder.encode(event) else { return }
+        xpcServer?.sendThreatToApp(data)
     }
 
     /// Limits real-time deep scanning to files that can reasonably carry
@@ -831,15 +1304,15 @@ final class ESEventHandler {
     }
 
     /// Build products written by Apple's toolchain skip heuristic scanning.
-    /// The actor must be a validly (non-ad-hoc) signed binary inside a
-    /// toolchain location — a process merely *named* `ld` or `swift` anywhere
-    /// on disk no longer qualifies.
+    /// The actor must carry Apple's kernel-established platform identity inside
+    /// a toolchain location. A self-signed binary with a copied Team ID or tool
+    /// name cannot qualify.
     private func isTrustedDeveloperBuild(
         actorPath: String,
-        actorHasValidSignature: Bool,
+        actorIsPlatformBinary: Bool,
         filePath: String
     ) -> Bool {
-        guard actorHasValidSignature else { return false }
+        guard actorIsPlatformBinary else { return false }
         let actor = URL(fileURLWithPath: actorPath).lastPathComponent.lowercased()
         let trustedActors: Set<String> = [
             "xcode", "xcbuild", "xcodebuild", "swbbuildservice",
@@ -865,6 +1338,77 @@ final class ESEventHandler {
             codesigningFlags: process.codesigning_flags,
             isPlatformBinary: process.is_platform_binary,
             teamID: esOptionalString(process.team_id)
+        )
+    }
+
+    private func validatedNickTamperActor(
+        auditToken: audit_token_t,
+        identity: TamperActorIdentity
+    ) -> Bool {
+        TamperActorValidator.shared.validatesNickActor(
+            auditToken: auditToken,
+            identity: identity
+        )
+    }
+
+    private func leasedUpdateAuthorization(
+        targetPath: String,
+        sourcePath: String? = nil,
+        operation: NickUpdateLeaseOperation,
+        process: es_process_t,
+        processPath: String,
+        identity: TamperActorIdentity
+    ) -> Bool {
+        updateLeaseManager?.authorizes(
+            targetPath: targetPath,
+            sourcePath: sourcePath,
+            operation: operation,
+            actorPath: processPath,
+            identity: identity,
+            nickUpdateIdentityValidated: TamperActorValidator.shared.validatesNickUpdateActor(
+                auditToken: process.audit_token,
+                identity: identity
+            )
+        ) ?? false
+    }
+
+    private func handleProtectedWriteAuthorization(
+        message: UnsafePointer<es_message_t>,
+        targetPath: String,
+        process: es_process_t,
+        processPath: String,
+        pid: Int32,
+        identity: TamperActorIdentity,
+        operation: TamperProtectedOperation
+    ) {
+        guard tamperProtection?.protects(path: targetPath) == true else {
+            esClient?.respond(to: message, allow: true)
+            return
+        }
+        let ordinarilyBlocked = tamperProtection?.shouldBlockWrite(
+            targetPath: targetPath,
+            identity: identity,
+            nickIdentityValidated: validatedNickTamperActor(
+                auditToken: process.audit_token,
+                identity: identity
+            )
+        ) ?? false
+        let leaseAllowed = leasedUpdateAuthorization(
+            targetPath: targetPath,
+            operation: .write,
+            process: process,
+            processPath: processPath,
+            identity: identity
+        )
+        let blocked = ordinarilyBlocked && !leaseAllowed
+        esClient?.respond(to: message, allow: !blocked)
+        tamperProtection?.handleWriteEvent(
+            targetPath: targetPath,
+            actorPath: processPath,
+            actorPid: pid,
+            identity: identity,
+            blocked: blocked,
+            operation: operation
         )
     }
 

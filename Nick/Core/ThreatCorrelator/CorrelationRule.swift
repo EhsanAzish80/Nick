@@ -190,6 +190,9 @@ struct CorrelationRule: Sendable {
     ) { signals in
         let matches = signals.filter { $0.source == .avCapture }
         guard !matches.isEmpty else { return nil }
+        let isInactive = matches.allSatisfy {
+            $0.metadata["reason"] == "capture_device_inactive"
+        }
         let devices   = matches.compactMap { $0.metadata["deviceName"] }.joined(separator: ", ")
         let processes = matches.compactMap { $0.metadata["process"]    }.joined(separator: ", ")
         let hasAuthoritativeAttribution = matches.allSatisfy {
@@ -202,6 +205,19 @@ struct CorrelationRule: Sendable {
         let hasInvalidSignature = hasAuthoritativeAttribution && matches.contains {
             guard let signingStatus = $0.processInfo?.signingStatus else { return false }
             return signingStatus == .unsigned || signingStatus == .invalid
+        }
+
+        if isInactive {
+            return ThreatAlert(
+                score: 0.05,
+                content: AlertContent(
+                    title: "Camera or microphone became inactive",
+                    description: "\(devices) stopped streaming.",
+                    severity: .info,
+                    recommendedAction: "No action is needed."
+                ),
+                contributingSignals: matches
+            )
         }
 
         if isSimulatorActivity {

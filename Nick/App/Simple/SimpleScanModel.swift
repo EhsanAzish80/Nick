@@ -15,11 +15,34 @@ struct SimpleScanResult: Equatable {
     let flaggedNames: [String]
     /// Full paths behind `flaggedNames`, for Move to Trash / Show in Finder.
     let flaggedPaths: [String]
+    /// Scan-time SHA-256 evidence keyed by path, used to reject swapped files.
+    let reviewedHashes: [String: String]
+    /// Detection name keyed by path, retained for the quarantine record.
+    let threatNames: [String: String]
+
+    init(
+        verdict: Verdict,
+        headline: String,
+        detail: String,
+        flaggedNames: [String],
+        flaggedPaths: [String],
+        reviewedHashes: [String: String] = [:],
+        threatNames: [String: String] = [:]
+    ) {
+        self.verdict = verdict
+        self.headline = headline
+        self.detail = detail
+        self.flaggedNames = flaggedNames
+        self.flaggedPaths = flaggedPaths
+        self.reviewedHashes = reviewedHashes
+        self.threatNames = threatNames
+    }
 
     /// Result of checking one chosen file or folder.
     static func fileCheck(
         target: URL,
         matches: [YARAMatch],
+        reviewedHashes: [String: String] = [:],
         classify: (YARAMatch) -> ThreatVerdict = { DeepScanner.classify(match: $0) }
     ) -> SimpleScanResult {
         let name = target.lastPathComponent
@@ -37,6 +60,12 @@ struct SimpleScanResult: Equatable {
         let reviewPaths = unique(review).filter { !harmfulPaths.contains($0) }
         let flagged = harmfulPaths + reviewPaths
         let names = flagged.map { URL(fileURLWithPath: $0).lastPathComponent }
+        var hashes = reviewedHashes
+        var threatNames: [String: String] = [:]
+        for match in matches where flagged.contains(match.filePath) {
+            if let hash = match.metadata["sha256"] { hashes[match.filePath] = hash }
+            threatNames[match.filePath] = match.metadata["description"] ?? match.ruleName
+        }
 
         if !harmfulPaths.isEmpty {
             return SimpleScanResult(
@@ -45,7 +74,8 @@ struct SimpleScanResult: Equatable {
                     ? "Found \(count(harmfulPaths.count, "harmful file")) in “\(name)”"
                     : "“\(name)” looks harmful",
                 detail: "Don’t open it. Move it to the Trash unless you’re sure where it came from.",
-                flaggedNames: names, flaggedPaths: flagged
+                flaggedNames: names, flaggedPaths: flagged,
+                reviewedHashes: hashes, threatNames: threatNames
             )
         }
         if !reviewPaths.isEmpty {
@@ -55,7 +85,8 @@ struct SimpleScanResult: Equatable {
                     ? "\(count(reviewPaths.count, "file")) in “\(name)” need\(reviewPaths.count == 1 ? "s" : "") a look"
                     : "“\(name)” needs a look",
                 detail: "It can do things harmful apps also do. That’s often fine — keep it only if you trust where it came from.",
-                flaggedNames: names, flaggedPaths: flagged
+                flaggedNames: names, flaggedPaths: flagged,
+                reviewedHashes: hashes, threatNames: threatNames
             )
         }
         return SimpleScanResult(

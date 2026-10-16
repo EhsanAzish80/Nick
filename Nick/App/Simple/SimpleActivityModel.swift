@@ -19,9 +19,8 @@ struct SimpleActivityItem: Identifiable, Equatable {
     }
 
     enum Status: String, Equatable {
-        case needsAction = "Needs action"
-        case threat = "Threat"
-        case warning = "Warning"
+        case informational = "Observed"
+        case needsAction = "Needs review"
         case blocked = "Blocked"
         case quarantined = "Quarantined"
     }
@@ -35,16 +34,15 @@ struct SimpleActivityItem: Identifiable, Equatable {
 
     var icon: String {
         switch status {
+        case .informational: "info.circle"
         case .needsAction: "exclamationmark.circle"
-        case .threat:      "xmark.shield"
-        case .warning:     "exclamationmark.triangle"
         case .blocked:     "hand.raised"
         case .quarantined: "archivebox"
         }
     }
 
     var isNeedsAction: Bool { status == .needsAction }
-    var isBlocked: Bool { status == .blocked || status == .quarantined }
+    var isBlocked: Bool { status == .blocked }
     var isQuarantined: Bool { status == .quarantined }
     var opensDetail: Bool { source != .blocked }
 }
@@ -75,12 +73,29 @@ enum SimpleActivityFeed {
 
     /// An alert reduced to what Simple mode may show.
     struct AlertInput: Equatable {
-        enum Level: Equatable { case warning, critical }
+        enum Level: Equatable { case informational, warning, critical }
         let id: UUID
         let headline: String
         let level: Level
         let date: Date
-        let needsAction: Bool
+        let displayStatus: IncidentDisplayStatus
+
+        init(
+            id: UUID,
+            headline: String,
+            level: Level,
+            date: Date,
+            needsAction: Bool,
+            isBlocked: Bool = false,
+            displayStatus: IncidentDisplayStatus? = nil
+        ) {
+            self.id = id
+            self.headline = headline
+            self.level = level
+            self.date = date
+            self.displayStatus = displayStatus
+                ?? (isBlocked ? .blocked : (needsAction ? .needsReview : .observed))
+        }
     }
 
     /// A launch or open that real-time protection denied.
@@ -88,6 +103,14 @@ enum SimpleActivityFeed {
         let name: String
         let date: Date
         let wasLaunch: Bool
+        let persistenceFailed: Bool
+
+        init(name: String, date: Date, wasLaunch: Bool, persistenceFailed: Bool = false) {
+            self.name = name
+            self.date = date
+            self.wasLaunch = wasLaunch
+            self.persistenceFailed = persistenceFailed
+        }
     }
 
     struct Day: Identifiable, Equatable {
@@ -99,30 +122,65 @@ enum SimpleActivityFeed {
     static func alertInputs(
         from alerts: [ThreatAlert],
         actionable: Set<UUID>,
+        incidents: [SecurityIncident] = [],
         builder: UserFacingAlertBuilder = .shared
     ) -> [AlertInput] {
-        alerts.compactMap { alert in
+        let incidentsByAlertID = Dictionary(uniqueKeysWithValues: incidents.map { ($0.alert.id, $0) })
+        return alerts.compactMap { alert in
             let user = builder.build(from: alert)
+            let incident = incidentsByAlertID[alert.id]
+            let displayStatus = incident?.displayStatus ?? IncidentDisplayStatus(alert: alert)
+            let behavior = BehaviorIncidentPresentation(alert: alert, incident: incident)
             let level: AlertInput.Level
-            switch user.severity {
-            case .safe:     return nil
-            case .warning:  level = .warning
-            case .critical: level = .critical
+            if displayStatus == .needsReview && behavior.isBehavior {
+                level = .critical
+            } else if !alert.isActionableUserFinding {
+                level = .informational
+            } else {
+                switch user.severity {
+                case .safe:
+                    // The only actionable safe-mapped case is protected evidence.
+                    level = .warning
+                case .warning:  level = .warning
+                case .critical: level = .critical
+                }
             }
             return AlertInput(
-                id: alert.id, headline: user.headline, level: level,
-                date: alert.lastSeen, needsAction: actionable.contains(alert.id)
+                id: alert.id,
+                headline: level == .informational ? informationalHeadline(user.headline)
+                    : (user.severity == .safe ? "Security finding needs review" : user.headline),
+                level: level,
+                date: alert.lastSeen,
+                needsAction: displayStatus == .needsReview && actionable.contains(alert.id),
+                isBlocked: displayStatus == .blocked,
+                displayStatus: displayStatus
             )
         }
     }
 
-    static func blockedInputs(from events: [ESEvent]) -> [BlockedInput] {
+    private static func informationalHeadline(_ headline: String) -> String {
+        let suffix = " needs your review"
+        guard headline.lowercased().hasSuffix(suffix) else { return headline }
+        return String(headline.dropLast(suffix.count)) + " activity observed"
+    }
+
+    static func blockedInputs(
+        from events: [ESEvent],
+        failedThreatEventIDs: Set<UUID> = []
+    ) -> [BlockedInput] {
         events.compactMap { event in
             guard event.decision == .deny else { return nil }
+            let isTamper = event.threatFamily == "tamper"
+            guard !isTamper || failedThreatEventIDs.contains(event.id) else { return nil }
             let path = event.filePath ?? event.processPath
             let name = (path as NSString).lastPathComponent
             guard !name.isEmpty else { return nil }
-            return BlockedInput(name: name, date: event.timestamp, wasLaunch: event.eventType == .authExec)
+            return BlockedInput(
+                name: name,
+                date: event.timestamp,
+                wasLaunch: event.eventType == .authExec,
+                persistenceFailed: failedThreatEventIDs.contains(event.id)
+            )
         }
     }
 
@@ -135,14 +193,18 @@ enum SimpleActivityFeed {
         var items: [SimpleActivityItem] = []
 
         for alert in alerts {
-            let status: SimpleActivityItem.Status = alert.needsAction
-                ? .needsAction
-                : (alert.level == .critical ? .threat : .warning)
+            let status: SimpleActivityItem.Status = switch alert.displayStatus {
+            case .needsReview, .remediationNeeded: .needsAction
+            case .blocked: .blocked
+            case .quarantined: .quarantined
+            case .resolved, .observed: .informational
+            }
             items.append(SimpleActivityItem(
                 id: "a-\(alert.id.uuidString)",
                 source: .alert(alert.id),
                 title: alert.headline,
-                detail: alert.level == .critical ? "Nick found a threat" : "Nick warned you",
+                detail: alert.level == .critical ? "Nick detected activity"
+                    : (alert.level == .warning ? "Nick warned you" : "Nick observed activity"),
                 date: alert.date,
                 status: status
             ))
@@ -163,19 +225,26 @@ enum SimpleActivityFeed {
 
         // Repeated blocks of the same item on the same day collapse to one line.
         // A block of something already in Quarantine is covered by that line.
-        struct Key: Hashable { let name: String; let day: Date; let launch: Bool }
+        struct Key: Hashable { let name: String; let day: Date; let launch: Bool; let failed: Bool }
         let groups = Dictionary(grouping: blocked.filter { !quarantinedNames.contains($0.name) }) {
-            Key(name: $0.name, day: calendar.startOfDay(for: $0.date), launch: $0.wasLaunch)
+            Key(
+                name: $0.name,
+                day: calendar.startOfDay(for: $0.date),
+                launch: $0.wasLaunch,
+                failed: $0.persistenceFailed
+            )
         }
         for (key, group) in groups {
             let times = group.count == 1 ? "" : " (\(group.count) times)"
             items.append(SimpleActivityItem(
                 id: "b-\(key.launch ? "x" : "o")-\(Int(key.day.timeIntervalSince1970))-\(key.name)",
                 source: .blocked,
-                title: key.launch ? "Stopped “\(key.name)” from running" : "Stopped “\(key.name)” from opening",
-                detail: "Blocked by real-time protection\(times)",
+                title: key.failed
+                    ? "Could not save blocked evidence for “\(key.name)”"
+                    : (key.launch ? "Stopped “\(key.name)” from running" : "Stopped “\(key.name)” from opening"),
+                detail: key.failed ? "Nick will retry from its protected journal" : "Blocked by real-time protection\(times)",
                 date: group.map(\.date).max() ?? key.day,
-                status: .blocked
+                status: key.failed ? .needsAction : .blocked
             ))
         }
 

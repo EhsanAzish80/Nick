@@ -142,4 +142,199 @@ final class TrustedProcessListTests: XCTestCase {
         let sut = TrustedProcessList(userTrusted: ["CustomApp"])
         XCTAssertTrue(sut.isTrusted("Terminal"),   "Built-in entries must still be trusted when userTrusted is set")
     }
+
+    func test_securityTrustRequiresExactSigningIdentity() {
+        let trusted = NickProcessInfo(
+            pid: 10, path: "/Applications/Tool.app/Contents/MacOS/Tool", name: "Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "TEAM", signingID: "com.example.tool")
+        )
+        var sut = TrustedProcessList()
+        XCTAssertTrue(sut.addUserTrusted(trusted))
+        XCTAssertTrue(sut.isTrusted(trusted))
+
+        let impersonator = NickProcessInfo(
+            pid: 11, path: "/tmp/Tool", name: "Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "OTHER", signingID: "com.example.tool")
+        )
+        XCTAssertFalse(sut.isTrusted(impersonator))
+
+        let sameTeamDifferentProduct = NickProcessInfo(
+            pid: 12, path: "/Applications/Other.app/Contents/MacOS/Other", name: "Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "TEAM", signingID: "com.example.other")
+        )
+        XCTAssertFalse(sut.isTrusted(sameTeamDifferentProduct))
+    }
+
+    func test_nameOnlyLegacyEntryDoesNotGrantSecurityTrust() {
+        let process = NickProcessInfo(
+            pid: 10, path: "/Applications/Tool.app/Contents/MacOS/Tool", name: "Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "TEAM", signingID: "com.example.tool")
+        )
+        let sut = TrustedProcessList(userTrusted: ["Tool"])
+        XCTAssertTrue(sut.isTrusted("Tool"))
+        XCTAssertFalse(sut.isTrusted(process))
+    }
+
+    func test_builtinTrustRequiresExactIdentity() {
+        let terminal = NickProcessInfo(
+            pid: 20, path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+            name: "Terminal", parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal")
+        )
+        let impersonator = NickProcessInfo(
+            pid: 21, path: "/tmp/Terminal", name: "Terminal",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "OTHER", signingID: "com.apple.Terminal")
+        )
+        let sut = TrustedProcessList()
+        XCTAssertTrue(sut.isTrusted(terminal))
+        XCTAssertFalse(sut.isTrusted(impersonator))
+    }
+
+    func test_interpreterCannotBeUserTrusted() {
+        let shell = NickProcessInfo(
+            pid: 22, path: "/bin/zsh", name: "zsh",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+        var sut = TrustedProcessList()
+        XCTAssertFalse(sut.addUserTrusted(shell))
+        XCTAssertFalse(sut.isTrusted(shell))
+        XCTAssertNotNil(TrustedProcessList.trustRejectionReason(for: shell))
+    }
+
+    func test_forbiddenIdentityCannotUseBenignDisplayName() {
+        let renamedShell = NickProcessInfo(
+            pid: 23, path: "/bin/zsh", name: "Build Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+        var sut = TrustedProcessList()
+        XCTAssertFalse(sut.addUserTrusted(renamedShell))
+    }
+
+    func test_versionedPerlSigningIdentifierIsForbidden() {
+        let perl = NickProcessInfo(
+            pid: 24, path: "/usr/bin/perl5.34", name: "Renamed Tool",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.perl5.34")
+        )
+        var sut = TrustedProcessList()
+        XCTAssertFalse(sut.addUserTrusted(perl))
+    }
+
+    func test_interpreterSigningIdentifiersAreForbiddenAfterRename() {
+        let signingIDs = ["com.apple.python3", "com.apple.ruby", "com.apple.tclsh"]
+        for (index, signingID) in signingIDs.enumerated() {
+            let process = NickProcessInfo(
+                pid: Int32(50 + index), path: "/tmp/renamed-\(index)", name: "Build Tool",
+                parentPID: 1, parentName: "launchd",
+                signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: signingID)
+            )
+            var sut = TrustedProcessList()
+            XCTAssertFalse(sut.addUserTrusted(process), "\(signingID) must not be trustable")
+        }
+    }
+
+    func test_generalPurposeLaunchersCannotBeTrustedByName() {
+        let names = [
+            "env", "swift", "tclsh", "awk", "xargs", "find", "open",
+            "launchctl", "php", "lua", "pwsh", "java"
+        ]
+        for (index, name) in names.enumerated() {
+            let process = NickProcessInfo(
+                pid: Int32(100 + index), path: "/usr/bin/\(name)", name: name,
+                parentPID: 1, parentName: "launchd",
+                signingStatus: .signed(teamID: "TEAM", signingID: "example.\(name)")
+            )
+            var sut = TrustedProcessList()
+            XCTAssertFalse(sut.addUserTrusted(process), "\(name) must not be trustable")
+        }
+    }
+
+    func test_curlOsascriptAndZshExposeNoPersistentTrustWhileSignedAppDoes() {
+        let blocked = [
+            ("curl", "/usr/bin/curl", "com.apple.curl"),
+            ("osascript", "/usr/bin/osascript", "com.apple.osascript"),
+            ("zsh", "/bin/zsh", "com.apple.zsh"),
+        ]
+        for (name, path, signingID) in blocked {
+            let process = NickProcessInfo(
+                pid: 500, path: path, name: name, parentPID: 1, parentName: "launchd",
+                signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: signingID)
+            )
+            XCTAssertNotNil(TrustedProcessList.trustRejectionReason(for: process), name)
+        }
+
+        let thirdParty = NickProcessInfo(
+            pid: 501, path: "/Applications/Example.app/Contents/MacOS/Example", name: "Example",
+            parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "THIRDPARTY", signingID: "com.example.app")
+        )
+        XCTAssertNil(TrustedProcessList.trustRejectionReason(for: thirdParty))
+    }
+
+    func test_ineligiblePrimaryActorNeverFallsThroughToEligibleParentContext() {
+        let curl = NickProcessInfo(
+            pid: 601, path: "/usr/bin/curl", name: "curl", parentPID: 600, parentName: "Terminal",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.curl")
+        )
+        let terminal = NickProcessInfo(
+            pid: 600, path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+            name: "Terminal", parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.Terminal")
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: AlertContent(
+                title: "Known dangerous destination", description: "curl tried to connect",
+                severity: .critical, recommendedAction: "Review"
+            ),
+            contributingSignals: [
+                ThreatSignal(
+                    source: .network, severity: .high, title: "Known dangerous destination",
+                    description: "curl tried to connect",
+                    context: ThreatSignalContext(processInfo: curl)
+                ),
+                ThreatSignal(
+                    source: .process, severity: .info, title: "Parent context",
+                    description: "Terminal launched curl",
+                    context: ThreatSignalContext(processInfo: terminal)
+                ),
+            ]
+        )
+
+        // Both SimpleAlertSheet and AlertListView use this shared decision.
+        XCTAssertNil(TrustedProcessList.eligibleProcess(in: alert))
+    }
+
+    func test_contextualCaptureDoesNotOfferPersistentTrust() {
+        let photoBooth = NickProcessInfo(
+            pid: 700,
+            path: "/System/Applications/Photo Booth.app/Contents/MacOS/Photo Booth",
+            name: "Photo Booth", parentPID: 1, parentName: "launchd",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.PhotoBooth")
+        )
+        let alert = ThreatAlert(
+            score: 0.2,
+            content: AlertContent(
+                title: "Camera activity", description: "Camera active",
+                severity: .info, recommendedAction: "Review"
+            ),
+            contributingSignals: [ThreatSignal(
+                source: .avCapture, severity: .info, title: "Camera active",
+                description: "Photo Booth was frontmost",
+                context: ThreatSignalContext(
+                    processInfo: photoBooth,
+                    metadata: ["attributionConfidence": "contextual"]
+                )
+            )]
+        )
+
+        XCTAssertNil(TrustedProcessList.eligibleProcess(in: alert))
+    }
 }

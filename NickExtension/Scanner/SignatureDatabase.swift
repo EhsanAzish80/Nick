@@ -31,9 +31,7 @@ nonisolated(unsafe) private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_
 /// )
 /// ```
 ///
-/// Phase 6 (cloud intel) pushes updates via XPC; the extension calls
-/// `upsert(hash:name:family:severity:)` to merge new signatures without
-/// rebuilding the table.
+/// A versioned catalog bundled in the signed extension seeds fresh installs.
 ///
 /// All public methods are safe to call from any thread. An internal `NSLock`
 /// serialises concurrent reads and writes.
@@ -62,14 +60,22 @@ final class SignatureDatabase {
 
     private var db: OpaquePointer?
     private let lock = NSLock()
+    private(set) var bundledCatalogEntryCount = 0
+    private(set) var bundledCatalogRetrievedAt: String?
 
     // MARK: - Init
 
     /// Opens (or creates) the signatures database.
     ///
     /// - Parameter path: Path to the SQLite file. Defaults to `SignatureDatabase.dbPath`.
-    init(path: String = SignatureDatabase.dbPath) {
-        ensureDirectory(at: SignatureDatabase.dbDirectory)
+    init(
+        path: String = SignatureDatabase.dbPath,
+        bundledCatalogURL: URL? = Bundle.main.url(
+            forResource: "known-threat-hashes",
+            withExtension: "json"
+        )
+    ) {
+        ensureDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent().path)
 
         if sqlite3_open(path, &db) != SQLITE_OK {
             let msg = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
@@ -79,6 +85,8 @@ final class SignatureDatabase {
 
         applyPragmas()
         createTableIfNeeded()
+        createMetadataTableIfNeeded()
+        loadBundledCatalog(from: bundledCatalogURL)
         Self.logger.info("Signature database ready at \(path)")
     }
 
@@ -116,7 +124,7 @@ final class SignatureDatabase {
 
     /// Inserts or replaces a signature entry.
     ///
-    /// Thread-safe. Used by Phase 6 cloud intel XPC handler.
+    /// Thread-safe primitive retained for local catalog maintenance.
     func upsert(hash: String, name: String, family: String, severity: String) {
         lock.lock()
         defer { lock.unlock() }
@@ -215,6 +223,76 @@ final class SignatureDatabase {
             );
         """
         sqlite3_exec(db, sql, nil, nil, nil)
+    }
+
+    private func createMetadataTableIfNeeded() {
+        guard let db else { return }
+        sqlite3_exec(
+            db,
+            "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            nil,
+            nil,
+            nil
+        )
+    }
+
+    private func loadBundledCatalog(from url: URL?) {
+        guard let db, let url else { return }
+        let catalog: BundledHashCatalog
+        let validEntries: [BundledHashCatalog.Entry]
+        do {
+            let data = try Data(contentsOf: url)
+            catalog = try JSONDecoder().decode(BundledHashCatalog.self, from: data)
+            validEntries = try catalog.validatedEntries()
+        } catch {
+            Self.logger.error("Rejected invalid bundled signature catalog: \(error.localizedDescription)")
+            return
+        }
+
+        bundledCatalogEntryCount = validEntries.count
+        bundledCatalogRetrievedAt = catalog.retrievedAt
+        guard catalog.version > metadataInteger(for: "bundled_catalog_version") else { return }
+
+        let databaseEntries = validEntries.map {
+            ($0.hash, $0.name, $0.family, $0.severity)
+        }
+        guard !databaseEntries.isEmpty else {
+            Self.logger.error("Bundled signature catalog contained no valid entries")
+            return
+        }
+
+        bulkUpsert(databaseEntries)
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('bundled_catalog_version', ?);",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, String(catalog.version), -1, sqliteTransient)
+        if sqlite3_step(statement) == SQLITE_DONE {
+            Self.logger.info(
+                "Loaded bundled signature catalog version \(catalog.version) with \(databaseEntries.count) entries"
+            )
+        }
+    }
+
+    private func metadataInteger(for key: String) -> Int {
+        guard let db else { return 0 }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT value FROM metadata WHERE key = ? LIMIT 1;",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, key, -1, sqliteTransient)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return Int(columnText(statement, 0)) ?? 0
     }
 
     private func ensureDirectory(at path: String) {

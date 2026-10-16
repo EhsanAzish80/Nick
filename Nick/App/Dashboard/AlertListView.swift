@@ -25,11 +25,7 @@ struct AlertListView: View {
     @State private var timelineSearch = ""
 
     private var visibleAlerts: [ThreatAlert] {
-        engine.alerts.filter { alert in
-            alert.hasActionableEvidence
-                && (showTrustedAlerts
-                    || UserFacingAlertBuilder.shared.build(from: alert).severity != .safe)
-        }
+        engine.alerts.filter { $0.isVisibleInActiveAlerts(showInformational: showTrustedAlerts) }
     }
 
     var body: some View {
@@ -103,6 +99,7 @@ struct AlertListView: View {
 /// `.info` severity alerts (trusted-app activity) render with `textTertiary`
 /// styling to visually distinguish them from actionable alerts.
 private struct AlertRow: View {
+    @Environment(NetworkProtectionManager.self) private var networkProtection
 
     let alert: ThreatAlert
     @Environment(SecurityEngine.self) private var engine
@@ -120,6 +117,10 @@ private struct AlertRow: View {
 
     private var userAlert: UserFacingAlert {
         UserFacingAlertBuilder.shared.build(from: alert)
+    }
+
+    private var behaviorPresentation: BehaviorIncidentPresentation {
+        BehaviorIncidentPresentation(alert: alert, incident: engine.incident(for: alert))
     }
 
     private var displaySeverity: SignalSeverity {
@@ -188,15 +189,8 @@ private struct AlertRow: View {
             .first(where: { !$0.isEmpty })
     }
 
-    private var hasStableSignedIdentity: Bool {
-        alert.contributingSignals.contains { signal in
-            guard let process = signal.processInfo,
-                  case .signed(let teamID) = process.signingStatus else {
-                return false
-            }
-            return !teamID.isEmpty && !process.path.isEmpty
-        }
-    }
+    private var trustEligibleProcess: NickProcessInfo? { TrustedProcessList.eligibleProcess(in: alert) }
+    private var networkDomain: String? { TrustedProcessList.networkDomain(in: alert) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: NickSpacing.md) {
@@ -212,13 +206,13 @@ private struct AlertRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if behaviorPresentation.isBehavior || behaviorPresentation.responsibleAppName != "Unknown app" {
+                ResponsibleAppLine(presentation: behaviorPresentation)
+            }
+
             // Line 2 — badge · confidence · timestamp
             HStack(spacing: NickSpacing.xs) {
-                if simpleAlertMode {
-                    AssessmentBadge(text: userAlert.assessment, severity: displaySeverity)
-                } else {
-                    SeverityBadge(severity: alert.severity)
-                }
+                AssessmentBadge(text: behaviorPresentation.status.rawValue, severity: displaySeverity)
                 Text("·")
                     .font(.nickCaption)
                     .foregroundStyle(Color.textTertiary)
@@ -237,7 +231,7 @@ private struct AlertRow: View {
                     Text("·")
                         .font(.nickCaption)
                         .foregroundStyle(Color.textTertiary)
-                    Text("Seen \(alert.occurrenceCount) times")
+                    Text("Seen \(DisplayNumber.count(alert.occurrenceCount)) times")
                         .font(.nickCaption)
                         .foregroundStyle(Color.textSecondary)
                 }
@@ -280,6 +274,22 @@ private struct AlertRow: View {
             // Contributing signals — only in technical mode
             if !simpleAlertMode, !alert.contributingSignals.isEmpty {
                 VStack(alignment: .leading, spacing: NickSpacing.sm) {
+                    if behaviorPresentation.isBehavior || behaviorPresentation.responsibleAppName != "Unknown app" {
+                        technicalDetail("Responsible app", [
+                            behaviorPresentation.responsibleAppName,
+                            behaviorPresentation.bundleID,
+                            behaviorPresentation.teamID,
+                            behaviorPresentation.signing
+                        ].compactMap { $0 }.joined(separator: " · "))
+                        technicalDetail("Chain", behaviorPresentation.chain)
+                        technicalDetail(
+                            "Shell / actor",
+                            "\(behaviorPresentation.actor) · \(behaviorPresentation.actorSigning)"
+                        )
+                        if let command = behaviorPresentation.matchedCommand {
+                            technicalDetail("Matched command", command)
+                        }
+                    }
                     ForEach(alert.contributingSignals.prefix(5)) { signal in
                         HStack(alignment: .top, spacing: NickSpacing.sm) {
                             Text("▸")
@@ -301,7 +311,7 @@ private struct AlertRow: View {
                                         .truncationMode(.middle)
                                 }
                                 if let pid = signal.processInfo?.pid {
-                                    Text("PID \(pid)")
+                                    Text("PID \(String(pid))")
                                         .font(.nickMonoSmall)
                                         .foregroundStyle(Color.textTertiary)
                                 }
@@ -320,19 +330,28 @@ private struct AlertRow: View {
 
             // Buttons
             HStack(spacing: NickSpacing.md) {
-                if (!isMalwareDetection || isHeuristicDetection), reviewProcessName != nil {
+                if let networkDomain {
+                    Button("Allow This Domain") {
+                        Task { _ = await networkProtection.allowDomain(networkDomain) }
+                    }
+                    .buttonStyle(.nickSecondary)
+                } else if (!isMalwareDetection || isHeuristicDetection), reviewProcessName != nil {
                     Button("Expected for 24 Hours") {
                         engine.allowAlertOnce(alert.id)
                     }
                     .buttonStyle(.nickSecondary)
                     .help("Mutes only this exact behavior for 24 hours. Different, critical, persistence, and malware activity still alerts.")
 
-                    if hasStableSignedIdentity {
-                        Button("Allow This Behavior for 7 Days") {
+                    if trustEligibleProcess != nil {
+                        Button(engine.contributesToVerdictLearning(alert) ? "Confirm Expected Activity" : "Allow This Behavior for 7 Days") {
                             engine.alwaysAllowBehavior(from: alert.id)
                         }
                         .buttonStyle(.nickSecondary)
-                        .help("Allows this signed app only for the same behavior for 7 days. New, critical, persistence, and malware activity still alerts.")
+                        .help(
+                            engine.contributesToVerdictLearning(alert)
+                                ? "Records this review decision. A second distinct occurrence must be confirmed before matching review-only findings are lowered to Info; detections are never hidden."
+                                : "Allows this signed app only for the same behavior for 7 days. New, critical, persistence, and malware activity still alerts."
+                        )
                     }
                 }
 
@@ -342,7 +361,7 @@ private struct AlertRow: View {
                             if success {
                                 engine.allowAlertOnce(alert.id)
                             } else {
-                                approvalError = "Real-Time Protection did not accept the approval. The file remains blocked."
+                                approvalError = "The reviewed finding expired or the file changed. Scan the file again before allowing it."
                             }
                         }
                     }
@@ -477,6 +496,12 @@ private struct AlertRow: View {
                         .font(.nickButton)
                         .foregroundStyle(Color.textSecondary)
                 }
+                if behaviorPresentation.status == .needsReview {
+                    Button("Mark as reviewed") {
+                        engine.markAlertReviewed(alert.id)
+                    }
+                    .buttonStyle(.nickPrimary)
+                }
                 Button(simpleAlertMode ? "Hide This Occurrence" : "Dismiss") {
                     if simpleAlertMode {
                         engine.hideAlert(alert.id)
@@ -489,6 +514,7 @@ private struct AlertRow: View {
         }
         .padding(.horizontal, NickSpacing.lg)
         .padding(.vertical, NickSpacing.lg)
+        .onAppear { engine.markIncidentSeen(alert.id) }
         .confirmationDialog(
             "Move this file to Quarantine?",
             isPresented: $showQuarantineConfirmation,
@@ -524,6 +550,18 @@ private struct AlertRow: View {
             Button("OK") { approvalError = nil }
         } message: {
             Text(approvalError ?? "")
+        }
+    }
+
+    private func technicalDetail(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.nickCaption)
+                .foregroundStyle(Color.textSecondary)
+            Text(value)
+                .font(.nickMonoSmall)
+                .foregroundStyle(Color.textTertiary)
+                .textSelection(.enabled)
         }
     }
 
@@ -567,6 +605,20 @@ private struct AlertRow: View {
                 Text("Nick found this while monitoring \(URL(fileURLWithPath: path).deletingLastPathComponent().path). It has not been removed.")
                     .font(.nickCaption)
                     .foregroundStyle(Color.textSecondary)
+                if let signal = alert.contributingSignals.first,
+                   signal.metadata["remediationStatus"] == "quarantine-failed" {
+                    Text(signal.metadata["remediationStatusLine"] ?? "Quarantine failed")
+                        .font(.nickBodyMedium)
+                        .foregroundStyle(Color.statusRed)
+                    if let volume = signal.metadata["remediationVolumeName"] {
+                        Text("Volume: \(volume)")
+                            .font(.nickCaption)
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    Text(signal.metadata["remediationGuidance"] ?? alert.recommendedAction)
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.textSecondary)
+                }
             }
             .padding(.leading, NickSpacing.lg)
         } else if detectedFilePath != nil {
@@ -593,13 +645,16 @@ private struct AlertRow: View {
         xpcClient.requestQuarantineFile(
             path: path,
             expectedThreatName: detectionRule ?? "Detected threat"
-        ) { success, message in
+        ) { result in
             quarantining = false
-            if success {
-                engine.resolveAlert(alert.id)
+            switch result {
+            case .success:
+                engine.recordManualQuarantineSuccess(alertID: alert.id)
                 engine.runFullScan()
-            } else {
-                quarantineError = message ?? "Nick could not quarantine the file."
+            case .failure(let failure):
+                engine.recordManualQuarantineFailure(failure, alertID: alert.id)
+                let volume = failure.volumeName.map { " Volume: \($0)." } ?? ""
+                quarantineError = failure.statusLine + "." + volume + " " + failure.guidance
             }
         }
     }

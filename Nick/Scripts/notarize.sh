@@ -4,11 +4,6 @@
 # Usage:
 #   ./Nick/Scripts/notarize.sh
 #
-# Required environment variables (set in CI or export before running):
-#   APPLE_ID        — Apple ID used for notarization (e.g. you@example.com)
-#   APP_PASSWORD    — App-specific password from appleid.apple.com
-#   TEAM_ID         — 10-character Apple Developer Team ID
-#
 # Optional overrides:
 #   SCHEME            (default: Nick)
 #   CONFIGURATION     (default: Release)
@@ -16,6 +11,7 @@
 #   EXPORT_PATH       (default: build/export)
 #   EXPORT_PLIST      (default: Nick/Scripts/ExportOptions.plist)
 #   DMG_NAME          (default: Nick.dmg)
+#   NOTARY_PROFILE    (default: NickNotary; created with notarytool store-credentials)
 #
 # MARK: - Nick
 # Copyright © 2026 Ehsan Azish — github.com/EhsanAzish80
@@ -33,10 +29,7 @@ ARCHIVE_PATH="${ARCHIVE_PATH:-build/Nick.xcarchive}"
 EXPORT_PATH="${EXPORT_PATH:-build/export}"
 EXPORT_PLIST="${EXPORT_PLIST:-Nick/Scripts/ExportOptions.plist}"
 DMG_NAME="${DMG_NAME:-Nick.dmg}"
-
-: "${APPLE_ID:?ERROR: APPLE_ID environment variable is not set.}"
-: "${APP_PASSWORD:?ERROR: APP_PASSWORD environment variable is not set.}"
-: "${TEAM_ID:?ERROR: TEAM_ID environment variable is not set.}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-NickNotary}"
 
 # ---------------------------------------------------------------------------
 # Step 1 — Archive
@@ -93,9 +86,7 @@ fi
 
 echo "==> Step 4: Submitting for notarization…"
 xcrun notarytool submit "${DMG_PATH}" \
-  --apple-id   "${APPLE_ID}" \
-  --password   "${APP_PASSWORD}" \
-  --team-id    "${TEAM_ID}" \
+  --keychain-profile "${NOTARY_PROFILE}" \
   --wait \
   --output-format plist
 

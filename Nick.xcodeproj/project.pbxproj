@@ -25,12 +25,27 @@
 		E40000000000000000000004 /* ScamGuardian.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000003 /* ScamGuardian.swift */; };
 		E40000000000000000000006 /* RansomwareNotePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000005 /* RansomwareNotePolicy.swift */; };
 		E40000000000000000000007 /* RansomwareNotePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000005 /* RansomwareNotePolicy.swift */; };
+		E40000000000000000000008 /* RansomwareNotePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000005 /* RansomwareNotePolicy.swift */; };
 		E40000000000000000000101 /* YARAVerdictPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000100 /* YARAVerdictPolicy.swift */; };
 		E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000100 /* YARAVerdictPolicy.swift */; };
 		E40000000000000000000201 /* ExecutionTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000200 /* ExecutionTrustPolicy.swift */; };
 		E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000200 /* ExecutionTrustPolicy.swift */; };
 		E40000000000000000000301 /* ScanCandidatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000300 /* ScanCandidatePolicy.swift */; };
 		E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000300 /* ScanCandidatePolicy.swift */; };
+		E40000000000000000000401 /* BundledHashCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000400 /* BundledHashCatalog.swift */; };
+		E40000000000000000000402 /* BundledHashCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000400 /* BundledHashCatalog.swift */; };
+		E40000000000000000000501 /* TamperProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000500 /* TamperProtectionPolicy.swift */; };
+		E40000000000000000000502 /* TamperProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000500 /* TamperProtectionPolicy.swift */; };
+		E40000000000000000000601 /* LOLBinExecutionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000600 /* LOLBinExecutionPolicy.swift */; };
+		E40000000000000000000602 /* LOLBinExecutionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000600 /* LOLBinExecutionPolicy.swift */; };
+		F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */; };
+		F60000000000000000000001 /* QuarantineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000003 /* QuarantineManager.swift */; };
+		F60000000000000000000002 /* QuarantineDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004 /* QuarantineDatabase.swift */; };
+		F70000000000000000000001 /* ProcessTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000002 /* ProcessTree.swift */; };
+		F70000000000000000000003 /* BehaviorTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000004 /* BehaviorTracker.swift */; };
+		F70000000000000000000005 /* RansomwareDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000006 /* RansomwareDetector.swift */; };
+		F70000000000000000000007 /* UserHomeDirectoryResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000008 /* UserHomeDirectoryResolver.swift */; };
+		A17A7E000000000000000002 /* AuthLatencyWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17A7E000000000000000001 /* AuthLatencyWindow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -125,7 +140,18 @@
 		E40000000000000000000005 /* RansomwareNotePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RansomwareNotePolicy.swift; path = Shared/RansomwareNotePolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000100 /* YARAVerdictPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAVerdictPolicy.swift; path = Shared/YARAVerdictPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000200 /* ExecutionTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ExecutionTrustPolicy.swift; path = Shared/ExecutionTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000600 /* LOLBinExecutionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LOLBinExecutionPolicy.swift; path = Shared/LOLBinExecutionPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000300 /* ScanCandidatePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScanCandidatePolicy.swift; path = Shared/ScanCandidatePolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000400 /* BundledHashCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BundledHashCatalog.swift; path = Shared/BundledHashCatalog.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000500 /* TamperProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TamperProtectionPolicy.swift; path = Shared/TamperProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
+		F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PrivilegedIncidentFileStore.swift; path = Nick/Core/ThreatCorrelator/PrivilegedIncidentFileStore.swift; sourceTree = SOURCE_ROOT; };
+		F60000000000000000000003 /* QuarantineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineManager.swift; path = NickExtension/Quarantine/QuarantineManager.swift; sourceTree = SOURCE_ROOT; };
+		F60000000000000000000004 /* QuarantineDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineDatabase.swift; path = NickExtension/Quarantine/QuarantineDatabase.swift; sourceTree = SOURCE_ROOT; };
+		F70000000000000000000002 /* ProcessTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProcessTree.swift; path = NickExtension/Forensics/ProcessTree.swift; sourceTree = SOURCE_ROOT; };
+		F70000000000000000000004 /* BehaviorTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BehaviorTracker.swift; path = NickExtension/Behavioral/BehaviorTracker.swift; sourceTree = SOURCE_ROOT; };
+		F70000000000000000000006 /* RansomwareDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RansomwareDetector.swift; path = NickExtension/Ransomware/RansomwareDetector.swift; sourceTree = SOURCE_ROOT; };
+		F70000000000000000000008 /* UserHomeDirectoryResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = UserHomeDirectoryResolver.swift; path = NickExtension/Shared/UserHomeDirectoryResolver.swift; sourceTree = SOURCE_ROOT; };
+		A17A7E000000000000000001 /* AuthLatencyWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AuthLatencyWindow.swift; path = Nick/Core/Metrics/AuthLatencyWindow.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -282,7 +308,17 @@
 				E40000000000000000000003 /* ScamGuardian.swift */,
 				E40000000000000000000300 /* ScanCandidatePolicy.swift */,
 				E40000000000000000000200 /* ExecutionTrustPolicy.swift */,
+				E40000000000000000000600 /* LOLBinExecutionPolicy.swift */,
 				E40000000000000000000100 /* YARAVerdictPolicy.swift */,
+				E40000000000000000000400 /* BundledHashCatalog.swift */,
+				E40000000000000000000500 /* TamperProtectionPolicy.swift */,
+				F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */,
+				F60000000000000000000003 /* QuarantineManager.swift */,
+				F60000000000000000000004 /* QuarantineDatabase.swift */,
+				F70000000000000000000002 /* ProcessTree.swift */,
+				F70000000000000000000004 /* BehaviorTracker.swift */,
+				F70000000000000000000006 /* RansomwareDetector.swift */,
+				F70000000000000000000008 /* UserHomeDirectoryResolver.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -613,6 +649,7 @@
 				"$(SRCROOT)/Rules/community",
 				"$(SRCROOT)/Rules/families",
 				"$(SRCROOT)/Rules/families/LICENSES",
+				"$(SRCROOT)/NickExtension/known-threat-hashes.json",
 			);
 			name = "Copy YARA Rules";
 			outputFileListPaths = (
@@ -622,10 +659,11 @@
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/community",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/families",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Rules/families/LICENSES",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/known-threat-hashes.json",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules\"\nRULES_LIST=\"${RULES_SRC}/YARARules.xcfilelist\"\nrm -rf \"${RULES_DST}\"\nmkdir -p \"${RULES_DST}\"\nwhile IFS= read -r RULE_FILE || [ -n \"${RULE_FILE}\" ]; do\n  RULE_FILE=$(printf '%s\\n' \"${RULE_FILE}\" | sed \"s|^\\$(SRCROOT)|${SRCROOT}|\")\n  RELATIVE_PATH=\"${RULE_FILE#${RULES_SRC}/}\"\n  mkdir -p \"${RULES_DST}/$(dirname \"${RELATIVE_PATH}\")\"\n  cp \"${RULE_FILE}\" \"${RULES_DST}/${RELATIVE_PATH}\"\ndone < \"${RULES_LIST}\"\necho \"note: Copied YARA rules to ${RULES_DST}\"\n";
+			shellScript = "set -e\nRULES_SRC=\"${SRCROOT}/Rules\"\nRULES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Rules\"\nRULES_LIST=\"${RULES_SRC}/YARARules.xcfilelist\"\nRESOURCES_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nrm -rf \"${RULES_DST}\"\nmkdir -p \"${RULES_DST}\"\nwhile IFS= read -r RULE_FILE || [ -n \"${RULE_FILE}\" ]; do\n  RULE_FILE=$(printf '%s\\n' \"${RULE_FILE}\" | sed \"s|^\\$(SRCROOT)|${SRCROOT}|\")\n  RELATIVE_PATH=\"${RULE_FILE#${RULES_SRC}/}\"\n  mkdir -p \"${RULES_DST}/$(dirname \"${RELATIVE_PATH}\")\"\n  cp \"${RULE_FILE}\" \"${RULES_DST}/${RELATIVE_PATH}\"\ndone < \"${RULES_LIST}\"\ncp \"${SRCROOT}/NickExtension/known-threat-hashes.json\" \"${RESOURCES_DST}/known-threat-hashes.json\"\necho \"note: Copied YARA rules and exact-hash catalog to ${RESOURCES_DST}\"\n";
 		};
 		CC1AABB4D5E6F78900002301 /* Copy YARA Rules Into Extension */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -675,9 +713,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A17A7E000000000000000002 /* AuthLatencyWindow.swift in Sources */,
+				F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */,
 				E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */,
 				E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */,
+				E40000000000000000000602 /* LOLBinExecutionPolicy.swift in Sources */,
 				E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */,
+				E40000000000000000000402 /* BundledHashCatalog.swift in Sources */,
+				E40000000000000000000502 /* TamperProtectionPolicy.swift in Sources */,
 				E40000000000000000000007 /* RansomwareNotePolicy.swift in Sources */,
 				AA11223344556677AABB0015 /* YARAEngine.swift in Sources */,
 				AA11223344556677AABB0016 /* YARAMatch.swift in Sources */,
@@ -703,6 +746,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F60000000000000000000001 /* QuarantineManager.swift in Sources */,
+				F60000000000000000000002 /* QuarantineDatabase.swift in Sources */,
+				F70000000000000000000001 /* ProcessTree.swift in Sources */,
+				F70000000000000000000003 /* BehaviorTracker.swift in Sources */,
+				F70000000000000000000005 /* RansomwareDetector.swift in Sources */,
+				F70000000000000000000007 /* UserHomeDirectoryResolver.swift in Sources */,
+				E40000000000000000000008 /* RansomwareNotePolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -712,7 +762,10 @@
 			files = (
 				E40000000000000000000301 /* ScanCandidatePolicy.swift in Sources */,
 				E40000000000000000000201 /* ExecutionTrustPolicy.swift in Sources */,
+				E40000000000000000000601 /* LOLBinExecutionPolicy.swift in Sources */,
 				E40000000000000000000101 /* YARAVerdictPolicy.swift in Sources */,
+				E40000000000000000000401 /* BundledHashCatalog.swift in Sources */,
+				E40000000000000000000501 /* TamperProtectionPolicy.swift in Sources */,
 				E40000000000000000000001 /* NetworkProtectionPolicy.swift in Sources */,
 				E40000000000000000000006 /* RansomwareNotePolicy.swift in Sources */,
 				E40000000000000000000004 /* ScamGuardian.swift in Sources */,
@@ -873,6 +926,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 4.6.3;
+				NICK_DEBUG_UPDATE_FEED_URL = "";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",
@@ -1030,6 +1084,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 4.6.3;
+				NICK_DEBUG_UPDATE_FEED_URL = "";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"$(SRCROOT)/Nick/Core/YARAEngine/Vendor/libyara-universal.a",

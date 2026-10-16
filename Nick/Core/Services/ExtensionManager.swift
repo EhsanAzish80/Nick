@@ -67,6 +67,7 @@ public final class ExtensionManager: NSObject {
     )
     private static let activationCompletedKey = "endpointSecurityExtensionActivationCompleted"
     private static let activatedVersionKey = "endpointSecurityExtensionActivatedVersion"
+    private var activationCompletion: CheckedContinuation<Void, Never>?
 
     public override init() {
         super.init()
@@ -78,25 +79,18 @@ public final class ExtensionManager: NSObject {
     }
 
     private static var bundledExtensionVersion: String? {
-        guard let extensionURL = Bundle.main.builtInPlugInsURL?
-            .deletingLastPathComponent()
-            .appendingPathComponent("SystemExtensions")
-            .appendingPathComponent("com.ehsanazish.nick.NickExtension.systemextension"),
-              let bundle = Bundle(url: extensionURL) else {
+        guard let bundle = Bundle(url: bundledExtensionURL(in: Bundle.main.bundleURL)) else {
             return nil
         }
         return bundle.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as? String
     }
 
-    private static var runningExtensionVersion: String? {
-        let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
-        guard
-            let data = FileManager.default.contents(atPath: path),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
-        }
-        return object["version"] as? String
+    static func bundledExtensionURL(in appBundleURL: URL) -> URL {
+        appBundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("SystemExtensions", isDirectory: true)
+            .appendingPathComponent("com.ehsanazish.nick.NickExtension.systemextension", isDirectory: true)
     }
 
     static func needsBundledVersionActivation(
@@ -131,18 +125,26 @@ public final class ExtensionManager: NSObject {
     /// older than the provider embedded in the updated app. First-run setup is
     /// intentionally left to onboarding so this cannot create surprise prompts
     /// for users who have never enabled Endpoint Security.
-    func ensureBundledVersionIsActive() {
+    func ensureBundledVersionIsActive() async {
         guard UserDefaults.standard.bool(forKey: Self.activationCompletedKey) else { return }
         let recordedVersion = UserDefaults.standard.string(forKey: Self.activatedVersionKey)
         guard Self.needsBundledVersionActivation(
             bundledVersion: Self.bundledExtensionVersion,
-            runningVersion: Self.runningExtensionVersion ?? recordedVersion
+            runningVersion: recordedVersion
         ) else {
             extensionState = .installed
             return
         }
         Self.logger.info("Running Endpoint Security build differs from bundled build; requesting replacement")
-        installExtension()
+        await withCheckedContinuation { continuation in
+            activationCompletion = continuation
+            installExtension()
+        }
+    }
+
+    private func finishPendingActivation() {
+        activationCompletion?.resume()
+        activationCompletion = nil
     }
 
     /// Requests deactivation (removal) of the `NickExtension` System Extension.
@@ -180,6 +182,7 @@ extension ExtensionManager: OSSystemExtensionRequestDelegate {
         Task { @MainActor in
             Self.logger.notice("Extension requires user approval in System Settings")
             extensionState = .needsUserApproval
+            finishPendingActivation()
         }
     }
 
@@ -197,12 +200,15 @@ extension ExtensionManager: OSSystemExtensionRequestDelegate {
                     forKey: Self.activatedVersionKey
                 )
                 extensionState = .installed
+                finishPendingActivation()
             case .willCompleteAfterReboot:
                 Self.logger.notice("Extension will activate after reboot")
                 extensionState = .needsUserApproval
+                finishPendingActivation()
             @unknown default:
                 Self.logger.warning("Unknown extension request result: \(result.rawValue)")
                 extensionState = .installed
+                finishPendingActivation()
             }
         }
     }
@@ -214,6 +220,7 @@ extension ExtensionManager: OSSystemExtensionRequestDelegate {
         Task { @MainActor in
             Self.logger.error("Extension request failed: \(error.localizedDescription)")
             extensionState = .failed
+            finishPendingActivation()
             lastError = error
         }
     }

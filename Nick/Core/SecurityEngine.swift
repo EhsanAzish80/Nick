@@ -6,6 +6,64 @@ import Foundation
 import Observation
 import os
 
+private struct PrivilegedSecuritySettingsPayload: Codable {
+    static let schemaVersion = 1
+    let schemaVersion: Int
+    var trustedNames: Set<String>
+    var trustedEntries: Set<TrustedProcessList.UserEntry>
+    var suppressionRules: [SuppressionRule]
+    var ignoredPaths: Set<String>
+    var webhookURL: String?
+    var notificationThresholdRaw: Int
+    var verdictLearningEnabled: Bool
+    var approvedDevelopmentRoots: Set<String>
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, trustedNames, trustedEntries, suppressionRules, ignoredPaths
+        case webhookURL, notificationThresholdRaw, verdictLearningEnabled, approvedDevelopmentRoots
+    }
+
+    init(
+        schemaVersion: Int,
+        trustedNames: Set<String>,
+        trustedEntries: Set<TrustedProcessList.UserEntry>,
+        suppressionRules: [SuppressionRule],
+        ignoredPaths: Set<String>,
+        webhookURL: String?,
+        notificationThresholdRaw: Int,
+        verdictLearningEnabled: Bool,
+        approvedDevelopmentRoots: Set<String> = []
+    ) {
+        self.schemaVersion = schemaVersion
+        self.trustedNames = trustedNames
+        self.trustedEntries = trustedEntries
+        self.suppressionRules = suppressionRules
+        self.ignoredPaths = ignoredPaths
+        self.webhookURL = webhookURL
+        self.notificationThresholdRaw = notificationThresholdRaw
+        self.verdictLearningEnabled = verdictLearningEnabled
+        self.approvedDevelopmentRoots = approvedDevelopmentRoots
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        trustedNames = try container.decode(Set<String>.self, forKey: .trustedNames)
+        trustedEntries = try container.decode(Set<TrustedProcessList.UserEntry>.self, forKey: .trustedEntries)
+        suppressionRules = try container.decode([SuppressionRule].self, forKey: .suppressionRules)
+        ignoredPaths = try container.decode(Set<String>.self, forKey: .ignoredPaths)
+        webhookURL = try container.decodeIfPresent(String.self, forKey: .webhookURL)
+        notificationThresholdRaw = try container.decode(Int.self, forKey: .notificationThresholdRaw)
+        verdictLearningEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .verdictLearningEnabled
+        ) ?? false
+        approvedDevelopmentRoots = try container.decodeIfPresent(
+            Set<String>.self, forKey: .approvedDevelopmentRoots
+        ) ?? []
+    }
+}
+
 enum MenuBarAttentionState: Int, Comparable, Sendable {
     case protected
     case review
@@ -28,17 +86,67 @@ enum MenuBarAttentionState: Int, Comparable, Sendable {
     }
 }
 
+struct IncidentActionApproval: Sendable {
+    let authorizationExternalForm: Data?
+}
+
+enum IncidentActionAuthorizationResult: Sendable {
+    case approved(IncidentActionApproval)
+    case approvalCancelled
+    case targetMissing
+    case protectionDisconnected
+    case versionMismatch(appBuild: String, extensionBuild: String)
+    case rejected
+}
+
+private struct PendingIncidentAction {
+    let id: UUID
+    let action: IncidentActionKind
+    let alertID: UUID
+    let mutation: (ThreatAlert) -> Void
+}
+
 extension ThreatAlert {
+    var isTamperEvidence: Bool {
+        contributingSignals.contains { $0.metadata["reason"] == "endpoint_tamper_observed" }
+    }
+
+    var isBlockedTamperEvidence: Bool {
+        contributingSignals.contains {
+            $0.metadata["reason"] == "endpoint_tamper_observed"
+                && $0.metadata["tamperDisposition"] == "blocked"
+        }
+    }
+
     /// Whether this alert still has evidence a user can act on. Keeping this in
     /// Core gives the sidebar badge, Alerts view, and menu-bar state one source
     /// of truth instead of letting persisted, expired evidence disagree.
     var hasActionableEvidence: Bool {
+        // A denied or legacy tamper attempt is historical evidence of an
+        // operation Nick handled. Whether the target exists afterward cannot
+        // erase that evidence.
+        if isTamperEvidence { return true }
         switch evidenceState() {
         case .fileNoLongerExists, .processEnded:
             return false
         case .fileAvailable, .processActive, .historical:
             return true
         }
+    }
+
+    /// Whether this incident should ask the user for a decision. Informational
+    /// observations remain in Activity history, but do not make Home or badges
+    /// look unsafe. Protected evidence stays actionable even if consumer copy
+    /// maps it to a calm presentation.
+    var isActionableUserFinding: Bool {
+        guard hasActionableEvidence else { return false }
+        if hasProtectedEvidence { return true }
+        guard severity != .info else { return false }
+        return UserFacingAlertBuilder.shared.build(from: self).severity != .safe
+    }
+
+    func isVisibleInActiveAlerts(showInformational: Bool) -> Bool {
+        hasActionableEvidence && (isActionableUserFinding || showInformational)
     }
 }
 
@@ -64,8 +172,12 @@ final class SecurityEngine {
     /// All threat alerts produced by the correlator since the last `reset()`.
     private(set) var alerts: [ThreatAlert] = []
 
+    /// Invalidates SwiftUI observers when only per-user seen state changes.
+    /// The evidence and review state remain untouched.
+    private var unseenIncidentRevision = 0
+
     /// Stable deduplication keys for alerts the user has explicitly dismissed.
-    /// Persisted to `UserDefaults` so dismissed alerts do not reappear after a rescan.
+    /// Persisted by the root-owned incident store so dismissals survive restart.
     private(set) var dismissedAlertKeys: Set<String> = []
 
     /// The most recent set of system audit results.
@@ -94,11 +206,27 @@ final class SecurityEngine {
     /// `.nickScanFileRequest` notification handler in `MainWindowView`.
     var pendingFinderScanURL: URL?
 
+    /// Alert selected from a system notification. The main window routes to
+    /// Activity/Alerts and the simple activity view consumes this identifier
+    /// to present the matching incident.
+    var pendingNotificationAlertID: UUID?
+
     /// The most recent threat score from the real-time ML pipeline (0.0–1.0).
     var currentThreatScore: Double = 0.0
 
     /// Whether the real-time pipeline is running, stopped, or degraded.
     var activePipelineStatus: PipelineStatus = .stopped
+
+    /// Paths discarded by the bounded app-side FSEvents scan queue.
+    private(set) var fileEventDroppedCount = 0
+
+    func recordFileEventDroppedCount(_ count: Int) {
+        fileEventDroppedCount = max(0, count)
+    }
+
+    /// Set when an incident action could not be authenticated against the active
+    /// extension. The request stays pending so the user can retry after upgrade.
+    private(set) var incidentActionRetryMessage: String?
 
     /// The date of the most recent scan completion.
     var lastScanDate: Date?
@@ -128,34 +256,116 @@ final class SecurityEngine {
     ///
     /// Changing this takes effect on the next `runFullScan()` call.
     /// The user-trusted subset is automatically persisted to `UserDefaults`.
-    var trustedProcessList: TrustedProcessList = {
-        let saved = UserDefaults.standard.stringArray(forKey: "userTrustedProcesses") ?? []
-        return TrustedProcessList(userTrusted: Set(saved))
-    }() {
-        didSet {
-            // Persist user-configured entries whenever the list changes.
-            let names = Array(trustedProcessList.userTrusted)
-            UserDefaults.standard.set(names, forKey: "userTrustedProcesses")
-        }
-    }
+    var trustedProcessList = TrustedProcessList() { didSet { persistSecuritySettingsIfReady() } }
 
     /// Active suppression rules. Persisted to UserDefaults as JSON.
-    var suppressionRules: [SuppressionRule] = {
-        guard let data = UserDefaults.standard.data(forKey: "suppressionRulesData"),
-              let rules = try? JSONDecoder().decode([SuppressionRule].self, from: data) else { return [] }
-        return rules
-    }() {
-        didSet {
-            if let data = try? JSONEncoder().encode(suppressionRules) {
-                UserDefaults.standard.set(data, forKey: "suppressionRulesData")
-            }
+    var suppressionRules: [SuppressionRule] = [] { didSet { persistSecuritySettingsIfReady() } }
+    var deepScanIgnoredPaths: Set<String> = [] { didSet { persistSecuritySettingsIfReady() } }
+    var webhookURLString: String? { didSet { persistSecuritySettingsIfReady() } }
+    var notificationThreshold: SignalSeverity = .high { didSet { persistSecuritySettingsIfReady() } }
+    private(set) var verdictLearningEnabled = false
+    var approvedDevelopmentRoots: Set<String> = [] { didSet { persistSecuritySettingsIfReady() } }
+    private var securitySettingsPersistence: ((Data, Data?) -> Void)?
+    private var nextSecuritySettingsAuthorization: Data?
+    private var installingSecuritySettings = false
+
+    var suppressionRuleMigrationNotices: [String] {
+        UserDefaults.standard.stringArray(forKey: "suppressionRuleMigrationNotices") ?? []
+    }
+
+    func dismissSuppressionMigrationNotices() {
+        UserDefaults.standard.removeObject(forKey: "suppressionRuleMigrationNotices")
+    }
+
+    func prepareLegacySecuritySettingsMigration() -> Data {
+        let defaults = UserDefaults.standard
+        let names = Set(defaults.stringArray(forKey: "userTrustedProcesses") ?? [])
+        let entries = defaults.data(forKey: "userTrustedProcessIdentities")
+            .flatMap { try? JSONDecoder().decode(Set<TrustedProcessList.UserEntry>.self, from: $0) }
+            ?? []
+        let legacyRules = defaults.data(forKey: "suppressionRulesData")
+            .flatMap { try? JSONDecoder().decode([SuppressionRule].self, from: $0) }
+            ?? []
+        let migrated = SuppressionRule.migrateLegacySignedProcessRules(legacyRules) {
+            SignatureValidator.shared.evaluate(binaryPath: $0)
+        }
+        defaults.set(migrated.notices, forKey: "suppressionRuleMigrationNotices")
+        let ignored = Set((defaults.string(forKey: "deepScanIgnoredPaths") ?? "")
+            .split(separator: "\n").map { DeepScanner.canonicalPath(String($0)) })
+        let payload = PrivilegedSecuritySettingsPayload(
+            schemaVersion: PrivilegedSecuritySettingsPayload.schemaVersion,
+            trustedNames: names,
+            trustedEntries: entries,
+            suppressionRules: migrated.rules,
+            ignoredPaths: ignored,
+            webhookURL: defaults.string(forKey: "webhookURL"),
+            notificationThresholdRaw: defaults.object(forKey: "notificationThresholdRaw") as? Int
+                ?? SignalSeverity.high.rawValue,
+            verdictLearningEnabled: false,
+            approvedDevelopmentRoots: []
+        )
+        return (try? JSONEncoder().encode(payload)) ?? Data("{}".utf8)
+    }
+
+    func installPrivilegedSecuritySettings(
+        payload: Data,
+        persistence: @escaping (Data, Data?) -> Void
+    ) throws {
+        let settings = try JSONDecoder().decode(PrivilegedSecuritySettingsPayload.self, from: payload)
+        guard settings.schemaVersion == PrivilegedSecuritySettingsPayload.schemaVersion else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        installingSecuritySettings = true
+        trustedProcessList = TrustedProcessList(
+            userTrusted: settings.trustedNames,
+            userEntries: settings.trustedEntries
+        )
+        suppressionRules = settings.suppressionRules
+        deepScanIgnoredPaths = settings.ignoredPaths
+        webhookURLString = settings.webhookURL
+        notificationThreshold = SignalSeverity(rawValue: settings.notificationThresholdRaw) ?? .high
+        verdictLearningEnabled = settings.verdictLearningEnabled
+        approvedDevelopmentRoots = settings.approvedDevelopmentRoots
+        installingSecuritySettings = false
+        securitySettingsPersistence = persistence
+        NotificationManager.shared.notificationThreshold = notificationThreshold
+        PrivilegedWebhookSettings.setURL(webhookURLString)
+
+        let defaults = UserDefaults.standard
+        ["userTrustedProcesses", "userTrustedProcessIdentities", "suppressionRulesData",
+         "deepScanIgnoredPaths", "webhookURL", "notificationThresholdRaw",
+         "verdictLearningEnabled"].forEach {
+            defaults.removeObject(forKey: $0)
         }
     }
 
-    /// Short-lived acknowledgements for one exact, non-critical behavior.
-    /// These never apply to persistence, malware-rule, or critical detections.
-    private var expectedAlertCooldowns: [String: TimeInterval] =
-        UserDefaults.standard.dictionary(forKey: "nickExpectedAlertCooldowns") as? [String: TimeInterval] ?? [:]
+    /// Attaches a user-presence authorization to exactly the next settings
+    /// mutation. The extension still decides whether the change is reducing
+    /// and verifies the right independently.
+    func authorizeNextSecuritySettingsWrite(with externalForm: Data) {
+        nextSecuritySettingsAuthorization = externalForm
+    }
+
+    private func persistSecuritySettingsIfReady() {
+        guard !installingSecuritySettings, let securitySettingsPersistence else { return }
+        let payload = PrivilegedSecuritySettingsPayload(
+            schemaVersion: PrivilegedSecuritySettingsPayload.schemaVersion,
+            trustedNames: trustedProcessList.userTrusted,
+            trustedEntries: trustedProcessList.userEntries,
+            suppressionRules: suppressionRules,
+            ignoredPaths: deepScanIgnoredPaths,
+            webhookURL: webhookURLString,
+            notificationThresholdRaw: notificationThreshold.rawValue,
+            verdictLearningEnabled: verdictLearningEnabled,
+            approvedDevelopmentRoots: approvedDevelopmentRoots
+        )
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        NotificationManager.shared.notificationThreshold = notificationThreshold
+        PrivilegedWebhookSettings.setURL(webhookURLString)
+        let authorization = nextSecuritySettingsAuthorization
+        nextSecuritySettingsAuthorization = nil
+        securitySettingsPersistence(data, authorization)
+    }
 
     // MARK: - Overall Health Score (0–100)
 
@@ -180,10 +390,41 @@ final class SecurityEngine {
 
     /// Consumer-facing alerts that still have actionable evidence.
     var activeActionableAlerts: [ThreatAlert] {
-        alerts.filter { alert in
-            alert.hasActionableEvidence
-                && UserFacingAlertBuilder.shared.build(from: alert).severity != .safe
-        }
+        alerts.filter { displayStatus(for: $0).contributesToProtectionStatus }
+    }
+
+    /// Per-user notification badge count. Seeing an incident clears only this
+    /// badge state; it does not review evidence or alter ProtectionStatus.
+    var unseenIncidentCount: Int {
+        _ = unseenIncidentRevision
+        return incidentSeenStore.unseenCount(in: incidentStore.incidents)
+    }
+
+    func markIncidentSeen(_ alertID: UUID) {
+        guard let incident = incidentStore.incidents.first(where: { $0.alert.id == alertID }) else { return }
+        incidentSeenStore.markSeen(
+            id: incident.alert.id,
+            occurrenceCount: incident.alert.occurrenceCount
+        )
+        unseenIncidentRevision &+= 1
+    }
+
+    func incident(for alert: ThreatAlert) -> SecurityIncident? {
+        incidentStore.incidents.first { $0.alert.id == alert.id }
+    }
+
+    func displayStatus(for alert: ThreatAlert) -> IncidentDisplayStatus {
+        incident(for: alert)?.displayStatus ?? IncidentDisplayStatus(alert: alert)
+    }
+
+    /// Canonical status/count consumed by every top-level protection surface.
+    var protectionStatus: ProtectionStatus {
+        ProtectionStatus.evaluate(
+            actionableAlerts: activeActionableAlerts,
+            incidents: incidentStore.incidents,
+            auditIssueCount: auditResults.filter { $0.status != .pass && $0.status != .unknown }.count,
+            sensorRunning: activePipelineStatus == .running
+        )
     }
 
     // MARK: - Private
@@ -194,6 +435,16 @@ final class SecurityEngine {
     private let netMon     = NetworkAnalyzer()
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
+    private(set) var incidentStore = IncidentStore()
+    private let incidentSeenStore: IncidentSeenStore
+    /// True only after the authoritative root-owned incident snapshot has been
+    /// installed. Live providers must not enter the incident pipeline before
+    /// this flips: local pre-bootstrap generations cannot be durably confirmed.
+    private(set) var incidentStoreReady = false
+    private let durableIncidentNotifications = DurableIncidentNotificationQueue()
+    private var incidentActionAuthorizer: ((UUID, IncidentActionKind) async -> IncidentActionAuthorizationResult)?
+    private var nextIncidentStoreAuthorization: Data?
+    private var pendingIncidentAction: PendingIncidentAction?
 
     /// Phase 7 — Performance / disk-cleanup engine.
     private(set) var performanceMonitor: PerformanceMonitor?
@@ -203,8 +454,8 @@ final class SecurityEngine {
     /// Use this in simple-mode UI instead of reading `alerts` directly.
     private(set) var userFacingAlerts: [UserFacingAlert] = []
 
-    /// Shared Foundation Models explainer — used by both the full scan path and
-    /// the real-time pipeline so every new alert gets an AI explanation.
+    /// Shared local explainer used by both the full scan path and the real-time
+    /// pipeline so every new alert gets deterministic display text.
     let explainer = AlertExplainer()
 
     /// Historical scan snapshots powering sparkline charts in the Overview.
@@ -214,6 +465,10 @@ final class SecurityEngine {
     let activityLog = ActivityLog()
 
     private let logger = Logger(subsystem: "com.ehsanazish.nick", category: "SecurityEngine")
+    private let networkIngestLogger = Logger(
+        subsystem: "com.ehsanazish.nick",
+        category: "NetworkIngest"
+    )
 
     /// Stored handle for the running scan. Kept on the engine so the task outlives
     /// any SwiftUI view scope — panel hide/show cannot cancel it.
@@ -221,10 +476,24 @@ final class SecurityEngine {
 
     // MARK: - Init
 
-    init() {
+    init(incidentSeenDefaults: UserDefaults = .standard) {
+        incidentSeenStore = IncidentSeenStore(defaults: incidentSeenDefaults)
+        incidentStore.configure(
+            trustedProcessList: trustedProcessList,
+            suppressionRules: suppressionRules,
+            verdictLearningEnabled: verdictLearningEnabled
+        )
         deepScanner.engine = self
         procMon.processDidUpdate = { [weak self] updated in
             self?.applyResolvedProcess(updated)
+        }
+        avCapture.signalHandler = { [weak self] signal in
+            guard let self else { return }
+            _ = await self.ingestLiveFinding(
+                signal,
+                score: 0.55,
+                recommendedAction: "Confirm that camera or microphone use matches what you are doing."
+            )
         }
         let ud = UserDefaults.standard
         if let stored = ud.object(forKey: "nickMonitoringSince") as? Date {
@@ -236,40 +505,26 @@ final class SecurityEngine {
         totalThreatsDetected  = ud.integer(forKey: "nickTotalThreatsDetected")
         lastDeepScanDate      = ud.object(forKey: "nickLastDeepScanDate") as? Date
         lastDeepScanFileCount = ud.integer(forKey: "nickLastDeepScanFileCount")
-        let storedKeys        = ud.stringArray(forKey: "nickDismissedAlertKeys") ?? []
-        dismissedAlertKeys    = Set(storedKeys)
-
-        // Restore alerts saved from the previous session.
-        if let data = ud.data(forKey: "nickPersistedAlerts"),
-           let decoded = try? JSONDecoder().decode([ThreatAlert].self, from: data) {
-            // Drop any that were later dismissed.
-            alerts = Self.boundedPersistedAlerts(
-                decoded.filter { !dismissedAlertKeys.contains($0.deduplicationKey) }
-            )
-            logger.info("Restored \(self.alerts.count) persisted alert(s)")
-            if let encoded = try? JSONEncoder().encode(alerts) {
-                ud.set(encoded, forKey: "nickPersistedAlerts")
-            }
-        }
+        syncAlertsFromStore()
 
         // One-time purge: remove false-positive raw-IP alerts produced before the
         // private-network / bogus-address filters were added (v2 filter set).
         // The flag is set permanently so this runs exactly once per install.
         if !ud.bool(forKey: "nickRawIPFalsePositivePurgedV2") {
             let before = alerts.count
-            alerts.removeAll { $0.title == "Outbound connection to raw IP address" }
+            incidentStore.removeIncidents {
+                $0.alert.title == "Outbound connection to raw IP address"
+            }
+            alerts = incidentStore.visibleAlerts
             if alerts.count != before {
                 logger.info("Purged \(before - self.alerts.count) stale raw-IP false-positive alert(s)")
-                // Persist the cleaned list immediately.
-                if let encoded = try? JSONEncoder().encode(alerts) {
-                    ud.set(encoded, forKey: "nickPersistedAlerts")
-                }
             }
             ud.set(true, forKey: "nickRawIPFalsePositivePurgedV2")
         }
 
         // Phase 7: initialise performance monitor
         performanceMonitor = PerformanceMonitor()
+        rebuildUserFacingAlerts()
     }
 
     /// Mirrors asynchronous signing updates from `ProcessMonitor` into the
@@ -281,19 +536,151 @@ final class SecurityEngine {
 
     // MARK: - Public API
 
-    /// Clears all stored threat alerts, resets threat counters, and removes all
-    /// dismissed-alert suppression so every alert type can fire again.
-    ///
-    /// Monitoring continues uninterrupted. This only affects historical display data.
-    func clearAlertHistory() {
+    func prepareLegacyIncidentMigration() -> Data? {
+        try? incidentStore.prepareLegacyMigration()
+    }
+
+    func installPrivilegedIncidentStore(
+        payload: Data,
+        persistence: @escaping (Data, UInt64, Data?) -> Void,
+        authorizer: @escaping (UUID, IncidentActionKind) async -> IncidentActionAuthorizationResult,
+        removeLegacyState: Bool
+    ) throws {
+        incidentStoreReady = false
+        try incidentStore.installPrivilegedSnapshot(payload) { [weak self] payload, generation in
+            let authorization = self?.nextIncidentStoreAuthorization
+            self?.nextIncidentStoreAuthorization = nil
+            persistence(payload, generation, authorization)
+        }
+        incidentActionAuthorizer = authorizer
+        if removeLegacyState {
+            incidentStore.removeLegacyPersistence()
+        }
+        syncAlertsFromStore()
+        incidentStoreReady = true
+        logger.info("Restored \(self.alerts.count) root-owned incident(s)")
+    }
+
+    func confirmIncidentStorePersistence(generation: UInt64) {
+        incidentStore.confirmDurablePersistence(generation: generation)
+        let confirmedAlerts = durableIncidentNotifications.confirm(generation: generation)
+        guard !confirmedAlerts.isEmpty else { return }
+        Task { @MainActor in
+            let (formatter, outputs) = buildPipeline()
+            for alert in confirmedAlerts {
+                await NotificationManager.shared.send(for: alert)
+                await emitAlert(alert, formatter: formatter, outputs: outputs)
+            }
+        }
+    }
+
+#if DEBUG
+    /// Validation-only retention flood. This deliberately enters through the
+    /// same privileged IncidentStore persistence boundary as live findings,
+    /// but is absent from Release builds.
+    func debugRunRetentionFlood() -> String {
+        guard incidentStoreReady else { return "FAILED: incident store is not ready" }
+        let criticalIDs = Set(incidentStore.incidents.compactMap {
+            $0.alert.severity == .critical ? $0.id : nil
+        })
+        guard !criticalIDs.isEmpty else { return "FAILED: no critical incident exists to preserve" }
+
+        let evictedBefore = incidentStore.evictedIncidentCount
+        let candidates = (0..<126).map { index in
+            let ruleIndex = index % 6
+            let process = NickProcessInfo(
+                pid: Int32(60_000 + index),
+                path: "/private/tmp/nick-retention-noise-\(index)",
+                name: "nick-retention-noise-\(index)",
+                parentPID: 1,
+                parentName: "launchd",
+                signingStatus: .signed(
+                    teamID: "RETENTION\(index)",
+                    signingID: "com.ehsanazish.nick.retention.\(index)"
+                )
+            )
+            let signal = ThreatSignal(
+                source: .process,
+                severity: .info,
+                title: "Retention validation noise",
+                description: "Harmless validation-only retention evidence.",
+                context: ThreatSignalContext(
+                    processInfo: process,
+                    metadata: [
+                        "rule": "debug_retention_noise_\(ruleIndex)",
+                        "class": "audit"
+                    ]
+                )
+            )
+            return ThreatAlert(
+                score: 0,
+                content: AlertContent(
+                    title: signal.title,
+                    description: signal.description,
+                    severity: .info,
+                    recommendedAction: "No action needed."
+                ),
+                contributingSignals: [signal],
+                timestamp: signal.timestamp
+            )
+        }
+
+        configureIncidentStore()
+        let result = incidentStore.ingest(candidates)
+        syncAlertsFromStore()
+        let retainedCriticalIDs = Set(incidentStore.incidents.compactMap {
+            $0.alert.severity == .critical ? $0.id : nil
+        })
+        let noiseCounts = Dictionary(grouping: incidentStore.incidents.filter {
+            $0.alert.contributingSignals.filter { signal in
+                signal.metadata["rule"]?.hasPrefix("debug_retention_noise_") == true
+            }.isEmpty == false
+        }) { incident in
+            incident.alert.contributingSignals.filter {
+                $0.metadata["rule"]?.hasPrefix("debug_retention_noise_") == true
+            }.first?.metadata["rule"] ?? "unknown"
+        }
+        let maximumNoisePerRule = noiseCounts.values.map { $0.count }.max() ?? 0
+        let criticalPreserved = criticalIDs.isSubset(of: retainedCriticalIDs)
+        let evictedDelta = incidentStore.evictedIncidentCount - evictedBefore
+        let generation = result.outcomes.compactMap(\.generation).max() ?? 0
+        return "injected=126 retained=\(incidentStore.incidents.count) "
+            + "evictedDelta=\(evictedDelta) perRuleMax=\(maximumNoisePerRule) "
+            + "criticalPreserved=\(criticalPreserved) "
+            + "generation=\(generation) durable=\(!incidentStore.hasUnconfirmedChanges)"
+    }
+
+    func debugRetentionFloodPersistenceStatus() -> String {
+        "retained=\(incidentStore.incidents.count) "
+            + "evicted=\(incidentStore.evictedIncidentCount) "
+            + "durable=\(!incidentStore.hasUnconfirmedChanges)"
+    }
+
+    func debugCleanRetentionFlood() -> String {
+        guard incidentStoreReady else { return "FAILED: incident store is not ready" }
+        let before = incidentStore.incidents.count
+        incidentStore.removeIncidents { incident in
+            incident.alert.contributingSignals.filter { signal in
+                signal.metadata["rule"]?.hasPrefix("debug_retention_noise_") == true
+            }.isEmpty == false
+        }
+        syncAlertsFromStore()
+        return "removed=\(before - incidentStore.incidents.count) "
+            + "retained=\(incidentStore.incidents.count) "
+            + "evicted=\(incidentStore.evictedIncidentCount) "
+            + "durable=\(!incidentStore.hasUnconfirmedChanges)"
+    }
+#endif
+
+    /// Removes incident history only. Learning, dismissals, suppression rules,
+    /// trusted processes, expected cooldowns, and settings remain unchanged.
+    func clearIncidentHistory() {
         alerts = []
         totalThreatsDetected = 0
-        dismissedAlertKeys = []
-        expectedAlertCooldowns = [:]
         UserDefaults.standard.set(0, forKey: "nickTotalThreatsDetected")
-        UserDefaults.standard.removeObject(forKey: "nickDismissedAlertKeys")
-        UserDefaults.standard.removeObject(forKey: "nickExpectedAlertCooldowns")
         UserDefaults.standard.removeObject(forKey: "nickPersistedAlerts")
+        incidentStore.clearIncidentHistory()
+        syncAlertsFromStore()
     }
 
     /// Launches a full security scan as an independent, stored task.
@@ -316,13 +703,16 @@ final class SecurityEngine {
         lastError = nil
         logger.info("Full scan started")
 
-        // Propagate the current trusted process configuration to monitors.
+        // Propagate the current trusted process configuration to monitors and
+        // the one post-correlation policy boundary.
         procMon.trustedProcessList = trustedProcessList
-        await correlator.updateTrustedProcessList(trustedProcessList)
-        await correlator.updateSuppressionRules(suppressionRules)
+        configureIncidentStore()
+
+        var genuinelyNew: [ThreatAlert] = []
 
         await startAuditor()
         guard isScanning else { return }
+        genuinelyNew += await ingestSignals(await auditor.latestSignals())
         activityLog.log(
             icon: "checkmark.shield", color: "green",
             title: "System audit complete",
@@ -331,6 +721,7 @@ final class SecurityEngine {
 
         await startPersistence()
         guard isScanning else { return }
+        genuinelyNew += await ingestSignals(await persistence.latestSignals())
         activityLog.log(
             icon: "checkmark.circle", color: "green",
             title: "Persistence check passed",
@@ -339,9 +730,11 @@ final class SecurityEngine {
 
         await startProcMon()
         guard isScanning else { return }
+        genuinelyNew += await ingestSignals(await procMon.latestSignals())
 
         await startNetMon()
         guard isScanning else { return }
+        genuinelyNew += await ingestSignals(await netMon.latestSignals())
         activityLog.log(
             icon: "network", color: "green",
             title: "Network baseline updated",
@@ -350,58 +743,15 @@ final class SecurityEngine {
 
         await startAVCapture()
         guard isScanning else { return }
-
-        // Collect signals and batch-update published state on @MainActor.
-        var allSignals: [ThreatSignal] = []
-        allSignals += await auditor.latestSignals()
-        allSignals += await persistence.latestSignals()
-        allSignals += await procMon.latestSignals()
-        allSignals += await netMon.latestSignals()
-        allSignals += await avCapture.latestSignals()
+        genuinelyNew += await ingestSignals(await avCapture.latestSignals())
 
         auditResults     = auditor.results
         persistenceItems = persistence.items
         processes        = procMon.processes
         connections      = netMon.connections
 
-        await correlator.resetEmittedRules()
-        await correlator.ingest(allSignals)
-        var newAlerts = await correlator.correlate()
-        // A repeat observation updates the existing incident. It is not another
-        // notification unless its severity has increased.
-        newAlerts.removeAll(where: shouldTemporarilySuppress)
-        let existingSeverity = Dictionary(
-            alerts.map { ($0.deduplicationKey, $0.severity) },
-            uniquingKeysWith: { max($0, $1) }
-        )
-        var genuinelyNew = newAlerts.filter { alert in
-            guard alert.severity != .info else { return false }
-            guard let priorSeverity = existingSeverity[alert.deduplicationKey] else { return true }
-            return alert.severity > priorSeverity
-        }
-        // Enrich new alerts with a plain-English explanation before surfacing them.
-        if !genuinelyNew.isEmpty {
-            for i in genuinelyNew.indices {
-                let topFeatures: [(name: String, contribution: Double)] = genuinelyNew[i]
-                    .contributingSignals.prefix(5).map {
-                        ($0.title, Double($0.severity.rawValue) / 4.0)
-                    }
-                genuinelyNew[i].explanation = await explainer.explain(
-                    alert: genuinelyNew[i],
-                    topFeatures: topFeatures
-                )
-            }
-            let explanations = Dictionary(
-                genuinelyNew.compactMap { alert in
-                    alert.explanation.map { (alert.deduplicationKey, $0) }
-                },
-                uniquingKeysWith: { _, newest in newest }
-            )
-            for i in newAlerts.indices {
-                newAlerts[i].explanation = explanations[newAlerts[i].deduplicationKey]
-            }
-        }
-        mergeAlerts(newAlerts)
+        genuinelyNew = Array(Dictionary(grouping: genuinelyNew, by: IncidentStore.incidentKey(for:))
+            .compactMap { $0.value.max(by: { $0.severity < $1.severity }) })
         for alert in genuinelyNew {
             await NotificationManager.shared.send(for: alert)
             let (fmt, outs) = buildPipeline()
@@ -443,7 +793,7 @@ final class SecurityEngine {
             )
         }
 
-        logger.info("Full scan complete — \(newAlerts.count) alerts, health: \(self.healthScore)")
+        logger.info("Full scan complete — \(genuinelyNew.count) new incidents, health: \(self.healthScore)")
     }
 
     // MARK: - Private monitor starters (for async let decomposition)
@@ -490,44 +840,103 @@ final class SecurityEngine {
         await correlator.flush()
     }
 
+    /// Shared ingestion boundary used by full scans, quick ticks, Deep Scan and
+    /// FSEvents. Correlation stays deterministic; the incident store then applies
+    /// trust, suppression and dedup exactly once and persists the explanation.
+    @discardableResult
+    func ingestSignals(_ signals: [ThreatSignal]) async -> [ThreatAlert] {
+        guard !signals.isEmpty else { return [] }
+        var candidates = await correlator.ingestAndCorrelateNew(signals.map(Evidence.init(signal:)))
+        for index in candidates.indices {
+            let topFeatures: [(name: String, contribution: Double)] = candidates[index]
+                .contributingSignals.prefix(5).map {
+                    ($0.title, Double($0.severity.rawValue) / 4.0)
+                }
+            candidates[index].explanation = await explainer.explain(
+                alert: candidates[index],
+                topFeatures: topFeatures
+            )
+        }
+        configureIncidentStore()
+        let result = incidentStore.ingest(candidates)
+        alerts = result.visibleAlerts
+        rebuildUserFacingAlerts()
+        return result.newlyActionable
+    }
+
+    /// Sends an already-classified source finding through the same incident,
+    /// suppression, deduplication, explanation and notification boundary as
+    /// correlated monitor output. Sources such as Endpoint Security and the
+    /// Network Extension have already applied their detector-specific rule.
+    @discardableResult
+    func ingestLiveFinding(
+        _ signal: ThreatSignal,
+        score: Double,
+        recommendedAction: String
+    ) async -> IncidentIngestOutcome {
+        var alert = ThreatAlert(
+            score: score,
+            content: AlertContent(
+                title: signal.title,
+                description: signal.description,
+                severity: signal.severity,
+                recommendedAction: recommendedAction
+            ),
+            contributingSignals: [signal],
+            timestamp: signal.timestamp
+        )
+        alert.explanation = await explainer.explain(
+            alert: alert,
+            topFeatures: [(signal.title, Double(signal.severity.rawValue) / 4.0)]
+        )
+        configureIncidentStore()
+        let result = incidentStore.ingest([alert])
+        alerts = result.visibleAlerts
+        rebuildUserFacingAlerts()
+#if DEBUG
+        precondition(result.outcomes.count == 1, "A live finding must produce exactly one ingest outcome")
+#endif
+        guard result.outcomes.count == 1 else { return .failed }
+        let outcome = result.outcomes[0]
+        switch outcome {
+        case .persisted(let generation), .coalesced(let generation):
+            durableIncidentNotifications.stage(result.newlyActionable, for: generation)
+            if result.newlyActionable.isEmpty {
+                networkIngestLogger.info(
+                    "notification skipped id=\(signal.id.uuidString, privacy: .public) reason=no-actionable-candidate generation=\(generation, privacy: .public)"
+                )
+            } else {
+                networkIngestLogger.info(
+                    "notification staged id=\(signal.id.uuidString, privacy: .public) count=\(result.newlyActionable.count, privacy: .public) generation=\(generation, privacy: .public)"
+                )
+            }
+        case .suppressedByPolicy(let reason):
+            networkIngestLogger.info(
+                "notification skipped id=\(signal.id.uuidString, privacy: .public) reason=policy-\(reason, privacy: .public)"
+            )
+        case .failed:
+            networkIngestLogger.error(
+                "notification skipped id=\(signal.id.uuidString, privacy: .public) reason=ingest-failed"
+            )
+        }
+        return outcome
+    }
+
     /// Adds a single alert from the real-time pipeline. Repeat evidence updates
     /// the existing incident rather than creating another card.
     @MainActor
     func addAlert(_ alert: ThreatAlert) {
-        guard !dismissedAlertKeys.contains(alert.deduplicationKey) else { return }
-        guard !shouldTemporarilySuppress(alert) else { return }
-        mergeAlerts([alert])
+        configureIncidentStore()
+        let result = incidentStore.ingest([alert])
+        alerts = result.visibleAlerts
+        rebuildUserFacingAlerts()
     }
 
     /// Merges new alerts from the real-time pipeline by stable incident identity.
     /// Alerts whose `deduplicationKey` has been previously dismissed are silently dropped.
     func mergeAlerts(_ newAlerts: [ThreatAlert]) {
-        // Consolidate alerts restored from older builds before adding new
-        // evidence. Their UUIDs differed even when they described one incident.
-        var consolidated: [String: ThreatAlert] = [:]
-        for existing in alerts {
-            if let prior = consolidated[existing.deduplicationKey] {
-                consolidated[existing.deduplicationKey] = prior.mergingOccurrence(existing)
-            } else {
-                consolidated[existing.deduplicationKey] = existing
-            }
-        }
-        alerts = Array(consolidated.values)
-
-        let filtered = newAlerts.filter {
-            !dismissedAlertKeys.contains($0.deduplicationKey) && !shouldTemporarilySuppress($0)
-        }
-        for candidate in filtered {
-            if let index = alerts.firstIndex(where: {
-                $0.deduplicationKey == candidate.deduplicationKey
-            }) {
-                alerts[index] = alerts[index].mergingOccurrence(candidate)
-            } else {
-                alerts.append(candidate)
-            }
-        }
-        alerts.sort { $0.score > $1.score }
-        saveAlerts()
+        configureIncidentStore()
+        alerts = incidentStore.ingest(newAlerts).visibleAlerts
         rebuildUserFacingAlerts()
     }
 
@@ -536,129 +945,222 @@ final class SecurityEngine {
         userFacingAlerts = alerts.map { builder.build(from: $0) }
     }
 
-    /// Removes a single alert by ID and persists its `deduplicationKey` so it
-    /// is suppressed on all future scans until `clearAlertHistory()` is called.
-    func dismissAlert(_ id: UUID) {
-        guard let alert = alerts.first(where: { $0.id == id }) else {
-            alerts.removeAll { $0.id == id }
-            return
-        }
-        // Record as false positive for optional local training data.
-        SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-        dismissedAlertKeys.insert(alert.deduplicationKey)
-        alerts.removeAll { $0.id == id }
-        UserDefaults.standard.set(Array(dismissedAlertKeys), forKey: "nickDismissedAlertKeys")
-        saveAlerts()
+    private func syncAlertsFromStore() {
+        alerts = incidentStore.visibleAlerts
+        dismissedAlertKeys = incidentStore.dismissedAlertDeduplicationKeys
         rebuildUserFacingAlerts()
+    }
+
+    var learnedReviewEntries: [LearnedReviewEntry] {
+        incidentStore.learnedReviewEntries.sorted { $0.lastConfirmedAt > $1.lastConfirmedAt }
+    }
+
+    var legacyDismissalTombstones: [IncidentDismissalTombstone] {
+        incidentStore.legacyDismissalTombstones
+    }
+
+    func setVerdictLearningEnabled(_ enabled: Bool, authorizationExternalForm: Data? = nil) {
+        if enabled { nextSecuritySettingsAuthorization = authorizationExternalForm }
+        verdictLearningEnabled = enabled
+        persistSecuritySettingsIfReady()
+        configureIncidentStore()
+    }
+
+    func resetLearnedEntry(id: UUID) {
+        incidentStore.resetLearnedEntry(id: id)
+    }
+
+    func resetLearnedDecisions() {
+        incidentStore.resetAllLearnedEntries()
+    }
+
+    func resetLegacyDismissal(incidentKey: String) {
+        incidentStore.resetLegacyDismissal(incidentKey: incidentKey)
+        syncAlertsFromStore()
+    }
+
+    func exportLearnedEntries() throws -> Data {
+        try incidentStore.exportLearnedEntries()
+    }
+
+    private func configureIncidentStore() {
+        incidentStore.configure(
+            trustedProcessList: trustedProcessList,
+            suppressionRules: suppressionRules,
+            verdictLearningEnabled: verdictLearningEnabled
+        )
+    }
+
+    /// Removes a single alert by ID and persists its `deduplicationKey` so it
+    /// is suppressed on future scans until that dismissal is reset.
+    func dismissAlert(_ id: UUID) {
+        performAuthenticatedIncidentAction(.dismissed, alertID: id) { [weak self] alert in
+            SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
+            self?.incidentStore.performAuthenticatedUserAction(.dismissed, alertID: id)
+        }
+    }
+
+    /// Records an explicit review verdict through the extension-validated
+    /// incident action path. Merely opening or closing the detail never calls
+    /// this method.
+    func markAlertReviewed(_ id: UUID) {
+        performAuthenticatedIncidentAction(.reviewed, alertID: id) { [weak self] _ in
+            self?.incidentStore.performAuthenticatedUserAction(.reviewed, alertID: id)
+        }
     }
 
     /// Hides the current alert without classifying it as a false positive or
     /// suppressing future detections of the same pattern.
     func hideAlert(_ id: UUID) {
-        alerts.removeAll { $0.id == id }
-        saveAlerts()
-        rebuildUserFacingAlerts()
+        performAuthenticatedIncidentAction(.hidden, alertID: id) { [weak self] _ in
+            self?.incidentStore.performAuthenticatedUserAction(.hidden, alertID: id)
+        }
     }
 
     /// Acknowledges this exact, non-critical behavior for 24 hours. Exact malware
     /// detections cannot be muted; reviewable shell-profile and SSH-key changes
     /// may be acknowledged so normal developer workflows do not alert repeatedly.
     func allowAlertOnce(_ id: UUID) {
-        guard let alert = alerts.first(where: { $0.id == id }) else { return }
-        SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-        if isEligibleForExpectedCooldown(alert) {
-            expectedAlertCooldowns[alert.deduplicationKey] = Date().addingTimeInterval(86_400).timeIntervalSince1970
-            persistExpectedAlertCooldowns()
+        performAuthenticatedIncidentAction(.allowedOnce, alertID: id) { [weak self] alert in
+            SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
+            self?.incidentStore.performAuthenticatedUserAction(.allowedOnce, alertID: id)
         }
-        hideAlert(id)
-    }
-
-    private func isEligibleForExpectedCooldown(_ alert: ThreatAlert) -> Bool {
-        guard alert.severity < .critical,
-              !alert.contributingSignals.contains(where: { $0.source == .yara }) else {
-            return false
-        }
-
-        let reviewablePersistenceReasons: Set<String> = [
-            "shell_profile_modified",
-            "ssh_keys_modified",
-        ]
-        return alert.contributingSignals
-            .filter { $0.source == .persistence }
-            .allSatisfy { signal in
-                reviewablePersistenceReasons.contains(signal.metadata["reason"] ?? "")
-            }
-    }
-
-    private func shouldTemporarilySuppress(_ alert: ThreatAlert) -> Bool {
-        let now = Date().timeIntervalSince1970
-        if expectedAlertCooldowns.values.contains(where: { $0 <= now }) {
-            expectedAlertCooldowns = expectedAlertCooldowns.filter { $0.value > now }
-            persistExpectedAlertCooldowns()
-        }
-        guard isEligibleForExpectedCooldown(alert) else { return false }
-        return (expectedAlertCooldowns[alert.deduplicationKey] ?? 0) > now
-    }
-
-    private func persistExpectedAlertCooldowns() {
-        UserDefaults.standard.set(expectedAlertCooldowns, forKey: "nickExpectedAlertCooldowns")
     }
 
     /// Trusts a user-confirmed application/process for future behavioural
     /// correlation. Exact malware hash detections are intentionally excluded
     /// from this preference.
     func alwaysAllowBehavior(from alertID: UUID) {
-        guard let alert = alerts.first(where: { $0.id == alertID }),
-              let name = alert.contributingSignals.compactMap(\.processInfo?.name)
-                .first(where: { !$0.isEmpty }) else { return }
-        let signedIdentity = alert.contributingSignals.compactMap { signal -> String? in
-            guard let process = signal.processInfo,
-                  case .signed(let teamID) = process.signingStatus,
-                  !teamID.isEmpty,
-                  !process.path.isEmpty else { return nil }
-            let path = URL(fileURLWithPath: process.path).standardizedFileURL.path
-            return "\(teamID)|\(path)"
-        }.first
-        guard let signedIdentity else {
-            // Unsigned/name-only identities are trivial to impersonate. They
-            // may be accepted once, but never receive persistent trust.
-            return
-        }
-        suppressionRules.append(SuppressionRule(
-            type: .signedProcess,
-            value: signedIdentity,
-            note: "Accepted \(name) for this behavior",
-            behaviorContext: SuppressionRule.contextFingerprint(for: alert),
-            expiresAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
-        ))
-        SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
-        let acceptedContext = SuppressionRule.contextFingerprint(for: alert)
-        // Remove only repeats of this same behavior. Different activity from
-        // the same app remains visible and reviewable.
-        alerts.removeAll { candidate in
-            SuppressionRule.contextFingerprint(for: candidate) == acceptedContext &&
-            candidate.contributingSignals.contains {
-                $0.processInfo?.name.caseInsensitiveCompare(name) == .orderedSame
+        performAuthenticatedIncidentAction(.alwaysAllowed, alertID: alertID) { [weak self] alert in
+            guard let self,
+                  let process = TrustedProcessList.eligibleProcess(in: alert),
+                  case .signed(let teamID, let signingID?) = process.signingStatus,
+                  !teamID.isEmpty, !signingID.isEmpty else {
+                // Unsigned/name-only identities are trivial to impersonate. They
+                // may be accepted once, but never receive persistent trust.
+                return
             }
+            let name = process.name
+            let signedIdentity = "\(teamID)|\(signingID)"
+            SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
+            let contributesToLearning = incidentStore.isEligibleForVerdictLearning(alert)
+            incidentStore.performAuthenticatedUserAction(.alwaysAllowed, alertID: alertID)
+            if !contributesToLearning {
+                suppressionRules.append(SuppressionRule(
+                    type: .signedProcess,
+                    value: signedIdentity,
+                    note: "Accepted \(name) for this behavior",
+                    behaviorContext: SuppressionRule.contextFingerprint(for: alert),
+                    expiresAt: Calendar.current.date(byAdding: .day, value: 7, to: Date())
+                ))
+                // Remove only repeats of this same behavior. Different activity
+                // from the same app remains visible and reviewable.
+                configureIncidentStore()
+            }
+            syncAlertsFromStore()
         }
-        saveAlerts()
-        rebuildUserFacingAlerts()
-        Task {
-            await correlator.updateSuppressionRules(suppressionRules)
-        }
+    }
+
+    /// Whether this review action feeds the two-occurrence local learning
+    /// flow instead of installing an immediate seven-day suppression rule.
+    func contributesToVerdictLearning(_ alert: ThreatAlert) -> Bool {
+        incidentStore.isEligibleForVerdictLearning(alert)
     }
 
     /// Removes a resolved alert (threat was killed / deleted) without adding its
     /// `deduplicationKey` to `dismissedAlertKeys`.  The same threat pattern will
     /// reappear in the alert list if the binary is re-run.
     func resolveAlert(_ id: UUID) {
-        if let alert = alerts.first(where: { $0.id == id }) {
-            // Record as true positive for optional local training data.
+        performAuthenticatedIncidentAction(.resolved, alertID: id) { [weak self] alert in
             SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .truePositive)
+            self?.incidentStore.performAuthenticatedUserAction(.resolved, alertID: id)
         }
-        alerts.removeAll { $0.id == id }
-        saveAlerts()
-        rebuildUserFacingAlerts()
+    }
+
+    /// The extension has already validated the protection right and advanced
+    /// the FIM baseline. Retire the matching actionable incident without a
+    /// second prompt while retaining it in the persisted audit history.
+    func resolveAcknowledgedFIMIncident(_ id: UUID) {
+        incidentStore.performAuthenticatedUserAction(.resolved, alertID: id)
+        syncAlertsFromStore()
+    }
+
+    /// Records the outcome of a user-initiated quarantine attempt in the
+    /// canonical root-owned incident. Manual failures deliberately do not
+    /// enqueue a notification because the user is already looking at the
+    /// result.
+    func recordManualQuarantineFailure(_ failure: QuarantineFailure, alertID: UUID) {
+        incidentStore.recordQuarantineFailure(alertID: alertID, failure: failure)
+        syncAlertsFromStore()
+    }
+
+    func recordManualQuarantineSuccess(alertID: UUID) {
+        incidentStore.recordQuarantineSuccess(alertID: alertID)
+        syncAlertsFromStore()
+    }
+
+    private func performAuthenticatedIncidentAction(
+        _ action: IncidentActionKind,
+        alertID: UUID,
+        mutation: @escaping (ThreatAlert) -> Void
+    ) {
+        guard alerts.contains(where: { $0.id == alertID }) else { return }
+        pendingIncidentAction = PendingIncidentAction(
+            id: UUID(),
+            action: action,
+            alertID: alertID,
+            mutation: mutation
+        )
+        attemptPendingIncidentAction()
+    }
+
+    func retryPendingIncidentAction() {
+        attemptPendingIncidentAction()
+    }
+
+    func cancelPendingIncidentAction() {
+        pendingIncidentAction = nil
+        incidentActionRetryMessage = nil
+    }
+
+    private func attemptPendingIncidentAction() {
+        guard let request = pendingIncidentAction,
+              let incidentActionAuthorizer,
+              let alert = alerts.first(where: { $0.id == request.alertID }) else {
+            incidentActionRetryMessage = "Nick's security extension is not ready. Your action was not applied. Retry when protection reconnects."
+            return
+        }
+        incidentActionRetryMessage = nil
+        Task { @MainActor [weak self] in
+            let result = await incidentActionAuthorizer(request.alertID, request.action)
+            guard let self else { return }
+            guard self.pendingIncidentAction?.id == request.id else { return }
+            guard case .approved(let approval) = result else {
+                switch result {
+                case .approvalCancelled:
+                    self.incidentActionRetryMessage = "Approval was cancelled. Your action was not applied."
+                case .targetMissing:
+                    self.incidentActionRetryMessage = "This item is no longer in Nick's protected record. Refresh Activity and try again."
+                case .protectionDisconnected:
+                    self.incidentActionRetryMessage = "Protection is not connected. Your action was not applied."
+                case .versionMismatch(let appBuild, let extensionBuild):
+                    self.incidentActionRetryMessage = "App and protection versions differ (app \(appBuild), protection \(extensionBuild)). Nick may still be updating; reopen Nick after the update completes."
+                case .rejected:
+                    self.incidentActionRetryMessage = "Protection refused this action. Refresh Activity and try again."
+                case .approved:
+                    break
+                }
+                return
+            }
+            self.nextIncidentStoreAuthorization = approval.authorizationExternalForm
+            request.mutation(alert)
+            // A guarded mutation may decide it cannot safely change state.
+            // Do not let that approval authorize a later, unrelated write.
+            self.nextIncidentStoreAuthorization = nil
+            self.pendingIncidentAction = nil
+            self.incidentActionRetryMessage = nil
+            self.syncAlertsFromStore()
+        }
     }
 
     /// Cancels an in-progress scan, clearing all progress state immediately.
@@ -675,28 +1177,6 @@ final class SecurityEngine {
 
     // MARK: - Private Helpers
 
-    /// Encodes the current alerts array to JSON and writes it to UserDefaults
-    /// so they survive app restarts.
-    private func saveAlerts() {
-        let bounded = Self.boundedPersistedAlerts(alerts)
-        guard let data = try? JSONEncoder().encode(bounded) else { return }
-        UserDefaults.standard.set(data, forKey: "nickPersistedAlerts")
-    }
-
-    /// UserDefaults rejects values around 4 MB. Keep only the newest alert
-    /// summaries that fit comfortably below that boundary.
-    private static func boundedPersistedAlerts(_ source: [ThreatAlert]) -> [ThreatAlert] {
-        var bounded = Array(source.sorted { $0.timestamp > $1.timestamp }.prefix(100))
-        let encoder = JSONEncoder()
-        let byteLimit = 3_000_000
-        while bounded.count > 1,
-              let data = try? encoder.encode(bounded),
-              data.count > byteLimit {
-            bounded.removeLast()
-        }
-        return bounded
-    }
-
     /// Records the completion of a YARA deep scan and persists the stats.
     func recordDeepScan(fileCount: Int) {
         lastDeepScanDate      = Date()
@@ -711,7 +1191,10 @@ final class SecurityEngine {
     /// Lazily-created YARA engine used for on-demand file scanning.
     private var yaraEngine: YARAEngine?
 
-    /// Scans a single file or directory with the bundled YARA rule set.
+    /// Lazily-created exact-hash scanner backed by the validated bundled catalog.
+    private var bundledHashFileScanner: BundledHashFileScanner?
+
+    /// Scans a single file or directory with the bundled exact-hash catalog and YARA rules.
     ///
     /// The YARA engine is compiled lazily on first use from the `Rules` directory
     /// inside the app bundle. If the bundle does not contain a `Rules` directory
@@ -728,9 +1211,27 @@ final class SecurityEngine {
             yaraEngine = try YARAEngine(rulesDirectory: rulesDir)
         }
         guard let engine = yaraEngine else { throw YARAError.noRulesCompiled }
-        if url.hasDirectoryPath {
-            return try await engine.scanDirectory(at: url.path, recursive: true)
+        if bundledHashFileScanner == nil {
+            bundledHashFileScanner = try BundledHashFileScanner(bundle: .main)
         }
-        return try await engine.scanFile(at: url.path)
+        guard let hashScanner = bundledHashFileScanner else {
+            throw BundledHashFileScanner.ScannerError.catalogMissing
+        }
+        if url.hasDirectoryPath {
+            async let yaraMatches = engine.scanDirectory(at: url.path, recursive: true)
+            async let hashMatches = Task.detached {
+                try hashScanner.scanDirectory(at: url)
+            }.value
+            return try await yaraMatches + hashMatches
+        }
+        async let yaraMatches = engine.scanFile(at: url.path)
+        async let hashMatch = Task.detached {
+            try hashScanner.scanFile(at: url)
+        }.value
+        var results = try await yaraMatches
+        if let hashMatch = try await hashMatch {
+            results.append(hashMatch)
+        }
+        return results
     }
 }

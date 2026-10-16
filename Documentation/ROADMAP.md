@@ -101,6 +101,13 @@ gates pass, not on a fixed date. Planned capabilities:
 - Bundled, versioned exact-hash intelligence available immediately after
   installation.
 
+**5.0.1 detection-hardening backlog**
+- Add a built-product YARA zero-match gate and move production policy literals
+  out of plain text (encoded or loaded from the signed rules bundle).
+- Review Deep Scan's generic `signed -> likelySafe` downgrade. Developer ID
+  signing alone must not soften YARA evidence, and ad-hoc signatures must never
+  qualify for that downgrade.
+
 **Honest, visible protection**
 - Protection status generated from live component health.
 - A diagnostics view for sensor coverage, dropped events and update status.
@@ -123,6 +130,14 @@ gates pass, not on a fixed date. Planned capabilities:
 
 ## Version 5.1: trusted rule and signature updates
 
+### Deferred 5.0 interface work
+
+- Join related shell events into one incident chain.
+- Reorganize Settings in both Simple and Advanced modes.
+- Continue expanding the shared Simple and Advanced Storage screen after 5.0.
+  Nick 5.0 credits its JunkYard-powered cleanup engine and links to the full
+  JunkYard Cleaner App Store product from the Storage screen in both modes.
+
 - Publish Nick-maintained, signed YARA, network-rule and hash bundles.
 - Add staged rollout, expiry, rollback, and last-known-good recovery.
 - Display rule source, version, signing status, and last successful update.
@@ -132,13 +147,27 @@ gates pass, not on a fixed date. Planned capabilities:
 
 No unsigned community rule is eligible for automatic enforcement.
 
+## Version 5.2: learns from you (local only)
+
+- Learn from your own decisions on incidents (allowed, dismissed,
+  quarantined) to reduce repeat noise for lower-confidence findings.
+- Learning never hides signature, hash or YARA detections, and never applies
+  to unsigned code or script interpreters.
+- A "What Nick learned" view in Settings showing each learned entry, why it
+  exists and when it expires, with reset and export.
+- On-device incident summaries and plain-language help drafting suppression
+  rules, which you review and confirm.
+- Everything stays on your Mac.
+
 ## Later: behavioral model
 
+- Per-app behavioral baselines with explainable novelty scores.
 - Train and evaluate the CoreML behavioral model on consented, de-identified
   signal data.
 - Publish evaluation methodology, false-positive rate, and model limitations.
 - Keep deterministic rules as an explainable fallback.
 - Require model output to be supported by observable security evidence.
+- No model output triggers kill, quarantine or block on its own.
 - Provide local reset, export, and opt-out controls.
 
 ## Deferred unless a concrete requirement appears

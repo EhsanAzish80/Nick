@@ -143,8 +143,10 @@ final class FilterDataProvider: NEFilterDataProvider {
         let verdict = NetworkProtectionPolicy(configuration: configuration).evaluate(
             host: host,
             appIdentifier: appID,
-            isBlocklisted: blocklist.isBlocked(host:),
-            isScam: scamGuardian.isSuspicious(host:)
+            isBlocklisted: { host in
+                blocklist.isBlocked(host: host) || self.scamGuardian.isExactMatch(host: host)
+            },
+            isScam: scamGuardian.isHeuristicMatch(host:)
         )
 
         if case .block(let reason) = verdict {
@@ -170,7 +172,9 @@ final class FilterDataProvider: NEFilterDataProvider {
         }
 
         // ── Layer 2: Suspicious port ──────────────────────────────────────
-        if port > 1024 && !allowlistedPorts.contains(port) {
+        if port > 1024,
+           !allowlistedPorts.contains(port),
+           !NetworkEventContext.isExpectedLocalDiscovery(host: host, port: port) {
             recordObservation(
                 reason: .unusualPort,
                 host: host,
@@ -202,11 +206,12 @@ final class FilterDataProvider: NEFilterDataProvider {
         port: Int
     ) {
         let normalizedHost = NetworkProtectionConfiguration.normalizedDomain(host) ?? host
-        let throttleKey = "\(appID)|\(reason.rawValue)"
+        let throttleKey = "\(appID)|\(reason.rawValue)|\(normalizedHost)"
+        let throttleInterval: TimeInterval = reason == .knownThreat ? 600 : 300
         let now = Date()
         let shouldRecord = observationLock.withLock {
             if let previous = observationTimestamps[throttleKey],
-               now.timeIntervalSince(previous) < 300 {
+               now.timeIntervalSince(previous) < throttleInterval {
                 return false
             }
             observationTimestamps[throttleKey] = now
@@ -228,6 +233,12 @@ final class FilterDataProvider: NEFilterDataProvider {
             reasonTitle: reason.userTitle,
             port: port >= 0 ? port : nil
         ))
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("com.ehsanazish.nick.network-observation"),
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
     }
 
     private func signingIdentifier(for auditToken: Data?) -> String? {

@@ -19,6 +19,14 @@ import os
 ///   the Trust Evaluation daemon warms up — call only from async contexts.
 final class SignatureValidator: @unchecked Sendable {
 
+    enum NickAppBundleValidation: Sendable, Equatable {
+        case notNick
+        case valid
+        case invalid
+    }
+
+    static let nickAppRequirement = "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[subject.OU] = \"UXGW5V3BY6\" and identifier \"com.ehsanazish.nick\""
+
     // MARK: - Shared Instance
 
     /// Global shared instance used by `PersistenceWatcher` and `ProcessMonitor`.
@@ -31,11 +39,18 @@ final class SignatureValidator: @unchecked Sendable {
 
     private struct CacheEntry {
         let status: SigningStatus
+        let identity: FileIdentity
         let cachedAt: Date
     }
 
     private let lock = NSLock()
     private var cache: [String: CacheEntry] = [:]
+    private struct ValidatedIdentityCacheKey: Hashable {
+        let cdhash: Data
+        let teamID: String
+        let signingIdentifier: String
+    }
+    private var validatedIdentityCache: [ValidatedIdentityCacheKey: Bool] = [:]
 
     private static let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -59,8 +74,11 @@ final class SignatureValidator: @unchecked Sendable {
     /// - Parameter binaryPath: Absolute path to the Mach-O binary.
     /// - Returns: A `SigningStatus` value describing the binary's signing state.
     func evaluate(binaryPath: String) -> SigningStatus {
+        guard let currentIdentity = FileIdentity(path: binaryPath) else { return .unknown }
         lock.lock()
-        if let entry = cache[binaryPath], Date().timeIntervalSince(entry.cachedAt) < cacheTTL {
+        if let entry = cache[binaryPath],
+           entry.identity == currentIdentity,
+           Date().timeIntervalSince(entry.cachedAt) < cacheTTL {
             lock.unlock()
             return entry.status
         }
@@ -71,11 +89,15 @@ final class SignatureValidator: @unchecked Sendable {
         // validation for every Apple daemon during each process snapshot.
         // Writable and third-party locations still receive the full check.
         let result: SigningStatus = Self.isSealedSystemBinaryPath(binaryPath)
-            ? .signed(teamID: "APPLE_PLATFORM")
+            ? sealedSystemSigningStatus(path: binaryPath)
             : performStaticCheck(path: binaryPath)
 
         lock.lock()
-        cache[binaryPath] = CacheEntry(status: result, cachedAt: Date())
+        cache[binaryPath] = CacheEntry(
+            status: result,
+            identity: currentIdentity,
+            cachedAt: Date()
+        )
         lock.unlock()
 
         return result
@@ -97,7 +119,110 @@ final class SignatureValidator: @unchecked Sendable {
     func clearCache() {
         lock.lock()
         cache.removeAll()
+        validatedIdentityCache.removeAll()
         lock.unlock()
+    }
+
+    /// Validates an exact Developer ID identity against Apple's certificate
+    /// chain. Caller-supplied Team IDs are never sufficient for this decision.
+    /// Results are keyed by the signed code's cdhash plus the expected identity.
+    func validatesDeveloperIdentity(
+        binaryPath: String,
+        teamID: String,
+        signingIdentifier: String
+    ) -> Bool {
+        let teamCharacters = CharacterSet.uppercaseLetters.union(.decimalDigits)
+        let identifierCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-"))
+        let isApplePlatformIdentity = teamID == "APPLE_PLATFORM"
+        guard !teamID.isEmpty,
+              !signingIdentifier.isEmpty,
+              isApplePlatformIdentity || teamID.rangeOfCharacter(from: teamCharacters.inverted) == nil,
+              signingIdentifier.rangeOfCharacter(from: identifierCharacters.inverted) == nil
+        else { return false }
+
+        if isApplePlatformIdentity {
+            guard Self.isSealedSystemBinaryPath(binaryPath) else { return false }
+            return evaluate(binaryPath: binaryPath)
+                == .signed(teamID: "APPLE_PLATFORM", signingID: signingIdentifier)
+        }
+
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: binaryPath) as CFURL, [], &code) == errSecSuccess,
+              let code else { return false }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            code,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        ) == errSecSuccess,
+              let dictionary = information as? [String: Any],
+              let cdhash = dictionary[kSecCodeInfoUnique as String] as? Data
+        else { return false }
+
+        let key = ValidatedIdentityCacheKey(
+            cdhash: cdhash,
+            teamID: teamID,
+            signingIdentifier: signingIdentifier
+        )
+        lock.lock()
+        if let cached = validatedIdentityCache[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        // Apple platform binaries on the sealed system volume intentionally do
+        // not carry a Developer ID TeamIdentifier/OU. Requiring the synthetic
+        // APPLE_PLATFORM marker as a certificate OU makes every genuine Apple
+        // app fail exact-identity validation. Bind those identities to both the
+        // sealed path and Apple's designated requirement instead.
+        let requirementText = "identifier \"\(signingIdentifier)\" and anchor apple generic "
+            + "and certificate leaf[subject.OU] = \"\(teamID)\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            requirementText as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess,
+              let requirement else { return false }
+        let flags = SecCSFlags(rawValue: UInt32(kSecCSDoNotValidateResources))
+        let valid = SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess
+        lock.lock()
+        validatedIdentityCache[key] = valid
+        lock.unlock()
+        return valid
+    }
+
+    /// Identifies Nick by its signed Developer ID requirement, then validates the
+    /// complete bundle seal. Paths, bundle names and Info.plist values are never
+    /// identity evidence here.
+    func validateNickAppBundle(atPath path: String) -> NickAppBundleValidation {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code else { return .notNick }
+
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            Self.nickAppRequirement as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess, let requirement else { return .notNick }
+
+        // Establish identity without trusting the resource envelope. This lets a
+        // damaged genuine Nick bundle be distinguished from an unrelated app.
+        let identityFlags = SecCSFlags(rawValue: UInt32(kSecCSDoNotValidateResources))
+        guard SecStaticCodeCheckValidity(code, identityFlags, requirement) == errSecSuccess else {
+            return .notNick
+        }
+
+        let strictFlags = SecCSFlags(rawValue:
+            UInt32(kSecCSStrictValidate)
+                | UInt32(kSecCSCheckAllArchitectures)
+                | UInt32(kSecCSCheckNestedCode)
+        )
+        return SecStaticCodeCheckValidity(code, strictFlags, requirement) == errSecSuccess
+            ? .valid
+            : .invalid
     }
 
     /// Returns the number of currently cached entries.
@@ -162,6 +287,26 @@ final class SignatureValidator: @unchecked Sendable {
 
     // MARK: - Private Helpers
 
+    /// The sealed system volume already supplies the integrity boundary, but
+    /// trust decisions still need the stable signing identifier. Reading the
+    /// identifier does not perform the expensive certificate/resource check.
+    private func sealedSystemSigningStatus(path: String) -> SigningStatus {
+        let url = URL(fileURLWithPath: path) as CFURL
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url, [], &staticCode) == errSecSuccess,
+              let staticCode else { return .unknown }
+
+        var info: CFDictionary?
+        let flags = SecCSFlags(rawValue: kSecCSSigningInformation)
+        guard SecCodeCopySigningInformation(staticCode, flags, &info) == errSecSuccess,
+              let dictionary = info as? [String: Any],
+              let signingID = dictionary[kSecCodeInfoIdentifier as String] as? String,
+              !signingID.isEmpty else {
+            return .signed(teamID: "APPLE_PLATFORM")
+        }
+        return .signed(teamID: "APPLE_PLATFORM", signingID: signingID)
+    }
+
     private func performStaticCheck(path: String) -> SigningStatus {
         let url = URL(fileURLWithPath: path) as CFURL
 
@@ -208,9 +353,11 @@ final class SignatureValidator: @unchecked Sendable {
               let dict = info as? [String: Any] else { return .unknown }
 
         let teamID = dict[kSecCodeInfoTeamIdentifier as String] as? String
+        let signingID = dict[kSecCodeInfoIdentifier as String] as? String
         let hasTeamID = !(teamID ?? "").isEmpty
         return Self.statusForValidSignature(
             teamID: teamID,
+            signingID: signingID,
             isAppleAnchored: !hasTeamID && satisfies("anchor apple", code: code, validationFlags: validationFlags),
             isAppleIssued: hasTeamID && satisfies("anchor apple generic", code: code, validationFlags: validationFlags)
         )
@@ -227,13 +374,16 @@ final class SignatureValidator: @unchecked Sendable {
     ///   enough because a self-signed binary may also carry certificates.
     static func statusForValidSignature(
         teamID: String?,
+        signingID: String? = nil,
         isAppleAnchored: Bool,
         isAppleIssued: Bool
     ) -> SigningStatus {
         if let teamID, !teamID.isEmpty {
-            return isAppleIssued ? .signed(teamID: teamID) : .adHoc
+            return isAppleIssued ? .signed(teamID: teamID, signingID: signingID) : .adHoc
         }
-        if isAppleAnchored { return .signed(teamID: "APPLE_PLATFORM") }
+        if isAppleAnchored {
+            return .signed(teamID: "APPLE_PLATFORM", signingID: signingID)
+        }
         return .adHoc
     }
 

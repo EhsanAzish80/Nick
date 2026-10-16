@@ -4,6 +4,11 @@
 
 import SwiftUI
 
+enum StorageProductReference {
+    static let name = "JunkYard Cleaner"
+    static let appStoreURL = URL(string: "https://apps.apple.com/app/junkyard-cleaner/id6759726421")!
+}
+
 /// Disk cleanup and storage recommendations backed by `PerformanceMonitor`.
 struct PerformanceView: View {
 
@@ -24,6 +29,8 @@ struct PerformanceView: View {
                 DiskUsageView()
                     .environment(engine)
 
+                junkYardCard
+
                 scanCard
 
                 if hasScanResults {
@@ -39,7 +46,7 @@ struct PerformanceView: View {
             }
             .padding(NickSpacing.xxl)
         }
-        .navigationTitle("Performance")
+        .navigationTitle("Storage")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -57,6 +64,35 @@ struct PerformanceView: View {
             CleanupProgressView()
                 .environment(engine)
         }
+    }
+
+    private var junkYardCard: some View {
+        HStack(alignment: .center, spacing: NickSpacing.lg) {
+            Image(systemName: "sparkles.rectangle.stack.fill")
+                .font(.title2)
+                .foregroundStyle(.mint)
+                .frame(width: 34, height: 34)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: NickSpacing.xs) {
+                Text("Powered by JunkYard")
+                    .font(.headline)
+                Text("Nick includes focused, review-first storage cleanup. For storage maps, app uninstalling, leftovers, duplicates, and guided recovery, try JunkYard Cleaner.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: NickSpacing.xl)
+
+            Link(destination: StorageProductReference.appStoreURL) {
+                Label("View on the App Store", systemImage: "arrow.up.right.square")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("View JunkYard Cleaner on the App Store")
+        }
+        .padding(NickSpacing.xl)
+        .nickCard()
     }
 
     // MARK: - Scan

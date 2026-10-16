@@ -25,6 +25,12 @@ final class RansomwareDetector {
     // MARK: - Types
 
     struct RansomwareAlert {
+        struct RenameBurst {
+            let newExtension: String
+            let fileCount: Int
+            let directoryCount: Int
+            let windowSeconds: Int
+        }
         let pid: Int32
         let processPath: String
         let indicators: [String]
@@ -32,6 +38,7 @@ final class RansomwareDetector {
         /// True only when evidence is specific enough to justify terminating
         /// the writer without waiting for user review.
         let automaticBlockAllowed: Bool
+        let renameBurst: RenameBurst?
 
         enum Recommendation {
             case block      // high confidence — kill and quarantine now
@@ -161,7 +168,8 @@ final class RansomwareDetector {
             // and legitimately rewrite synced canaries; they get a prompt, not
             // an automatic kill.
             automaticBlockAllowed: !actorHasTrustedSigner && (canaryTouched
-                || (behavior.isSuspicious && (familyExtensionObserved || ransomNoteObserved)))
+                || (behavior.isSuspicious && (familyExtensionObserved || ransomNoteObserved))),
+            renameBurst: nil
         )
 
         Self.logger.notice(
@@ -183,9 +191,11 @@ final class RansomwareDetector {
         source: String,
         destination: String,
         actorIsPlatformBinary: Bool,
-        actorHasTrustedSigner: Bool = false
+        actorHasTrustedSigner: Bool = false,
+        ignoreBrowserDownloadDestination: Bool = false
     ) -> RansomwareAlert? {
         guard !actorIsPlatformBinary else { return nil }
+        guard !ignoreBrowserDownloadDestination else { return nil }
         var indicators: [String] = []
         var confidence = 0.0
         var canaryTouched = false
@@ -204,11 +214,18 @@ final class RansomwareDetector {
             strongEvidence = true
         }
 
-        if let burst = behaviorTracker.extensionChangeBurst(pid: pid),
+        let observedBurst = behaviorTracker.extensionChangeBurst(pid: pid)
+        if let burst = observedBurst,
            burst.fileCount >= Self.extensionBurstThreshold {
-            indicators.append(
-                "Mass extension change to .\(burst.newExtension): \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
-            )
+            if burst.newExtension == "encrypted replacement" {
+                indicators.append(
+                    "Encrypted replacement burst: \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
+                )
+            } else {
+                indicators.append(
+                    "Mass extension change to .\(burst.newExtension): \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
+                )
+            }
             confidence += burst.fileCount >= Self.extensionBurstThreshold * 3 ? 0.6 : 0.5
             strongEvidence = strongEvidence || burst.directoryCount >= 2
         }
@@ -222,7 +239,11 @@ final class RansomwareDetector {
             // A rename burst alone prompts the user; combined with a canary or a
             // known family extension it justifies stopping the writer.
             automaticBlockAllowed: !actorHasTrustedSigner
-                && (canaryTouched || (strongEvidence && confidence >= 0.9))
+                && (canaryTouched || (strongEvidence && confidence >= 0.9)),
+            renameBurst: observedBurst.map {
+                .init(newExtension: $0.newExtension, fileCount: $0.fileCount,
+                      directoryCount: $0.directoryCount, windowSeconds: 10)
+            }
         )
         Self.logger.notice(
             "Ransomware rename alert pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) action=\(String(describing: alert.recommendation))"
@@ -287,10 +308,15 @@ final class CanaryFileManager {
     private(set) var canaryPaths: Set<String> = []
 
     private let homeDirectories: [URL]
+    private let installationToken: String
     private let protectedFolderNames = ["Desktop", "Documents", "Downloads", "Pictures"]
 
-    init(homeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories()) {
+    init(
+        homeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories(),
+        tokenURL: URL = URL(fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/canary-token")
+    ) {
         self.homeDirectories = homeDirectories
+        self.installationToken = Self.loadOrCreateInstallationToken(at: tokenURL)
     }
 
     // MARK: - Public API
@@ -308,17 +334,17 @@ final class CanaryFileManager {
                 // deliberately persistent. Legacy dot-file canaries stay
                 // registered alongside the document canary.
                 let existingNames = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-                for name in existingNames where Self.isCanaryName(name) {
+                for name in existingNames where isManagedCanaryName(name) {
                     canaryPaths.insert(directory.appendingPathComponent(name).path)
                 }
-                guard !existingNames.contains(where: Self.isDocumentCanaryName) else { continue }
+                guard !existingNames.contains(where: isManagedDocumentCanaryName) else { continue }
 
                 // Ransomware typically skips dot-files and only encrypts known
                 // document and image extensions, so the canary is a visible
                 // name with a targeted extension, hidden from Finder by flag.
                 let ext = folderName == "Pictures" ? "jpg" : "docx"
                 let canaryPath = directory
-                    .appendingPathComponent("\(Self.documentCanaryPrefix)\(UUID().uuidString.prefix(6)).\(ext)")
+                    .appendingPathComponent(".\(installationToken)-\(UUID().uuidString.prefix(8)).\(ext)")
                     .path
 
                 let content = "NICK_CANARY_DO_NOT_MODIFY_\(Date())"
@@ -342,7 +368,7 @@ final class CanaryFileManager {
         if canaryPaths.contains(path) {
             return true
         }
-        return Self.isCanaryName((path as NSString).lastPathComponent)
+        return isManagedCanaryName((path as NSString).lastPathComponent)
     }
 
     static let documentCanaryPrefix = "Nick Canary - do not modify "
@@ -353,6 +379,36 @@ final class CanaryFileManager {
 
     static func isCanaryName(_ name: String) -> Bool {
         isDocumentCanaryName(name) || (name.hasPrefix(".~nick_canary_") && name.hasSuffix(".tmp"))
+    }
+
+    private func isManagedDocumentCanaryName(_ name: String) -> Bool {
+        name.hasPrefix(".\(installationToken)-")
+            && ["docx", "jpg"].contains((name as NSString).pathExtension.lowercased())
+    }
+
+    private func isManagedCanaryName(_ name: String) -> Bool {
+        isManagedDocumentCanaryName(name) || Self.isCanaryName(name)
+    }
+
+    private static func loadOrCreateInstallationToken(at url: URL) -> String {
+        if let existing = try? String(contentsOf: url, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           existing.count == 24 {
+            return existing
+        }
+        let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try Data(token.utf8).write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            Self.logger.error("Could not persist randomized canary token: \(error.localizedDescription, privacy: .public)")
+        }
+        return String(token)
     }
 
     /// Removes all canary files from disk and clears the set.

@@ -22,6 +22,9 @@ struct SystemAuditView: View {
 
     @State private var isExporting   = false
     @State private var exportMessage: String?
+    @State private var fimActionMessage: String?
+    @State private var acknowledgingFIM: Set<UUID> = []
+    @State private var isRebuildingFIM = false
 
     // Separate XProtect result from the rest so it gets its own section.
     private var xprotectResult: SystemCheckResult? {
@@ -69,32 +72,39 @@ struct SystemAuditView: View {
     }
 
     var body: some View {
+        let presentation = SystemAuditProtectionStatusModel(
+            status: engine.protectionStatus
+        ).presentation
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 14) {
+                    IconTile(
+                        systemImage: presentation.systemImage,
+                        tint: presentation.tone.statusColor,
+                        size: 56
+                    )
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("System Audit")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Color.textPrimary)
+                        Text(presentation.displayText)
+                            .font(.system(size: 13))
+                            .foregroundStyle(presentation.tone.statusColor)
+                        if !engine.auditResults.isEmpty {
+                            Text("\(passCount) settings verified")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 16)
+
                 if engine.auditResults.isEmpty {
                     emptyState
                 } else {
-                    // Hero row
-                    HStack(spacing: 14) {
-                        IconTile(
-                            systemImage: issueCount > 0 ? "exclamationmark.shield.fill" : "checkmark.shield.fill",
-                            tint: issueCount > 0 ? .orange : .green,
-                            size: 56
-                        )
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("System Audit")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(Color.textPrimary)
-                            Text(heroSubtitle)
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.textSecondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
-                    .padding(.bottom, 16)
-
                     // Security Score section
                     scoreSection
 
@@ -453,11 +463,21 @@ struct SystemAuditView: View {
     @ViewBuilder
     private var integritySection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("FILE INTEGRITY")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.textTertiary)
-                .tracking(0.5)
-                .padding(.horizontal, 20)
+            HStack {
+                Text("FILE INTEGRITY")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.textTertiary)
+                    .tracking(0.5)
+                Spacer()
+                Button("Rebuild Baseline") {
+                    rebuildFIMBaseline()
+                }
+                .buttonStyle(.link)
+                .disabled(isRebuildingFIM)
+                .help("Rebuilds the baseline only when all pending integrity changes have been reviewed.")
+                .accessibilityLabel("Rebuild file integrity baseline")
+            }
+            .padding(.horizontal, 20)
 
             if xpcClient.integrityViolations.isEmpty {
                 Text("No integrity violations — all monitored paths are unchanged.")
@@ -467,7 +487,7 @@ struct SystemAuditView: View {
                     .padding(.bottom, 24)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(xpcClient.integrityViolations.prefix(5).enumerated()), id: \.element.id) { idx, v in
+                    ForEach(Array(xpcClient.integrityViolations.enumerated()), id: \.element.id) { idx, v in
                         if idx > 0 { Divider().padding(.leading, 44) }
                         let createdOrModifiedIcon = v.violationType == .created ? "plus.circle" : "pencil"
                         let violationIcon = v.violationType == .deleted ? "trash" : createdOrModifiedIcon
@@ -487,9 +507,25 @@ struct SystemAuditView: View {
                                     .foregroundStyle(Color.textSecondary)
                             }
                             Spacer()
-                            Text(Self.compactDateFormatter.string(from: v.timestamp))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(Color.textTertiary)
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(Self.compactDateFormatter.string(from: v.timestamp))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(Color.textTertiary)
+                                Button("Acknowledge") {
+                                    acknowledgingFIM.insert(v.id)
+                                    xpcClient.acknowledgeFIMViolation(id: v.id) { accepted in
+                                        Task { @MainActor in
+                                            acknowledgingFIM.remove(v.id)
+                                            fimActionMessage = accepted
+                                                ? "Change acknowledged and baseline advanced."
+                                                : "The file changed again. Review it and retry."
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.link)
+                                .disabled(acknowledgingFIM.contains(v.id))
+                                .accessibilityLabel("Acknowledge integrity change for \(v.path)")
+                            }
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
@@ -504,21 +540,31 @@ struct SystemAuditView: View {
                         .strokeBorder(Color.borderSubtle, lineWidth: 0.5)
                 )
                 .padding(.horizontal, 20)
-                .padding(.bottom, 24)
+            }
+            if let fimActionMessage {
+                Text(fimActionMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.textSecondary)
+                    .padding(.horizontal, 20)
+            }
+            Spacer().frame(height: 24)
+        }
+    }
+
+    private func rebuildFIMBaseline() {
+        isRebuildingFIM = true
+        fimActionMessage = nil
+        xpcClient.requestRebuildFIMBaseline { accepted in
+            Task { @MainActor in
+                isRebuildingFIM = false
+                fimActionMessage = accepted
+                    ? "Baseline rebuilt from the current files."
+                    : "Review and acknowledge pending changes before rebuilding."
             }
         }
     }
 
     // MARK: - Helpers
-
-    private var heroSubtitle: String {
-        guard !engine.auditResults.isEmpty else { return "Run a scan to check your system." }
-        if issueCount == 0 {
-            return "\(passCount) settings verified. All hardened."
-        } else {
-            return "\(passCount) settings verified · \(issueCount) issue\(issueCount == 1 ? "" : "s") found."
-        }
-    }
 
     private func xprotectRows(from result: SystemCheckResult) -> [(label: String, value: String)] {
         // currentValue format: "Version 5345 (updated 9d ago)" or "Unreadable"

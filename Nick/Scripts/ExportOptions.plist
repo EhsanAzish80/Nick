@@ -9,13 +9,8 @@
     <key>stripSwiftSymbols</key>
     <true/>
     <key>signingStyle</key>
-    <string>manual</string>
+    <string>automatic</string>
     <key>signingCertificate</key>
     <string>Developer ID Application</string>
-    <key>provisioningProfiles</key>
-    <dict>
-        <key>com.ehsanazish.nick</key>
-        <string>Nick Developer ID</string>
-    </dict>
 </dict>
 </plist>

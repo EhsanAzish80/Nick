@@ -7,6 +7,34 @@ import XCTest
 
 @MainActor
 final class SmartScanStatusTests: XCTestCase {
+    func testSetupDoesNotTrapUserOnUnactionableWarning() {
+        let warning = ProtectionCheck(
+            id: "network_monitor",
+            title: "Network Monitor",
+            status: .warning,
+            headline: "Network monitoring is not running",
+            explanation: "Monitoring is still starting.",
+            icon: "network",
+            resolution: .none
+        )
+
+        XCTAssertFalse(ProtectionSetupPolicy.needsGuidance(warning))
+    }
+
+    func testSetupGuidesUserWhenAnActionIsAvailable() {
+        let warning = ProtectionCheck(
+            id: "endpoint_security",
+            title: "Real-Time Protection",
+            status: .warning,
+            headline: "Install protection",
+            explanation: "The extension is not active.",
+            icon: "shield",
+            resolution: .installExtension(extensionName: "NickExtension")
+        )
+
+        XCTAssertTrue(ProtectionSetupPolicy.needsGuidance(warning))
+    }
+
     func testNetworkFilterVersionActivationIsRequiredWhenVersionChanges() {
         XCTAssertTrue(
             NetworkFilterInstaller.needsBundledVersionActivation(
@@ -206,6 +234,15 @@ final class SmartScanStatusTests: XCTestCase {
         )
     }
 
+    func test_endpointExtensionBundleURLUsesSystemExtensionsInstallLocation() {
+        let appURL = URL(fileURLWithPath: "/Applications/Nick.app", isDirectory: true)
+
+        XCTAssertEqual(
+            ExtensionManager.bundledExtensionURL(in: appURL).path,
+            "/Applications/Nick.app/Contents/Library/SystemExtensions/com.ehsanazish.nick.NickExtension.systemextension"
+        )
+    }
+
     func test_uninstallDoesNotFailWhenLaunchAtLoginRemovalIsDenied() {
         let denied = NSError(
             domain: NSPOSIXErrorDomain,
@@ -223,5 +260,24 @@ final class SmartScanStatusTests: XCTestCase {
         XCTAssertTrue(AppDelegate.isIgnorableLaunchAtLoginRemovalError(denied))
         XCTAssertTrue(AppDelegate.isIgnorableLaunchAtLoginRemovalError(inaccessible))
         XCTAssertFalse(AppDelegate.isIgnorableLaunchAtLoginRemovalError(unrelated))
+    }
+
+    func test_uninstallerPreservesContainingAppUntilExtensionsAreGone() throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: projectRoot.appendingPathComponent("NickUninstaller/UninstallerView.swift"),
+            encoding: .utf8
+        )
+
+        let prepare = try XCTUnwrap(source.range(of: "try await prepareNickForRemoval(at: nickURL)"))
+        let restartGate = try XCTUnwrap(source.range(of: "if restartRequired", range: prepare.upperBound..<source.endIndex))
+        let purge = try XCTUnwrap(source.range(of: "try await performAuthorizedPurge(nickURL: nickURL)"))
+
+        XCTAssertLessThan(restartGate.lowerBound, purge.lowerBound)
+        XCTAssertTrue(source.contains("preserving Nick.app and all data"))
+        XCTAssertTrue(source.contains("/Applications/Nick.app"))
+        XCTAssertFalse(source.contains("NSWorkspace.shared.urlForApplication"))
     }
 }

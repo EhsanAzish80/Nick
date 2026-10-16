@@ -73,9 +73,13 @@ final class NetworkBlocklist: @unchecked Sendable {
         guard let envelope = try? JSONDecoder().decode(SignedNetworkRuleEnvelope.self, from: data),
               envelope.payload.schemaVersion == 1,
               envelope.payload.expiresAt > Date(),
-              envelope.verify()
+              envelope.verify(),
+              NetworkRuleVersionPolicy.accepts(
+                  candidateVersion: envelope.payload.version,
+                  highestAcceptedVersion: highestAcceptedVersion()
+              )
         else {
-            Self.logger.error("NetworkBlocklist: rejected invalid or expired signed rules")
+            Self.logger.error("NetworkBlocklist: rejected invalid, expired, or downgraded signed rules")
             return
         }
 
@@ -85,7 +89,26 @@ final class NetworkBlocklist: @unchecked Sendable {
             ))
             blockedIPs = Set(envelope.payload.ipAddresses.map { $0.lowercased() })
         }
+        persistHighestAcceptedVersion(envelope.payload.version)
         Self.logger.info("NetworkBlocklist: loaded signed rule version \(envelope.payload.version)")
+    }
+
+    private func highestAcceptedVersion() -> Int? {
+        guard let url = NetworkProtectionSharedStore.signedRulesVersionURL(),
+              let value = try? String(contentsOf: url, encoding: .utf8),
+              let version = Int(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return version
+    }
+
+    private func persistHighestAcceptedVersion(_ version: Int) {
+        guard let url = NetworkProtectionSharedStore.signedRulesVersionURL() else { return }
+        do {
+            try Data(String(version).utf8).write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            Self.logger.error("NetworkBlocklist: could not persist accepted rule version")
+        }
     }
 }
 

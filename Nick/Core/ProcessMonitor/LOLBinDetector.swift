@@ -199,23 +199,58 @@ enum LOLBinDetector {
     static func evaluate(
         _ proc: NickProcessInfo,
         parentName: String?,
-        trustedProcessList: TrustedProcessList = TrustedProcessList()
+        trustedProcessList: TrustedProcessList = TrustedProcessList(),
+        signingResolver: (String) -> SigningStatus = { SignatureValidator.shared.evaluate(binaryPath: $0) }
     ) -> ThreatSignal? {
+        // Download-to-shell findings require the shared policy's concrete
+        // command evidence. Do not fall back to substring matching here: the
+        // scanner and the Endpoint Security exec path must classify the same
+        // argv in exactly the same way.
+        if let finding = LOLBinExecutionPolicy.finding(
+            executablePath: proc.path,
+            arguments: proc.arguments
+        ), finding.reason == "curl_pipe_shell" || finding.reason == "wget_pipe_shell" {
+            let evidenceProcess = resolvedSigningEvidence(for: proc, resolver: signingResolver)
+            var metadata = [
+                "reason": finding.reason,
+                "detector": "LOLBinDetector",
+                "matched_pattern": "download_to_shell"
+            ]
+            if let matchedCommand = finding.matchedCommand {
+                metadata["matchedCommand"] = matchedCommand
+            }
+            return ThreatSignal(
+                source: .process,
+                severity: .critical,
+                title: finding.title,
+                description: "Nick saw a shell run a command that sends downloaded content directly to a shell interpreter. Parent: '\(parentName ?? "unknown")'.",
+                context: ThreatSignalContext(
+                    processInfo: evidenceProcess,
+                    metadata: metadata
+                )
+            )
+        }
+
         // Inspect the actual argv captured from KERN_PROCARGS2. A parent process name alone is not evidence that a download was piped to a shell.
         let argv = ([proc.path, proc.name] + proc.arguments).joined(separator: " ")
 
         for sig in signatures {
+            // These signatures are retained for compatibility documentation,
+            // but detection is handled exclusively by the evidence-requiring
+            // shared policy above.
+            guard sig.reason != "curl_pipe_shell", sig.reason != "wget_pipe_shell" else { continue }
             guard proc.name.lowercased() == sig.processName.lowercased() else { continue }
             guard argv.lowercased().contains(sig.argumentPattern.lowercased()) else { continue }
             guard isSpecificMatch(reason: sig.reason, arguments: proc.arguments, command: argv) else { continue }
 
+            let evidenceProcess = resolvedSigningEvidence(for: proc, resolver: signingResolver)
             return ThreatSignal(
                 source: .process,
                 severity: sig.severity,
                 title: sig.title,
                 description: "'\(proc.name)' (PID \(proc.pid)) matches LOLBin pattern '\(sig.argumentPattern)'. Parent: '\(parentName ?? "unknown")'.",
                 context: ThreatSignalContext(
-                    processInfo: proc,
+                    processInfo: evidenceProcess,
                     metadata: [
                         "reason": sig.reason,
                         "detector": "LOLBinDetector",
@@ -226,6 +261,27 @@ enum LOLBinDetector {
         }
 
         return nil
+    }
+
+    private static func resolvedSigningEvidence(
+        for process: NickProcessInfo,
+        resolver: (String) -> SigningStatus
+    ) -> NickProcessInfo {
+        guard process.signingStatus == .pending || process.signingStatus == .unknown,
+              !process.path.isEmpty else { return process }
+        return NickProcessInfo(
+            pid: process.pid,
+            path: process.path,
+            name: process.name,
+            parentPID: process.parentPID,
+            parentName: process.parentName,
+            signingStatus: resolver(process.path),
+            metadata: ProcessMetadata(
+                user: process.user,
+                startTime: process.startTime,
+                arguments: process.arguments
+            )
+        )
     }
 
     /// Evaluates a list of processes for LOLBin patterns.
