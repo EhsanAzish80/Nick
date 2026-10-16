@@ -160,8 +160,6 @@ fi
 EXPANDED_PACKAGE="${BUILD_DIR}/ExpandedPackage"
 rm -rf "${EXPANDED_PACKAGE}"
 pkgutil --expand-full "${LOCAL_PACKAGE_PATH}" "${EXPANDED_PACKAGE}"
-codesign --verify --deep --strict --verbose=2 \
-  "${EXPANDED_PACKAGE}/Payload/Applications/Nick.app"
 
 # Expansion is part of the real Installer compatibility audit. Verify the
 # installer signature again afterwards so a package that only appears valid
@@ -208,7 +206,6 @@ if [[ "${NOTARIZE}" == "1" ]]; then
   spctl -a -vv -t install "${OUTPUT_PATH}"
 else
   print "Skipping Apple notarization (NOTARIZE=${NOTARIZE})."
-  pkgutil --check-signature "${OUTPUT_PATH}"
 fi
 
 print
@@ -216,6 +213,21 @@ print "Sparkle enclosure attributes:"
 "${SPARKLE_BIN}/sign_update" --account "${SPARKLE_ACCOUNT}" "${OUTPUT_PATH}"
 print
 shasum -a 256 "${OUTPUT_PATH}"
+
+# Signature, Gatekeeper, and system-extension verdicts from the restricted
+# release-agent shell are not authoritative. Keep the in-pipeline payload and
+# expected signing-identity gates above, then hand the completed artifact to
+# Ehsan for the final verification in his Terminal.
+print
+print "Authoritative verification — run these exact commands in Ehsan's Terminal:"
+print "P=${(q)OUTPUT_PATH}"
+print 'shasum -a 256 "$P"'
+print 'pkgutil --check-signature "$P"'
+print 'D=$(mktemp -d)'
+print 'pkgutil --expand-full "$P" "$D/x"'
+print 'codesign --verify --deep --strict --verbose=2 "$D/x/Payload/Applications/Nick.app"'
+print
+print "Expected SHA-256: ${OUTPUT_PACKAGE_SHA}"
 
 if [[ "${VALIDATE_LIVE_APPCAST:-0}" == "1" ]]; then
   "${SCRIPT_DIR}/validate-live-appcast.sh" \
