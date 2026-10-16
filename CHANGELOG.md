@@ -12,7 +12,7 @@ monotonically increasing macOS bundle build number.
 
 ### Added
 
-- A shared Simple and Advanced experience for Home, Activity, Protection,
+- A redesigned Simple mode for Home, Activity, Protection,
   scanning, and Storage, while retaining the full diagnostic and monitoring
   tools in Advanced mode.
 - One protection-status presentation used by Home, Activity, Overview, Smart
@@ -23,6 +23,13 @@ monotonically increasing macOS bundle build number.
   learned decisions.
 - A small, versioned offline exact-hash catalog with provenance displayed in
   Diagnostics and acknowledgements in Settings.
+- Password-approved security settings and reviewed actions backed by protected
+  root-owned incident and settings stores.
+- Nick self-file tamper protection and completed-download exact-hash checks in
+  Downloads, Desktop, and Mail Downloads for files up to 100 MiB.
+- Durable alert delivery that reopens dismissed protected incidents when new
+  matching evidence arrives.
+- Verified in-app updates through the signed Sparkle feed.
 
 ### Changed
 
@@ -50,6 +57,21 @@ monotonically increasing macOS bundle build number.
   destructive write-then-swap behavior remains detectable.
 - System Audit now treats a custom System Integrity Protection configuration
   as partially disabled instead of potentially reporting SIP as fully enabled.
+
+### Upgrading from 4.x
+
+- Nick performs a one-time migration of supported local settings and incident
+  history.
+- macOS may request password or Touch ID approval for protected settings and
+  security-sensitive actions.
+
+### Known limitations
+
+- Network findings appear in Network Activity only; they do not create alerts
+  or notifications and traffic is not blocked.
+- Completed-download exact-hash checks do not cover custom download folders.
+- MDM management and compliance enforcement are not supported.
+- An independent security review is pending.
 
 ## [4.6.3] - 2026-10-05
 
@@ -402,7 +424,8 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v4.6.3...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v5.0.0...HEAD
+[5.0.0]: https://github.com/EhsanAzish80/Nick/compare/v4.6.3...v5.0.0
 [4.6.3]: https://github.com/EhsanAzish80/Nick/compare/v4.6.2...v4.6.3
 [4.6.2]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.6.2
 [4.6.1]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.6.1
