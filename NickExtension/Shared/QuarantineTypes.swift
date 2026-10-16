@@ -331,19 +331,23 @@ public struct IntegrityViolation: Codable, Sendable, Identifiable {
     public let expectedHash: String?
     public let actualHash: String?
     public let timestamp: Date
+    public let metadata: [String: String]?
 
     public init(
+        id: UUID = UUID(),
         path: String,
         violationType: ViolationType,
         expectedHash: String?,
         actualHash: String?,
-        timestamp: Date
+        timestamp: Date,
+        metadata: [String: String]? = nil
     ) {
-        self.id = UUID()
+        self.id = id
         self.path = path
         self.violationType = violationType
         self.expectedHash = expectedHash
         self.actualHash = actualHash
         self.timestamp = timestamp
+        self.metadata = metadata
     }
 }

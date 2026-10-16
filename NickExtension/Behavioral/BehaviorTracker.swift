@@ -55,6 +55,14 @@ final class BehaviorTracker {
         let detail: String
         /// Rename source path; `detail` holds the destination.
         var source: String? = nil
+        /// False for a recent same-process/process-group write-then-swap.
+        var countsTowardRenameBurst: Bool = true
+    }
+
+    private struct RecentCreation {
+        let pid: Int32
+        let processGroupID: Int32
+        let timestamp: Date
     }
 
     /// Result of the extension-change analysis for one process.
@@ -80,6 +88,7 @@ final class BehaviorTracker {
     )
 
     private var processTimelines: [Int32: ProcessTimeline] = [:]
+    private var recentCreations: [String: RecentCreation] = [:]
     private let lock = NSLock()
     private let thresholds: AlertThresholds
 
@@ -116,7 +125,29 @@ final class BehaviorTracker {
 
     /// Records a completed rename with both paths so extension changes can be
     /// attributed to the renaming process.
-    func recordRename(pid: Int32, processPath: String, source: String, destination: String) {
+    func recordCreate(
+        pid: Int32,
+        processGroupID: Int32,
+        processPath: String,
+        path: String,
+        at timestamp: Date = Date()
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        recentCreations[path] = RecentCreation(
+            pid: pid, processGroupID: processGroupID, timestamp: timestamp
+        )
+        pruneRecentCreations(now: timestamp)
+    }
+
+    func recordRename(
+        pid: Int32,
+        processGroupID: Int32,
+        processPath: String,
+        source: String,
+        destination: String,
+        at timestamp: Date = Date()
+    ) {
         lock.lock()
         defer { lock.unlock() }
 
@@ -126,9 +157,20 @@ final class BehaviorTracker {
                 startTime: Date(), events: [], childPids: []
             )
         }
-        processTimelines[pid]?.events.append(
-            BehaviorEvent(timestamp: Date(), type: .fileRename, detail: destination, source: source)
-        )
+        pruneRecentCreations(now: timestamp)
+        let creation = recentCreations[source]
+        let isAtomicSwap = creation.map {
+            timestamp.timeIntervalSince($0.timestamp) <= 10
+                && ($0.pid == pid || $0.processGroupID == processGroupID)
+        } ?? false
+        processTimelines[pid]?.events.append(BehaviorEvent(
+            timestamp: timestamp,
+            type: .fileRename,
+            detail: destination,
+            source: source,
+            countsTowardRenameBurst: !isAtomicSwap
+        ))
+        recentCreations.removeValue(forKey: source)
         processTimelines[pid]?.prune(window: thresholds.timelineWindowSeconds)
         if let count = processTimelines[pid]?.events.count,
            count > thresholds.maxEventsPerProcess {
@@ -149,7 +191,8 @@ final class BehaviorTracker {
         let cutoff = Date().addingTimeInterval(-window)
         var files: [String: Set<String>] = [:]
         var directories: [String: Set<String>] = [:]
-        for event in timeline.events where event.type == .fileRename && event.timestamp >= cutoff {
+        for event in timeline.events where event.type == .fileRename
+            && event.timestamp >= cutoff && event.countsTowardRenameBurst {
             guard let source = event.source,
                   let newExtension = Self.introducedExtension(source: source, destination: event.detail)
             else { continue }
@@ -229,7 +272,8 @@ final class BehaviorTracker {
         // atomic saves and download completion do not contribute.
         let cutoff = now.addingTimeInterval(-10)
         var introduced: [String: Int] = [:]
-        for event in fileOps where event.type == .fileRename && event.timestamp >= cutoff {
+        for event in fileOps where event.type == .fileRename
+            && event.timestamp >= cutoff && event.countsTowardRenameBurst {
             if let source = event.source,
                let ext = Self.introducedExtension(source: source, destination: event.detail) {
                 introduced[ext, default: 0] += 1
@@ -269,6 +313,19 @@ final class BehaviorTracker {
         lock.lock()
         defer { lock.unlock() }
         processTimelines.removeValue(forKey: pid)
+        recentCreations = recentCreations.filter { $0.value.pid != pid }
+    }
+
+    private func pruneRecentCreations(now: Date) {
+        let cutoff = now.addingTimeInterval(-thresholds.timelineWindowSeconds)
+        recentCreations = recentCreations.filter { $0.value.timestamp >= cutoff }
+        if recentCreations.count > thresholds.maxEventsPerProcess * 8 {
+            let excess = recentCreations.count - thresholds.maxEventsPerProcess * 8
+            for key in recentCreations.sorted(by: { $0.value.timestamp < $1.value.timestamp })
+                .prefix(excess).map(\.key) {
+                recentCreations.removeValue(forKey: key)
+            }
+        }
     }
 
     // MARK: - Helpers
