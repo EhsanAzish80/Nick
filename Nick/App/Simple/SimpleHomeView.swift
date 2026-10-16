@@ -405,6 +405,9 @@ struct SimpleHomeView: View {
     }
 
     private func markSeen(_ incident: HomeIncident) {
+        if case .alert(let id) = incident.source {
+            engine.markIncidentSeen(id)
+        }
         var ids = seenIncidentsRaw.split(separator: "\n").map(String.init)
         guard !ids.contains(incident.id) else { return }
         ids.append(incident.id)

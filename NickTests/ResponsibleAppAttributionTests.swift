@@ -4,9 +4,14 @@ import XCTest
 final class ResponsibleAppAttributionTests: XCTestCase {
     private struct Resolver: ResponsibleProcessIdentityResolving {
         let identities: [Int32: ResponsibleAppIdentity]
+        var liveProcesses: [Int32: ResponsibleLiveProcess] = [:]
 
         func identity(pid: Int32, pathHint: String?) -> ResponsibleAppIdentity? {
             identities[pid]
+        }
+
+        func liveProcess(pid: Int32) -> ResponsibleLiveProcess? {
+            liveProcesses[pid]
         }
     }
 
@@ -50,6 +55,49 @@ final class ResponsibleAppAttributionTests: XCTestCase {
 
         XCTAssertEqual(result.displayLine, "ChatGPT ran this · via ChatGPTHelper")
         XCTAssertEqual(result.chain, ["ChatGPT", "ChatGPTHelper"])
+    }
+
+    func test_preExistingCodexCLIIsRecoveredLiveAndKeptInViaChain() {
+        let tree = ProcessTree()
+        tree.recordExec(pid: 1_842, ppid: 1_060, path: "/bin/zsh", args: ["zsh", "-c"])
+        let resolver = Resolver(
+            identities: [999: chatGPTIdentity],
+            liveProcesses: [
+                1_060: ResponsibleLiveProcess(
+                    pid: 1_060,
+                    ppid: 999,
+                    path: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+                ),
+                999: ResponsibleLiveProcess(
+                    pid: 999,
+                    ppid: 1,
+                    path: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"
+                )
+            ]
+        )
+
+        let result = tree.responsibleApp(
+            actorPID: 1_842,
+            responsiblePID: 999,
+            resolver: resolver
+        )
+
+        XCTAssertEqual(result.displayLine, "ChatGPT ran this · via Codex CLI → zsh")
+        XCTAssertEqual(result.chain, ["ChatGPT", "Codex CLI", "zsh"])
+    }
+
+    func test_unresolvableExitedParentLeavesVisibleGapInChain() {
+        let tree = ProcessTree()
+        tree.recordExec(pid: 1_842, ppid: 1_060, path: "/bin/zsh", args: ["zsh", "-c"])
+
+        let result = tree.responsibleApp(
+            actorPID: 1_842,
+            responsiblePID: 999,
+            resolver: Resolver(identities: [999: chatGPTIdentity])
+        )
+
+        XCTAssertEqual(result.displayLine, "ChatGPT ran this · via ? → zsh")
+        XCTAssertEqual(result.chain, ["ChatGPT", "?", "zsh"])
     }
 
     func test_terminalLaunchedShellAttributesTerminalWithoutNoisyShellSuffix() {
@@ -104,7 +152,7 @@ final class ResponsibleAppAttributionTests: XCTestCase {
         )
 
         XCTAssertEqual(result.displayName, "Unknown app")
-        XCTAssertEqual(result.displayLine, "Unknown app ran this")
+        XCTAssertEqual(result.displayLine, "Unknown app ran this · via ? → zsh")
     }
 
     func test_unsignedResponsibleApplicationIsReportedAsUnsigned() {

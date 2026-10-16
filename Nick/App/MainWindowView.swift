@@ -47,9 +47,10 @@ struct MainWindowView: View {
         }
     }
 
-    // Count only alerts that the consumer-facing assessment considers actionable.
+    // Badges represent unseen incidents. ProtectionStatus separately represents
+    // findings that still need a review decision.
     private var activeAlertCount: Int {
-        engine.protectionStatus.count
+        engine.unseenIncidentCount
     }
 
     var body: some View {
