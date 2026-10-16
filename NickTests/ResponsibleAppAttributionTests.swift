@@ -59,10 +59,17 @@ final class ResponsibleAppAttributionTests: XCTestCase {
 
     func test_preExistingCodexCLIIsRecoveredLiveAndKeptInViaChain() {
         let tree = ProcessTree()
-        tree.recordExec(pid: 1_842, ppid: 1_060, path: "/bin/zsh", args: ["zsh", "-c"])
+        // Reproduce the 5051 field evidence: the tracked ES node skipped the
+        // pre-existing CLI and pointed straight at the responsible app.
+        tree.recordExec(pid: 1_842, ppid: 999, path: "/bin/zsh", args: ["zsh", "-c"])
         let resolver = Resolver(
             identities: [999: chatGPTIdentity],
             liveProcesses: [
+                1_842: ResponsibleLiveProcess(
+                    pid: 1_842,
+                    ppid: 1_060,
+                    path: "/bin/zsh"
+                ),
                 1_060: ResponsibleLiveProcess(
                     pid: 1_060,
                     ppid: 999,
@@ -84,6 +91,43 @@ final class ResponsibleAppAttributionTests: XCTestCase {
 
         XCTAssertEqual(result.displayLine, "ChatGPT ran this · via Codex CLI → zsh")
         XCTAssertEqual(result.chain, ["ChatGPT", "Codex CLI", "zsh"])
+    }
+
+    func test_liveParentReconciliationIsGenericForAnyAppHelperAndShell() {
+        let tree = ProcessTree()
+        tree.recordExec(pid: 3_000, ppid: 2_000, path: "/bin/zsh", args: ["zsh", "-c"])
+        let builder = ResponsibleAppIdentity(
+            name: "Builder",
+            bundleID: "com.example.builder",
+            teamID: "EXAMPLETEAM",
+            signing: .signed,
+            path: "/Applications/Builder.app"
+        )
+        let resolver = Resolver(
+            identities: [2_000: builder],
+            liveProcesses: [
+                3_000: ResponsibleLiveProcess(pid: 3_000, ppid: 2_500, path: "/bin/zsh"),
+                2_500: ResponsibleLiveProcess(
+                    pid: 2_500,
+                    ppid: 2_000,
+                    path: "/Applications/Builder.app/Contents/Helpers/build-helper"
+                ),
+                2_000: ResponsibleLiveProcess(
+                    pid: 2_000,
+                    ppid: 1,
+                    path: "/Applications/Builder.app/Contents/MacOS/Builder"
+                )
+            ]
+        )
+
+        let result = tree.responsibleApp(
+            actorPID: 3_000,
+            responsiblePID: 2_000,
+            resolver: resolver
+        )
+
+        XCTAssertEqual(result.displayLine, "Builder ran this · via build-helper → zsh")
+        XCTAssertEqual(result.chain, ["Builder", "build-helper", "zsh"])
     }
 
     func test_unresolvableExitedParentLeavesVisibleGapInChain() {
