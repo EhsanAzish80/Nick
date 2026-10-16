@@ -56,6 +56,27 @@ final class ResponsibleAppAttributionTests: XCTestCase {
         XCTAssertEqual(result.displayLine, "Terminal ran this")
     }
 
+    func test_fileBehaviorFromCodexChainAttributesChatGPTViaCodexCLIAndCMake() {
+        let tree = ProcessTree()
+        tree.recordExec(
+            pid: 999, ppid: 1,
+            path: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", args: []
+        )
+        tree.recordExec(
+            pid: 1_060, ppid: 999,
+            path: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI", args: []
+        )
+        tree.recordExec(pid: 1_842, ppid: 1_060, path: "/opt/homebrew/bin/cmake", args: [])
+
+        let result = tree.responsibleApp(
+            actorPID: 1_842,
+            responsiblePID: 999,
+            resolver: Resolver(identities: [999: chatGPTIdentity])
+        )
+
+        XCTAssertEqual(result.displayLine, "ChatGPT ran this · via Codex CLI → cmake")
+    }
+
     func test_brokenChainDoesNotGuessAnApplication() {
         let tree = ProcessTree()
         tree.recordExec(pid: 700, ppid: 699, path: "/bin/zsh", args: [])

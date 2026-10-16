@@ -4,6 +4,7 @@
 
 import EndpointSecurity
 import Foundation
+import Darwin
 import os
 
 // MARK: - ESEventHandler
@@ -89,6 +90,9 @@ final class ESEventHandler {
         let processPath = esString(process.executable.pointee.path)
         let pid         = audit_token_to_pid(process.audit_token)
         let parentPid   = audit_token_to_pid(process.parent_audit_token)
+        let responsiblePid = audit_token_to_pid(process.responsible_audit_token)
+        let observedProcessGroupID = getpgid(pid)
+        let processGroupID = observedProcessGroupID > 0 ? observedProcessGroupID : pid
         let processIdentity = ProcessInstanceIdentity.capture(pid: pid)
         let tamperActorIdentity = TamperActorIdentity(
             teamID: esOptionalString(process.team_id),
@@ -306,6 +310,12 @@ final class ESEventHandler {
             let destSuspect    = fileScanner?.isUntrustedLocation(filePath) ?? false
             let isSuspicious   = processSuspect && destSuspect
             esClient?.respond(to: message, allow: true)
+            behaviorTracker?.recordCreate(
+                pid: pid,
+                processGroupID: processGroupID,
+                processPath: processPath,
+                path: filePath
+            )
 
             if isSuspicious {
                 guard !isTrustedPlatformActor(processPath) else { break }
@@ -460,7 +470,9 @@ final class ESEventHandler {
                 }
 
                 // --- File Integrity Monitoring ---
-                self.reportIntegrityViolation(at: filePath)
+                self.reportIntegrityViolation(
+                    at: filePath, actorPID: pid, responsiblePID: responsiblePid
+                )
 
                 // Ransomware heuristics run once at close and read at most a
                 // small prefix. Canary names and known extensions do not need
@@ -490,7 +502,8 @@ final class ESEventHandler {
                         parentPid: parentPid,
                         processPath: processPath,
                         filePath: filePath,
-                        processIdentity: processIdentity
+                        processIdentity: processIdentity,
+                        responsiblePID: responsiblePid
                     )
                 }
 
@@ -590,6 +603,21 @@ final class ESEventHandler {
             } else {
                 renameBlocked = false
             }
+            if !renameBlocked,
+               behaviorTracker?.wasRecentlyCreated(
+                path: srcPath, by: pid, processGroupID: processGroupID
+            ) == true,
+               FileManager.default.fileExists(atPath: destinationPath) {
+                let renameReplacementEvidence = BehaviorTracker.RenameReplacementEvidence(
+                    sourceData: self.boundedFileSample(at: srcPath, maximumBytes: 65_536),
+                    destinationData: self.boundedFileSample(at: destinationPath, maximumBytes: 65_536),
+                    destinationExisted: true
+                )
+                behaviorTracker?.recordRenameIntent(
+                    pid: pid, source: srcPath, destination: destinationPath,
+                    evidence: renameReplacementEvidence
+                )
+            }
             esClient?.respond(to: message, allow: !renameBlocked)
             tamperProtection?.handleRenameEvent(
                 srcPath: srcPath,
@@ -624,11 +652,18 @@ final class ESEventHandler {
             let renameSigningID = esOptionalString(process.signing_id)
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
-                self.reportIntegrityViolation(at: notifySrcPath)
-                self.reportIntegrityViolation(at: notifyDestPath)
+                self.reportIntegrityViolation(
+                    at: notifySrcPath, actorPID: pid, responsiblePID: responsiblePid
+                )
+                self.reportIntegrityViolation(
+                    at: notifyDestPath, actorPID: pid, responsiblePID: responsiblePid
+                )
                 self.behaviorTracker?.recordRename(
-                    pid: pid, processPath: processPath,
-                    source: notifySrcPath, destination: notifyDestPath
+                    pid: pid, processGroupID: processGroupID, processPath: processPath,
+                    source: notifySrcPath, destination: notifyDestPath,
+                    replacementEvidence: self.behaviorTracker?.consumeRenameIntent(
+                        pid: pid, source: notifySrcPath, destination: notifyDestPath
+                    )
                 )
                 self.processTree?.recordFileAccess(pid: pid, path: notifySrcPath, operation: "rename")
                 let browserIdentityCandidate = BrowserDownloadRenamePolicy.shouldIgnoreDestination(
@@ -655,6 +690,7 @@ final class ESEventHandler {
                         processPath: processPath,
                         filePath: notifyDestPath,
                         processIdentity: processIdentity,
+                        responsiblePID: responsiblePid,
                         actorIsPlatformBinary: renameActorIsPlatform,
                         teamID: renameTeamID,
                         signingID: renameSigningID
@@ -737,7 +773,9 @@ final class ESEventHandler {
             let filePath = esString(msg.event.unlink.target.pointee.path)
             fileScanner?.cache.invalidate(path: filePath)
             dispatchQueue.async { [weak self] in
-                self?.reportIntegrityViolation(at: filePath)
+                self?.reportIntegrityViolation(
+                    at: filePath, actorPID: pid, responsiblePID: responsiblePid
+                )
             }
             // Encrypt-to-new-file ransomware deletes the originals, including
             // a canary it never modified in place.
@@ -759,7 +797,8 @@ final class ESEventHandler {
                         parentPid: parentPid,
                         processPath: processPath,
                         filePath: filePath,
-                        processIdentity: processIdentity
+                        processIdentity: processIdentity,
+                        responsiblePID: responsiblePid
                     )
                 }
             }
@@ -996,9 +1035,29 @@ final class ESEventHandler {
 
     // MARK: - Private Helpers
 
-    private func reportIntegrityViolation(at path: String) {
-        guard let violation = fileIntegrityMonitor?.check(path: path),
-              let data = try? encoder.encode(violation) else { return }
+    private func reportIntegrityViolation(
+        at path: String,
+        actorPID: Int32? = nil,
+        responsiblePID: Int32? = nil
+    ) {
+        guard let violation = fileIntegrityMonitor?.check(path: path) else { return }
+        let attribution = actorPID.flatMap {
+            processTree?.responsibleApp(
+                actorPID: $0,
+                responsiblePID: responsiblePID,
+                resolver: SecCodeResponsibleProcessIdentityResolver.shared
+            ).metadata
+        }
+        let attributed = IntegrityViolation(
+            id: violation.id,
+            path: violation.path,
+            violationType: violation.violationType,
+            expectedHash: violation.expectedHash,
+            actualHash: violation.actualHash,
+            timestamp: violation.timestamp,
+            metadata: attribution
+        )
+        guard let data = try? encoder.encode(attributed) else { return }
         xpcServer?.sendIntegrityViolationToApp(data)
     }
 
@@ -1055,6 +1114,7 @@ final class ESEventHandler {
         processPath: String,
         filePath: String,
         processIdentity: ProcessInstanceIdentity?,
+        responsiblePID: Int32? = nil,
         actorIsPlatformBinary: Bool = false,
         teamID: String? = nil,
         signingID: String? = nil
@@ -1104,7 +1164,7 @@ final class ESEventHandler {
         ]
         if let attribution = processTree?.responsibleApp(
             actorPID: pid,
-            responsiblePID: nil,
+            responsiblePID: responsiblePID,
             resolver: SecCodeResponsibleProcessIdentityResolver.shared
         ) {
             ransomwareMetadata.merge(attribution.metadata) { current, _ in current }

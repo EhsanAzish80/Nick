@@ -1189,7 +1189,7 @@ struct ExtensionFinding: Sendable {
         let signingStatus: SigningStatus
         if let teamID = event.teamID, !teamID.isEmpty {
             signingStatus = .signed(teamID: teamID, signingID: event.signingID)
-        } else if SignatureValidator.isSealedSystemBinaryPath(actorPath) {
+        } else if !actorPath.isEmpty {
             signingStatus = SignatureValidator.shared.evaluate(binaryPath: actorPath)
         } else {
             signingStatus = .unknown
@@ -1416,7 +1416,7 @@ struct ExtensionFinding: Sendable {
                     "ruleTier": "protected",
                     "fimStatus": "pending",
                     "expectedHash": violation.expectedHash ?? "unavailable"
-                ]
+                ].merging(violation.metadata ?? [:]) { current, _ in current }
             )
         )
         score = 0.9
