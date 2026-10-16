@@ -76,7 +76,11 @@ struct AlertDetailView: View {
     }
 
     private var incident: SecurityIncident? {
-        engine.incidentStore.incidents.first(where: { $0.alert.id == alert.id })
+        engine.incident(for: alert)
+    }
+
+    private var displayStatus: IncidentDisplayStatus {
+        engine.displayStatus(for: alert)
     }
 
     private var tamperDetailsSection: some View {
@@ -147,7 +151,12 @@ struct AlertDetailView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: NickSpacing.md) {
-                    SeverityBadge(severity: alert.severity)
+                    Text(displayStatus.rawValue)
+                        .font(.nickCaption)
+                        .foregroundStyle(Color.statusRed)
+                        .padding(.horizontal, NickSpacing.sm)
+                        .padding(.vertical, NickSpacing.xs)
+                        .background(Color.statusRed.opacity(0.12), in: Capsule())
                     Text(String(format: "Confidence: %.0f%%", alert.score * 100))
                         .font(.nickMono)
                         .foregroundStyle(Color.textSecondary)

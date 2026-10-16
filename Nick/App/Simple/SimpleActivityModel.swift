@@ -21,8 +21,6 @@ struct SimpleActivityItem: Identifiable, Equatable {
     enum Status: String, Equatable {
         case informational = "Observed"
         case needsAction = "Needs review"
-        case threat = "Threat"
-        case warning = "Warning"
         case blocked = "Blocked"
         case quarantined = "Quarantined"
     }
@@ -38,8 +36,6 @@ struct SimpleActivityItem: Identifiable, Equatable {
         switch status {
         case .informational: "info.circle"
         case .needsAction: "exclamationmark.circle"
-        case .threat:      "xmark.shield"
-        case .warning:     "exclamationmark.triangle"
         case .blocked:     "hand.raised"
         case .quarantined: "archivebox"
         }
@@ -82,8 +78,7 @@ enum SimpleActivityFeed {
         let headline: String
         let level: Level
         let date: Date
-        let needsAction: Bool
-        let isBlocked: Bool
+        let displayStatus: IncidentDisplayStatus
 
         init(
             id: UUID,
@@ -91,14 +86,15 @@ enum SimpleActivityFeed {
             level: Level,
             date: Date,
             needsAction: Bool,
-            isBlocked: Bool = false
+            isBlocked: Bool = false,
+            displayStatus: IncidentDisplayStatus? = nil
         ) {
             self.id = id
             self.headline = headline
             self.level = level
             self.date = date
-            self.needsAction = needsAction
-            self.isBlocked = isBlocked
+            self.displayStatus = displayStatus
+                ?? (isBlocked ? .blocked : (needsAction ? .needsReview : .observed))
         }
     }
 
@@ -126,13 +122,17 @@ enum SimpleActivityFeed {
     static func alertInputs(
         from alerts: [ThreatAlert],
         actionable: Set<UUID>,
+        incidents: [SecurityIncident] = [],
         builder: UserFacingAlertBuilder = .shared
     ) -> [AlertInput] {
-        alerts.compactMap { alert in
+        let incidentsByAlertID = Dictionary(uniqueKeysWithValues: incidents.map { ($0.alert.id, $0) })
+        return alerts.compactMap { alert in
             let user = builder.build(from: alert)
-            let behavior = BehaviorIncidentPresentation(alert: alert)
+            let incident = incidentsByAlertID[alert.id]
+            let displayStatus = incident?.displayStatus ?? IncidentDisplayStatus(alert: alert)
+            let behavior = BehaviorIncidentPresentation(alert: alert, incident: incident)
             let level: AlertInput.Level
-            if behavior.status == .needsReview {
+            if displayStatus == .needsReview && behavior.isBehavior {
                 level = .critical
             } else if !alert.isActionableUserFinding {
                 level = .informational
@@ -151,9 +151,9 @@ enum SimpleActivityFeed {
                     : (user.severity == .safe ? "Security finding needs review" : user.headline),
                 level: level,
                 date: alert.lastSeen,
-                needsAction: (behavior.status == .needsReview || alert.isActionableUserFinding)
-                    && actionable.contains(alert.id),
-                isBlocked: alert.isBlockedTamperEvidence
+                needsAction: displayStatus == .needsReview && actionable.contains(alert.id),
+                isBlocked: displayStatus == .blocked,
+                displayStatus: displayStatus
             )
         }
     }
@@ -193,12 +193,12 @@ enum SimpleActivityFeed {
         var items: [SimpleActivityItem] = []
 
         for alert in alerts {
-            let status: SimpleActivityItem.Status = alert.isBlocked
-                ? .blocked
-                : (alert.needsAction
-                ? .needsAction
-                : (alert.level == .critical ? .threat
-                    : (alert.level == .warning ? .warning : .informational)))
+            let status: SimpleActivityItem.Status = switch alert.displayStatus {
+            case .needsReview, .remediationNeeded: .needsAction
+            case .blocked: .blocked
+            case .quarantined: .quarantined
+            case .resolved, .observed: .informational
+            }
             items.append(SimpleActivityItem(
                 id: "a-\(alert.id.uuidString)",
                 source: .alert(alert.id),

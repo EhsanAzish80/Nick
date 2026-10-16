@@ -27,28 +27,19 @@ struct ProtectionStatus: Equatable, Sendable {
         auditIssueCount: Int,
         sensorRunning: Bool
     ) -> ProtectionStatus {
-        let count = actionableAlerts.count + max(0, auditIssueCount)
+        let representedAlertIDs = Set(incidents.map(\.alert.id))
+        let incidentStatuses = incidents.map(\.displayStatus)
+        let fallbackAlerts = actionableAlerts.filter { !representedAlertIDs.contains($0.id) }
+        let count = incidentStatuses.filter(\.contributesToProtectionStatus).count
+            + fallbackAlerts.count + max(0, auditIssueCount)
         guard sensorRunning else {
             return ProtectionStatus(state: .sensorProblem, count: count)
         }
 
-        let relevant = incidents.filter { incident in
-            actionableAlerts.contains { $0.id == incident.alert.id }
-        }
-        if relevant.contains(where: { incident in
-            incident.actions.contains { $0.action == .quarantineFailed }
-                || incident.alert.contributingSignals.contains {
-                    $0.metadata["remediationStatus"] == "quarantine-failed"
-                }
-        }) {
+        if incidentStatuses.contains(.remediationNeeded) {
             return ProtectionStatus(state: .remediationNeeded, count: max(1, count))
         }
-        if relevant.contains(where: { incident in
-            incident.actions.contains { $0.action == .quarantined }
-                || incident.alert.contributingSignals.contains {
-                    $0.metadata["tamperDisposition"] == "blocked"
-                }
-        }) {
+        if incidentStatuses.contains(.blocked) || incidentStatuses.contains(.quarantined) {
             return ProtectionStatus(state: .threatBlocked, count: max(1, count))
         }
         if count > 0 {
@@ -88,17 +79,17 @@ struct ProtectionStatusPresentation: Equatable, Sendable {
             systemImage = "checkmark.shield.fill"
         case .attentionNeeded:
             headlineText = "Attention needed"
-            countText = "\(count) items need review"
+            countText = status.count == 1 ? "1 item needs review" : "\(count) items need review"
             tone = .attention
             systemImage = "exclamationmark.shield.fill"
         case .threatBlocked:
             headlineText = "Threat blocked"
-            countText = "\(count) items"
+            countText = status.count == 1 ? "1 item" : "\(count) items"
             tone = .critical
             systemImage = "hand.raised.fill"
         case .remediationNeeded:
             headlineText = "Remediation needed"
-            countText = "\(count) items"
+            countText = status.count == 1 ? "1 item" : "\(count) items"
             tone = .critical
             systemImage = "exclamationmark.triangle.fill"
         case .sensorProblem:

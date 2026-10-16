@@ -122,7 +122,7 @@ final class SimpleActivityFeedTests: XCTestCase {
             blocked: [.init(name: "dropper", date: now.addingTimeInterval(-2 * 3_600), wasLaunch: true)],
             calendar: calendar
         )
-        XCTAssertEqual(items.map(\.status), [.quarantined, .blocked, .warning])
+        XCTAssertEqual(items.map(\.status), [.quarantined, .blocked, .informational])
         XCTAssertEqual(items[0].title, "Moved “Bad.app” to Quarantine")
         XCTAssertEqual(items[1].title, "Stopped “dropper” from running")
     }
@@ -135,7 +135,7 @@ final class SimpleActivityFeedTests: XCTestCase {
             ],
             quarantine: [], blocked: [], calendar: calendar
         )
-        XCTAssertEqual(items.map(\.status), [.needsAction, .threat])
+        XCTAssertEqual(items.map(\.status), [.needsAction, .informational])
         XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
     }
 
@@ -151,7 +151,7 @@ final class SimpleActivityFeedTests: XCTestCase {
         XCTAssertEqual(inputs.count, 1)
         XCTAssertEqual(inputs.first?.level, .warning)
         XCTAssertEqual(inputs.first?.headline, "New startup item detected")
-        XCTAssertEqual(inputs.first?.needsAction, true)
+        XCTAssertEqual(inputs.first?.displayStatus, .needsReview)
     }
 
     func test_informationalObservationHasAdvancedSimpleBadgeAndHomeParity() {
@@ -166,7 +166,7 @@ final class SimpleActivityFeedTests: XCTestCase {
         let inputs = SimpleActivityFeed.alertInputs(from: [info], actionable: [info.id])
         XCTAssertEqual(inputs.count, 1)
         XCTAssertEqual(inputs.first?.level, .informational)
-        XCTAssertEqual(inputs.first?.needsAction, false)
+        XCTAssertEqual(inputs.first?.displayStatus, .observed)
 
         let items = SimpleActivityFeed.items(
             alerts: inputs, quarantine: [], blocked: [], calendar: calendar

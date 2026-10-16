@@ -292,24 +292,23 @@ final class ProcessTree: @unchecked Sendable {
             resolver.identity(pid: $0, pathHint: nodeByPID[$0]?.path)
         }
         let responsibleApp = responsible.flatMap { identity in
-            Self.isApplicationIdentity(identity, executablePath: nodeByPID[responsiblePID ?? -1]?.path)
-                ? identity : nil
+            identity.path.hasSuffix(".app") ? identity : nil
         }
 
-        let selected = responsibleApp ?? chain.reversed().lazy.compactMap { node -> ResponsibleAppIdentity? in
-            guard !Self.isCommandLineTool(node.path),
-                  SecCodeResponsibleProcessIdentityResolver.appBundleURL(for: node.path) != nil else { return nil }
-            return resolver.identity(pid: node.pid, pathHint: node.path)
+        let selected = responsibleApp ?? chain.lazy.compactMap { node -> ResponsibleAppIdentity? in
+            guard let identity = resolver.identity(pid: node.pid, pathHint: node.path),
+                  Self.isMainBundleExecutable(node.path, app: identity) else { return nil }
+            return identity
         }.first
 
         guard let selected else { return ResponsibleAppAttribution(app: nil, chain: []) }
-        let selectedIndex = chain.firstIndex { node in
-            let appPath = SecCodeResponsibleProcessIdentityResolver.appBundleURL(for: node.path)?.path
-            return appPath == selected.path || node.pid == responsiblePID
-        }
+        let mainIndex = chain.firstIndex { Self.isMainBundleExecutable($0.path, app: selected) }
+        let responsibleIndex = responsiblePID.flatMap { pid in chain.firstIndex { $0.pid == pid } }
+        let selectedIndex = mainIndex ?? responsibleIndex
         let suffix = selectedIndex.map { Array(chain[$0...]) } ?? Array(chain.suffix(4))
         var labels = [selected.name]
-        for node in suffix.dropFirst() {
+        for node in suffix {
+            if Self.isMainBundleExecutable(node.path, app: selected) { continue }
             let label = Self.chainLabel(for: node.path)
             if labels.last != label { labels.append(label) }
         }
@@ -434,12 +433,14 @@ final class ProcessTree: @unchecked Sendable {
         "codex", "codexcli", "systemextensionsctl", "shove"
     ]
 
-    private static func isApplicationIdentity(
-        _ identity: ResponsibleAppIdentity,
-        executablePath: String?
-    ) -> Bool {
-        guard identity.path.hasSuffix(".app") else { return false }
-        return !isCommandLineTool(executablePath ?? identity.name)
+    private static func isMainBundleExecutable(_ executablePath: String, app: ResponsibleAppIdentity) -> Bool {
+        guard app.path.hasSuffix(".app") else { return false }
+        let bundleURL = URL(fileURLWithPath: app.path)
+        let executableName = Bundle(url: bundleURL)?.object(forInfoDictionaryKey: "CFBundleExecutable") as? String
+            ?? app.name
+        let expected = bundleURL.appendingPathComponent("Contents/MacOS/\(executableName)").path
+        return URL(fileURLWithPath: executablePath).standardizedFileURL.path
+            == URL(fileURLWithPath: expected).standardizedFileURL.path
     }
 
     private static func isCommandLineTool(_ path: String) -> Bool {

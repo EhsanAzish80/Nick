@@ -4,19 +4,59 @@
 
 import Foundation
 
+/// The single lifecycle/status vocabulary rendered for a persisted incident.
+/// Evidence availability only controls actions; it never rewrites status.
+enum IncidentDisplayStatus: String, Equatable, Sendable {
+    case needsReview = "Needs review"
+    case blocked = "Blocked"
+    case quarantined = "Quarantined"
+    case remediationNeeded = "Remediation needed"
+    case resolved = "Resolved"
+    case observed = "Observed"
+
+    var contributesToProtectionStatus: Bool {
+        switch self {
+        case .needsReview, .blocked, .quarantined, .remediationNeeded: true
+        case .resolved, .observed: false
+        }
+    }
+
+    init(alert: ThreatAlert, incident: SecurityIncident? = nil) {
+        if incident?.actions.contains(where: { $0.action == .quarantineFailed }) == true
+            || alert.contributingSignals.contains(where: {
+                $0.metadata["remediationStatus"] == "quarantine-failed"
+            }) {
+            self = .remediationNeeded
+        } else if incident?.actions.contains(where: { $0.action == .quarantined }) == true {
+            self = .quarantined
+        } else if alert.isBlockedTamperEvidence {
+            self = .blocked
+        } else if let incident, incident.state != .new || !incident.isVisible {
+            self = .resolved
+        } else if alert.severity == .info {
+            self = .observed
+        } else if alert.hasProtectedEvidence || alert.isActionableUserFinding {
+            self = .needsReview
+        } else {
+            self = .observed
+        }
+    }
+}
+
+extension SecurityIncident {
+    /// The canonical user-visible lifecycle for this incident. All surfaces
+    /// consume this value instead of reinterpreting severity or evidence state.
+    var displayStatus: IncidentDisplayStatus {
+        IncidentDisplayStatus(alert: alert, incident: self)
+    }
+}
+
 /// Presentation-only attribution and lifecycle for behavior incidents.
 /// Responsible-app metadata never participates in detection, trust, tier,
 /// severity, suppression, or correlation policy.
 struct BehaviorIncidentPresentation: Equatable, Sendable {
-    enum Status: String, Equatable, Sendable {
-        case needsReview = "Needs review"
-        case blocked = "Blocked"
-        case remediationNeeded = "Remediation needed"
-        case observed = "Observed"
-    }
-
     let isBehavior: Bool
-    let status: Status
+    let status: IncidentDisplayStatus
     let responsibleLine: String
     let responsibleAppName: String
     let bundleID: String?
@@ -28,7 +68,7 @@ struct BehaviorIncidentPresentation: Equatable, Sendable {
     let actorSigning: String
     let matchedCommand: String?
 
-    init(alert: ThreatAlert) {
+    init(alert: ThreatAlert, incident: SecurityIncident? = nil) {
         let signal = alert.contributingSignals.first { signal in
             signal.metadata["class"] == "behavior"
                 || signal.metadata["detectionKind"]?.hasSuffix("-behavior") == true
@@ -59,18 +99,7 @@ struct BehaviorIncidentPresentation: Equatable, Sendable {
         actorSigning = signal?.processInfo?.signingStatus.behaviorDisplayName ?? "Unknown"
         matchedCommand = metadata["matchedCommand"].flatMap(Self.nonEmpty)
 
-        let remediationFailed = alert.contributingSignals.contains {
-            $0.metadata["remediationStatus"] == "quarantine-failed"
-        }
-        if remediationFailed {
-            status = .remediationNeeded
-        } else if alert.isBlockedTamperEvidence {
-            status = .blocked
-        } else if isBehavior && alert.hasProtectedEvidence {
-            status = .needsReview
-        } else {
-            status = .observed
-        }
+        status = incident?.displayStatus ?? IncidentDisplayStatus(alert: alert)
     }
 
     private static func nonEmpty(_ value: String) -> String? { value.isEmpty ? nil : value }

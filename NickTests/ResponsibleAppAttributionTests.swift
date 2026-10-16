@@ -35,6 +35,23 @@ final class ResponsibleAppAttributionTests: XCTestCase {
         XCTAssertLessThanOrEqual(result.chain.count, 5)
     }
 
+    func test_responsibleHelperWithLaunchdParentAttributesAppAndKeepsHelperAsVia() {
+        let tree = ProcessTree()
+        tree.recordExec(
+            pid: 2_001, ppid: 1,
+            path: "/Applications/ChatGPT.app/Contents/Helpers/ChatGPTHelper", args: []
+        )
+
+        let result = tree.responsibleApp(
+            actorPID: 2_001,
+            responsiblePID: 2_001,
+            resolver: Resolver(identities: [2_001: chatGPTIdentity])
+        )
+
+        XCTAssertEqual(result.displayLine, "ChatGPT ran this · via ChatGPTHelper")
+        XCTAssertEqual(result.chain, ["ChatGPT", "ChatGPTHelper"])
+    }
+
     func test_terminalLaunchedShellAttributesTerminalWithoutNoisyShellSuffix() {
         let tree = ProcessTree()
         tree.recordExec(

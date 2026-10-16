@@ -386,7 +386,15 @@ final class SecurityEngine {
 
     /// Consumer-facing alerts that still have actionable evidence.
     var activeActionableAlerts: [ThreatAlert] {
-        alerts.filter(\.isActionableUserFinding)
+        alerts.filter { displayStatus(for: $0).contributesToProtectionStatus }
+    }
+
+    func incident(for alert: ThreatAlert) -> SecurityIncident? {
+        incidentStore.incidents.first { $0.alert.id == alert.id }
+    }
+
+    func displayStatus(for alert: ThreatAlert) -> IncidentDisplayStatus {
+        incident(for: alert)?.displayStatus ?? IncidentDisplayStatus(alert: alert)
     }
 
     /// Canonical status/count consumed by every top-level protection surface.

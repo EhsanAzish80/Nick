@@ -21,7 +21,11 @@ struct SimpleActivityView: View {
     private var items: [SimpleActivityItem] {
         let actionable = Set(engine.activeActionableAlerts.map(\.id))
         return SimpleActivityFeed.items(
-            alerts: SimpleActivityFeed.alertInputs(from: engine.alerts, actionable: actionable),
+            alerts: SimpleActivityFeed.alertInputs(
+                from: engine.alerts,
+                actionable: actionable,
+                incidents: engine.incidentStore.incidents
+            ),
             quarantine: xpcClient.quarantineRecords,
             blocked: SimpleActivityFeed.blockedInputs(
                 from: xpcClient.events,
@@ -214,10 +218,8 @@ struct SimpleActivityRow: View {
         switch item.status {
         case .informational:
             (.nickSecondaryText, Color.nickSecondaryText.opacity(0.12))
-        case .needsAction, .threat, .quarantined, .blocked:
+        case .needsAction, .quarantined, .blocked:
             (.nickDangerText, .nickDangerBackground)
-        case .warning:
-            (.nickWarningText, .nickWarningBackground)
         }
     }
 
