@@ -58,15 +58,17 @@ exports sanitized Markdown or JSON support bundles.
 
 ## Start simple, go deeper when needed
 
-Nick opens in **Simple mode**. It focuses on four things:
+Nick opens in **Simple mode**. It focuses on five destinations:
 
 - **Home** — one clear protection state and recent activity;
 - **Scan** — Quick Check, Full Scan, or a specific file, app, folder, or drive;
 - **Activity** — alerts, quarantined files, and blocked launches in one timeline;
-- **Protection** — plain-language status and direct fixes for paused protections.
+- **Protection** — plain-language status and direct fixes for paused protections;
+- **Storage** — storage opportunities and reviewed cleanup actions, powered by
+  JunkYard.
 
 **Advanced mode** keeps the full process, network, persistence, rule, Runtime
-Compare, performance, and diagnostic views. Switch at any time from the toolbar
+Compare, Storage, and diagnostic views. Switch at any time from the toolbar
 or with `Shift-Command-A`.
 
 Nick is not a promise that every threat can be detected. Its goal is to combine
@@ -80,13 +82,13 @@ turning every unusual developer or system action into a malware claim.
 | Real-Time Protection | Observes process and file activity through Apple's Endpoint Security framework. |
 | Malware Scanner | Uses YARA rules for on-demand, real-time, email, and external-volume scanning. |
 | Behavioral Detection | Correlates process, persistence, filesystem, privacy, and network signals. |
-| Scam Guardian | Observes phishing and lookalike destinations through a fail-open Network Extension. |
+| Scam Guardian | In 5.0, suspected and known dangerous destinations appear in Network Activity; they don't create alerts or notifications and traffic isn't blocked. |
 | Email Guard | Scans supported Apple Mail and Outlook attachment locations. |
 | Ransomware Shield | Watches sentinel files and suspicious high-volume file changes. |
 | System Audit | Checks SIP, FileVault, Gatekeeper, firewall, updates, XProtect, and persistence. |
 | Threat Timeline | Keeps a bounded, searchable record of relevant security activity. |
 | Quarantine | Re-verifies and isolates actionable files while preserving recovery information. |
-| Performance | Explains disk usage and offers reviewed, opt-in cleanup actions. |
+| Storage | Explains disk usage and offers reviewed, opt-in cleanup actions. |
 | Runtime Compare | Captures before-and-after runtime evidence and exports sanitized support bundles. |
 
 ### Endpoint Security
@@ -128,9 +130,9 @@ content-filter APIs to evaluate connection destinations with bundled
 lookalike-domain checks. Signed-rule envelope validation is implemented, but a
 production signing key and downloaded rule feed are not published. It does not
 inspect page contents or store full
-URLs, query strings, or payloads. Version 4.0.1 operates in observation-only
-mode: suspected destinations are reported for review, but the extension does
-not drop ordinary application traffic. Missing, stale, or invalid
+URLs, query strings, or payloads. In 5.0, suspected and known dangerous
+destinations appear in Network Activity; they don't create alerts or
+notifications and traffic isn't blocked. Missing, stale, or invalid
 configuration also fails open.
 
 ### Email Guard
@@ -149,7 +151,7 @@ data.
 - Privacy permission and capture-device change monitoring.
 - Bounded Threat Timeline and exportable security reports.
 
-### Performance and maintenance
+### Storage and maintenance
 
 - Disk-usage analysis and reviewed cleanup recommendations.
 - Background work uses reduced cadence when Nick is not active.
@@ -233,19 +235,18 @@ For implementation details and trust boundaries, see
 
 ### Published release
 
-The current stable release is **Nick 4.6.3 (build 430)** for macOS 26 and later.
+The current stable release is **Nick 5.0.0 (build 5052)** for macOS 26 and later.
 
-1. Download the notarized Nick disk image from
+1. Download the notarized Nick installer package from
    [the latest GitHub release](https://github.com/EhsanAzish80/Nick/releases/latest).
-2. Open the disk image and run the signed installer package.
+2. Open the signed installer package and complete installation.
 3. Launch Nick from `/Applications`.
 4. Follow the setup walkthrough. macOS requires explicit user approval for
    system extensions, Network Extensions, and Full Disk Access.
 5. On Home, confirm that each enabled protection reports current health, then
    run Quick Check.
 
-The disk image is a presentation wrapper around the installer package. Sparkle
-updates use the signed package directly.
+Sparkle updates use the same signed package directly.
 
 ### What to expect in the first five minutes
 
@@ -324,8 +325,8 @@ The production release pipeline is documented in
 - The appcast enclosure must reference the exact, unmodified signed package.
 - Manual website and GitHub downloads may use the disk image.
 
-Version 4.6 release notes are in
-[Packaging/Release/v4.6.0/RELEASE_NOTES.md](Packaging/Release/v4.6.0/RELEASE_NOTES.md).
+Version 5.0 release notes are in
+[Packaging/Release/v5.0.0/RELEASE_NOTES.md](Packaging/Release/v5.0.0/RELEASE_NOTES.md).
 
 ## Quality gates
 
@@ -374,9 +375,9 @@ state and does not mean the extension remains installed.
 
 ## Project status
 
-Nick 4.6.3 is the current production release. Every future release remains gated
+Nick 5.0.0 is the current production release. Every future release remains gated
 on clean-Mac validation of Endpoint Security, Email Guard, Scam Guardian,
-updates, performance, quarantine, and uninstall behavior.
+updates, Storage, quarantine, and uninstall behavior.
 
 ## License
 

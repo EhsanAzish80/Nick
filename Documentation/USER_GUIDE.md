@@ -66,9 +66,8 @@ malware exclusion.
 Scam Guardian evaluates connection hostnames. It does not read page contents,
 form data, messages, or full browsing history.
 
-Nick 4.1 observes suspected phishing destinations but does not block
-connections. A finding appears in Nick for review while the application
-connection remains available.
+In 5.0, suspected and known dangerous destinations appear in Network Activity;
+they don't create alerts or notifications and traffic isn't blocked.
 
 If normal browsing stops while the extension is enabled:
 
@@ -79,7 +78,6 @@ If normal browsing stops while the extension is enabled:
 5. Report the affected domain and app as a false positive.
 
 Nick's policy is fail-open when configuration is missing, stale, or invalid.
-Build 416 also contains no Network Extension traffic-drop path.
 
 ## Local analysis and network access
 
@@ -106,6 +104,10 @@ expires, and how often it was confirmed. Entries can be reset individually,
 reset together, or exported to a file you choose. They are stored locally in
 Nick's root-owned incident store and are not uploaded.
 
+Security-sensitive changes and remediation actions can require password or
+Touch ID approval. Cancelling the approval leaves the protected setting or
+incident unchanged.
+
 ## Email Guard
 
 Email Guard requires NickExtension to be running and to have Full Disk Access.
@@ -125,11 +127,14 @@ file already exists at that location or if a folder on the original path has
 been replaced by a link. Move the existing item or recreate the folder, then
 try again.
 
-## Performance
+## Storage
 
-The Performance view reports storage opportunities and reviewed cleanup
-actions. Read the item description before deleting data. Nick avoids deleting
-documents and does not treat cache size alone as a security problem.
+The Storage view reports storage opportunities and reviewed cleanup actions in
+both Simple and Advanced modes. Its cleanup engine is powered by JunkYard; the
+view links to [JunkYard Cleaner on the App Store](https://apps.apple.com/app/junkyard-cleaner/id6759726421)
+for deeper storage work. Read the item description before deleting data. Nick
+avoids deleting documents and does not treat cache size alone as a security
+problem.
 
 ## Runtime Compare
 

@@ -70,73 +70,48 @@ Delivered:
   extension, protected local event storage, a safer quarantine restore, and
   less sensitive process information in diagnostic logs.
 
-4.6.3 is the final planned 4.x release. Development continues on Nick 5.0.
+4.6.3 is the final 4.x feature release.
 
-## Version 5.0: trustworthy by design (in development)
+## Version 5.0: trustworthy by design
 
-Nick 5.0 is a larger internal redesign. It ships when its measured release
-gates pass, not on a fixed date. Planned capabilities:
+Released 2026-10-16.
 
-**One evidence pipeline**
-- Endpoint Security, Network Extension, Deep Scan, file-system and app-level
-  monitors feed one typed evidence model and one incident store.
-- Every finding that matters appears once in Activity, with one severity,
-  one set of suppressions, and a persisted history.
-- Real-time findings and Scam Guardian observations notify the user.
+- Redesigned Simple mode with Home, Scan, Activity, Protection, and Storage.
+- Shared protection and incident display states across the five status views.
+- Root-owned incident and security-settings stores with authenticated changes.
+- Durable Endpoint Security finding delivery with persistence acknowledgement
+  and a readiness gate.
+- Responsible-app attribution with bounded process chains for behavior
+  findings.
+- Validated identity-based exclusion when Nick scans its own signed bundle.
+- Nick self-file tamper protection and safer, file-identity-bound remediation.
+- Completed-download exact-hash checks for bounded supported locations.
+- Verified Sparkle updates and visible update status.
+- Local L1-L2 verdict learning for review-tier findings, off by default, with
+  inspection, export, and reset controls.
+- Network findings remain in Network Activity and do not create alerts or
+  notifications in 5.0.
 
-**Narrower privileges and stable file identity**
-- Per-action authorization between the app and the extension.
-- Quarantine and allow-once bound to file identity, not paths.
-- Security settings stored and changed through the protected extension store.
-- Durable file-integrity evidence that changes only when the user
-  acknowledges it.
+## Version 5.0.1
 
-**Detection integrity**
-- Trust decisions based on verified signing identity, never process names.
-- Measured Endpoint Security coverage of common download, archive, mail and
-  launch paths.
-- Bounded, observable file-event processing with dropped-event counters.
-- Process genealogy and self-tamper protection either activated and tested,
-  or removed.
-- Bundled, versioned exact-hash intelligence available immediately after
-  installation.
-
-**5.0.1 detection-hardening backlog**
-- Add a built-product YARA zero-match gate and move production policy literals
-  out of plain text (encoded or loaded from the signed rules bundle).
-- Review Deep Scan's generic `signed -> likelySafe` downgrade. Developer ID
-  signing alone must not soften YARA evidence, and ad-hoc signatures must never
-  qualify for that downgrade.
-
-**Honest, visible protection**
-- Protection status generated from live component health.
-- A diagnostics view for sensor coverage, dropped events and update status.
-- Nick reports when its own extension, health or settings change unexpectedly.
-
-**Reliable in-app updates**
-- Check for Updates reliably finds and installs new versions, including from
-  the menu bar, with the last check result visible in Settings.
-- Every release is verified by updating the previous public build through
-  Sparkle on a clean Mac.
-
-**Release gates**
-- Endpoint Security authorization latency, event loss, CPU, memory and energy
-  measured on every release.
-- False-positive testing on a benign corpus and real developer workloads.
-- Adversarial tests for file replacement, symbolic-link redirection, burst
-  writes and settings tampering.
-- An independent security review of the privileged paths before 5.0 is
-  described as complete.
+- Deliver eligible network findings into Activity with notifications.
+- Harden extension self-protection and continuity reporting.
+- Harden protected-evidence lifecycle and write-authorization policy.
+- Expand shell-pipeline detection coverage while retaining command evidence.
+- Persist retention counters across processes and relaunches.
+- Review generic scan downgrades for signed software.
+- Add a built-product rule gate and keep production policy material out of
+  built test artifacts.
 
 ## Version 5.1: trusted rule and signature updates
 
-### Deferred 5.0 interface work
+### Interface work
 
 - Join related shell events into one incident chain.
 - Reorganize Settings in both Simple and Advanced modes.
-- Continue expanding the shared Simple and Advanced Storage screen after 5.0.
-  Nick 5.0 credits its JunkYard-powered cleanup engine and links to the full
-  JunkYard Cleaner App Store product from the Storage screen in both modes.
+- Continue expanding the shared Simple and Advanced Storage screen. Nick 5.0
+  credits its JunkYard-powered cleanup engine and links to the full JunkYard
+  Cleaner App Store product from the Storage screen in both modes.
 
 - Publish Nick-maintained, signed YARA, network-rule and hash bundles.
 - Add staged rollout, expiry, rollback, and last-known-good recovery.
@@ -147,10 +122,10 @@ gates pass, not on a fixed date. Planned capabilities:
 
 No unsigned community rule is eligible for automatic enforcement.
 
-## Version 5.2: learns from you (local only)
+## Version 5.2: expands local learning
 
-- Learn from your own decisions on incidents (allowed, dismissed,
-  quarantined) to reduce repeat noise for lower-confidence findings.
+- Expand the L1-L2 learning shipped in 5.0 to additional eligible local review
+  decisions while keeping the feature off by default.
 - Learning never hides signature, hash or YARA detections, and never applies
   to unsigned code or script interpreters.
 - A "What Nick learned" view in Settings showing each learned entry, why it
