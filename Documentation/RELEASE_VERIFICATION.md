@@ -26,10 +26,11 @@ Expected results:
 - `codesign` exits successfully and reports that the application satisfies its
   designated requirement.
 
-After uploading the package and appcast, run:
+Nick 5.0.0 shipped as build 5052. Any subsequent build must use a build number
+greater than 5052. After uploading the package and appcast, run:
 
 ```sh
-Packaging/validate-live-appcast.sh https://3nsofts.com/nick/appcast.xml BUILD
+Packaging/validate-live-appcast.sh https://3nsofts.com/nick/appcast.xml 5052
 ```
 
 Expected output reports the live build, its lower predecessor, and the exact
@@ -40,9 +41,9 @@ also confirm every package enclosure declares
 
 ## Update reminder test
 
-Shipped 4.x builds use the production feed embedded in their Info.plist. On a
-Mac with build 428 installed, use **Check for Updates** and confirm that the
-live feed offers build 430.
+Shipped builds use the production feed embedded in their Info.plist. To verify
+a future update, start from the immediately preceding published build, use
+**Check for Updates**, and confirm that the live feed offers the newer build.
 
 Test the new reminder UI only with a Debug build and an HTTPS staging feed:
 

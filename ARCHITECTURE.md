@@ -1,6 +1,6 @@
 # Nick Architecture
 
-This document describes the architecture implemented in Nick 4.6.3. It is for
+This document describes the architecture implemented in Nick 5.0.0. It is for
 contributors and reviewers who want to understand the product's current
 boundaries. Planned and inactive components are identified explicitly.
 
@@ -67,14 +67,25 @@ These monitors emit `ThreatSignal` values. `ThreatCorrelator` retains a bounded
 processes, suppression rules, stable incident identities, and temporary
 acknowledgements reduce repeated or low-confidence alerts.
 
-`SecurityEngine` owns one correlator and one incident store. App monitors,
+`SecurityEngine` owns one correlator and presents the extension's root-owned
+incident store. App monitors,
 Deep Scan, FSEvents, detector-confirmed Endpoint Security findings, privacy and
-integrity findings, USB findings, and Network Extension observations enter that
-incident boundary. The source detector still decides what its raw observation
-means; the incident store applies suppression, deduplication, lifecycle, local
+integrity findings, and USB findings enter that incident boundary.
+Authenticated changes protect security settings and user-reviewed incident
+actions. The source detector still decides what its raw observation means; the
+incident store applies suppression, deduplication, lifecycle, local
 explanation and notification policy once. File-oriented bursts are coalesced
 by rule and actor identity, each rule has a bounded share of the 100 retained
 incident slots, and Diagnostics reports how many incidents retention evicted.
+Endpoint findings use durable delivery with acknowledgement only after
+persistence; the app waits for incident-store readiness before presenting the
+current protection state.
+
+`ProtectionStatus` and `IncidentDisplayStatus` provide the shared status and
+actionable count used by Simple Home, Activity, Advanced Overview, Smart Scan,
+and System Audit. Behavior incidents carry a validated responsible-app identity
+and a bounded process chain for presentation; attribution does not change the
+incident's severity or enforcement policy.
 
 The Endpoint Security extension denies deletion or replacement of Nick's
 protected installation paths unless the actor has one of the exact validated
@@ -97,11 +108,15 @@ compiled into immutable rule sets, and scanned with bounded concurrency and a
 10-second per-file timeout.
 
 `DeepScanner` streams candidate discovery and scanning concurrently and stops
-at a bounded total time budget, reporting candidates skipped by that budget. Match
-classification considers rule class and severity, file format, verified
-development layouts or repositories explicitly selected by the user, Homebrew receipts, signed application context, and code
-signing state. Concrete family signatures remain actionable regardless of
-path; broad behavior matches can remain visible without becoming alerts.
+at a bounded total time budget, reporting candidates skipped by that budget.
+Match classification considers rule class and severity, file format, verified
+development layouts or repositories explicitly selected by the user, Homebrew
+receipts, signed application context, and code signing state. A Nick application
+bundle is excluded only after strict
+Security.framework validation of its Developer ID identity and nested code; an
+unvalidated or modified bundle is scanned normally. Concrete family signatures
+remain actionable regardless of path; broad behavior matches can remain visible
+without becoming alerts.
 
 An FSEvents watcher provides additional post-write YARA coverage for newly
 created or modified executable content in selected directories. Its bounded,
@@ -119,9 +134,9 @@ data.
 
 The shipping provider is observation-only and returns an allow verdict for all
 flows. Missing, stale, or invalid configuration also fails open. Network
-observations are stored locally in a bounded app-group record. The app watches
-that record for changes and feeds new observation IDs into the shared incident
-store; replay uses the same IDs and does not create a second incident.
+observations are stored locally in a bounded app-group record. In 5.0 they are
+shown in Network Activity only; delivery into the incident and notification
+pipeline is disabled.
 
 ## Alert and response flow
 
@@ -139,8 +154,8 @@ ThreatAlert ──► on-device Apple Foundation Models explanation
         ├──► optional local file/stdout output
         └──► optional user-configured webhook
 
-Endpoint Security findings ──► protected journal ──► authenticated XPC ──► incident store
-Network Extension findings  ──► local observation store ──► incident store
+Endpoint Security findings ──► protected journal ──► authenticated XPC ──► root-owned incident store
+Network Extension findings  ──► local observation store ──► Network Activity
 Camera/microphone transitions ──► CoreMediaIO/CoreAudio callbacks ──► incident store
 ```
 
@@ -278,7 +293,7 @@ The repository contains code that is not part of the current live product path:
 See [the roadmap](Documentation/ROADMAP.md) for planned work. Code presence is
 not treated as an implemented product capability.
 
-The 5.0 development build's exact-hash intelligence is an offline, signed-bundle
+Nick 5.0's exact-hash intelligence is an offline, signed-bundle
 snapshot: 25 entries retrieved on October 9, 2026. Twenty-four macOS hashes come
 from four family-specific ESET IOC lists under BSD-2-Clause; EICAR remains a
 low-severity Test-family entry. The catalog enforces a 5,000-entry maximum and

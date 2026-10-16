@@ -8,8 +8,8 @@ documentation.
 - [User Guide](USER_GUIDE.md)
 - [Nick 4.1 Release Readiness](archive/NICK_4_1_RELEASE_READINESS.md)
 - [Release Checklist](RELEASE_CHECKLIST.md)
-- [5.0 Validation Plan](5_0_VALIDATION_PLAN.md)
-- [5.0 Beta Plan](5_0_BETA_PLAN.md)
+- [5.0 Validation Plan](archive/5_0_VALIDATION_PLAN.md)
+- [5.0 Beta Plan](archive/5_0_BETA_PLAN.md)
 
 ## Contributors
 
@@ -28,6 +28,7 @@ documentation.
 - [Architecture and Trust Boundaries](../ARCHITECTURE.md)
 - [Security Audit Record](SECURITY_AUDIT.md)
 - [External Security Review Scope](EXTERNAL_SECURITY_REVIEW_SCOPE.md)
+- [Version 4 Network Prevention Handoff](archive/V4_NETWORK_PREVENTION_HANDOFF.md)
 
 Historical documents describe the version and date stated in the document.
 They should not be interpreted as current certification or runtime proof.

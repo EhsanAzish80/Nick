@@ -20,7 +20,7 @@
       remain tracked for Nick 5.0.
 - [ ] The full test suite passes with coverage.
 - [ ] The measurement and consolidated physical-Mac gates in
-      `5_0_VALIDATION_PLAN.md` pass with evidence recorded for the exact build.
+      `archive/5_0_VALIDATION_PLAN.md` pass with evidence recorded for the exact build.
 - [ ] The benign executable corpus is capped at **120k files** and reports the exact selected-file count for the candidate machine; the cap
       is not misreported as the number of files scanned.
 - [ ] The independent review scope in `EXTERNAL_SECURITY_REVIEW_SCOPE.md` was
