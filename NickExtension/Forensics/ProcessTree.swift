@@ -49,6 +49,17 @@ struct ResponsibleAppAttribution: Equatable, Sendable {
 
 protocol ResponsibleProcessIdentityResolving: Sendable {
     func identity(pid: Int32, pathHint: String?) -> ResponsibleAppIdentity?
+    func liveProcess(pid: Int32) -> ResponsibleLiveProcess?
+}
+
+extension ResponsibleProcessIdentityResolving {
+    func liveProcess(pid: Int32) -> ResponsibleLiveProcess? { nil }
+}
+
+struct ResponsibleLiveProcess: Equatable, Sendable {
+    let pid: Int32
+    let ppid: Int32
+    let path: String
 }
 
 /// Reads the running process's kernel-selected code object and validates it
@@ -111,6 +122,15 @@ final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentit
             signing: signing,
             path: appURL?.path ?? path
         )
+    }
+
+    func liveProcess(pid: Int32) -> ResponsibleLiveProcess? {
+        guard let path = executablePath(pid: pid) else { return nil }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
+        let copied = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size)
+        guard copied == size else { return nil }
+        return ResponsibleLiveProcess(pid: pid, ppid: Int32(info.pbi_ppid), path: path)
     }
 
     private func executablePath(pid: Int32) -> String? {
@@ -286,7 +306,8 @@ final class ProcessTree: @unchecked Sendable {
         responsiblePID: Int32?,
         resolver: ResponsibleProcessIdentityResolving
     ) -> ResponsibleAppAttribution {
-        let chain = attackChain(pid: actorPID)
+        let lineage = attributionLineage(actorPID: actorPID, resolver: resolver)
+        let chain = lineage.compactMap(\.node)
         let nodeByPID = Dictionary(uniqueKeysWithValues: chain.map { ($0.pid, $0) })
         let responsible = responsiblePID.flatMap {
             resolver.identity(pid: $0, pathHint: nodeByPID[$0]?.path)
@@ -301,13 +322,29 @@ final class ProcessTree: @unchecked Sendable {
             return identity
         }.first
 
-        guard let selected else { return ResponsibleAppAttribution(app: nil, chain: []) }
-        let mainIndex = chain.firstIndex { Self.isMainBundleExecutable($0.path, app: selected) }
-        let responsibleIndex = responsiblePID.flatMap { pid in chain.firstIndex { $0.pid == pid } }
+        guard let selected else {
+            let labels = lineage.map { entry in
+                entry.node.map { Self.chainLabel(for: $0.path) } ?? "?"
+            }
+            return ResponsibleAppAttribution(
+                app: nil,
+                chain: ["Unknown app"] + Array(labels.suffix(4))
+            )
+        }
+        let mainIndex = lineage.firstIndex {
+            $0.node.map { Self.isMainBundleExecutable($0.path, app: selected) } ?? false
+        }
+        let responsibleIndex = responsiblePID.flatMap { pid in
+            lineage.firstIndex { $0.node?.pid == pid }
+        }
         let selectedIndex = mainIndex ?? responsibleIndex
-        let suffix = selectedIndex.map { Array(chain[$0...]) } ?? Array(chain.suffix(4))
+        let suffix = selectedIndex.map { Array(lineage[$0...]) } ?? Array(lineage.suffix(4))
         var labels = [selected.name]
-        for node in suffix {
+        for entry in suffix {
+            guard let node = entry.node else {
+                if labels.last != "?" { labels.append("?") }
+                continue
+            }
             if Self.isMainBundleExecutable(node.path, app: selected) { continue }
             let label = Self.chainLabel(for: node.path)
             if labels.last != label { labels.append(label) }
@@ -324,6 +361,50 @@ final class ProcessTree: @unchecked Sendable {
             labels.removeLast()
         }
         return ResponsibleAppAttribution(app: selected, chain: Array(labels.prefix(5)))
+    }
+
+    private struct AttributionLineageEntry {
+        let node: ProcessNode?
+    }
+
+    /// Builds a bounded root-to-actor chain. Processes that predate the
+    /// extension are recovered from the kernel. A process that exited before
+    /// it could be resolved remains an explicit gap instead of disappearing.
+    private func attributionLineage(
+        actorPID: Int32,
+        resolver: ResponsibleProcessIdentityResolving
+    ) -> [AttributionLineageEntry] {
+        let tracked = lock.withLock { nodes }
+        var reverse: [AttributionLineageEntry] = []
+        var current = actorPID
+        var visited: Set<Int32> = []
+
+        while current > 1, reverse.count < 5, visited.insert(current).inserted {
+            if let node = tracked[current] {
+                reverse.append(AttributionLineageEntry(node: node))
+                current = node.ppid
+                continue
+            }
+            guard let live = resolver.liveProcess(pid: current) else {
+                reverse.append(AttributionLineageEntry(node: nil))
+                break
+            }
+            reverse.append(AttributionLineageEntry(node: ProcessNode(
+                pid: live.pid,
+                ppid: live.ppid,
+                path: live.path,
+                args: [],
+                startTime: Date(),
+                exitTime: nil,
+                exitCode: nil,
+                childPids: [],
+                filesAccessed: [],
+                networkConnections: [],
+                isThreat: false
+            )))
+            current = live.ppid
+        }
+        return reverse.reversed()
     }
 
     /// Returns `pid` and all of its descendants (breadth-first).

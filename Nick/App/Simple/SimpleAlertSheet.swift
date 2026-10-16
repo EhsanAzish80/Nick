@@ -227,6 +227,14 @@ struct SimpleAlertSheet: View {
                     .tint(Color.nickAccent)
             }
             Spacer()
+            if behaviorPresentation.status == .needsReview {
+                Button("Mark as reviewed") {
+                    engine.markAlertReviewed(alert.id)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.nickAccent)
+            }
             if quarantineRecord != nil {
                 Button("Keep in Quarantine") {
                     engine.hideAlert(alert.id)

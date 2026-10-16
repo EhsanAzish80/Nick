@@ -172,6 +172,10 @@ final class SecurityEngine {
     /// All threat alerts produced by the correlator since the last `reset()`.
     private(set) var alerts: [ThreatAlert] = []
 
+    /// Invalidates SwiftUI observers when only per-user seen state changes.
+    /// The evidence and review state remain untouched.
+    private var unseenIncidentRevision = 0
+
     /// Stable deduplication keys for alerts the user has explicitly dismissed.
     /// Persisted by the root-owned incident store so dismissals survive restart.
     private(set) var dismissedAlertKeys: Set<String> = []
@@ -389,6 +393,22 @@ final class SecurityEngine {
         alerts.filter { displayStatus(for: $0).contributesToProtectionStatus }
     }
 
+    /// Per-user notification badge count. Seeing an incident clears only this
+    /// badge state; it does not review evidence or alter ProtectionStatus.
+    var unseenIncidentCount: Int {
+        _ = unseenIncidentRevision
+        return incidentSeenStore.unseenCount(in: incidentStore.incidents)
+    }
+
+    func markIncidentSeen(_ alertID: UUID) {
+        guard let incident = incidentStore.incidents.first(where: { $0.alert.id == alertID }) else { return }
+        incidentSeenStore.markSeen(
+            id: incident.alert.id,
+            occurrenceCount: incident.alert.occurrenceCount
+        )
+        unseenIncidentRevision &+= 1
+    }
+
     func incident(for alert: ThreatAlert) -> SecurityIncident? {
         incidentStore.incidents.first { $0.alert.id == alert.id }
     }
@@ -416,6 +436,7 @@ final class SecurityEngine {
     private let avCapture  = AVCaptureMonitor()
     let correlator = ThreatCorrelator()
     private(set) var incidentStore = IncidentStore()
+    private let incidentSeenStore: IncidentSeenStore
     /// True only after the authoritative root-owned incident snapshot has been
     /// installed. Live providers must not enter the incident pipeline before
     /// this flips: local pre-bootstrap generations cannot be durably confirmed.
@@ -455,7 +476,8 @@ final class SecurityEngine {
 
     // MARK: - Init
 
-    init() {
+    init(incidentSeenDefaults: UserDefaults = .standard) {
+        incidentSeenStore = IncidentSeenStore(defaults: incidentSeenDefaults)
         incidentStore.configure(
             trustedProcessList: trustedProcessList,
             suppressionRules: suppressionRules,
@@ -975,6 +997,15 @@ final class SecurityEngine {
         performAuthenticatedIncidentAction(.dismissed, alertID: id) { [weak self] alert in
             SignalTelemetry.shared.record(signals: alert.contributingSignals, verdict: .falsePositive)
             self?.incidentStore.performAuthenticatedUserAction(.dismissed, alertID: id)
+        }
+    }
+
+    /// Records an explicit review verdict through the extension-validated
+    /// incident action path. Merely opening or closing the detail never calls
+    /// this method.
+    func markAlertReviewed(_ id: UUID) {
+        performAuthenticatedIncidentAction(.reviewed, alertID: id) { [weak self] _ in
+            self?.incidentStore.performAuthenticatedUserAction(.reviewed, alertID: id)
         }
     }
 

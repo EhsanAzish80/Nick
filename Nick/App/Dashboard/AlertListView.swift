@@ -496,6 +496,12 @@ private struct AlertRow: View {
                         .font(.nickButton)
                         .foregroundStyle(Color.textSecondary)
                 }
+                if behaviorPresentation.status == .needsReview {
+                    Button("Mark as reviewed") {
+                        engine.markAlertReviewed(alert.id)
+                    }
+                    .buttonStyle(.nickPrimary)
+                }
                 Button(simpleAlertMode ? "Hide This Occurrence" : "Dismiss") {
                     if simpleAlertMode {
                         engine.hideAlert(alert.id)
@@ -508,6 +514,7 @@ private struct AlertRow: View {
         }
         .padding(.horizontal, NickSpacing.lg)
         .padding(.vertical, NickSpacing.lg)
+        .onAppear { engine.markIncidentSeen(alert.id) }
         .confirmationDialog(
             "Move this file to Quarantine?",
             isPresented: $showQuarantineConfirmation,

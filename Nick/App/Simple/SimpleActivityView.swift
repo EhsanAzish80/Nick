@@ -192,6 +192,7 @@ struct SimpleActivityView: View {
     private func open(_ item: SimpleActivityItem) {
         switch item.source {
         case .alert(let id):
+            engine.markIncidentSeen(id)
             presentedAlert = engine.alerts.first { $0.id == id }
         case .quarantine(let id):
             presentedQuarantine = xpcClient.quarantineRecords.first { $0.id == id }
@@ -203,6 +204,7 @@ struct SimpleActivityView: View {
     private func presentPendingNotificationAlert() {
         guard let id = engine.pendingNotificationAlertID,
               let alert = engine.alerts.first(where: { $0.id == id }) else { return }
+        engine.markIncidentSeen(id)
         presentedAlert = alert
         engine.pendingNotificationAlertID = nil
     }

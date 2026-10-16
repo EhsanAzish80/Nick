@@ -22,11 +22,14 @@ struct AlertDetailView: View {
     private var simpleAlertMode: Bool { interfaceMode == .simple }
 
     var body: some View {
-        if simpleAlertMode {
-            SimpleAlertSheet(alert: alert)
-        } else {
-            technicalBody
+        Group {
+            if simpleAlertMode {
+                SimpleAlertSheet(alert: alert)
+            } else {
+                technicalBody
+            }
         }
+        .onAppear { engine.markIncidentSeen(alert.id) }
     }
 
     private var technicalBody: some View {
@@ -312,7 +315,14 @@ struct AlertDetailView: View {
 
             Button("Copy JSON") { copyJSON() }
                 .buttonStyle(.nickSecondary)
-            Button("Dismiss") { dismiss() }
+            if displayStatus == .needsReview {
+                Button("Mark as reviewed") {
+                    engine.markAlertReviewed(alert.id)
+                    dismiss()
+                }
+                .buttonStyle(.nickPrimary)
+            }
+            Button("Done") { dismiss() }
                 .buttonStyle(.nickPrimary)
         }
         .padding(.horizontal, NickSpacing.xl)
