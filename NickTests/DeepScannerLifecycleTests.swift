@@ -9,6 +9,86 @@ private actor ScanInvocationCounter {
 @MainActor
 final class DeepScannerLifecycleTests: XCTestCase {
 
+    func test_validatedNickBundleIsSkippedWithoutAnyScanCandidate() throws {
+        let root = try makeAppFixture(name: "Anything.app", bundleIdentifier: "com.ehsanazish.nick")
+        let queue = CandidateQueue()
+
+        DeepScanner.enumerateCandidates(
+            into: queue,
+            scanRoots: [root.deletingLastPathComponent().path],
+            nickBundleValidator: { _ in .valid }
+        )
+
+        XCTAssertTrue(drain(queue).isEmpty)
+    }
+
+    func test_modifiedNickBundleIsScannedAndProducesIntegrityFailureCandidate() throws {
+        let app = try makeAppFixture(name: "Renamed.app", bundleIdentifier: "com.ehsanazish.nick")
+        let queue = CandidateQueue()
+
+        DeepScanner.enumerateCandidates(
+            into: queue,
+            scanRoots: [app.deletingLastPathComponent().path],
+            nickBundleValidator: { _ in .invalid }
+        )
+
+        let candidates = drain(queue)
+        XCTAssertTrue(candidates.contains {
+            DeepScanner.canonicalPath($0.path) == DeepScanner.canonicalPath(app.path)
+                && $0.kind == .nickBundleSignatureFailure
+        })
+        XCTAssertTrue(candidates.contains { $0.kind == .file && $0.path.hasSuffix("/Contents/MacOS/Fixture") })
+    }
+
+    func test_copiedNickInfoPlistDoesNotExcludeUnrelatedApp() throws {
+        let app = try makeAppFixture(name: "Unrelated.app", bundleIdentifier: "com.ehsanazish.nick")
+        let queue = CandidateQueue()
+
+        DeepScanner.enumerateCandidates(
+            into: queue,
+            scanRoots: [app.deletingLastPathComponent().path],
+            nickBundleValidator: { _ in .notNick }
+        )
+
+        XCTAssertTrue(drain(queue).contains { $0.path.hasSuffix("/Contents/MacOS/Fixture") })
+    }
+
+    func test_otherTeamAtNickPathIsScannedNormally() throws {
+        let app = try makeAppFixture(name: "Nick.app", bundleIdentifier: "com.ehsanazish.nick")
+        let queue = CandidateQueue()
+
+        DeepScanner.enumerateCandidates(
+            into: queue,
+            scanRoots: [app.deletingLastPathComponent().path],
+            nickBundleValidator: { _ in .notNick }
+        )
+
+        let candidates = drain(queue)
+        XCTAssertFalse(candidates.contains { $0.kind == .nickBundleSignatureFailure })
+        XCTAssertTrue(candidates.contains { $0.path.hasSuffix("/Contents/MacOS/Fixture") })
+    }
+
+    func test_nickRequirementBindsDeveloperIDTeamAndSigningIdentifier() {
+        XCTAssertEqual(
+            SignatureValidator.nickAppRequirement,
+            "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[subject.OU] = \"UXGW5V3BY6\" and identifier \"com.ehsanazish.nick\""
+        )
+    }
+
+    func test_nickBundleIntegrityFailureIsProtectedAndNotQuarantinable() {
+        let signal = DeepScanner.nickBundleIntegrityFailureSignal(bundlePath: "/Applications/Nick.app")
+
+        XCTAssertEqual(signal.title, "Nick's app bundle failed signature validation")
+        XCTAssertEqual(signal.severity, .critical)
+        XCTAssertEqual(signal.metadata["quarantineEligible"], "false")
+        XCTAssertEqual(signal.metadata["remediation"], "reinstall-official-package")
+        XCTAssertNil(signal.fileInfo)
+        XCTAssertEqual(
+            EvidenceRulePolicy.tier(for: signal, ruleClass: EvidenceRuleClass(signal: signal)),
+            .protectedDetection
+        )
+    }
+
     func test_securityEngineOwnsStableDeepScanner() {
         let engine = SecurityEngine()
         let initialScanner = engine.deepScanner
@@ -417,6 +497,36 @@ final class DeepScannerLifecycleTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return root
+    }
+
+    private func makeAppFixture(name: String, bundleIdentifier: String) throws -> URL {
+        let root = try makeTemporaryDirectory("app-fixture")
+        let app = root.appendingPathComponent(name, isDirectory: true)
+        let executable = app.appendingPathComponent("Contents/MacOS/Fixture")
+        try FileManager.default.createDirectory(
+            at: executable.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let info: [String: Any] = [
+            "CFBundleIdentifier": bundleIdentifier,
+            "CFBundleExecutable": "Fixture",
+        ]
+        let plist = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        try plist.write(to: app.appendingPathComponent("Contents/Info.plist"))
+        return app
+    }
+
+    private func drain(_ queue: CandidateQueue) -> [DeepScanner.Candidate] {
+        var candidates: [DeepScanner.Candidate] = []
+        while true {
+            switch queue.pop() {
+            case .item(let candidate): candidates.append(candidate)
+            case .finished: return candidates
+            case .empty: continue
+            }
+        }
     }
 
     func test_genericTemporaryPayloadRemainsSuspicious() {

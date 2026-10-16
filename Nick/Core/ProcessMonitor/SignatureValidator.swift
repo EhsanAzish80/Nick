@@ -19,6 +19,14 @@ import os
 ///   the Trust Evaluation daemon warms up — call only from async contexts.
 final class SignatureValidator: @unchecked Sendable {
 
+    enum NickAppBundleValidation: Sendable, Equatable {
+        case notNick
+        case valid
+        case invalid
+    }
+
+    static let nickAppRequirement = "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[subject.OU] = \"UXGW5V3BY6\" and identifier \"com.ehsanazish.nick\""
+
     // MARK: - Shared Instance
 
     /// Global shared instance used by `PersistenceWatcher` and `ProcessMonitor`.
@@ -183,6 +191,38 @@ final class SignatureValidator: @unchecked Sendable {
         validatedIdentityCache[key] = valid
         lock.unlock()
         return valid
+    }
+
+    /// Identifies Nick by its signed Developer ID requirement, then validates the
+    /// complete bundle seal. Paths, bundle names and Info.plist values are never
+    /// identity evidence here.
+    func validateNickAppBundle(atPath path: String) -> NickAppBundleValidation {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code else { return .notNick }
+
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            Self.nickAppRequirement as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess, let requirement else { return .notNick }
+
+        // Establish identity without trusting the resource envelope. This lets a
+        // damaged genuine Nick bundle be distinguished from an unrelated app.
+        let identityFlags = SecCSFlags(rawValue: UInt32(kSecCSDoNotValidateResources))
+        guard SecStaticCodeCheckValidity(code, identityFlags, requirement) == errSecSuccess else {
+            return .notNick
+        }
+
+        let strictFlags = SecCSFlags(rawValue:
+            UInt32(kSecCSStrictValidate)
+                | UInt32(kSecCSCheckAllArchitectures)
+                | UInt32(kSecCSCheckNestedCode)
+        )
+        return SecStaticCodeCheckValidity(code, strictFlags, requirement) == errSecSuccess
+            ? .valid
+            : .invalid
     }
 
     /// Returns the number of currently cached entries.

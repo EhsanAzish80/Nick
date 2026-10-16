@@ -101,6 +101,13 @@ gates pass, not on a fixed date. Planned capabilities:
 - Bundled, versioned exact-hash intelligence available immediately after
   installation.
 
+**5.0.1 detection-hardening backlog**
+- Add a built-product YARA zero-match gate and move production policy literals
+  out of plain text (encoded or loaded from the signed rules bundle).
+- Review Deep Scan's generic `signed -> likelySafe` downgrade. Developer ID
+  signing alone must not soften YARA evidence, and ad-hoc signatures must never
+  qualify for that downgrade.
+
 **Honest, visible protection**
 - Protection status generated from live component health.
 - A diagnostics view for sensor coverage, dropped events and update status.
