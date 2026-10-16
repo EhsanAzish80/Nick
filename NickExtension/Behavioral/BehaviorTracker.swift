@@ -57,12 +57,68 @@ final class BehaviorTracker {
         var source: String? = nil
         /// False for a recent same-process/process-group write-then-swap.
         var countsTowardRenameBurst: Bool = true
+        /// A recent temp file replaced a pre-existing non-encrypted file with
+        /// high-entropy content that has no recognized file magic.
+        var encryptedReplacement: Bool = false
     }
 
     private struct RecentCreation {
         let pid: Int32
         let processGroupID: Int32
         let timestamp: Date
+    }
+
+    struct RenameReplacementEvidence: Equatable {
+        let sourceIsHighEntropyWithoutKnownMagic: Bool
+        let destinationExisted: Bool
+        let destinationWasHighEntropyWithoutKnownMagic: Bool
+
+        var indicatesEncryptedReplacement: Bool {
+            sourceIsHighEntropyWithoutKnownMagic
+                && destinationExisted
+                && !destinationWasHighEntropyWithoutKnownMagic
+        }
+
+        init(sourceData: Data?, destinationData: Data?, destinationExisted: Bool) {
+            self.sourceIsHighEntropyWithoutKnownMagic = Self.isHighEntropyWithoutKnownMagic(sourceData)
+            self.destinationExisted = destinationExisted
+            self.destinationWasHighEntropyWithoutKnownMagic = Self.isHighEntropyWithoutKnownMagic(destinationData)
+        }
+
+        init(
+            sourceIsHighEntropyWithoutKnownMagic: Bool,
+            destinationExisted: Bool,
+            destinationWasHighEntropyWithoutKnownMagic: Bool
+        ) {
+            self.sourceIsHighEntropyWithoutKnownMagic = sourceIsHighEntropyWithoutKnownMagic
+            self.destinationExisted = destinationExisted
+            self.destinationWasHighEntropyWithoutKnownMagic = destinationWasHighEntropyWithoutKnownMagic
+        }
+
+        private static func isHighEntropyWithoutKnownMagic(_ data: Data?) -> Bool {
+            guard let data, !data.isEmpty, !hasKnownFileMagic(data) else { return false }
+            var frequencies = [Int](repeating: 0, count: 256)
+            for byte in data { frequencies[Int(byte)] += 1 }
+            let length = Double(data.count)
+            let entropy = frequencies.reduce(0.0) { result, count in
+                guard count > 0 else { return result }
+                let probability = Double(count) / length
+                return result - probability * log2(probability)
+            }
+            return entropy >= 7.5
+        }
+
+        private static func hasKnownFileMagic(_ data: Data) -> Bool {
+            let magics: [[UInt8]] = [
+                [0x25, 0x50, 0x44, 0x46], [0x50, 0x4B, 0x03, 0x04],
+                [0x89, 0x50, 0x4E, 0x47], [0xFF, 0xD8, 0xFF],
+                [0x47, 0x49, 0x46, 0x38], [0x7F, 0x45, 0x4C, 0x46],
+                [0xCF, 0xFA, 0xED, 0xFE], [0xCA, 0xFE, 0xBA, 0xBE],
+            ]
+            return magics.contains { magic in
+                data.count >= magic.count && data.prefix(magic.count).elementsEqual(magic)
+            }
+        }
     }
 
     /// Result of the extension-change analysis for one process.
@@ -89,6 +145,7 @@ final class BehaviorTracker {
 
     private var processTimelines: [Int32: ProcessTimeline] = [:]
     private var recentCreations: [String: RecentCreation] = [:]
+    private var renameIntents: [String: RenameReplacementEvidence] = [:]
     private let lock = NSLock()
     private let thresholds: AlertThresholds
 
@@ -146,7 +203,8 @@ final class BehaviorTracker {
         processPath: String,
         source: String,
         destination: String,
-        at timestamp: Date = Date()
+        at timestamp: Date = Date(),
+        replacementEvidence: RenameReplacementEvidence? = nil
     ) {
         lock.lock()
         defer { lock.unlock() }
@@ -169,6 +227,8 @@ final class BehaviorTracker {
             detail: destination,
             source: source,
             countsTowardRenameBurst: !isAtomicSwap
+                || replacementEvidence?.indicatesEncryptedReplacement == true,
+            encryptedReplacement: replacementEvidence?.indicatesEncryptedReplacement == true
         ))
         recentCreations.removeValue(forKey: source)
         processTimelines[pid]?.prune(window: thresholds.timelineWindowSeconds)
@@ -176,6 +236,45 @@ final class BehaviorTracker {
            count > thresholds.maxEventsPerProcess {
             processTimelines[pid]?.events.removeFirst(count - thresholds.maxEventsPerProcess)
         }
+    }
+
+    func recordRenameIntent(
+        pid: Int32,
+        source: String,
+        destination: String,
+        evidence: RenameReplacementEvidence
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        renameIntents[Self.renameIntentKey(pid: pid, source: source, destination: destination)] = evidence
+        if renameIntents.count > thresholds.maxEventsPerProcess * 2 {
+            renameIntents.removeAll(keepingCapacity: true)
+        }
+    }
+
+    func wasRecentlyCreated(
+        path: String,
+        by pid: Int32,
+        processGroupID: Int32,
+        at timestamp: Date = Date()
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let creation = recentCreations[path] else { return false }
+        return timestamp.timeIntervalSince(creation.timestamp) <= 10
+            && (creation.pid == pid || creation.processGroupID == processGroupID)
+    }
+
+    func consumeRenameIntent(
+        pid: Int32,
+        source: String,
+        destination: String
+    ) -> RenameReplacementEvidence? {
+        lock.lock()
+        defer { lock.unlock() }
+        return renameIntents.removeValue(
+            forKey: Self.renameIntentKey(pid: pid, source: source, destination: destination)
+        )
     }
 
     /// The most common *new* extension a process has given files by renaming
@@ -194,7 +293,9 @@ final class BehaviorTracker {
         for event in timeline.events where event.type == .fileRename
             && event.timestamp >= cutoff && event.countsTowardRenameBurst {
             guard let source = event.source,
-                  let newExtension = Self.introducedExtension(source: source, destination: event.detail)
+                  let newExtension = event.encryptedReplacement
+                    ? "encrypted replacement"
+                    : Self.introducedExtension(source: source, destination: event.detail)
             else { continue }
             files[newExtension, default: []].insert(event.detail)
             directories[newExtension, default: []].insert((event.detail as NSString).deletingLastPathComponent)
@@ -274,8 +375,10 @@ final class BehaviorTracker {
         var introduced: [String: Int] = [:]
         for event in fileOps where event.type == .fileRename
             && event.timestamp >= cutoff && event.countsTowardRenameBurst {
-            if let source = event.source,
-               let ext = Self.introducedExtension(source: source, destination: event.detail) {
+            if event.encryptedReplacement {
+                introduced["encrypted replacement", default: 0] += 1
+            } else if let source = event.source,
+                      let ext = Self.introducedExtension(source: source, destination: event.detail) {
                 introduced[ext, default: 0] += 1
             }
         }
@@ -314,6 +417,8 @@ final class BehaviorTracker {
         defer { lock.unlock() }
         processTimelines.removeValue(forKey: pid)
         recentCreations = recentCreations.filter { $0.value.pid != pid }
+        let prefix = "\(pid)\u{0}"
+        renameIntents = renameIntents.filter { !$0.key.hasPrefix(prefix) }
     }
 
     private func pruneRecentCreations(now: Date) {
@@ -326,6 +431,10 @@ final class BehaviorTracker {
                 recentCreations.removeValue(forKey: key)
             }
         }
+    }
+
+    private static func renameIntentKey(pid: Int32, source: String, destination: String) -> String {
+        "\(pid)\u{0}\(source)\u{0}\(destination)"
     }
 
     // MARK: - Helpers

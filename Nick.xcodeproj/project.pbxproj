@@ -43,6 +43,8 @@
 		F60000000000000000000002 /* QuarantineDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004 /* QuarantineDatabase.swift */; };
 		F70000000000000000000001 /* ProcessTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000002 /* ProcessTree.swift */; };
 		F70000000000000000000003 /* BehaviorTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000004 /* BehaviorTracker.swift */; };
+		F70000000000000000000005 /* RansomwareDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000006 /* RansomwareDetector.swift */; };
+		F70000000000000000000007 /* UserHomeDirectoryResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000008 /* UserHomeDirectoryResolver.swift */; };
 		A17A7E000000000000000002 /* AuthLatencyWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17A7E000000000000000001 /* AuthLatencyWindow.swift */; };
 /* End PBXBuildFile section */
 
@@ -147,6 +149,8 @@
 		F60000000000000000000004 /* QuarantineDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineDatabase.swift; path = NickExtension/Quarantine/QuarantineDatabase.swift; sourceTree = SOURCE_ROOT; };
 		F70000000000000000000002 /* ProcessTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProcessTree.swift; path = NickExtension/Forensics/ProcessTree.swift; sourceTree = SOURCE_ROOT; };
 		F70000000000000000000004 /* BehaviorTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BehaviorTracker.swift; path = NickExtension/Behavioral/BehaviorTracker.swift; sourceTree = SOURCE_ROOT; };
+		F70000000000000000000006 /* RansomwareDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RansomwareDetector.swift; path = NickExtension/Ransomware/RansomwareDetector.swift; sourceTree = SOURCE_ROOT; };
+		F70000000000000000000008 /* UserHomeDirectoryResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = UserHomeDirectoryResolver.swift; path = NickExtension/Shared/UserHomeDirectoryResolver.swift; sourceTree = SOURCE_ROOT; };
 		A17A7E000000000000000001 /* AuthLatencyWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AuthLatencyWindow.swift; path = Nick/Core/Metrics/AuthLatencyWindow.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -313,6 +317,8 @@
 				F60000000000000000000004 /* QuarantineDatabase.swift */,
 				F70000000000000000000002 /* ProcessTree.swift */,
 				F70000000000000000000004 /* BehaviorTracker.swift */,
+				F70000000000000000000006 /* RansomwareDetector.swift */,
+				F70000000000000000000008 /* UserHomeDirectoryResolver.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -744,6 +750,8 @@
 				F60000000000000000000002 /* QuarantineDatabase.swift in Sources */,
 				F70000000000000000000001 /* ProcessTree.swift in Sources */,
 				F70000000000000000000003 /* BehaviorTracker.swift in Sources */,
+				F70000000000000000000005 /* RansomwareDetector.swift in Sources */,
+				F70000000000000000000007 /* UserHomeDirectoryResolver.swift in Sources */,
 				E40000000000000000000008 /* RansomwareNotePolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

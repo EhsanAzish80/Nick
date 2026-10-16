@@ -603,6 +603,21 @@ final class ESEventHandler {
             } else {
                 renameBlocked = false
             }
+            if !renameBlocked,
+               behaviorTracker?.wasRecentlyCreated(
+                path: srcPath, by: pid, processGroupID: processGroupID
+            ) == true,
+               FileManager.default.fileExists(atPath: destinationPath) {
+                let renameReplacementEvidence = BehaviorTracker.RenameReplacementEvidence(
+                    sourceData: self.boundedFileSample(at: srcPath, maximumBytes: 65_536),
+                    destinationData: self.boundedFileSample(at: destinationPath, maximumBytes: 65_536),
+                    destinationExisted: true
+                )
+                behaviorTracker?.recordRenameIntent(
+                    pid: pid, source: srcPath, destination: destinationPath,
+                    evidence: renameReplacementEvidence
+                )
+            }
             esClient?.respond(to: message, allow: !renameBlocked)
             tamperProtection?.handleRenameEvent(
                 srcPath: srcPath,
@@ -645,7 +660,10 @@ final class ESEventHandler {
                 )
                 self.behaviorTracker?.recordRename(
                     pid: pid, processGroupID: processGroupID, processPath: processPath,
-                    source: notifySrcPath, destination: notifyDestPath
+                    source: notifySrcPath, destination: notifyDestPath,
+                    replacementEvidence: self.behaviorTracker?.consumeRenameIntent(
+                        pid: pid, source: notifySrcPath, destination: notifyDestPath
+                    )
                 )
                 self.processTree?.recordFileAccess(pid: pid, path: notifySrcPath, operation: "rename")
                 let browserIdentityCandidate = BrowserDownloadRenamePolicy.shouldIgnoreDestination(

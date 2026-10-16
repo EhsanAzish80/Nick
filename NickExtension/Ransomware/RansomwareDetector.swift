@@ -217,9 +217,15 @@ final class RansomwareDetector {
         let observedBurst = behaviorTracker.extensionChangeBurst(pid: pid)
         if let burst = observedBurst,
            burst.fileCount >= Self.extensionBurstThreshold {
-            indicators.append(
-                "Mass extension change to .\(burst.newExtension): \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
-            )
+            if burst.newExtension == "encrypted replacement" {
+                indicators.append(
+                    "Encrypted replacement burst: \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
+                )
+            } else {
+                indicators.append(
+                    "Mass extension change to .\(burst.newExtension): \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
+                )
+            }
             confidence += burst.fileCount >= Self.extensionBurstThreshold * 3 ? 0.6 : 0.5
             strongEvidence = strongEvidence || burst.directoryCount >= 2
         }
