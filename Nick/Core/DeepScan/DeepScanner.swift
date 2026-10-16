@@ -59,6 +59,7 @@ final class DeepScanner {
     var indexingLocation:   String       = ""
     var skippedFiles:       Int          = 0
     var timeBudgetExceeded: Bool         = false
+    var bundleIntegrityFailures: [String] = []
 
     // MARK: - Private
 
@@ -115,6 +116,7 @@ final class DeepScanner {
         hasCompletedScan = false
         skippedFiles = 0
         timeBudgetExceeded = false
+        bundleIntegrityFailures = []
         scanTask = Task { [weak self] in
             await self?.performDeepScan(
                 scanID: scanID,
@@ -149,6 +151,7 @@ final class DeepScanner {
         hasCompletedScan = false
         skippedFiles = 0
         timeBudgetExceeded = false
+        bundleIntegrityFailures = []
     }
 
     // MARK: - Private Implementation
@@ -161,6 +164,7 @@ final class DeepScanner {
         let startTime = Date()
         results       = []
         resultVerdicts = [:]
+        bundleIntegrityFailures = []
         threatsFound  = 0
         currentFile   = "Indexing files…"
 
@@ -285,6 +289,7 @@ final class DeepScanner {
     private struct FileOutcome: Sendable {
         let path: String
         let classified: [(YARAMatch, ThreatVerdict)]
+        let nickBundleSignatureFailure: Bool
     }
 
     nonisolated private static func workerCount() -> Int {
@@ -299,24 +304,36 @@ final class DeepScanner {
         with scanFile: @escaping @Sendable (String) async throws -> [YARAMatch]
     ) async -> FileOutcome {
         let file = candidate.path
+        if candidate.kind == .nickBundleSignatureFailure {
+            return FileOutcome(path: file, classified: [], nickBundleSignatureFailure: true)
+        }
         // Extensionless files are sniffed here, in parallel, rather than
         // during the walk: reading a header for every cache blob serially was
         // most of the indexing time.
         if candidate.needsContentCheck,
            !ScanCandidatePolicy.isExecutableContent(ScanCandidatePolicy.kind(atPath: file)) {
-            return FileOutcome(path: file, classified: [])
+            return FileOutcome(path: file, classified: [], nickBundleSignatureFailure: false)
         }
         guard let matches = try? await scanFile(file), !matches.isEmpty else {
-            return FileOutcome(path: file, classified: [])
+            return FileOutcome(path: file, classified: [], nickBundleSignatureFailure: false)
         }
         let unique = uniqueMatches(matches)
         return FileOutcome(path: file, classified: unique.map {
             ($0, classify(match: $0, approvedDevelopmentRoots: approvedDevelopmentRoots))
-        })
+        }, nickBundleSignatureFailure: false)
     }
 
     /// Records one file's findings and forwards actionable ones to the correlator.
     private func merge(_ outcome: FileOutcome) async {
+        if outcome.nickBundleSignatureFailure {
+            bundleIntegrityFailures.append(outcome.path)
+            threatsFound += 1
+            guard let eng = engine else { return }
+            let signal = Self.nickBundleIntegrityFailureSignal(bundlePath: outcome.path)
+            let alerts = await eng.ingestSignals([signal])
+            for alert in alerts { await NotificationManager.shared.send(for: alert) }
+            return
+        }
         guard !outcome.classified.isEmpty else { return }
         results.append(contentsOf: outcome.classified.map { $0.0 })
         for (match, verdict) in outcome.classified {
@@ -369,6 +386,22 @@ final class DeepScanner {
         }
     }
 
+    nonisolated static func nickBundleIntegrityFailureSignal(bundlePath: String) -> ThreatSignal {
+        ThreatSignal(
+            source: .systemAudit,
+            severity: .critical,
+            title: "Nick's app bundle failed signature validation",
+            description: "Nick's installed app failed strict Developer ID and nested-code validation. Reinstall Nick from the official package.",
+            context: ThreatSignalContext(metadata: [
+                "rule": "nick_app_signature_validation_failed",
+                "class": "integrity",
+                "bundle_path": bundlePath,
+                "remediation": "reinstall-official-package",
+                "quarantineEligible": "false",
+            ])
+        )
+    }
+
     /// Publishes scan progress. While locations are still being walked the
     /// total is unknown, so the percentage is withheld (`progress` stays 0 and
     /// the view shows an indeterminate state with the running counts).
@@ -407,8 +440,20 @@ final class DeepScanner {
     /// A file to scan. `needsContentCheck` marks extensionless files whose
     /// header decides whether they are scanned at all.
     struct Candidate: Sendable, Equatable {
+        enum Kind: Sendable, Equatable {
+            case file
+            case nickBundleSignatureFailure
+        }
+
         let path: String
         let needsContentCheck: Bool
+        let kind: Kind
+
+        init(path: String, needsContentCheck: Bool, kind: Kind = .file) {
+            self.path = path
+            self.needsContentCheck = needsContentCheck
+            self.kind = kind
+        }
     }
 
     /// What the walk decided about one file.
@@ -451,13 +496,20 @@ final class DeepScanner {
     /// Walks the standard macOS scan paths and streams candidates into
     /// `queue`. Media, document, archive, and font files are skipped.
     /// Runs inside `Task.detached`; stops early when that task is cancelled.
-    nonisolated static func enumerateCandidates(into queue: CandidateQueue) {
+    nonisolated static func enumerateCandidates(
+        into queue: CandidateQueue,
+        scanRoots: [String] = standardScanRoots,
+        nickBundleValidator: (String) -> SignatureValidator.NickAppBundleValidation = {
+            SignatureValidator.shared.validateNickAppBundle(atPath: $0)
+        }
+    ) {
         defer { queue.finish() }
         let fm  = FileManager.default
         let log = Logger(subsystem: "com.ehsanazish.nick", category: "DeepScanner")
         var walkedRoots = Set<String>()
+        var bundleValidationCache: [BundleValidationCacheKey: SignatureValidator.NickAppBundleValidation] = [:]
 
-        for scanPath in standardScanRoots {
+        for scanPath in scanRoots {
             guard !Task.isCancelled else { return }
             // /tmp and /private/tmp are the same directory; walk it once.
             let root = canonicalPath(scanPath)
@@ -486,6 +538,25 @@ final class DeepScanner {
                     forKeys: [.isExecutableKey, .isRegularFileKey, .isDirectoryKey]
                 ) else { continue }
                 if res.isDirectory == true {
+                    if url.pathExtension.caseInsensitiveCompare("app") == .orderedSame {
+                        let validation = cachedNickBundleValidation(
+                            for: url,
+                            cache: &bundleValidationCache,
+                            validator: nickBundleValidator
+                        )
+                        switch validation {
+                        case .valid:
+                            enumerator.skipDescendants()
+                        case .invalid:
+                            queue.push(Candidate(
+                                path: url.path,
+                                needsContentCheck: false,
+                                kind: .nickBundleSignatureFailure
+                            ))
+                        case .notNick:
+                            break
+                        }
+                    }
                     if prunedDirectoryNames.contains(url.lastPathComponent) {
                         enumerator.skipDescendants()
                     }
@@ -509,6 +580,34 @@ final class DeepScanner {
             }
             log.info("DeepScan: \(count) candidates from \(scanPath, privacy: .public)")
         }
+    }
+
+    struct BundleValidationCacheKey: Hashable, Sendable {
+        let path: String
+        let device: UInt64
+        let inode: UInt64
+        let modifiedNanoseconds: Int64
+    }
+
+    nonisolated private static func cachedNickBundleValidation(
+        for url: URL,
+        cache: inout [BundleValidationCacheKey: SignatureValidator.NickAppBundleValidation],
+        validator: (String) -> SignatureValidator.NickAppBundleValidation
+    ) -> SignatureValidator.NickAppBundleValidation {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let device = (attributes?[.systemNumber] as? NSNumber)?.uint64Value ?? 0
+        let inode = (attributes?[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let key = BundleValidationCacheKey(
+            path: canonicalPath(url.path),
+            device: device,
+            inode: inode,
+            modifiedNanoseconds: Int64(modified * 1_000_000_000)
+        )
+        if let cached = cache[key] { return cached }
+        let validation = validator(url.path)
+        cache[key] = validation
+        return validation
     }
 
     /// Decides a file's fate from metadata alone (no I/O).
