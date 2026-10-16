@@ -115,7 +115,9 @@ struct SimpleAlertSheet: View {
             titleVisibility: .visible
         ) {
             Button(contributesToLearning ? "Confirm Expected Activity" : "Trust for 7 Days") { trust() }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                // SwiftUI dismisses a confirmation dialog for its cancel role.
+            }
         } message: {
             if contributesToLearning {
                 Text("Nick will record this review decision. A second distinct occurrence must also be confirmed before matching review-only findings are lowered to Info. They are never hidden.")
@@ -129,7 +131,9 @@ struct SimpleAlertSheet: View {
             titleVisibility: .visible
         ) {
             Button("Move to Trash", role: .destructive) { moveToTrash() }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                // SwiftUI dismisses a confirmation dialog for its cancel role.
+            }
         } message: {
             Text("You can get it back from the Trash if you change your mind.")
         }

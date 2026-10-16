@@ -212,12 +212,16 @@ struct SimpleHomeView: View {
             titleVisibility: .visible
         ) {
             Button("Delete It", role: .destructive) { deleteQuarantinedIncident() }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                // SwiftUI dismisses a confirmation dialog for its cancel role.
+            }
         } message: {
             Text("It’s already in Quarantine and can’t run. Deleting it removes it for good.")
         }
         .alert("Nick couldn’t delete it", isPresented: $deleteFailed) {
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel) {
+                // SwiftUI dismisses this informational alert for its cancel role.
+            }
         } message: {
             Text("It’s still safely in Quarantine. You can try again from Activity.")
         }

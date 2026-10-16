@@ -713,7 +713,9 @@ struct SettingsView: View {
                 Button("Remove", role: .destructive) {
                     if let n = nameToRemove { removeProcess(n) }
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Cancel", role: .cancel) {
+                    // SwiftUI dismisses a confirmation dialog for its cancel role.
+                }
             }
         } header: {
             Text("Trusted Processes")
@@ -1547,7 +1549,9 @@ private struct LearnedReviewEntriesView: View {
                 engine.resetLearnedDecisions()
                 refresh()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                // SwiftUI dismisses an alert for its cancel role.
+            }
         } message: {
             Text("Removes learned review entries only. Incident history, dismissals, suppression rules, trusted processes, cooldowns, quarantine records, and settings stay unchanged.")
         }

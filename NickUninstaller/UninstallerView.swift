@@ -421,7 +421,9 @@ struct UninstallerView: View {
             Button("Uninstall Nick", role: .destructive) {
                 model.uninstall()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                // SwiftUI dismisses a confirmation dialog for its cancel role.
+            }
         } message: {
             Text("This permanently deletes Nick’s quarantine, security history, settings, baselines, and all installed protection components.")
         }

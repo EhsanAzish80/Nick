@@ -975,7 +975,10 @@ private final class SystemExtensionRemovalRequest: NSObject,
         }
         // OSSystemExtensionRequest.delegate is not an ownership boundary. Keep
         // this delegate alive until macOS delivers its terminal callback.
-        withExtendedLifetime(operation) {}
+        withExtendedLifetime(operation) {
+            // The scope itself is the operation: keep the delegate retained
+            // until macOS has delivered the terminal callback above.
+        }
         return result
     }
 
@@ -987,7 +990,10 @@ private final class SystemExtensionRemovalRequest: NSObject,
         .cancel
     }
 
-    func requestNeedsUserApproval(_: OSSystemExtensionRequest) {}
+    func requestNeedsUserApproval(_: OSSystemExtensionRequest) {
+        // macOS presents its own approval UI; the request remains pending until
+        // a later success or failure delegate callback resumes the continuation.
+    }
 
     func request(
         _: OSSystemExtensionRequest,

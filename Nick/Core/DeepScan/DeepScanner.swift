@@ -180,7 +180,10 @@ final class DeepScanner {
                 queue.push(Candidate(path: path, needsContentCheck: false))
             }
             queue.finish()
-            enumeration = Task {}
+            enumeration = Task {
+                // Explicit candidates are already queued synchronously, so
+                // there is no background enumeration work to await.
+            }
         } else {
             enumeration = Task.detached(priority: .utility) {
                 DeepScanner.enumerateCandidates(into: queue)

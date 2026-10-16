@@ -330,13 +330,17 @@ struct QuarantineActionSheet: View {
         .frame(width: 580)
         .confirmationDialog("Delete “\(name)”?", isPresented: $confirmsDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { delete() }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                // SwiftUI dismisses a confirmation dialog for its cancel role.
+            }
         } message: {
             Text("This removes it for good. It can’t be undone.")
         }
         .confirmationDialog("Restore “\(name)”?", isPresented: $confirmsRestore, titleVisibility: .visible) {
             Button("Restore") { restore() }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                // SwiftUI dismisses a confirmation dialog for its cancel role.
+            }
         } message: {
             Text("It goes back where it was and will be able to run again. Only do this if you’re sure it’s safe.")
         }
@@ -344,7 +348,9 @@ struct QuarantineActionSheet: View {
             get: { failure != nil },
             set: { if !$0 { failure = nil } }
         )) {
-            Button("OK", role: .cancel) {}
+            Button("OK", role: .cancel) {
+                // SwiftUI dismisses this informational alert for its cancel role.
+            }
         } message: {
             Text("It’s still safely in Quarantine. Try again in a moment.")
         }

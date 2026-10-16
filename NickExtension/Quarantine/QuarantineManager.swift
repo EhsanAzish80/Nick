@@ -53,7 +53,10 @@ final class QuarantineManager {
         moveItem: @escaping (String, String) throws -> Void = { source, destination in
             try FileManager.default.moveItem(atPath: source, toPath: destination)
         },
-        afterMove: @escaping (String) throws -> Void = { _ in }
+        afterMove: @escaping (String) throws -> Void = { _ in
+            // Production quarantine needs no post-move hook; tests inject one
+            // to exercise failures after the filesystem move succeeds.
+        }
     ) {
         vaultPath = (supportDir as NSString).appendingPathComponent("Quarantine")
         let dbPath = (supportDir as NSString).appendingPathComponent("quarantine.db")
