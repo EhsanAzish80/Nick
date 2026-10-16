@@ -382,7 +382,19 @@ final class ProcessTree: @unchecked Sendable {
         while current > 1, reverse.count < 5, visited.insert(current).inserted {
             if let node = tracked[current] {
                 reverse.append(AttributionLineageEntry(node: node))
-                current = node.ppid
+                // ES can occasionally give a flattened parent audit token for
+                // an exec while the kernel still has the direct helper/CLI
+                // parent. Reconcile every live node generically; this is about
+                // topology, never an app or tool allowlist. Require the live
+                // executable to match before trusting its ppid so PID reuse
+                // cannot splice an unrelated process into stored evidence.
+                if let live = resolver.liveProcess(pid: current),
+                   live.path == node.path,
+                   live.ppid > 0 {
+                    current = live.ppid
+                } else {
+                    current = node.ppid
+                }
                 continue
             }
             guard let live = resolver.liveProcess(pid: current) else {
