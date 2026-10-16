@@ -1330,8 +1330,14 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
                 timestamp: finding.signal.timestamp
             )
             let result = store.ingest([alert])
-            let outcome = try! XCTUnwrap(result.outcomes.first)
-            let generation = try! XCTUnwrap(outcome.generation)
+            guard let outcome = result.outcomes.first else {
+                XCTFail("Expected an ingest outcome")
+                return .failed
+            }
+            guard let generation = outcome.generation else {
+                XCTFail("Expected a durable generation")
+                return .failed
+            }
             notifications.stage(result.newlyActionable, for: generation)
             persistedGeneration = generation
             delivered.fulfill()

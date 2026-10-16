@@ -32,7 +32,9 @@ final class IncidentStorePersistenceTests: XCTestCase {
             incidents: store.incidents, dismissalTombstones: [], expectedCooldowns: [:]
         ))
         let restored = IncidentStore(persistOnInit: false)
-        try restored.installPrivilegedSnapshot(payload) { _, _ in }
+        try restored.installPrivilegedSnapshot(payload) { _, _ in
+            // Persistence is deliberately inert while verifying snapshot restoration.
+        }
         XCTAssertEqual(restored.incidents.first?.actions.last?.action, .quarantineFailed)
         XCTAssertEqual(restored.incidents.first?.alert.recommendedAction, failure.guidance)
     }
@@ -491,7 +493,9 @@ final class IncidentStorePersistenceTests: XCTestCase {
         let snapshot = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [], dismissalTombstones: [], expectedCooldowns: [:]
         ))
-        try store.installPrivilegedSnapshot(snapshot) { _, _ in }
+        try store.installPrivilegedSnapshot(snapshot) { _, _ in
+            // The helper returns an isolated in-memory store for focused tests.
+        }
         return store
     }
 

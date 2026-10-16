@@ -975,7 +975,9 @@ final class ThreatCorrelatorTests: XCTestCase {
         let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [], dismissalTombstones: [], expectedCooldowns: [:], learnedReviewEntries: entries
         ))
-        try store.installPrivilegedSnapshot(payload) { _, _ in }
+        try store.installPrivilegedSnapshot(payload) { _, _ in
+            // Snapshot normalization is under test; no external write is required.
+        }
         XCTAssertEqual(store.learnedReviewEntries.count, IncidentStore.maximumLearnedEntriesPerIdentity)
         store.resetAllLearnedEntries()
         XCTAssertTrue(store.learnedReviewEntries.isEmpty)
@@ -1078,7 +1080,9 @@ final class ThreatCorrelatorTests: XCTestCase {
             expectedCooldowns: [:],
             learnedReviewEntries: [activeEntry]
         ))
-        try rejectingStore.installPrivilegedSnapshot(payload) { _, _ in }
+        try rejectingStore.installPrivilegedSnapshot(payload) { _, _ in
+            // The test exercises identity rejection with an in-memory snapshot.
+        }
         XCTAssertEqual(rejectingStore.ingest([alert]).visibleAlerts.first?.severity, .medium)
     }
 
@@ -1095,7 +1099,9 @@ final class ThreatCorrelatorTests: XCTestCase {
             "verdictLearningEnabled": false
         ])
         let engine = SecurityEngine()
-        try engine.installPrivilegedSecuritySettings(payload: payload) { _, _ in }
+        try engine.installPrivilegedSecuritySettings(payload: payload) { _, _ in
+            // UserDefaults isolation is under test, not the persistence transport.
+        }
 
         XCTAssertFalse(engine.verdictLearningEnabled)
         XCTAssertNil(UserDefaults.standard.object(forKey: "verdictLearningEnabled"))
@@ -1193,7 +1199,9 @@ final class ThreatCorrelatorTests: XCTestCase {
         let source = IncidentStore(defaults: defaults, persistOnInit: false)
         let payload = try source.prepareLegacyMigration(defaults: defaults)
         let restored = IncidentStore()
-        try restored.installPrivilegedSnapshot(payload) { _, _ in }
+        try restored.installPrivilegedSnapshot(payload) { _, _ in
+            // Legacy migration is verified in memory before removing old defaults.
+        }
 
         XCTAssertEqual(restored.dismissedAlertDeduplicationKeys, Set([dismissed.deduplicationKey]))
         XCTAssertTrue(restored.ingest([dismissed]).newlyActionable.isEmpty)
@@ -1244,7 +1252,9 @@ final class ThreatCorrelatorTests: XCTestCase {
         let source = IncidentStore(defaults: defaults, persistOnInit: false)
         let payload = try source.prepareLegacyMigration(defaults: defaults)
         let restored = IncidentStore()
-        try restored.installPrivilegedSnapshot(payload) { _, _ in }
+        try restored.installPrivilegedSnapshot(payload) { _, _ in
+            // Tombstone matching is under test; no external write is required.
+        }
         let result = restored.ingest([protected])
 
         XCTAssertEqual(result.newlyActionable.map(\.deduplicationKey), [protected.deduplicationKey])
@@ -1262,7 +1272,9 @@ final class ThreatCorrelatorTests: XCTestCase {
         defer { deniedEngine.setVerdictLearningEnabled(false) }
         try deniedEngine.installPrivilegedIncidentStore(
             payload: payload,
-            persistence: { _, _, _ in },
+            persistence: { _, _, _ in
+                // Authorization rejection must occur before any persisted mutation.
+            },
             authorizer: { _, _ in .targetMissing },
             removeLegacyState: false
         )
@@ -1286,7 +1298,9 @@ final class ThreatCorrelatorTests: XCTestCase {
         let allowedEngine = SecurityEngine()
         try allowedEngine.installPrivilegedIncidentStore(
             payload: payload,
-            persistence: { _, _, _ in },
+            persistence: { _, _, _ in
+                // This retry test observes authorization state in memory.
+            },
             authorizer: { _, action in
                 action == .hidden
                     ? .approved(IncidentActionApproval(authorizationExternalForm: nil))
@@ -1318,7 +1332,9 @@ final class ThreatCorrelatorTests: XCTestCase {
         let engine = SecurityEngine()
         try engine.installPrivilegedIncidentStore(
             payload: payload,
-            persistence: { _, _, _ in },
+            persistence: { _, _, _ in
+                // Each failure case is isolated from the external persistence layer.
+            },
             authorizer: { _, _ in
                 attempts += 1
                 return attempts == 1
@@ -1362,7 +1378,9 @@ final class ThreatCorrelatorTests: XCTestCase {
             let engine = SecurityEngine()
             try engine.installPrivilegedIncidentStore(
                 payload: payload,
-                persistence: { _, _, _ in },
+                persistence: { _, _, _ in
+                    // Cancellation behavior is isolated from external persistence.
+                },
                 authorizer: { _, _ in result },
                 removeLegacyState: false
             )
