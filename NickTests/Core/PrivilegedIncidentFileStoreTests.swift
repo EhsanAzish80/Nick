@@ -412,6 +412,19 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         ))
     }
 
+    func test_malformedExternalFormsAreRefusedByProductionVerifier() {
+        let rightName = "com.ehsanazish.nick.modify-protection"
+
+        XCTAssertFalse(ProtectionAuthorizationExternalFormVerifier.verify(
+            nil,
+            rightName: rightName
+        ))
+        XCTAssertFalse(ProtectionAuthorizationExternalFormVerifier.verify(
+            Data(repeating: 0, count: MemoryLayout<AuthorizationExternalForm>.size - 1),
+            rightName: rightName
+        ))
+    }
+
     func test_incidentStoreRequiresAuthorizationForNewReducingStateOrAction() throws {
         let id = UUID().uuidString
         let original = try payload(incidents: [["id": id, "state": "new", "actions": []]])

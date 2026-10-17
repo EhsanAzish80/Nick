@@ -11,10 +11,10 @@
 
 <p align="center">
   <a href="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml"><img src="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
-  <a href="https://github.com/EhsanAzish80/Nick/releases/latest"><img src="https://img.shields.io/github/v/release/EhsanAzish80/Nick?display_name=tag&sort=semver" alt="Latest release"></a>
+  <a href="https://github.com/EhsanAzish80/Nick/releases/tag/v5.0.0"><img src="https://img.shields.io/badge/release-v5.0.0-blue" alt="Latest release: v5.0.0"></a>
   <a href="https://codecov.io/gh/EhsanAzish80/Nick"><img src="https://codecov.io/gh/EhsanAzish80/Nick/branch/main/graph/badge.svg" alt="Code coverage"></a>
   <a href="https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick"><img src="https://sonarcloud.io/api/project_badges/measure?project=EhsanAzish80_Nick&metric=alert_status" alt="SonarCloud quality gate"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/EhsanAzish80/Nick" alt="AGPL-3.0 license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-blue" alt="AGPL-3.0-only license"></a>
   <img src="https://img.shields.io/badge/macOS-26%2B-black?logo=apple" alt="macOS 26 or later">
 </p>
 
@@ -375,9 +375,9 @@ state and does not mean the extension remains installed.
 
 ## Project status
 
-Nick 5.0.0 is the current production release. Every future release remains gated
-on clean-Mac validation of Endpoint Security, Email Guard, Scam Guardian,
-updates, Storage, quarantine, and uninstall behavior.
+Nick 5.0.0 (build 5052) is the current production release. Every future release
+remains gated on clean-Mac validation of Endpoint Security, Email Guard, Scam
+Guardian, updates, Storage, quarantine, and uninstall behavior.
 
 ## License
 
