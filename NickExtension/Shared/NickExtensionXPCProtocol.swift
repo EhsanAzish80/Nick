@@ -24,7 +24,10 @@ enum ProtectionAuthorizationExternalFormVerifier {
                     authorization,
                     &rights,
                     nil,
-                    [.extendRights],
+                    // Verification must never acquire a missing right. The app
+                    // preauthorizes this right before exporting the form; the
+                    // extension only confirms that grant is already present.
+                    [],
                     nil
                 ) == errAuthorizationSuccess
             }
