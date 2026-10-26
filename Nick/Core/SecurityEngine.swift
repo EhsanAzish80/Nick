@@ -17,10 +17,13 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
     var notificationThresholdRaw: Int
     var verdictLearningEnabled: Bool
     var approvedDevelopmentRoots: Set<String>
+    var strictModeEnabled: Bool
+    var blockingKillSwitch: Bool
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, trustedNames, trustedEntries, suppressionRules, ignoredPaths
         case webhookURL, notificationThresholdRaw, verdictLearningEnabled, approvedDevelopmentRoots
+        case strictModeEnabled, blockingKillSwitch
     }
 
     init(
@@ -32,7 +35,9 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
         webhookURL: String?,
         notificationThresholdRaw: Int,
         verdictLearningEnabled: Bool,
-        approvedDevelopmentRoots: Set<String> = []
+        approvedDevelopmentRoots: Set<String> = [],
+        strictModeEnabled: Bool = false,
+        blockingKillSwitch: Bool = false
     ) {
         self.schemaVersion = schemaVersion
         self.trustedNames = trustedNames
@@ -43,6 +48,8 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
         self.notificationThresholdRaw = notificationThresholdRaw
         self.verdictLearningEnabled = verdictLearningEnabled
         self.approvedDevelopmentRoots = approvedDevelopmentRoots
+        self.strictModeEnabled = strictModeEnabled
+        self.blockingKillSwitch = blockingKillSwitch
     }
 
     init(from decoder: Decoder) throws {
@@ -61,6 +68,8 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
         approvedDevelopmentRoots = try container.decodeIfPresent(
             Set<String>.self, forKey: .approvedDevelopmentRoots
         ) ?? []
+        strictModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .strictModeEnabled) ?? false
+        blockingKillSwitch = try container.decodeIfPresent(Bool.self, forKey: .blockingKillSwitch) ?? false
     }
 }
 
@@ -264,6 +273,8 @@ final class SecurityEngine {
     var webhookURLString: String? { didSet { persistSecuritySettingsIfReady() } }
     var notificationThreshold: SignalSeverity = .high { didSet { persistSecuritySettingsIfReady() } }
     private(set) var verdictLearningEnabled = false
+    private(set) var strictModeEnabled = false
+    private(set) var blockingKillSwitch = false
     var approvedDevelopmentRoots: Set<String> = [] { didSet { persistSecuritySettingsIfReady() } }
     private var securitySettingsPersistence: ((Data, Data?) -> Void)?
     private var nextSecuritySettingsAuthorization: Data?
@@ -302,7 +313,9 @@ final class SecurityEngine {
             notificationThresholdRaw: defaults.object(forKey: "notificationThresholdRaw") as? Int
                 ?? SignalSeverity.high.rawValue,
             verdictLearningEnabled: false,
-            approvedDevelopmentRoots: []
+            approvedDevelopmentRoots: [],
+            strictModeEnabled: false,
+            blockingKillSwitch: false
         )
         return (try? JSONEncoder().encode(payload)) ?? Data("{}".utf8)
     }
@@ -326,6 +339,8 @@ final class SecurityEngine {
         notificationThreshold = SignalSeverity(rawValue: settings.notificationThresholdRaw) ?? .high
         verdictLearningEnabled = settings.verdictLearningEnabled
         approvedDevelopmentRoots = settings.approvedDevelopmentRoots
+        strictModeEnabled = settings.strictModeEnabled
+        blockingKillSwitch = settings.blockingKillSwitch
         installingSecuritySettings = false
         securitySettingsPersistence = persistence
         NotificationManager.shared.notificationThreshold = notificationThreshold
@@ -357,7 +372,9 @@ final class SecurityEngine {
             webhookURL: webhookURLString,
             notificationThresholdRaw: notificationThreshold.rawValue,
             verdictLearningEnabled: verdictLearningEnabled,
-            approvedDevelopmentRoots: approvedDevelopmentRoots
+            approvedDevelopmentRoots: approvedDevelopmentRoots,
+            strictModeEnabled: strictModeEnabled,
+            blockingKillSwitch: blockingKillSwitch
         )
         guard let data = try? JSONEncoder().encode(payload) else { return }
         NotificationManager.shared.notificationThreshold = notificationThreshold
@@ -986,6 +1003,18 @@ final class SecurityEngine {
         verdictLearningEnabled = enabled
         persistSecuritySettingsIfReady()
         configureIncidentStore()
+    }
+
+    func setStrictModeEnabled(_ enabled: Bool, authorizationExternalForm: Data? = nil) {
+        if !enabled { nextSecuritySettingsAuthorization = authorizationExternalForm }
+        strictModeEnabled = enabled
+        persistSecuritySettingsIfReady()
+    }
+
+    func setBlockingKillSwitch(_ enabled: Bool, authorizationExternalForm: Data? = nil) {
+        if enabled { nextSecuritySettingsAuthorization = authorizationExternalForm }
+        blockingKillSwitch = enabled
+        persistSecuritySettingsIfReady()
     }
 
     func resetLearnedEntry(id: UUID) {

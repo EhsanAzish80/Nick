@@ -247,7 +247,13 @@ enum SecuritySettingsWritePolicy {
         if newThreshold > oldThreshold { return true }
         let oldLearning = old["verdictLearningEnabled"] as? Bool ?? false
         let newLearning = new["verdictLearningEnabled"] as? Bool ?? false
-        return !oldLearning && newLearning
+        if !oldLearning && newLearning { return true }
+        let oldStrict = old["strictModeEnabled"] as? Bool ?? false
+        let newStrict = new["strictModeEnabled"] as? Bool ?? false
+        if oldStrict && !newStrict { return true }
+        let oldKillSwitch = old["blockingKillSwitch"] as? Bool ?? false
+        let newKillSwitch = new["blockingKillSwitch"] as? Bool ?? false
+        return !oldKillSwitch && newKillSwitch
     }
 }
 

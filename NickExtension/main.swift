@@ -120,7 +120,19 @@ let yaraSetup: (engine: YARAEngine?, rulesReady: Bool) = {
 let yaraEngine = yaraSetup.engine
 let yaraRulesReady = yaraSetup.rulesReady
 
-let fileScanner  = FileScanner(signatureDB: signatureDB, cache: scanCache, yaraEngine: yaraEngine)
+let signedIntelligenceStore = SignedThreatIntelligenceBundleStore(
+    directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
+    publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,
+    updatesEnabled: ThreatIntelligenceBundleTrustAnchor.updatesEnabled
+)
+let signedRules = signedIntelligenceStore.loadBestAvailable()?.0.rules ?? []
+let strictBlockingPolicy = StrictBlockingPolicy(signedRules: signedRules)
+let fileScanner = FileScanner(
+    signatureDB: signatureDB,
+    cache: scanCache,
+    yaraEngine: yaraEngine,
+    strictBlockingPolicy: strictBlockingPolicy
+)
 
 logger.info("Signature database ready — \(signatureDB.count) signature(s) loaded")
 
@@ -174,6 +186,12 @@ let emailAttachmentMonitor = EmailAttachmentMonitor()
 let eventHandler = ESEventHandler()
 let xpcServer    = ESXPCServer()
 let esClient     = EndpointSecurityClient(eventHandler: eventHandler)
+
+strictBlockingPolicy.update(settingsRecord: xpcServer.currentSecuritySettingsRecord())
+xpcServer.securitySettingsDidChange = { record in
+    strictBlockingPolicy.update(settingsRecord: record)
+    scanCache.invalidateAll()
+}
 
 // Wire cross-references
 eventHandler.xpcServer               = xpcServer

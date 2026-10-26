@@ -206,7 +206,7 @@ final class ESEventHandler {
                 identity: targetIdentity,
                 currentHash: { fileScanner?.contentHash(path: targetPath) }
             ) ?? false
-            let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
+            let shouldBlock = !explicitlyAllowed && (fileScanner?.allowsEnforcement(of: cached) ?? false)
 
             // First launch of an unknown, non-identity-signed binary: hash it
             // against the curated database before answering, within a bounded
@@ -299,7 +299,7 @@ final class ESEventHandler {
                 identity: fileIdentity,
                 currentHash: { fileScanner?.contentHash(path: filePath) }
             ) ?? false
-            let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
+            let shouldBlock = !explicitlyAllowed && (fileScanner?.allowsEnforcement(of: cached) ?? false)
 
             esClient?.respond(to: message, allow: !shouldBlock)
 
@@ -460,7 +460,7 @@ final class ESEventHandler {
                 path: filePath,
                 identity: FileIdentity(stat: msg.event.mmap.source.pointee.stat)
             )
-            let shouldBlock = cached?.mayBlock ?? false
+            let shouldBlock = fileScanner?.allowsEnforcement(of: cached) ?? false
 
             esClient?.respond(to: message, allow: !shouldBlock)
 
@@ -486,7 +486,7 @@ final class ESEventHandler {
                 path: srcPath,
                 identity: FileIdentity(stat: msg.event.copyfile.source.pointee.stat)
             )
-            let shouldBlock = cached?.mayBlock ?? false
+            let shouldBlock = fileScanner?.allowsEnforcement(of: cached) ?? false
 
             esClient?.respond(to: message, allow: !shouldBlock)
 
@@ -1258,11 +1258,12 @@ final class ESEventHandler {
             guard retained.claimResponse() else { return }
             let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
             Self.logger.debug("Pre-launch exact-hash lookup completed in \(elapsed / 1_000_000) ms")
-            self?.esClient?.respond(to: retained.pointer, allow: match == nil)
-            if let match {
+            let blocked = match != nil && scanner.allowsAnyBlocking
+            self?.esClient?.respond(to: retained.pointer, allow: !blocked)
+            if blocked, let match {
                 Self.logger.notice("Blocked first launch of known threat \(match.name, privacy: .public): \(path, privacy: .private)")
             }
-            completion(match != nil, scanner.cache.lookup(path: path, identity: identity))
+            completion(blocked, scanner.cache.lookup(path: path, identity: identity))
         }
     }
 

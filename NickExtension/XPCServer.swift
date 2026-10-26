@@ -80,6 +80,7 @@ final class ESXPCServer: NSObject {
         fileURL: URL(fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/settings.json")
     )
     weak var updateLeaseManager: NickUpdateLeaseManager?
+    var securitySettingsDidChange: ((Data) -> Void)?
 
     // MARK: - Init
 
@@ -447,6 +448,7 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
     func migrateSecuritySettings(_ payload: Data, reply: @escaping (Bool, Data) -> Void) {
         let result = settingsStore.migrate(payload: payload)
+        if result.accepted { securitySettingsDidChange?(result.record) }
         reply(result.accepted, result.record)
     }
 
@@ -462,7 +464,12 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             return
         }
         let result = settingsStore.replace(payload: payload, expectedRevision: expectedRevision)
+        if result.accepted { securitySettingsDidChange?(result.record) }
         reply(result.accepted, result.record)
+    }
+
+    func currentSecuritySettingsRecord() -> Data {
+        settingsStore.load()
     }
 
     func migrateIncidentStore(_ payload: Data, reply: @escaping (Bool, Data) -> Void) {
