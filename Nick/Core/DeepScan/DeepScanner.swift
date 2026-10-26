@@ -727,9 +727,6 @@ final class DeepScanner {
         // a known application without the corresponding signed bundle.
         if isInsideSignedAppData(path: match.filePath) { return .applicationData }
 
-        let signing = SignatureValidator.shared.evaluate(binaryPath: match.filePath)
-        if case .signed = signing { return .likelySafe }
-
         return .suspicious
     }
 

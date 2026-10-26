@@ -46,7 +46,7 @@ enum LOLBinExecutionPolicy {
         if name == "launchctl",
            ["load", "bootstrap", "submit"].contains(where: arguments.map { $0.lowercased() }.contains),
            lowered.range(of: #"/(private/)?(tmp|var/folders)/"#, options: .regularExpression) != nil {
-            return Finding(title: "launchctl loading from a temporary directory", reason: "launchctl_tmp", severity: "critical", matchedCommand: nil)
+            return Finding(title: "Temporary-directory launch agent load", reason: "launchctl_tmp", severity: "critical", matchedCommand: nil)
         }
         if name == "crontab", arguments.contains("-e") || arguments.contains("-r") || arguments == ["-"] {
             return Finding(title: "crontab modification", reason: "crontab_modify", severity: "medium", matchedCommand: nil)

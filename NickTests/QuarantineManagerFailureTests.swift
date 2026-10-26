@@ -121,6 +121,25 @@ final class QuarantineManagerFailureTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.file.path))
         XCTAssertTrue(try fixture.vaultContents().isEmpty)
     }
+
+    func test_inPlaceWriteBetweenHashAndMoveIsRefusedAndRestored() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let manager = QuarantineManager(
+            supportDir: fixture.support.path,
+            volumeInfo: { _ in QuarantineVolumeInfo(isReadOnly: false, name: "Writable") },
+            afterMove: { path in
+                try Data("content changed after review".utf8).write(to: URL(fileURLWithPath: path))
+            }
+        )
+
+        let failure = try XCTUnwrap(manager.quarantineFailure(for: fixture.file, hash: fixture.hash))
+
+        XCTAssertEqual(failure.reason, .fileChanged)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.file.path))
+        XCTAssertEqual(try String(contentsOf: fixture.file, encoding: .utf8), "content changed after review")
+        XCTAssertTrue(try fixture.vaultContents().isEmpty)
+    }
 }
 
 private extension QuarantineManager {

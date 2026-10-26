@@ -404,6 +404,23 @@ enum IncidentStoreWritePolicy {
         reply: @escaping (Bool) -> Void
     )
 
+    /// Persists the authorized stop incident and clean marker before the app
+    /// submits a system-extension deactivation request.
+    func recordAuthorizedProtectionStop(
+        reason: String,
+        authorizationExternalForm: Data?,
+        reply: @escaping (Bool) -> Void
+    )
+
+    /// Imports a bounded, user-level observation made while the privileged
+    /// extension was unavailable. It corroborates but never replaces root
+    /// heartbeat evidence.
+    func ingestAppObservedProtectionGap(_ payload: Data, reply: @escaping (Bool) -> Void)
+
+    /// Marks the authenticated container app's next exit as intentional. The
+    /// token is short-lived and consumed once by NOTIFY_EXIT.
+    func recordIntentionalAppExit(pid: Int32, reason: String, reply: @escaping (Bool) -> Void)
+
     /// Instructs the extension to rebuild the FIM baseline from the current
     /// state of monitored paths. Used by the "Rebuild Baseline" button in
     /// `IntegrityView`.

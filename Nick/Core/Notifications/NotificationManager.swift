@@ -115,6 +115,24 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    func sendProtectionUnavailable() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional,
+              settings.alertStyle != .none else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Nick protection is unavailable"
+        content.body = "Endpoint Security stopped responding. Activity during this gap may not be observed."
+        content.sound = .default
+        content.interruptionLevel = .timeSensitive
+        content.categoryIdentifier = "THREAT_ALERT"
+        let request = UNNotificationRequest(
+            identifier: "nick-protection-unavailable",
+            content: content,
+            trigger: nil
+        )
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
     // MARK: - Delivery
 
     /// Posts a system notification banner for the given alert.

@@ -7,6 +7,7 @@ import XCTest
 
 final class TamperProtectionPolicyTests: XCTestCase {
     private let valid = ExecutionTrustPolicy.csValid
+    private let adhoc = ExecutionTrustPolicy.csValid | ExecutionTrustPolicy.csAdhoc
 
     func test_nickAndResignedSparkleInstallerAreTrustedByExactIdentity() {
         XCTAssertTrue(TamperProtectionPolicy.isTrustedMaintenanceActor(identity(
@@ -238,6 +239,78 @@ final class TamperProtectionPolicyTests: XCTestCase {
         XCTAssertTrue(TamperProtectionPolicy.isSensitiveSystemExtensionCommand(
             arguments: ["systemextensionsctl", "reset"]
         ))
+    }
+
+    func test_signalProtectionOnlyProtectsEndpointExtensionFromNonPlatformSenders() {
+        let target = identity(
+            team: TamperProtectionPolicy.nickTeamID,
+            signing: NickSignalProtectionPolicy.endpointExtensionSigningID
+        )
+        let adHocRootTool = identity(signing: "local.root.tool", flags: adhoc)
+        XCTAssertTrue(NickSignalProtectionPolicy.shouldDeny(
+            signal: SIGKILL, targetIdentity: target,
+            senderIdentity: adHocRootTool, senderNickIdentityValidated: false
+        ))
+        XCTAssertTrue(NickSignalProtectionPolicy.shouldDeny(
+            signal: SIGSTOP, targetIdentity: target,
+            senderIdentity: adHocRootTool, senderNickIdentityValidated: false
+        ))
+        XCTAssertFalse(NickSignalProtectionPolicy.shouldDeny(
+            signal: SIGKILL, targetIdentity: target,
+            senderIdentity: adHocRootTool, senderNickIdentityValidated: true
+        ))
+        for signingID in ["com.apple.ActivityMonitor", "com.apple.loginwindow", "com.apple.sysextd"] {
+            let platformSender = identity(signing: signingID, platform: true)
+            XCTAssertFalse(NickSignalProtectionPolicy.shouldDeny(
+                signal: SIGTERM, targetIdentity: target,
+                senderIdentity: platformSender, senderNickIdentityValidated: false
+            ), signingID)
+        }
+        XCTAssertFalse(NickSignalProtectionPolicy.shouldDeny(
+            signal: SIGUSR1, targetIdentity: target,
+            senderIdentity: adHocRootTool, senderNickIdentityValidated: false
+        ))
+
+        let app = identity(team: TamperProtectionPolicy.nickTeamID, signing: "com.ehsanazish.nick")
+        XCTAssertFalse(NickSignalProtectionPolicy.shouldDeny(
+            signal: SIGKILL, targetIdentity: app,
+            senderIdentity: adHocRootTool, senderNickIdentityValidated: false
+        ))
+    }
+
+    func test_continuityPolicySameBootIsGapAndRebootIsInformational() {
+        let boot = Date(timeIntervalSince1970: 10_000)
+        let sameBoot = ProtectionContinuityPolicy.evaluate(
+            previous: .init(sequence: 7, wallTime: boot, bootSessionUUID: "A"),
+            currentBootSessionUUID: "A", bootTime: boot
+        )
+        XCTAssertEqual(sameBoot?.kind, .interrupted)
+
+        let restarted = ProtectionContinuityPolicy.evaluate(
+            previous: .init(sequence: 8, wallTime: boot.addingTimeInterval(-30), bootSessionUUID: "A"),
+            currentBootSessionUUID: "B", bootTime: boot
+        )
+        XCTAssertEqual(restarted?.kind, .resumedAfterRestart)
+
+        let preexistingGap = ProtectionContinuityPolicy.evaluate(
+            previous: .init(sequence: 9, wallTime: boot.addingTimeInterval(-300), bootSessionUUID: "A"),
+            currentBootSessionUUID: "B", bootTime: boot
+        )
+        XCTAssertEqual(preexistingGap?.kind, .interrupted)
+
+        XCTAssertNil(ProtectionContinuityPolicy.evaluate(
+            previous: .init(sequence: 10, wallTime: boot, bootSessionUUID: "A"),
+            currentBootSessionUUID: "A",
+            bootTime: boot,
+            extensionRestarted: false
+        ), "sleep/wake without an extension restart is not a protection gap")
+    }
+
+    func test_continuityHeartbeatSequenceRejectsRollbackAndReplay() {
+        XCTAssertTrue(ProtectionContinuityPolicy.acceptsSequence(current: nil, proposed: 1))
+        XCTAssertTrue(ProtectionContinuityPolicy.acceptsSequence(current: 41, proposed: 42))
+        XCTAssertFalse(ProtectionContinuityPolicy.acceptsSequence(current: 42, proposed: 42))
+        XCTAssertFalse(ProtectionContinuityPolicy.acceptsSequence(current: 42, proposed: 1))
     }
 
     private func identity(

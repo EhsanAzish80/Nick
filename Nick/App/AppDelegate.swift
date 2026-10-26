@@ -76,6 +76,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (right-click → Quit Nick) so `applicationShouldTerminate` allows the quit
     /// even when the main window is hidden.
     private var forceQuit = false
+    private var quitConfirmationGranted = false
+    /// A workspace session-resign notification can also mean fast user
+    /// switching, so this must expire rather than suppressing unexpected-exit
+    /// reporting for the rest of the app process lifetime.
+    private var systemSessionEndDeadline: Date?
 
     private var isRunningTests: Bool {
         let environment = ProcessInfo.processInfo.environment
@@ -304,6 +309,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.willBecomeActiveNotification,
             object: nil
         )
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        workspaceCenter.addObserver(
+            self, selector: #selector(systemSessionWillEnd),
+            name: NSWorkspace.willPowerOffNotification, object: nil
+        )
+        workspaceCenter.addObserver(
+            self, selector: #selector(systemSessionWillEnd),
+            name: NSWorkspace.sessionDidResignActiveNotification, object: nil
+        )
+    }
+
+    @objc private func systemSessionWillEnd() {
+        systemSessionEndDeadline = Date().addingTimeInterval(120)
+        _ = xpcClient.recordIntentionalAppExitSynchronously(reason: "Logout or shutdown")
     }
 
     @MainActor
@@ -346,6 +365,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             var failures: [String] = []
             var restartRequired = false
+
+            guard xpcClient.recordAuthorizedProtectionStopSynchronously(
+                reason: "User approved Nick removal"
+            ) else {
+                traceUninstall("Protection stop was not authorized or could not be persisted")
+                return
+            }
 
             do {
                 traceUninstall("Loading Network Filter preferences")
@@ -529,13 +555,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // menu-bar "stay alive while hidden" policy to a test host, otherwise
         // xcodebuild waits forever after the final test has completed.
         let windowVisible = NSApp.nickMainWindow?.isVisible ?? false
-        return Self.terminationReply(
+        if let deadline = systemSessionEndDeadline, deadline >= Date() {
+            _ = xpcClient.recordIntentionalAppExitSynchronously(reason: "Logout or shutdown")
+            return .terminateNow
+        }
+        let reply = Self.terminationReply(
             isRunningTests: isRunningTests,
             forceQuit: forceQuit,
             sparkleInstallationInProgress: sparkleInstallationInProgress,
             sparkleUpdateLeaseFailed: sparkleUpdateLeaseFailed,
             windowVisible: windowVisible
         )
+        guard reply == .terminateNow, !isRunningTests else { return reply }
+        if !sparkleInstallationInProgress && !uninstallPreparationInProgress && !quitConfirmationGranted {
+            let alert = NSAlert()
+            alert.messageText = "Quit Nick?"
+            alert.informativeText = "Real-time monitoring stops while Nick is not running."
+            alert.addButton(withTitle: "Quit")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+            quitConfirmationGranted = true
+        }
+        let reason = sparkleInstallationInProgress ? "Sparkle update relaunch" : "User quit"
+        guard xpcClient.recordIntentionalAppExitSynchronously(reason: reason) else {
+            updateLogger.error("Could not persist intentional-exit token; cancelling termination")
+            return .terminateCancel
+        }
+        return .terminateNow
     }
 
     static func terminationReply(

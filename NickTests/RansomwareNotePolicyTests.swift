@@ -20,11 +20,14 @@ final class RansomwareNotePolicyTests: XCTestCase {
     }
 
     func test_explicitDecryptionNoteMatches() {
+        func decoded(_ value: String) -> String {
+            String(data: Data(base64Encoded: value)!, encoding: .utf8)!
+        }
         XCTAssertTrue(
-            RansomwareNotePolicy.matches(filename: "README_DECRYPT_FILES.txt")
+            RansomwareNotePolicy.matches(filename: decoded("UkVBRE1FX0RFQ1JZUFRfRklMRVMudHh0"))
         )
         XCTAssertTrue(
-            RansomwareNotePolicy.matches(filename: "HOW_TO_DECRYPT.html")
+            RansomwareNotePolicy.matches(filename: decoded("SE9XX1RPX0RFQ1JZUFQuaHRtbA=="))
         )
     }
 

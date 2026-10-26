@@ -119,14 +119,14 @@ enum LOLBinDetector {
         Signature(
             processName: "launchctl",
             argumentPattern: "/tmp/",
-            title: "launchctl loading agent from temp directory",
+            title: "Temporary-directory launch agent load",
             severity: .critical,
             reason: "launchctl_tmp"
         ),
         Signature(
             processName: "launchctl",
             argumentPattern: "/var/folders/",
-            title: "launchctl loading agent from temp directory",
+            title: "Temporary-directory launch agent load",
             severity: .critical,
             reason: "launchctl_tmp"
         ),

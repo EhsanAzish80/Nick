@@ -231,6 +231,17 @@ final class DeepScannerLifecycleTests: XCTestCase {
         XCTAssertEqual(DeepScanner.classify(match: match), .suspicious)
     }
 
+    func test_signedBinaryDoesNotDowngradeBehaviorMatch() {
+        let match = YARAMatch(
+            ruleName: "macos_reverse_shell",
+            tags: ["backdoor"],
+            filePath: "/bin/ls",
+            metadata: ["severity": "HIGH"]
+        )
+
+        XCTAssertEqual(DeepScanner.classify(match: match), .suspicious)
+    }
+
     func test_verifiedHomebrewKegDowngradesOnlyBehavioralRule() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

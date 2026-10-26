@@ -182,6 +182,8 @@ public final class ExtensionXPCClient: NSObject {
     private var reconnectTask: Task<Void, Never>?
     private var reconnectAttempt = 0
     private var healthRefreshTask: Task<Void, Never>?
+    private var lastHealthyExtensionTime: Date?
+    private var lastProtectionGapObservationAt: Date?
     /// Deterministic persistence completion seam used by unit tests. Production
     /// always uses the privileged XPC write/reply path.
     var incidentPersistenceOverride: ((UInt64) async -> (UInt64, Bool)?)?
@@ -239,6 +241,7 @@ public final class ExtensionXPCClient: NSObject {
                 Self.logger.warning("XPC connection to extension invalidated")
                 self.isConnected = false
                 self.connection = nil
+                self.recordAppObservedProtectionGap(reason: "Endpoint Security connection invalidated")
                 self.scheduleReconnect()
             }
         }
@@ -247,6 +250,7 @@ public final class ExtensionXPCClient: NSObject {
                 guard let self else { return }
                 Self.logger.warning("XPC connection to extension interrupted — extension may have crashed")
                 self.isConnected = false
+                self.recordAppObservedProtectionGap(reason: "Endpoint Security connection interrupted")
                 self.scheduleReconnect()
             }
         }
@@ -278,6 +282,7 @@ public final class ExtensionXPCClient: NSObject {
                     self?.reconnectAttempt = 0
                     self?.reconnectTask?.cancel()
                     self?.reconnectTask = nil
+                    self?.drainAppObservedProtectionGaps()
                     self?.startHealthRefresh()
                     self?.loadPersistedEvents()
                     self?.loadPendingFIMViolations()
@@ -311,6 +316,7 @@ public final class ExtensionXPCClient: NSObject {
     public func refreshExtensionHealth() async {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
             extensionHealth = nil
+            recordAppObservedProtectionGap(reason: "Endpoint Security heartbeat unavailable")
             return
         }
         let data: Data = await withCheckedContinuation { continuation in
@@ -319,6 +325,73 @@ public final class ExtensionXPCClient: NSObject {
         extensionHealth = data.isEmpty
             ? nil
             : (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let updatedAt = extensionHealth?["updatedAt"] as? TimeInterval
+        let healthy = extensionHealth?["active"] as? Bool == true
+            && updatedAt.map { Date().timeIntervalSince1970 - $0 <= 30 } == true
+        if healthy {
+            lastHealthyExtensionTime = updatedAt.map { Date(timeIntervalSince1970: $0) } ?? Date()
+        } else {
+            recordAppObservedProtectionGap(reason: "Endpoint Security heartbeat is stale or missing")
+        }
+    }
+
+    private var protectionObservationJournalURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return base.appendingPathComponent("com.ehsanazish.nick/protection-observations.json")
+    }
+
+    private func recordAppObservedProtectionGap(reason: String) {
+        let now = Date()
+        if let lastProtectionGapObservationAt,
+           now.timeIntervalSince(lastProtectionGapObservationAt) < 300 { return }
+        lastProtectionGapObservationAt = now
+        var observations = loadAppObservedProtectionGaps()
+        observations.append(.init(
+            id: UUID(), observedAt: now, lastHealthyAt: lastHealthyExtensionTime,
+            reason: String(reason.prefix(160))
+        ))
+        observations = Array(observations.suffix(32))
+        do {
+            let url = protectionObservationJournalURL
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try JSONEncoder().encode(observations).write(to: url, options: .atomic)
+        } catch {
+            Self.logger.error("Could not write protection observation journal: \(error.localizedDescription)")
+        }
+        Task { await NotificationManager.shared.sendProtectionUnavailable() }
+    }
+
+    private func loadAppObservedProtectionGaps() -> [AppObservedProtectionGap] {
+        guard let data = try? Data(contentsOf: protectionObservationJournalURL) else { return [] }
+        return (try? JSONDecoder().decode([AppObservedProtectionGap].self, from: data)) ?? []
+    }
+
+    private func drainAppObservedProtectionGaps() {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        let observations = loadAppObservedProtectionGaps()
+        guard !observations.isEmpty else { return }
+        let url = protectionObservationJournalURL
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var accepted = Set<UUID>()
+        for observation in observations {
+            guard let payload = try? JSONEncoder().encode(observation) else { continue }
+            group.enter()
+            proxy.ingestAppObservedProtectionGap(payload) { success in
+                if success { lock.withLock { _ = accepted.insert(observation.id) } }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            let remaining = observations.filter { !accepted.contains($0.id) }
+            if remaining.isEmpty {
+                try? FileManager.default.removeItem(at: url)
+            } else if let data = try? JSONEncoder().encode(remaining) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
     }
 
     private func loadPendingFIMViolations() {
@@ -708,6 +781,56 @@ public final class ExtensionXPCClient: NSObject {
         let completed = semaphore.wait(timeout: .now() + timeout) == .success
         finishProtectionAuthorization(authorization)
         return completed && reply.value()
+    }
+
+    /// Records durable evidence and a clean-stop marker before an authorized
+    /// system-extension deactivation request is submitted to macOS.
+    func recordAuthorizedProtectionStopSynchronously(
+        reason: String,
+        timeout: TimeInterval = 15
+    ) -> Bool {
+        guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+            Self.logger.error("Protection stop XPC failed: \(error.localizedDescription, privacy: .public)")
+        }) as? NickExtensionXPCProtocol,
+              let authorization = requestProtectionModificationAuthorization()
+        else { return false }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let reply = UpdateLeaseReplyBox()
+        proxy.recordAuthorizedProtectionStop(
+            reason: String(reason.prefix(160)),
+            authorizationExternalForm: authorization
+        ) { accepted in
+            reply.set(accepted)
+            semaphore.signal()
+        }
+        let completed = semaphore.wait(timeout: .now() + timeout) == .success
+        finishProtectionAuthorization(authorization)
+        return completed && reply.value()
+    }
+
+    func recordIntentionalAppExitSynchronously(
+        reason: String,
+        timeout: TimeInterval = 2
+    ) -> Bool {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return false }
+        let semaphore = DispatchSemaphore(value: 0)
+        let reply = UpdateLeaseReplyBox()
+        proxy.recordIntentionalAppExit(
+            pid: getpid(), reason: String(reason.prefix(160))
+        ) { accepted in
+            reply.set(accepted)
+            semaphore.signal()
+        }
+        return semaphore.wait(timeout: .now() + timeout) == .success && reply.value()
+    }
+
+    func ingestAppObservedProtectionGap(_ payload: Data, completion: @escaping (Bool) -> Void) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.ingestAppObservedProtectionGap(payload, reply: completion)
     }
 
     private func finishProtectionAuthorization(_ externalForm: Data?) {
