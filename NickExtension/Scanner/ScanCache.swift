@@ -101,6 +101,16 @@ final class ScanCache {
         return allowance.permits(identity, sha256: hash)
     }
 
+    /// Callback-safe form for Endpoint Security AUTH events. The allowance
+    /// was hash-bound when it was created; the kernel-provided identity also
+    /// includes inode, size and timestamps, so a changed file cannot reuse it.
+    /// No file is opened or hashed while the authorization reply is pending.
+    func consumeOneTimeAllowance(path: String, identity: FileIdentity) -> Bool {
+        guard let allowance = lock.withLock({ oneTimeAllowances.removeValue(forKey: path) })
+        else { return false }
+        return allowance.identity == identity && !allowance.sha256.isEmpty
+    }
+
     /// Allows the next authorization and clears any stale deny verdict now,
     /// rather than waiting for the normal cache TTL.
     func allowOnce(

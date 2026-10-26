@@ -49,6 +49,14 @@ private final class UpdateLeaseReplyBox: @unchecked Sendable {
     func value() -> Bool { lock.withLock { stored } }
 }
 
+private final class AcceptedObservationIDs: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids = Set<UUID>()
+
+    func insert(_ id: UUID) { lock.withLock { _ = ids.insert(id) } }
+    func contains(_ id: UUID) -> Bool { lock.withLock { ids.contains(id) } }
+}
+
 /// Bridges an XPC reply or error back to async code exactly once without
 /// inheriting MainActor isolation into the XPC callback queue.
 final class OneShotDataReply: @unchecked Sendable {
@@ -68,6 +76,50 @@ final class OneShotDataReply: @unchecked Sendable {
         }
         callback?(data)
         return callback != nil
+    }
+}
+
+/// Thread-safe, exactly-once bridge for Objective-C XPC callbacks. XPC may
+/// invoke a reply, an error handler, and an invalidation handler in any order
+/// and on non-main queues.
+final class OneShotReply<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completion: (@Sendable (Value) -> Void)?
+
+    init(completion: @escaping @Sendable (Value) -> Void) {
+        self.completion = completion
+    }
+
+    @discardableResult
+    func resolve(_ value: Value) -> Bool {
+        let callback = lock.withLock {
+            let callback = completion
+            completion = nil
+            return callback
+        }
+        callback?(value)
+        return callback != nil
+    }
+}
+
+final class MainActorOneShot<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completion: (@MainActor (Value) -> Void)?
+
+    init(completion: @escaping @MainActor (Value) -> Void) {
+        self.completion = completion
+    }
+
+    @discardableResult
+    nonisolated func resolve(_ value: Value) -> Bool {
+        let callback = lock.withLock {
+            let callback = completion
+            completion = nil
+            return callback
+        }
+        guard let callback else { return false }
+        Task { @MainActor in callback(value) }
+        return true
     }
 }
 
@@ -264,6 +316,7 @@ public final class ExtensionXPCClient: NSObject {
                 Self.logger.warning("XPC connection to extension invalidated")
                 self.isConnected = false
                 self.connection = nil
+                self.failIncidentWriteWaitersOnConnectionLoss()
                 self.recordAppObservedProtectionGap(reason: "Endpoint Security connection invalidated")
                 self.scheduleReconnect()
             }
@@ -297,7 +350,7 @@ public final class ExtensionXPCClient: NSObject {
             scheduleReconnect()
             return
         }
-        let statusReply: @Sendable (Bool) -> Void = { [weak self] active in
+        let statusCompletion = OneShotReply<Bool> { [weak self] active in
             Task { @MainActor [weak self] in
                 self?.isConnected = active
                 Self.logger.info("Verified extension status: isActive=\(active)")
@@ -324,7 +377,36 @@ public final class ExtensionXPCClient: NSObject {
                 }
             }
         }
+        let statusReply: @Sendable (Bool) -> Void = { statusCompletion.resolve($0) }
         proxy.getStatus(reply: statusReply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+            statusCompletion.resolve(false)
+        }
+    }
+
+    /// The only way this client obtains a remote proxy. Error callbacks never
+    /// inherit MainActor isolation from the caller.
+    private func extensionProxy(
+        onError: (@Sendable (Error) -> Void)? = nil
+    ) -> NickExtensionXPCProtocol? {
+        guard let connection else { return nil }
+        let handler: @Sendable (Error) -> Void = { [weak self] error in
+            onError?(error)
+            Task { @MainActor [weak self] in
+                self?.failIncidentWriteWaitersOnConnectionLoss()
+                self?.scheduleReconnect()
+            }
+        }
+        return connection.remoteObjectProxyWithErrorHandler(handler) as? NickExtensionXPCProtocol
+    }
+
+    private func failIncidentWriteWaitersOnConnectionLoss() {
+        incidentWriteInFlight = false
+        let waiters = incidentWriteWaiters
+        incidentWriteWaiters.removeAll()
+        for (_, continuation) in waiters {
+            continuation.resume(returning: false)
+        }
     }
 
     private func refreshThreatIntelligenceBundleIfEnabled() {
@@ -343,11 +425,14 @@ public final class ExtensionXPCClient: NSObject {
                 guard let http = response as? HTTPURLResponse,
                       http.statusCode == 200,
                       data.count <= ThreatBundleUpdateEndpointPolicy.maximumDownloadBytes,
-                      let proxy = self?.connection?.remoteObjectProxy as? NickExtensionXPCProtocol
+                      let proxy = self?.extensionProxy()
                 else { return }
                 let accepted: Bool = await withCheckedContinuation { continuation in
-                    proxy.installThreatIntelligenceBundle(data) {
-                        continuation.resume(returning: $0)
+                    let reply = OneShotReply<Bool> { continuation.resume(returning: $0) }
+                    let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
+                    proxy.installThreatIntelligenceBundle(data, reply: xpcReply)
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+                        reply.resolve(false)
                     }
                 }
                 if !accepted {
@@ -443,19 +528,23 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     private func drainAppObservedProtectionGaps() {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        guard let proxy = extensionProxy() else { return }
         let observations = loadAppObservedProtectionGaps()
         guard !observations.isEmpty else { return }
         let url = protectionObservationJournalURL
         let group = DispatchGroup()
-        let lock = NSLock()
-        var accepted = Set<UUID>()
+        let accepted = AcceptedObservationIDs()
         for observation in observations {
             guard let payload = try? JSONEncoder().encode(observation) else { continue }
             group.enter()
-            proxy.ingestAppObservedProtectionGap(payload) { success in
-                if success { lock.withLock { _ = accepted.insert(observation.id) } }
+            let reply = OneShotReply<Bool> { success in
+                if success { accepted.insert(observation.id) }
                 group.leave()
+            }
+            let xpcReply: @Sendable (Bool) -> Void = { success in reply.resolve(success) }
+            proxy.ingestAppObservedProtectionGap(payload, reply: xpcReply)
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+                reply.resolve(false)
             }
         }
         group.notify(queue: .main) {
@@ -469,22 +558,28 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     private func loadPendingFIMViolations() {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
-        proxy.getPendingFIMViolations { [weak self] data in
+        guard let proxy = extensionProxy() else { return }
+        let completion = MainActorOneShot<Data> { [weak self] data in
             guard !data.isEmpty,
                   let violations = try? JSONDecoder().decode([IntegrityViolation].self, from: data)
             else { return }
-            Task { @MainActor [weak self] in
-                self?.integrityViolations = violations.sorted { $0.timestamp > $1.timestamp }
-            }
+            self?.integrityViolations = violations.sorted { $0.timestamp > $1.timestamp }
+        }
+        let reply: @Sendable (Data) -> Void = { completion.resolve($0) }
+        proxy.getPendingFIMViolations(reply: reply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+            completion.resolve(Data())
         }
     }
 
     public func bootstrapSecuritySettings(legacyPayload: Data) async -> Data? {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return nil }
+        guard let proxy = extensionProxy() else { return nil }
         let response: (Bool, Data) = await withCheckedContinuation { continuation in
-            proxy.migrateSecuritySettings(legacyPayload) {
-                continuation.resume(returning: ($0, $1))
+            let reply = OneShotReply<(Bool, Data)> { continuation.resume(returning: $0) }
+            let xpcReply: @Sendable (Bool, Data) -> Void = { reply.resolve(($0, $1)) }
+            proxy.migrateSecuritySettings(legacyPayload, reply: xpcReply)
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+                reply.resolve((false, Data()))
             }
         }
         guard response.0,
@@ -507,16 +602,13 @@ public final class ExtensionXPCClient: NSObject {
         guard !securitySettingsWriteInFlight,
               let payload = pendingSecuritySettingsPayload,
               let revision = securitySettingsRevision,
-              let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+              let proxy = extensionProxy() else { return }
         pendingSecuritySettingsPayload = nil
         let authorization = pendingSecuritySettingsAuthorization
         pendingSecuritySettingsAuthorization = nil
         securitySettingsWriteInFlight = true
-        proxy.replaceSecuritySettings(
-            payload,
-            expectedRevision: revision,
-            authorizationExternalForm: authorization
-        ) { [weak self] accepted, data in
+        let completion = OneShotReply<(Bool, Data)> { [weak self] result in
+            let (accepted, data) = result
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.finishProtectionAuthorization(authorization)
@@ -530,6 +622,16 @@ public final class ExtensionXPCClient: NSObject {
                 }
                 self.flushSecuritySettingsIfNeeded()
             }
+        }
+        let xpcReply: @Sendable (Bool, Data) -> Void = { completion.resolve(($0, $1)) }
+        proxy.replaceSecuritySettings(
+            payload,
+            expectedRevision: revision,
+            authorizationExternalForm: authorization,
+            reply: xpcReply
+        )
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+            completion.resolve((false, Data()))
         }
     }
 
@@ -580,44 +682,46 @@ public final class ExtensionXPCClient: NSObject {
         legacyPayload: Data?,
         completion: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)?
     ) {
-        let errorHandler: @Sendable (Error) -> Void = { [weak self] error in
-            Self.logger.warning("Incident-store bootstrap failed: \(error.localizedDescription)")
-            Task { @MainActor [weak self] in
-                self?.scheduleReconnect()
-            }
-        }
-        guard let proxy = connection?.remoteObjectProxyWithErrorHandler(errorHandler)
-            as? NickExtensionXPCProtocol else {
+        guard let proxy = extensionProxy() else {
             scheduleReconnect()
             return
         }
-        proxy.getIncidentStore { [weak self] data in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: data) {
-                    self.incidentRevision = record.revision
-                    self.finishIncidentBootstrap(record: record, migrated: false)
-                    return
-                }
-                guard let legacyPayload else {
-                    self.finishIncidentBootstrap(record: nil, migrated: false)
-                    return
-                }
-                proxy.migrateIncidentStore(legacyPayload) { [weak self] accepted, recordData in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        let record = try? JSONDecoder().decode(
-                            PrivilegedIncidentStoreRecord.self,
-                            from: recordData
-                        )
-                        self.incidentRevision = record?.revision
-                        self.finishIncidentBootstrap(
-                            record: record,
-                            migrated: accepted && record != nil
-                        )
-                    }
-                }
+        let completion = MainActorOneShot<Data> { [weak self] data in
+            guard let self else { return }
+            if let record = try? JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: data) {
+                self.incidentRevision = record.revision
+                self.finishIncidentBootstrap(record: record, migrated: false)
+            } else if let legacyPayload {
+                self.migrateLegacyIncidentStore(legacyPayload)
+            } else {
+                self.finishIncidentBootstrap(record: nil, migrated: false)
             }
+        }
+        let reply: @Sendable (Data) -> Void = { completion.resolve($0) }
+        proxy.getIncidentStore(reply: reply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+            completion.resolve(Data())
+        }
+    }
+
+    private func migrateLegacyIncidentStore(_ payload: Data) {
+        guard let proxy = extensionProxy() else {
+            scheduleReconnect()
+            return
+        }
+        let completion = MainActorOneShot<(Bool, Data)> { [weak self] result in
+            guard let self else { return }
+            let record = try? JSONDecoder().decode(
+                PrivilegedIncidentStoreRecord.self,
+                from: result.1
+            )
+            self.incidentRevision = record?.revision
+            self.finishIncidentBootstrap(record: record, migrated: result.0 && record != nil)
+        }
+        let reply: @Sendable (Bool, Data) -> Void = { completion.resolve(($0, $1)) }
+        proxy.migrateIncidentStore(payload, reply: reply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+            completion.resolve((false, Data()))
         }
     }
 
@@ -641,17 +745,14 @@ public final class ExtensionXPCClient: NSObject {
               let payload = pendingIncidentPayload,
               let generation = pendingIncidentGeneration,
               let revision = incidentRevision,
-              let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+              let proxy = extensionProxy() else { return }
         pendingIncidentPayload = nil
         pendingIncidentGeneration = nil
         let authorization = pendingIncidentAuthorization
         pendingIncidentAuthorization = nil
         incidentWriteInFlight = true
-        proxy.replaceIncidentStore(
-            payload,
-            expectedRevision: revision,
-            authorizationExternalForm: authorization
-        ) { [weak self] accepted, recordData in
+        let completion = OneShotReply<(Bool, Data)> { [weak self] result in
+            let (accepted, recordData) = result
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.finishProtectionAuthorization(authorization)
@@ -660,24 +761,29 @@ public final class ExtensionXPCClient: NSObject {
                     PrivilegedIncidentStoreRecord.self,
                     from: recordData
                 )
-                if let record {
-                    self.incidentRevision = record.revision
-                }
+                if let record { self.incidentRevision = record.revision }
                 if !accepted, authorization == nil {
                     self.pendingIncidentPayload = self.pendingIncidentPayload ?? payload
                     self.pendingIncidentGeneration = self.pendingIncidentGeneration ?? generation
                 } else if !accepted {
                     Self.logger.error("Authorized incident-store write was rejected; authoritative state retained")
                 }
-                self.completeIncidentWrite(
-                    through: generation,
-                    succeeded: accepted && record != nil
-                )
+                self.completeIncidentWrite(through: generation, succeeded: accepted && record != nil)
                 if accepted && record != nil {
                     self.incidentPersistenceConfirmationHandler?(generation)
                 }
                 self.drainIncidentStoreWrites()
             }
+        }
+        let xpcReply: @Sendable (Bool, Data) -> Void = { completion.resolve(($0, $1)) }
+        proxy.replaceIncidentStore(
+            payload,
+            expectedRevision: revision,
+            authorizationExternalForm: authorization,
+            reply: xpcReply
+        )
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+            completion.resolve((false, Data()))
         }
     }
 
@@ -739,7 +845,7 @@ public final class ExtensionXPCClient: NSObject {
         action: IncidentActionKind
     ) async -> IncidentActionAuthorizationResult {
         guard isConnected,
-              let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+              let proxy = extensionProxy() else {
             return .protectionDisconnected
         }
         await refreshExtensionHealth()
@@ -752,12 +858,17 @@ public final class ExtensionXPCClient: NSObject {
 
         let requiresAuthorization: Bool = [.dismissed, .allowedOnce, .alwaysAllowed].contains(action)
         let preflight = await withCheckedContinuation { continuation in
+            let reply = OneShotReply<String> { continuation.resume(returning: $0) }
+            let xpcReply: @Sendable (String) -> Void = { reply.resolve($0) }
             proxy.validateIncidentVerdictTarget(
                 alertID: id.uuidString,
                 action: action.rawValue,
                 authorizationExternalForm: nil,
-                reply: { continuation.resume(returning: $0) }
+                reply: xpcReply
             )
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+                reply.resolve(IncidentVerdictValidationResult.invalidRequest.rawValue)
+            }
         }
         guard let preflightResult = IncidentVerdictValidationResult(rawValue: preflight) else {
             return .rejected
@@ -772,12 +883,17 @@ public final class ExtensionXPCClient: NSObject {
             },
             submitAuthorized: { authorization in
                 let raw = await withCheckedContinuation { continuation in
+                    let reply = OneShotReply<String> { continuation.resume(returning: $0) }
+                    let xpcReply: @Sendable (String) -> Void = { reply.resolve($0) }
                     proxy.validateIncidentVerdictTarget(
                         alertID: id.uuidString,
                         action: action.rawValue,
                         authorizationExternalForm: authorization,
-                        reply: { continuation.resume(returning: $0) }
+                        reply: xpcReply
                     )
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+                        reply.resolve(IncidentVerdictValidationResult.invalidRequest.rawValue)
+                    }
                 }
                 return IncidentVerdictValidationResult(rawValue: raw) ?? .invalidRequest
             }
@@ -844,14 +960,17 @@ public final class ExtensionXPCClient: NSObject {
 
         let semaphore = DispatchSemaphore(value: 0)
         let reply = UpdateLeaseReplyBox()
-        proxy.requestUpdateLease(
-            sourceBuild: sourceBuild,
-            destinationBuild: destinationBuild,
-            authorizationExternalForm: authorization
-        ) { accepted in
+        let once = OneShotReply<Bool> { accepted in
             reply.set(accepted)
             semaphore.signal()
         }
+        let xpcReply: @Sendable (Bool) -> Void = { once.resolve($0) }
+        proxy.requestUpdateLease(
+            sourceBuild: sourceBuild,
+            destinationBuild: destinationBuild,
+            authorizationExternalForm: authorization,
+            reply: xpcReply
+        )
         let completed = semaphore.wait(timeout: .now() + timeout) == .success
         finishProtectionAuthorization(authorization)
         return completed && reply.value()
@@ -871,13 +990,16 @@ public final class ExtensionXPCClient: NSObject {
 
         let semaphore = DispatchSemaphore(value: 0)
         let reply = UpdateLeaseReplyBox()
-        proxy.recordAuthorizedProtectionStop(
-            reason: String(reason.prefix(160)),
-            authorizationExternalForm: authorization
-        ) { accepted in
+        let once = OneShotReply<Bool> { accepted in
             reply.set(accepted)
             semaphore.signal()
         }
+        let xpcReply: @Sendable (Bool) -> Void = { once.resolve($0) }
+        proxy.recordAuthorizedProtectionStop(
+            reason: String(reason.prefix(160)),
+            authorizationExternalForm: authorization,
+            reply: xpcReply
+        )
         let completed = semaphore.wait(timeout: .now() + timeout) == .success
         finishProtectionAuthorization(authorization)
         return completed && reply.value()
@@ -887,24 +1009,34 @@ public final class ExtensionXPCClient: NSObject {
         reason: String,
         timeout: TimeInterval = 2
     ) -> Bool {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return false }
+        guard let proxy = extensionProxy() else { return false }
         let semaphore = DispatchSemaphore(value: 0)
         let reply = UpdateLeaseReplyBox()
-        proxy.recordIntentionalAppExit(
-            pid: getpid(), reason: String(reason.prefix(160))
-        ) { accepted in
+        let once = OneShotReply<Bool> { accepted in
             reply.set(accepted)
             semaphore.signal()
         }
+        let xpcReply: @Sendable (Bool) -> Void = { once.resolve($0) }
+        proxy.recordIntentionalAppExit(
+            pid: getpid(),
+            reason: String(reason.prefix(160)),
+            reply: xpcReply
+        )
         return semaphore.wait(timeout: .now() + timeout) == .success && reply.value()
     }
 
-    func ingestAppObservedProtectionGap(_ payload: Data, completion: @escaping (Bool) -> Void) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+    func ingestAppObservedProtectionGap(
+        _ payload: Data,
+        completion: @escaping @MainActor (Bool) -> Void
+    ) {
+        guard let proxy = extensionProxy() else {
             completion(false)
             return
         }
-        proxy.ingestAppObservedProtectionGap(payload, reply: completion)
+        let reply = MainActorOneShot<Bool>(completion: completion)
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
+        proxy.ingestAppObservedProtectionGap(payload, reply: xpcReply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { reply.resolve(false) }
     }
 
     private func finishProtectionAuthorization(_ externalForm: Data?) {
@@ -921,6 +1053,7 @@ public final class ExtensionXPCClient: NSObject {
         connection?.invalidate()
         connection  = nil
         isConnected = false
+        failIncidentWriteWaitersOnConnectionLoss()
         incidentBootstrapCompleted = false
         bootstrapLegacyPayload = nil
         bootstrapCompletion = nil
@@ -932,8 +1065,8 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     private func loadPersistedEvents() {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
-        proxy.getPersistedEvents { [weak self] data in
+        guard let proxy = extensionProxy() else { return }
+        let completion = MainActorOneShot<Data> { [weak self] data in
             guard let replay = try? JSONDecoder().decode([PersistedExtensionFinding].self, from: data) else {
                 return
             }
@@ -949,6 +1082,11 @@ public final class ExtensionXPCClient: NSObject {
                     proxy.acknowledgePersistedThreats(eventIDs: acknowledgedThreatIDs)
                 }
             }
+        }
+        let reply: @Sendable (Data) -> Void = { completion.resolve($0) }
+        proxy.getPersistedEvents(reply: reply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+            completion.resolve(Data())
         }
     }
 
@@ -1032,7 +1170,7 @@ public final class ExtensionXPCClient: NSObject {
             threatAcknowledgementOverride(eventID)
             return
         }
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        guard let proxy = extensionProxy() else { return }
         proxy.acknowledgePersistedThreats(eventIDs: [eventID.uuidString])
     }
 
@@ -1128,21 +1266,24 @@ public final class ExtensionXPCClient: NSObject {
 
     /// Queries the extension's running status.
     /// - Parameter completion: Called on the main queue with `true` if the ES client is active.
-    public func getExtensionStatus(completion: @escaping (Bool) -> Void) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+    public func getExtensionStatus(completion: @escaping @MainActor (Bool) -> Void) {
+        guard let proxy = extensionProxy() else {
             completion(false)
             return
         }
-        proxy.getStatus(reply: completion)
+        let reply = MainActorOneShot<Bool>(completion: completion)
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
+        proxy.getStatus(reply: xpcReply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { reply.resolve(false) }
     }
 
     public func requestQuarantineFile(
         path: String,
         expectedThreatName: String,
         expectedSHA256: String = "",
-        completion: @escaping (Result<QuarantineRecord, QuarantineFailure>) -> Void
+        completion: @escaping @MainActor (Result<QuarantineRecord, QuarantineFailure>) -> Void
     ) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+        guard let proxy = extensionProxy() else {
             completion(.failure(QuarantineFailure(
                 reason: .protectionDisconnected,
                 errorDomain: NSCocoaErrorDomain,
@@ -1150,28 +1291,32 @@ public final class ExtensionXPCClient: NSObject {
             )))
             return
         }
+        let reply = MainActorOneShot<(Bool, String?, Data?)> { [weak self] result in
+            let (success, message, recordData) = result
+            if success,
+               let recordData,
+               let record = try? JSONDecoder().decode(QuarantineRecord.self, from: recordData) {
+                self?.quarantineRecords.removeAll { $0.id == record.id }
+                self?.quarantineRecords.insert(record, at: 0)
+                completion(.success(record))
+            } else if let recordData,
+                      let failure = try? JSONDecoder().decode(QuarantineFailure.self, from: recordData) {
+                completion(.failure(failure))
+            } else {
+                completion(.failure(Self.unstructuredQuarantineFailure(message: message)))
+            }
+        }
+        let xpcReply: @Sendable (Bool, String?, Data?) -> Void = {
+            reply.resolve(($0, $1, $2))
+        }
         proxy.requestQuarantineFile(
             path: path,
             expectedThreatName: expectedThreatName,
-            expectedSHA256: expectedSHA256
-        ) {
-            [weak self] success, message, recordData in
-            Task { @MainActor [weak self] in
-                if success,
-                   let recordData,
-                   let record = try? JSONDecoder().decode(QuarantineRecord.self, from: recordData) {
-                    self?.quarantineRecords.removeAll { $0.id == record.id }
-                    self?.quarantineRecords.insert(record, at: 0)
-                    completion(.success(record))
-                    return
-                }
-                if let recordData,
-                   let failure = try? JSONDecoder().decode(QuarantineFailure.self, from: recordData) {
-                    completion(.failure(failure))
-                } else {
-                    completion(.failure(Self.unstructuredQuarantineFailure(message: message)))
-                }
-            }
+            expectedSHA256: expectedSHA256,
+            reply: xpcReply
+        )
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+            reply.resolve((false, nil, nil))
         }
     }
 
@@ -1186,9 +1331,9 @@ public final class ExtensionXPCClient: NSObject {
 
     public func requestAllowFileOnce(
         path: String,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping @MainActor (Bool) -> Void
     ) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+        guard let proxy = extensionProxy() else {
             completion(false)
             return
         }
@@ -1196,42 +1341,50 @@ public final class ExtensionXPCClient: NSObject {
             completion(false)
             return
         }
+        let reply = MainActorOneShot<Bool> { [weak self] accepted in
+            self?.finishProtectionAuthorization(authorization)
+            completion(accepted)
+        }
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
         proxy.requestAllowFileOnce(
             path: path,
-            authorizationExternalForm: authorization
-        ) { [weak self] accepted in
-            Task { @MainActor [weak self] in
-                self?.finishProtectionAuthorization(authorization)
-                completion(accepted)
-            }
-        }
+            authorizationExternalForm: authorization,
+            reply: xpcReply
+        )
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { reply.resolve(false) }
     }
 
     public func requestBlockReviewedFile(
         path: String,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping @MainActor (Bool) -> Void
     ) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+        guard let proxy = extensionProxy() else {
             completion(false)
             return
         }
-        proxy.requestBlockReviewedFile(path: path, reply: completion)
+        let reply = MainActorOneShot<Bool>(completion: completion)
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
+        proxy.requestBlockReviewedFile(path: path, reply: xpcReply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { reply.resolve(false) }
     }
 
     /// Instructs the extension to rebuild the FIM baseline (Phase 5+).
-    public func requestRebuildFIMBaseline(completion: @escaping (Bool) -> Void) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+    public func requestRebuildFIMBaseline(completion: @escaping @MainActor (Bool) -> Void) {
+        guard let proxy = extensionProxy() else {
             completion(false)
             return
         }
-        proxy.requestRebuildFIMBaseline(reply: completion)
+        let reply = MainActorOneShot<Bool>(completion: completion)
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
+        proxy.requestRebuildFIMBaseline(reply: xpcReply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10) { reply.resolve(false) }
     }
 
     public func acknowledgeFIMViolation(
         id: UUID,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping @MainActor (Bool) -> Void
     ) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+        guard let proxy = extensionProxy() else {
             completion(false)
             return
         }
@@ -1239,35 +1392,40 @@ public final class ExtensionXPCClient: NSObject {
             completion(false)
             return
         }
+        let reply = MainActorOneShot<Bool> { [weak self] accepted in
+            self?.finishProtectionAuthorization(authorization)
+            if accepted {
+                self?.integrityViolations.removeAll { $0.id == id }
+                self?.applyOrDeferIntegrityAcknowledgement(id)
+            }
+            completion(accepted)
+        }
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
         proxy.acknowledgeFIMViolation(
             id: id.uuidString,
-            authorizationExternalForm: authorization
-        ) { [weak self] accepted in
-            Task { @MainActor [weak self] in
-                self?.finishProtectionAuthorization(authorization)
-                if accepted {
-                    self?.integrityViolations.removeAll { $0.id == id }
-                    self?.applyOrDeferIntegrityAcknowledgement(id)
-                }
-                completion(accepted)
-            }
-        }
+            authorizationExternalForm: authorization,
+            reply: xpcReply
+        )
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { reply.resolve(false) }
     }
 
     /// Instructs the extension to deploy ransomware canary files into common user directories.
-    public func requestDeployCanaries(completion: @escaping (Bool) -> Void) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+    public func requestDeployCanaries(completion: @escaping @MainActor (Bool) -> Void) {
+        guard let proxy = extensionProxy() else {
             completion(false)
             return
         }
-        proxy.requestDeployCanaries(reply: completion)
+        let reply = MainActorOneShot<Bool>(completion: completion)
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
+        proxy.requestDeployCanaries(reply: xpcReply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10) { reply.resolve(false) }
     }
 
     public func requestRestoreQuarantinedFile(
         id: UUID,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping @MainActor (Bool) -> Void
     ) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+        guard let proxy = extensionProxy() else {
             completion(false)
             return
         }
@@ -1275,18 +1433,18 @@ public final class ExtensionXPCClient: NSObject {
             completion(false)
             return
         }
+        let reply = MainActorOneShot<Bool> { [weak self] success in
+            self?.finishProtectionAuthorization(authorization)
+            if success { self?.quarantineRecords.removeAll { $0.id == id } }
+            completion(success)
+        }
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
         proxy.requestRestoreQuarantinedFile(
             id: id.uuidString,
-            authorizationExternalForm: authorization
-        ) { [weak self] success in
-            Task { @MainActor [weak self] in
-                self?.finishProtectionAuthorization(authorization)
-                if success {
-                    self?.quarantineRecords.removeAll { $0.id == id }
-                }
-                completion(success)
-            }
-        }
+            authorizationExternalForm: authorization,
+            reply: xpcReply
+        )
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { reply.resolve(false) }
     }
 
 #if DEBUG
@@ -1332,29 +1490,36 @@ public final class ExtensionXPCClient: NSObject {
             return
         }
         let form = withUnsafeBytes(of: external) { Data($0) }
-        proxy.debugValidateProtectionAuthorization(authorizationExternalForm: form) { accepted in
+        let reply = MainActorOneShot<Bool> { accepted in
             AuthorizationFree(authorization, [.destroyRights])
             completion(accepted ? .unexpectedlyAccepted : .refused)
+        }
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
+        proxy.debugValidateProtectionAuthorization(
+            authorizationExternalForm: form,
+            reply: xpcReply
+        )
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+            reply.resolve(false)
         }
     }
 #endif
 
     public func requestDeleteQuarantinedFile(
         id: UUID,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping @MainActor (Bool) -> Void
     ) {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+        guard let proxy = extensionProxy() else {
             completion(false)
             return
         }
-        proxy.requestDeleteQuarantinedFile(id: id.uuidString) { [weak self] success in
-            Task { @MainActor [weak self] in
-                if success {
-                    self?.quarantineRecords.removeAll { $0.id == id }
-                }
-                completion(success)
-            }
+        let reply = MainActorOneShot<Bool> { [weak self] success in
+            if success { self?.quarantineRecords.removeAll { $0.id == id } }
+            completion(success)
         }
+        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
+        proxy.requestDeleteQuarantinedFile(id: id.uuidString, reply: xpcReply)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { reply.resolve(false) }
     }
 }
 

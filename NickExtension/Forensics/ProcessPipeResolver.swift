@@ -21,6 +21,7 @@ enum ProcessPipeResolver {
     }
 
     static func evidence(pid: Int32) -> Evidence {
+        ESCallbackSafetyGuard.requireOffCallbackThread("proc_pidinfo/proc_pidfdinfo")
         let byteCount = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
         guard byteCount > 0 else { return .empty }
         let count = Int(byteCount) / MemoryLayout<proc_fdinfo>.stride
