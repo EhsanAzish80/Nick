@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "attackVersion": "20.0",
+  "platform": "macOS",
+  "source": "https://attack.mitre.org/resources/versions/",
+  "techniques": [
+    {"id":"T1543.001","name":"Launch Agent","category":"persistence","mandatory":true,"fixture":"launch-agent-add"},
+    {"id":"T1543.004","name":"Launch Daemon","category":"persistence","mandatory":false,"fixture":"launch-daemon-add"},
+    {"id":"T1547.015","name":"Login Items","category":"persistence","mandatory":false,"fixture":"login-item-add"},
+    {"id":"T1053.003","name":"Cron","category":"persistence","mandatory":false,"fixture":"cron-modification"},
+    {"id":"T1546.004","name":"Unix Shell Configuration Modification","category":"persistence","mandatory":false,"fixture":"shell-profile-modification"},
+    {"id":"T1059.004","name":"Unix Shell","category":"execution","mandatory":true,"fixture":"download-to-shell"},
+    {"id":"T1059.002","name":"AppleScript","category":"execution","mandatory":false,"fixture":"osascript-shell"},
+    {"id":"T1204.002","name":"Malicious File","category":"execution","mandatory":false,"fixture":"eicar-file"},
+    {"id":"T1105","name":"Ingress Tool Transfer","category":"execution","mandatory":false,"fixture":"downloaded-executable"},
+    {"id":"T1218","name":"System Binary Proxy Execution","category":"execution","mandatory":false,"fixture":"system-binary-proxy"},
+    {"id":"T1555.001","name":"Keychain","category":"credential-access","mandatory":true,"fixture":"keychain-dump-pattern"},
+    {"id":"T1555.003","name":"Credentials from Web Browsers","category":"credential-access","mandatory":false,"fixture":"browser-store-read"},
+    {"id":"T1552.004","name":"Private Keys","category":"credential-access","mandatory":false,"fixture":"ssh-key-read"},
+    {"id":"T1552.001","name":"Credentials In Files","category":"credential-access","mandatory":false,"fixture":"wallet-file-read"},
+    {"id":"T1553.001","name":"Gatekeeper Bypass","category":"defense-evasion","mandatory":false,"fixture":"gatekeeper-user-override"},
+    {"id":"T1548.006","name":"TCC Manipulation","category":"defense-evasion","mandatory":false,"fixture":"tcc-modification"},
+    {"id":"T1562.001","name":"Impair Defenses","category":"defense-evasion","mandatory":true,"fixture":"nick-tamper"},
+    {"id":"T1222.002","name":"Linux and Mac File and Directory Permissions Modification","category":"defense-evasion","mandatory":false,"fixture":"permission-modification"},
+    {"id":"T1070.004","name":"File Deletion","category":"defense-evasion","mandatory":false,"fixture":"protected-file-deletion"},
+    {"id":"T1027","name":"Obfuscated Files or Information","category":"defense-evasion","mandatory":false,"fixture":"encoded-payload"},
+    {"id":"T1486","name":"Data Encrypted for Impact","category":"impact","mandatory":false,"fixture":"write-then-swap"},
+    {"id":"T1082","name":"System Information Discovery","category":"discovery","mandatory":false,"fixture":"system-discovery"},
+    {"id":"T1057","name":"Process Discovery","category":"discovery","mandatory":false,"fixture":"process-discovery"},
+    {"id":"T1071.001","name":"Web Protocols","category":"command-and-control","mandatory":false,"fixture":"known-dangerous-destination"}
+  ]
+}

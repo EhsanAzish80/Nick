@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "release": "5.0.0",
+  "build": 5052,
+  "measurements": {
+    "knownFamiliesHash": {"status":"not measured"},
+    "knownFamiliesBehavior": {"status":"not measured"},
+    "attackTechniques": {"status":"not measured"},
+    "extensionStopped": {"status":"not measured"},
+    "extensionAndAppGone": {"status":"not measured"},
+    "falsePositives": {"status":"measurement pending"},
+    "endpointSecurityHealth": {"status":"not measured"},
+    "independentReview": {"status":"not done"}
+  },
+  "techniqueResults": []
+}
