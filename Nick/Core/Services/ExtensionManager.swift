@@ -147,21 +147,10 @@ public final class ExtensionManager: NSObject {
         activationCompletion = nil
     }
 
-    /// Requests deactivation (removal) of the `NickExtension` System Extension.
-    public func uninstallExtension() {
-        extensionState = .uninstalling
-        lastError = nil
-        UserDefaults.standard.set(false, forKey: Self.activationCompletedKey)
-        UserDefaults.standard.removeObject(forKey: Self.activatedVersionKey)
-
-        let request = OSSystemExtensionRequest.deactivationRequest(
-            forExtensionWithIdentifier: NickExtensionConstants.extensionBundleID,
-            queue: .main
-        )
-        request.delegate = self
-        OSSystemExtensionManager.shared.submitRequest(request)
-        Self.logger.info("Submitted extension deactivation request")
-    }
+    // Deactivation is intentionally not exposed here. The documented uninstall
+    // flow in AppDelegate must first obtain the existing admin authorization,
+    // persist the authorized-stop incident and clean marker through XPC, and
+    // only then submit OSSystemExtensionRequest.deactivationRequest.
 }
 
 // MARK: - OSSystemExtensionRequestDelegate

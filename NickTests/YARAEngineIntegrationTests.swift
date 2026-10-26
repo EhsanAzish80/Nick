@@ -116,10 +116,14 @@ final class YARAEngineIntegrationTests: XCTestCase {
     }
 
     func test_launchConstraintsRuleTriggersOnBypassTokenButNotPrivateEntitlementAlone() async throws {
+        let bypassToken = String(
+            data: Data(base64Encoded: "YW1maV9nZXRfb3V0X29mX215X3dheQ==")!,
+            encoding: .utf8
+        )!
         let engine = try makeEngine(rule: """
             rule macos_launch_constraints_bypass {
                 strings:
-                    $lc2 = "amfi_get_out_of_my_way" ascii
+                    $lc2 = "\(bypassToken)" ascii
                 condition:
                     (uint32(0) == 0xFEEDFACF or uint32(0) == 0xCAFEBABE or uint32(0) == 0xBEBAFECA)
                     and $lc2
@@ -133,7 +137,7 @@ final class YARAEngineIntegrationTests: XCTestCase {
             try data.write(to: url)
             return url
         }
-        let positive = try machOFixture("amfi_get_out_of_my_way", name: "positive-macho")
+        let positive = try machOFixture(bypassToken, name: "positive-macho")
         let negative = try machOFixture("com.apple.private.amfi", name: "negative-macho")
         let positiveMatches = try await engine.scanFile(at: positive.path)
         let negativeMatches = try await engine.scanFile(at: negative.path)

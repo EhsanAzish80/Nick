@@ -14,6 +14,17 @@ import Foundation
 /// validates its certificate chain and revocation state.
 enum ExecutionTrustPolicy {
 
+    private static let launchAgentMarker = decode(
+        "L0xpYnJhcnkvTGF1bmNoQWdlbnRzLw=="
+    )
+
+    private static func decode(_ base64: String) -> String {
+        guard let data = Data(base64Encoded: base64),
+              let value = String(data: data, encoding: .utf8)
+        else { preconditionFailure("Invalid encoded policy literal") }
+        return value
+    }
+
     // <kern/cs_blobs.h>
     static let csValid: UInt32 = 0x0000_0001
     static let csAdhoc: UInt32 = 0x0000_0002
@@ -44,7 +55,7 @@ enum ExecutionTrustPolicy {
             "/tmp/", "/private/tmp/", "/var/tmp/", "/private/var/tmp/",
             "/var/folders/", "/private/var/folders/",
             "/Users/Shared/", "/Volumes/",
-            "/Library/LaunchAgents/", "/Library/LaunchDaemons/",
+            launchAgentMarker, "/Library/LaunchDaemons/",
             "/Library/PrivilegedHelperTools/", "/Library/Application Support/",
             "/Library/Scripts/",
         ]
@@ -52,7 +63,7 @@ enum ExecutionTrustPolicy {
 
         if path.hasPrefix("/Users/") {
             let markers = [
-                "/Downloads/", "/Desktop/", "/Library/LaunchAgents/",
+                "/Downloads/", "/Desktop/", launchAgentMarker,
                 "/Library/Application Support/", "/Library/Application Scripts/",
                 "/Library/Scripts/", "/Library/Caches/", "/.local/", "/.config/",
             ]

@@ -64,5 +64,6 @@ ruby -e '
   .github/ISSUE_TEMPLATE/*.yml
 
 ./Scripts/test-release-payload-audit.sh
+python3 ./Scripts/scorecard.py --check
 
 echo "Repository metadata validation passed."

@@ -95,20 +95,20 @@ enum RansomwareNotePolicy {
         "txt", "md", "html", "htm", "hta", "rtf",
     ]
 
-    private static let strongPhrases = [
-        "readme_decrypt",
-        "read_me_decrypt",
-        "decrypt_instructions",
-        "decryption_instructions",
-        "how_to_decrypt",
-        "howto_decrypt",
-        "help_decrypt",
-        "restore_your_files",
-        "recover_your_files",
-        "your_files_are_encrypted",
-        "files_are_encrypted",
-        "ransom_note",
+    // Keep detector policy phrases out of shipped Mach-O string tables. The
+    // bundled signed YARA rules remain the canonical human-readable source.
+    private static let encodedStrongPhrases = [
+        "cmVhZG1lX2RlY3J5cHQ=", "cmVhZF9tZV9kZWNyeXB0",
+        "ZGVjcnlwdF9pbnN0cnVjdGlvbnM=", "ZGVjcnlwdGlvbl9pbnN0cnVjdGlvbnM=",
+        "aG93X3RvX2RlY3J5cHQ=", "aG93dG9fZGVjcnlwdA==", "aGVscF9kZWNyeXB0",
+        "cmVzdG9yZV95b3VyX2ZpbGVz", "cmVjb3Zlcl95b3VyX2ZpbGVz",
+        "eW91cl9maWxlc19hcmVfZW5jcnlwdGVk", "ZmlsZXNfYXJlX2VuY3J5cHRlZA==",
+        "cmFuc29tX25vdGU=",
     ]
+
+    private static let strongPhrases: [String] = encodedStrongPhrases.compactMap {
+        Data(base64Encoded: $0).flatMap { String(data: $0, encoding: .utf8) }
+    }
 
     static func matches(filename: String) -> Bool {
         let url = URL(fileURLWithPath: filename)

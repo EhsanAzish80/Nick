@@ -168,6 +168,7 @@ final class QuarantineManager {
             originalPermissions: UInt16(originalStat.st_mode & 0o7777)
         )
 
+        var contentChangedAfterReview = false
         do {
             // Every record receives a unique vault path, so identical files never
             // overwrite earlier evidence or share a stale database reference.
@@ -185,6 +186,17 @@ final class QuarantineManager {
                 throw CocoaError(.fileWriteFileExists)
             }
             try afterMove(quarantinedPath)
+            let quarantinedFD = open(quarantinedPath, O_RDONLY | O_NOFOLLOW)
+            guard quarantinedFD >= 0 else {
+                throw CocoaError(.fileReadNoPermission)
+            }
+            let quarantinedHash = sha256(fileDescriptor: quarantinedFD)
+            close(quarantinedFD)
+            guard quarantinedHash == normalizedHash else {
+                contentChangedAfterReview = true
+                onReviewedFileSwap?(canonicalOriginalPath)
+                throw CocoaError(.fileReadCorruptFile)
+            }
 
             // Strip attributes while the owner can still access the file, then
             // lock the vault copy against reading, writing, and execution.
@@ -201,7 +213,9 @@ final class QuarantineManager {
             return .success(record)
 
         } catch {
-            let typedFailure = failure(from: error, path: canonicalOriginalPath)
+            let typedFailure = contentChangedAfterReview
+                ? failure(.fileChanged, code: Int(ESTALE), path: canonicalOriginalPath)
+                : failure(from: error, path: canonicalOriginalPath)
             Self.logger.error("Quarantine failed for '\(filePath)': \(error.localizedDescription, privacy: .public) [\(typedFailure.errorDomain, privacy: .public):\(typedFailure.errorCode)]")
             // Quarantine is fail-safe: if the move succeeded but a later vault step
             // failed, put the original back whenever possible. Never delete it.

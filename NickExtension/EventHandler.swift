@@ -64,6 +64,7 @@ final class ESEventHandler {
     /// Phase 6 — tamper protection for Nick's own files.
     var tamperProtection: TamperProtection?
     var updateLeaseManager: NickUpdateLeaseManager?
+    var intentionalAppExitRegistry: IntentionalAppExitRegistry?
 
     // MARK: - Private
 
@@ -102,6 +103,74 @@ final class ESEventHandler {
         )
 
         switch msg.event_type {
+
+        // MARK: AUTH_SIGNAL — protect Nick processes from hostile termination
+
+        case ES_EVENT_TYPE_AUTH_SIGNAL:
+            let signalEvent = msg.event.signal
+            let signalNumber = Int32(signalEvent.sig)
+            let target = signalEvent.target.pointee
+            let targetPID = audit_token_to_pid(target.audit_token)
+            let targetPath = esString(target.executable.pointee.path)
+            let targetIdentity = TamperActorIdentity(
+                teamID: esOptionalString(target.team_id),
+                signingID: esOptionalString(target.signing_id),
+                codesigningFlags: target.codesigning_flags,
+                isPlatformBinary: target.is_platform_binary
+            )
+            let effectiveSender = (msg.version >= 9 ? signalEvent.instigator : nil)?.pointee ?? process
+            let senderPID = audit_token_to_pid(effectiveSender.audit_token)
+            let senderPath = esString(effectiveSender.executable.pointee.path)
+            let senderIdentity = TamperActorIdentity(
+                teamID: esOptionalString(effectiveSender.team_id),
+                signingID: esOptionalString(effectiveSender.signing_id),
+                codesigningFlags: effectiveSender.codesigning_flags,
+                isPlatformBinary: effectiveSender.is_platform_binary
+            )
+            let senderNickValidated = TamperActorValidator.shared.validatesNickActor(
+                auditToken: effectiveSender.audit_token,
+                identity: senderIdentity
+            ) || TamperActorValidator.shared.validatesNickUpdateActor(
+                auditToken: effectiveSender.audit_token,
+                identity: senderIdentity
+            )
+            let deadlineExpired = mach_absolute_time() >= msg.deadline
+            let deny = !deadlineExpired && NickSignalProtectionPolicy.shouldDeny(
+                signal: signalNumber,
+                targetIdentity: targetIdentity,
+                senderIdentity: senderIdentity,
+                senderNickIdentityValidated: senderNickValidated
+            )
+            esClient?.respond(to: message, allow: !deny)
+            if deny {
+                dispatchQueue.async { [weak self] in
+                    let event = ESEvent(
+                        eventType: .notifyWrite,
+                        processPath: senderPath,
+                        pid: senderPID,
+                        parentPid: parentPid,
+                        filePath: targetPath,
+                        decision: .deny,
+                        threat: .init(
+                            threatName: "Attempt to terminate Nick was blocked",
+                            threatFamily: "tamper",
+                            isCodeSigned: senderIdentity.isValidIdentitySignature,
+                            teamID: senderIdentity.teamID,
+                            signingID: senderIdentity.signingID,
+                            metadata: [
+                                "signal": String(signalNumber),
+                                "targetPID": String(targetPID),
+                                "senderPID": String(senderPID),
+                                "senderPath": senderPath,
+                                "reason": "nick_signal_denied"
+                            ]
+                        )
+                    )
+                    if let data = try? self?.encoder.encode(event) {
+                        self?.xpcServer?.sendThreatToApp(data)
+                    }
+                }
+            }
 
         // MARK: AUTH_EXEC — block known-bad binaries on execution
 
@@ -821,7 +890,181 @@ final class ESEventHandler {
             // Phase 6: mark process exit in tree
             let exitCode: Int32 = 0  // exit code not provided by notify_exit in this binding
             processTree?.recordExit(pid: pid, exitCode: exitCode)
-            // Exits reclaim the behavioural timeline; they are not alerts.
+            if tamperActorIdentity.teamID == TamperProtectionPolicy.nickTeamID,
+               tamperActorIdentity.isValidIdentitySignature,
+               tamperActorIdentity.signingID == "com.ehsanazish.nick" {
+                let exit = intentionalAppExitRegistry?.consume(pid: pid)
+                    ?? (intentional: false, signal: nil)
+                if !exit.intentional {
+                    let signal = exit.signal
+                    dispatchQueue.async { [weak self] in
+                        let event = ESEvent(
+                            eventType: .notifyExit,
+                            processPath: processPath,
+                            pid: pid,
+                            parentPid: parentPid,
+                            filePath: nil,
+                            decision: .notApplicable,
+                            threat: .init(
+                                threatName: "Nick was terminated unexpectedly",
+                                threatFamily: "tamper",
+                                isCodeSigned: true,
+                                teamID: tamperActorIdentity.teamID,
+                                signingID: tamperActorIdentity.signingID,
+                                metadata: [
+                                    "reason": "nick_unexpected_exit",
+                                    "killerPID": signal.map { String($0.senderPID) } ?? "unknown",
+                                    "killerPath": signal?.senderPath ?? "unknown",
+                                    "signal": signal.map { String($0.signal) } ?? "unknown"
+                                ]
+                            )
+                        )
+                        if let data = try? self?.encoder.encode(event) {
+                            self?.xpcServer?.sendThreatToApp(data)
+                        }
+                    }
+                }
+            }
+
+        case ES_EVENT_TYPE_NOTIFY_SIGNAL:
+            // AUTH_SIGNAL owns enforcement and durable denial evidence. Keep
+            // the notify subscription so permitted root/platform signals can
+            // be correlated with a subsequent unexpected app exit in field logs.
+            let signalEvent = msg.event.signal
+            let targetPID = audit_token_to_pid(signalEvent.target.pointee.audit_token)
+            let sender = (msg.version >= 9 ? signalEvent.instigator : nil)?.pointee ?? process
+            intentionalAppExitRegistry?.recordSignal(
+                targetPID: targetPID,
+                context: .init(
+                    senderPID: audit_token_to_pid(sender.audit_token),
+                    senderPath: esString(sender.executable.pointee.path),
+                    signal: Int32(signalEvent.sig),
+                    observedAt: Date()
+                )
+            )
+
+        // MARK: Apple-provided security signals
+
+        case ES_EVENT_TYPE_NOTIFY_XP_MALWARE_DETECTED:
+            let detected = msg.event.xp_malware_detected.pointee
+            let malware = esString(detected.malware_identifier)
+            reportAppleSecurityEvent(
+                type: .notifyXProtectMalwareDetected,
+                actorPath: processPath,
+                actorPID: pid,
+                parentPID: parentPid,
+                responsiblePID: responsiblePid,
+                filePath: esString(detected.detected_path),
+                title: malware.isEmpty ? "XProtect detected malware" : "XProtect detected \(malware)",
+                family: "apple-xprotect",
+                ruleTier: "protected",
+                metadata: [
+                    "appleEvent": "xprotect-malware-detected",
+                    "signatureVersion": esString(detected.signature_version),
+                    "incidentIdentifier": esString(detected.incident_identifier)
+                ]
+            )
+
+        case ES_EVENT_TYPE_NOTIFY_XP_MALWARE_REMEDIATED:
+            let remediated = msg.event.xp_malware_remediated.pointee
+            let malware = esString(remediated.malware_identifier)
+            let remediatedPID = remediated.remediated_process_audit_token.map {
+                audit_token_to_pid($0.pointee)
+            }
+            reportAppleSecurityEvent(
+                type: .notifyXProtectMalwareRemediated,
+                actorPath: processPath,
+                actorPID: pid,
+                parentPID: parentPid,
+                responsiblePID: remediatedPID ?? responsiblePid,
+                filePath: esString(remediated.remediated_path),
+                title: malware.isEmpty ? "XProtect remediation reported" : "XProtect remediated \(malware)",
+                family: "apple-xprotect",
+                ruleTier: "review",
+                metadata: [
+                    "appleEvent": "xprotect-malware-remediated",
+                    "signatureVersion": esString(remediated.signature_version),
+                    "incidentIdentifier": esString(remediated.incident_identifier),
+                    "remediationAction": esString(remediated.action_type),
+                    "remediationSucceeded": remediated.success ? "true" : "false",
+                    "remediationResult": esString(remediated.result_description)
+                ]
+            )
+
+        case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD:
+            let event = msg.event.btm_launch_item_add.pointee
+            let actor = event.instigator
+            let actorPID = actor.map { audit_token_to_pid($0.pointee.audit_token) } ?? pid
+            let actorPath = actor.map { esString($0.pointee.executable.pointee.path) } ?? processPath
+            let actorParentPID = actor.map { audit_token_to_pid($0.pointee.parent_audit_token) } ?? parentPid
+            let appPID = event.app.map { audit_token_to_pid($0.pointee.audit_token) }
+            let item = event.item.pointee
+            reportAppleSecurityEvent(
+                type: .notifyBTMLaunchItemAdd,
+                actorPath: actorPath,
+                actorPID: actorPID,
+                parentPID: actorParentPID,
+                responsiblePID: appPID,
+                filePath: esString(event.executable_path),
+                title: "Background item added",
+                family: "apple-background-task-management",
+                ruleTier: "review",
+                metadata: [
+                    "appleEvent": "background-item-added",
+                    "itemURL": esString(item.item_url),
+                    "appURL": esString(item.app_url),
+                    "managed": item.managed ? "true" : "false",
+                    "legacy": item.legacy ? "true" : "false"
+                ]
+            )
+
+        case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_REMOVE:
+            let event = msg.event.btm_launch_item_remove.pointee
+            let actor = event.instigator
+            let actorPID = actor.map { audit_token_to_pid($0.pointee.audit_token) } ?? pid
+            let actorPath = actor.map { esString($0.pointee.executable.pointee.path) } ?? processPath
+            let actorParentPID = actor.map { audit_token_to_pid($0.pointee.parent_audit_token) } ?? parentPid
+            let appPID = event.app.map { audit_token_to_pid($0.pointee.audit_token) }
+            let item = event.item.pointee
+            reportAppleSecurityEvent(
+                type: .notifyBTMLaunchItemRemove,
+                actorPath: actorPath,
+                actorPID: actorPID,
+                parentPID: actorParentPID,
+                responsiblePID: appPID,
+                filePath: esString(item.item_url),
+                title: "Background item removed",
+                family: "apple-background-task-management",
+                ruleTier: "review",
+                metadata: [
+                    "appleEvent": "background-item-removed",
+                    "itemURL": esString(item.item_url),
+                    "appURL": esString(item.app_url),
+                    "managed": item.managed ? "true" : "false",
+                    "legacy": item.legacy ? "true" : "false"
+                ]
+            )
+
+        case ES_EVENT_TYPE_NOTIFY_GATEKEEPER_USER_OVERRIDE:
+            let event = msg.event.gatekeeper_user_override.pointee
+            let targetPath: String
+            if event.file_type == ES_GATEKEEPER_USER_OVERRIDE_FILE_TYPE_PATH {
+                targetPath = esString(event.file.file_path)
+            } else {
+                targetPath = esString(event.file.file.pointee.path)
+            }
+            reportAppleSecurityEvent(
+                type: .notifyGatekeeperUserOverride,
+                actorPath: processPath,
+                actorPID: pid,
+                parentPID: parentPid,
+                responsiblePID: responsiblePid,
+                filePath: targetPath,
+                title: "Gatekeeper override used",
+                family: "apple-gatekeeper",
+                ruleTier: "review",
+                metadata: ["appleEvent": "gatekeeper-user-override"]
+            )
 
         // MARK: NOTIFY_MOUNT — Phase 5: scan external volumes
 
@@ -849,15 +1092,34 @@ final class ESEventHandler {
             let appBundleID = tcc.identity_type == ES_TCC_IDENTITY_TYPE_BUNDLE_ID ? identity : ""
             let appPath     = tcc.identity_type == ES_TCC_IDENTITY_TYPE_EXECUTABLE_PATH ? identity : ""
             let isGranted   = (tcc.right == ES_TCC_AUTHORIZATION_RIGHT_ALLOWED)
-
-            if let alert = privacyGuard?.handleTCCChange(
-                service:       service,
-                appBundleID:   appBundleID,
-                appPath:       appPath,
-                accessGranted: isGranted
-            ), let data = try? JSONEncoder().encode(alert) {
-                xpcServer?.sendPrivacyAlertToApp(data)
-            }
+            let instigatorPID = audit_token_to_pid(tcc.instigator_token)
+            let instigatorPath = tcc.instigator.map {
+                esString($0.pointee.executable.pointee.path)
+            } ?? processPath
+            let instigatorParentPID = tcc.instigator.map {
+                audit_token_to_pid($0.pointee.parent_audit_token)
+            } ?? parentPid
+            let tccResponsiblePID = tcc.responsible_token.map {
+                audit_token_to_pid($0.pointee)
+            } ?? responsiblePid
+            reportAppleSecurityEvent(
+                type: .notifyTCCModify,
+                actorPath: instigatorPath,
+                actorPID: instigatorPID,
+                parentPID: instigatorParentPID,
+                responsiblePID: tccResponsiblePID,
+                filePath: appPath.isEmpty ? nil : appPath,
+                title: "Privacy permission \(isGranted ? "granted" : "revoked")",
+                family: "apple-tcc",
+                ruleTier: "review",
+                metadata: [
+                    "appleEvent": "tcc-permission-modified",
+                    "service": service,
+                    "appBundleID": appBundleID,
+                    "appPath": appPath,
+                    "changeType": isGranted ? "granted" : "revoked"
+                ]
+            )
 
         default:
             // For any unhandled AUTH event, allow immediately.
@@ -865,6 +1127,48 @@ final class ESEventHandler {
                 esClient?.respond(to: message, allow: true)
             }
         }
+    }
+
+    /// Converts Apple-authored Endpoint Security notifications into the same
+    /// durable finding channel used by Nick's detectors. Attribution is
+    /// captured here, while the process ancestry is still available.
+    private func reportAppleSecurityEvent(
+        type: ESEventType,
+        actorPath: String,
+        actorPID: Int32,
+        parentPID: Int32,
+        responsiblePID: Int32?,
+        filePath: String?,
+        title: String,
+        family: String,
+        ruleTier: String,
+        metadata: [String: String]
+    ) {
+        var evidence = metadata
+        evidence["reason"] = metadata["appleEvent"] ?? "apple-security-event"
+        evidence["rule"] = metadata["appleEvent"] ?? "apple-security-event"
+        evidence["ruleTier"] = ruleTier
+        evidence["detectionKind"] = "apple-security-event"
+        if let attribution = processTree?.responsibleApp(
+            actorPID: actorPID,
+            responsiblePID: responsiblePID,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        ) {
+            evidence.merge(attribution.metadata) { current, _ in current }
+        }
+        reportThreat(ESEvent(
+            eventType: type,
+            processPath: actorPath,
+            pid: actorPID,
+            parentPid: parentPID,
+            filePath: filePath,
+            decision: .notApplicable,
+            threat: ESEvent.ThreatContext(
+                threatName: title,
+                threatFamily: family,
+                metadata: evidence
+            )
+        ))
     }
 
     private let ransomwareReportLock = NSLock()

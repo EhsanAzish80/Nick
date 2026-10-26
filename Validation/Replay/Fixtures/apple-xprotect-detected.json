@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "eventType": "NOTIFY_XP_MALWARE_DETECTED",
+  "processPath": "/usr/libexec/XProtectRemediator",
+  "pid": 700,
+  "parentPid": 1,
+  "filePath": "/tmp/NickReplay/eicar.com",
+  "decision": "notApplicable",
+  "threatName": "XProtect detected EICAR test file",
+  "threatFamily": "apple-xprotect",
+  "metadata": {
+    "appleEvent": "xprotect-malware-detected",
+    "reason": "xprotect-malware-detected",
+    "rule": "xprotect-malware-detected",
+    "ruleTier": "protected",
+    "responsibleAppName": "macOS XProtect",
+    "responsibleAppSigning": "Apple platform",
+    "responsibleChain": "macOS XProtect"
+  }
+}

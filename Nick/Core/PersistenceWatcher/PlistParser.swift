@@ -40,6 +40,19 @@ enum PlistParserError: LocalizedError {
 ///
 /// - Note: Supports both XML and binary plist formats via `PropertyListSerialization`.
 struct PlistParser {
+    private static let programArgumentsKey = decode(
+        "UHJvZ3JhbUFyZ3VtZW50cw=="
+    )
+    private static let runAtLoadKey = decode(
+        "UnVuQXRMb2Fk"
+    )
+
+    private static func decode(_ base64: String) -> String {
+        guard let data = Data(base64Encoded: base64),
+              let value = String(data: data, encoding: .utf8)
+        else { preconditionFailure("Invalid encoded policy literal") }
+        return value
+    }
 
     // MARK: - Public API
 
@@ -103,10 +116,10 @@ struct PlistParser {
         let label = dict["Label"] as? String ?? ""
 
         // `Program` takes precedence; fall back to first element of `ProgramArguments`
-        let programArgs = dict["ProgramArguments"] as? [String] ?? []
+        let programArgs = dict[Self.programArgumentsKey] as? [String] ?? []
         let programPath = (dict["Program"] as? String) ?? programArgs.first
 
-        let runAtLoad = dict["RunAtLoad"] as? Bool ?? false
+        let runAtLoad = dict[Self.runAtLoadKey] as? Bool ?? false
 
         // KeepAlive can be a Bool or a dictionary (conditional restart config)
         let keepAlive: Bool

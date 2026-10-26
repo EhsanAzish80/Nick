@@ -137,6 +137,12 @@ public enum ESEventType: String, Codable, Sendable {
     case notifyFork  = "NOTIFY_FORK"
     case notifyExit  = "NOTIFY_EXIT"
     case notifyWrite = "NOTIFY_WRITE"
+    case notifyXProtectMalwareDetected = "NOTIFY_XP_MALWARE_DETECTED"
+    case notifyXProtectMalwareRemediated = "NOTIFY_XP_MALWARE_REMEDIATED"
+    case notifyBTMLaunchItemAdd = "NOTIFY_BTM_LAUNCH_ITEM_ADD"
+    case notifyBTMLaunchItemRemove = "NOTIFY_BTM_LAUNCH_ITEM_REMOVE"
+    case notifyGatekeeperUserOverride = "NOTIFY_GATEKEEPER_USER_OVERRIDE"
+    case notifyTCCModify = "NOTIFY_TCC_MODIFY"
     case unknown     = "UNKNOWN"
 }
 

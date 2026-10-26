@@ -179,9 +179,11 @@ public final class ExtensionXPCClient: NSObject {
     private var incidentBootstrapCompleted = false
     private var bootstrapLegacyPayload: Data?
     private var bootstrapCompletion: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)?
-    private var bootstrapReconnectTask: Task<Void, Never>?
-    private var bootstrapReconnectAttempt = 0
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectAttempt = 0
     private var healthRefreshTask: Task<Void, Never>?
+    private var lastHealthyExtensionTime: Date?
+    private var lastProtectionGapObservationAt: Date?
     /// Deterministic persistence completion seam used by unit tests. Production
     /// always uses the privileged XPC write/reply path.
     var incidentPersistenceOverride: ((UInt64) async -> (UInt64, Bool)?)?
@@ -205,7 +207,7 @@ public final class ExtensionXPCClient: NSObject {
             incidentBootstrapCompleted = false
             bootstrapLegacyPayload = legacyIncidentPayload
             bootstrapCompletion = incidentStoreReady
-            bootstrapReconnectAttempt = 0
+            reconnectAttempt = 0
             if isConnected {
                 bootstrapIncidentStore(
                     legacyPayload: legacyIncidentPayload,
@@ -217,12 +219,12 @@ public final class ExtensionXPCClient: NSObject {
         incidentBootstrapCompleted = false
         bootstrapLegacyPayload = legacyIncidentPayload
         bootstrapCompletion = incidentStoreReady
-        bootstrapReconnectAttempt = 0
+        reconnectAttempt = 0
         openConnection()
     }
 
     private func openConnection() {
-        guard connection == nil, !incidentBootstrapCompleted else { return }
+        guard connection == nil else { return }
 
         let conn = NSXPCConnection(machServiceName: NickExtensionConstants.machServiceName)
 
@@ -239,9 +241,8 @@ public final class ExtensionXPCClient: NSObject {
                 Self.logger.warning("XPC connection to extension invalidated")
                 self.isConnected = false
                 self.connection = nil
-                if !self.incidentBootstrapCompleted {
-                    self.scheduleBootstrapReconnect()
-                }
+                self.recordAppObservedProtectionGap(reason: "Endpoint Security connection invalidated")
+                self.scheduleReconnect()
             }
         }
         conn.interruptionHandler = { [weak self] in
@@ -249,9 +250,8 @@ public final class ExtensionXPCClient: NSObject {
                 guard let self else { return }
                 Self.logger.warning("XPC connection to extension interrupted — extension may have crashed")
                 self.isConnected = false
-                if !self.incidentBootstrapCompleted {
-                    self.scheduleBootstrapReconnect()
-                }
+                self.recordAppObservedProtectionGap(reason: "Endpoint Security connection interrupted")
+                self.scheduleReconnect()
             }
         }
 
@@ -266,13 +266,12 @@ public final class ExtensionXPCClient: NSObject {
         let errorHandler: @Sendable (Error) -> Void = { [weak self] error in
             Self.logger.warning("Extension status verification failed: \(error.localizedDescription)")
             Task { @MainActor [weak self] in
-                guard let self, !self.incidentBootstrapCompleted else { return }
-                self.scheduleBootstrapReconnect()
+                self?.scheduleReconnect()
             }
         }
         guard let proxy = conn.remoteObjectProxyWithErrorHandler(errorHandler)
             as? NickExtensionXPCProtocol else {
-            scheduleBootstrapReconnect()
+            scheduleReconnect()
             return
         }
         let statusReply: @Sendable (Bool) -> Void = { [weak self] active in
@@ -280,15 +279,24 @@ public final class ExtensionXPCClient: NSObject {
                 self?.isConnected = active
                 Self.logger.info("Verified extension status: isActive=\(active)")
                 if active {
+                    self?.reconnectAttempt = 0
+                    self?.reconnectTask?.cancel()
+                    self?.reconnectTask = nil
+                    self?.drainAppObservedProtectionGaps()
                     self?.startHealthRefresh()
                     self?.loadPersistedEvents()
                     self?.loadPendingFIMViolations()
-                    self?.bootstrapIncidentStore(
-                        legacyPayload: self?.bootstrapLegacyPayload,
-                        completion: self?.bootstrapCompletion
-                    )
+                    if self?.incidentBootstrapCompleted == true {
+                        self?.drainIncidentStoreWrites()
+                        self?.flushSecuritySettingsIfNeeded()
+                    } else {
+                        self?.bootstrapIncidentStore(
+                            legacyPayload: self?.bootstrapLegacyPayload,
+                            completion: self?.bootstrapCompletion
+                        )
+                    }
                 } else {
-                    self?.scheduleBootstrapReconnect()
+                    self?.scheduleReconnect()
                 }
             }
         }
@@ -308,6 +316,7 @@ public final class ExtensionXPCClient: NSObject {
     public func refreshExtensionHealth() async {
         guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
             extensionHealth = nil
+            recordAppObservedProtectionGap(reason: "Endpoint Security heartbeat unavailable")
             return
         }
         let data: Data = await withCheckedContinuation { continuation in
@@ -316,6 +325,73 @@ public final class ExtensionXPCClient: NSObject {
         extensionHealth = data.isEmpty
             ? nil
             : (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let updatedAt = extensionHealth?["updatedAt"] as? TimeInterval
+        let healthy = extensionHealth?["active"] as? Bool == true
+            && updatedAt.map { Date().timeIntervalSince1970 - $0 <= 30 } == true
+        if healthy {
+            lastHealthyExtensionTime = updatedAt.map { Date(timeIntervalSince1970: $0) } ?? Date()
+        } else {
+            recordAppObservedProtectionGap(reason: "Endpoint Security heartbeat is stale or missing")
+        }
+    }
+
+    private var protectionObservationJournalURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return base.appendingPathComponent("com.ehsanazish.nick/protection-observations.json")
+    }
+
+    private func recordAppObservedProtectionGap(reason: String) {
+        let now = Date()
+        if let lastProtectionGapObservationAt,
+           now.timeIntervalSince(lastProtectionGapObservationAt) < 300 { return }
+        lastProtectionGapObservationAt = now
+        var observations = loadAppObservedProtectionGaps()
+        observations.append(.init(
+            id: UUID(), observedAt: now, lastHealthyAt: lastHealthyExtensionTime,
+            reason: String(reason.prefix(160))
+        ))
+        observations = Array(observations.suffix(32))
+        do {
+            let url = protectionObservationJournalURL
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try JSONEncoder().encode(observations).write(to: url, options: .atomic)
+        } catch {
+            Self.logger.error("Could not write protection observation journal: \(error.localizedDescription)")
+        }
+        Task { await NotificationManager.shared.sendProtectionUnavailable() }
+    }
+
+    private func loadAppObservedProtectionGaps() -> [AppObservedProtectionGap] {
+        guard let data = try? Data(contentsOf: protectionObservationJournalURL) else { return [] }
+        return (try? JSONDecoder().decode([AppObservedProtectionGap].self, from: data)) ?? []
+    }
+
+    private func drainAppObservedProtectionGaps() {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return }
+        let observations = loadAppObservedProtectionGaps()
+        guard !observations.isEmpty else { return }
+        let url = protectionObservationJournalURL
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var accepted = Set<UUID>()
+        for observation in observations {
+            guard let payload = try? JSONEncoder().encode(observation) else { continue }
+            group.enter()
+            proxy.ingestAppObservedProtectionGap(payload) { success in
+                if success { lock.withLock { _ = accepted.insert(observation.id) } }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            let remaining = observations.filter { !accepted.contains($0.id) }
+            if remaining.isEmpty {
+                try? FileManager.default.removeItem(at: url)
+            } else if let data = try? JSONEncoder().encode(remaining) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
     }
 
     private func loadPendingFIMViolations() {
@@ -383,27 +459,30 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    private func scheduleBootstrapReconnect() {
-        guard !incidentBootstrapCompleted, bootstrapReconnectTask == nil else { return }
-        guard bootstrapReconnectAttempt < 12 else {
+    private func scheduleReconnect() {
+        guard reconnectTask == nil else { return }
+        guard incidentBootstrapCompleted || reconnectAttempt < 12 else {
             Self.logger.error("Incident-store bootstrap failed after repeated XPC reconnects")
             finishIncidentBootstrap(record: nil, migrated: false)
             return
         }
 
-        bootstrapReconnectAttempt += 1
-        let delayNanoseconds = UInt64(min(bootstrapReconnectAttempt, 4)) * 500_000_000
+        reconnectAttempt += 1
+        let delayNanoseconds = UInt64(min(reconnectAttempt, 4)) * 500_000_000
+        isConnected = false
+        healthRefreshTask?.cancel()
+        healthRefreshTask = nil
         connection?.invalidationHandler = nil
         connection?.interruptionHandler = nil
         connection?.invalidate()
         connection = nil
 
-        bootstrapReconnectTask = Task { @MainActor [weak self] in
+        reconnectTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard let self, !Task.isCancelled, !self.incidentBootstrapCompleted else { return }
-            self.bootstrapReconnectTask = nil
+            guard let self, !Task.isCancelled else { return }
+            self.reconnectTask = nil
             Self.logger.notice(
-                "Retrying incident-store bootstrap after extension replacement (attempt \(self.bootstrapReconnectAttempt))"
+                "Retrying XPC connection after extension replacement (attempt \(self.reconnectAttempt))"
             )
             self.openConnection()
         }
@@ -415,8 +494,8 @@ public final class ExtensionXPCClient: NSObject {
     ) {
         guard !incidentBootstrapCompleted else { return }
         incidentBootstrapCompleted = true
-        bootstrapReconnectTask?.cancel()
-        bootstrapReconnectTask = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
         let completion = bootstrapCompletion
         bootstrapCompletion = nil
         bootstrapLegacyPayload = nil
@@ -430,12 +509,12 @@ public final class ExtensionXPCClient: NSObject {
         let errorHandler: @Sendable (Error) -> Void = { [weak self] error in
             Self.logger.warning("Incident-store bootstrap failed: \(error.localizedDescription)")
             Task { @MainActor [weak self] in
-                self?.scheduleBootstrapReconnect()
+                self?.scheduleReconnect()
             }
         }
         guard let proxy = connection?.remoteObjectProxyWithErrorHandler(errorHandler)
             as? NickExtensionXPCProtocol else {
-            scheduleBootstrapReconnect()
+            scheduleReconnect()
             return
         }
         proxy.getIncidentStore { [weak self] data in
@@ -704,6 +783,56 @@ public final class ExtensionXPCClient: NSObject {
         return completed && reply.value()
     }
 
+    /// Records durable evidence and a clean-stop marker before an authorized
+    /// system-extension deactivation request is submitted to macOS.
+    func recordAuthorizedProtectionStopSynchronously(
+        reason: String,
+        timeout: TimeInterval = 15
+    ) -> Bool {
+        guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+            Self.logger.error("Protection stop XPC failed: \(error.localizedDescription, privacy: .public)")
+        }) as? NickExtensionXPCProtocol,
+              let authorization = requestProtectionModificationAuthorization()
+        else { return false }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let reply = UpdateLeaseReplyBox()
+        proxy.recordAuthorizedProtectionStop(
+            reason: String(reason.prefix(160)),
+            authorizationExternalForm: authorization
+        ) { accepted in
+            reply.set(accepted)
+            semaphore.signal()
+        }
+        let completed = semaphore.wait(timeout: .now() + timeout) == .success
+        finishProtectionAuthorization(authorization)
+        return completed && reply.value()
+    }
+
+    func recordIntentionalAppExitSynchronously(
+        reason: String,
+        timeout: TimeInterval = 2
+    ) -> Bool {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else { return false }
+        let semaphore = DispatchSemaphore(value: 0)
+        let reply = UpdateLeaseReplyBox()
+        proxy.recordIntentionalAppExit(
+            pid: getpid(), reason: String(reason.prefix(160))
+        ) { accepted in
+            reply.set(accepted)
+            semaphore.signal()
+        }
+        return semaphore.wait(timeout: .now() + timeout) == .success && reply.value()
+    }
+
+    func ingestAppObservedProtectionGap(_ payload: Data, completion: @escaping (Bool) -> Void) {
+        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+            completion(false)
+            return
+        }
+        proxy.ingestAppObservedProtectionGap(payload, reply: completion)
+    }
+
     private func finishProtectionAuthorization(_ externalForm: Data?) {
         guard let externalForm,
               let authorization = activeProtectionAuthorizations.removeValue(forKey: externalForm)
@@ -713,15 +842,15 @@ public final class ExtensionXPCClient: NSObject {
 
     /// Closes the XPC connection.
     public func disconnect() {
-        bootstrapReconnectTask?.cancel()
-        bootstrapReconnectTask = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
         connection?.invalidate()
         connection  = nil
         isConnected = false
         incidentBootstrapCompleted = false
         bootstrapLegacyPayload = nil
         bootstrapCompletion = nil
-        bootstrapReconnectAttempt = 0
+        reconnectAttempt = 0
         for authorization in activeProtectionAuthorizations.values {
             AuthorizationFree(authorization, [.destroyRights])
         }
@@ -1087,6 +1216,16 @@ public final class ExtensionXPCClient: NSObject {
     }
 
 #if DEBUG
+    var reconnectScheduledForTesting: Bool { reconnectTask != nil }
+
+    /// Reproduces a post-bootstrap interruption without requiring a live
+    /// system extension. Reconnection must remain enabled after startup.
+    func simulateEstablishedConnectionLossForTesting(previousAttempts: Int = 20) {
+        incidentBootstrapCompleted = true
+        reconnectAttempt = previousAttempts
+        scheduleReconnect()
+    }
+
     public func debugSendNeverAuthorizedProtectionCall(
         completion: @escaping @MainActor @Sendable (DebugAuthorizationHarnessResult) -> Void
     ) {
@@ -1167,6 +1306,7 @@ struct ExtensionFinding: Sendable {
         let isNickMaintenance = event.threatFamily == "nick-maintenance"
         let isDocumentedUninstall = event.threatFamily == "nick-documented-uninstall"
         let isManagementObservation = event.threatFamily == "endpoint-management"
+        let isAppleReviewEvent = event.metadata?["ruleTier"] == "review"
         let isRansomwareBehavior = event.metadata?["detectionKind"] == "ransomware-behavior"
         let isLOLBinBehavior = event.metadata?["detectionKind"] == "lolbin-behavior"
         let severity: SignalSeverity
@@ -1174,6 +1314,8 @@ struct ExtensionFinding: Sendable {
             severity = .critical
         } else if isManagementObservation || isNickMaintenance || isDocumentedUninstall {
             severity = .info
+        } else if isAppleReviewEvent {
+            severity = .medium
         } else if isLOLBinBehavior {
             switch event.metadata?["signalSeverity"] {
             case "critical": severity = .critical
@@ -1204,7 +1346,7 @@ struct ExtensionFinding: Sendable {
         )
         let isAuditEvent = isManagementObservation || isNickMaintenance || isDocumentedUninstall
         let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : ((isRansomwareBehavior || isLOLBinBehavior) ? "behavior" : "signature"))
-        let ruleTier = isAuditEvent ? "review" : "protected"
+        let ruleTier = event.metadata?["ruleTier"] ?? (isAuditEvent ? "review" : "protected")
         var metadata = [
             "reason": isTamper
                 ? "endpoint_tamper_observed"
@@ -1262,8 +1404,8 @@ struct ExtensionFinding: Sendable {
                 metadata: metadata
             )
         )
-        score = event.decision == .deny ? 0.98 : (isAuditEvent ? 0.1 : 0.9)
-        recommendedAction = isAuditEvent
+        score = event.decision == .deny ? 0.98 : ((isAuditEvent || isAppleReviewEvent) ? 0.35 : 0.9)
+        recommendedAction = (isAuditEvent || isAppleReviewEvent)
             ? "No action is needed if you ran this command."
             : "Review the event and investigate it if you do not recognise the activity."
     }
@@ -1276,6 +1418,24 @@ struct ExtensionFinding: Sendable {
         isDocumentedUninstall: Bool,
         isLOLBinBehavior: Bool
     ) -> String {
+        switch event.metadata?["appleEvent"] {
+        case "xprotect-malware-detected":
+            return "Apple XProtect detected known malware at the recorded path."
+        case "xprotect-malware-remediated":
+            return event.metadata?["remediationSucceeded"] == "true"
+                ? "Apple XProtect reports that it remediated the detected malware."
+                : "Apple XProtect attempted remediation but reported that it did not complete."
+        case "background-item-added":
+            return "macOS recorded a background item being added. Review it if you did not expect this change."
+        case "background-item-removed":
+            return "macOS recorded a background item being removed."
+        case "gatekeeper-user-override":
+            return "A user overrode Gatekeeper for this item. Review the item before opening it again."
+        case "tcc-permission-modified":
+            return "macOS recorded a privacy-permission change for the identified app."
+        default:
+            break
+        }
         if isManagementObservation {
             return "Nick observed routine use of Apple's system-extension management tool."
         }

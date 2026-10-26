@@ -24,7 +24,7 @@ struct SimpleActivityView: View {
             alerts: SimpleActivityFeed.alertInputs(
                 from: engine.alerts,
                 actionable: actionable,
-                incidents: engine.incidentStore.incidents
+                incidents: engine.visibleIncidents
             ),
             quarantine: xpcClient.quarantineRecords,
             blocked: SimpleActivityFeed.blockedInputs(

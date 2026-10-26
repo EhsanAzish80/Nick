@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "handling": "inert-hash-or-static-sample-only",
+  "deduplication": "sha256",
+  "families": [],
+  "status": "not measured",
+  "reason": "No external corpus has completed licence and handling review."
+}

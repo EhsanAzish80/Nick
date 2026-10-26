@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "eventType": "NOTIFY_BTM_LAUNCH_ITEM_REMOVE",
+  "processPath": "/Applications/Fixture.app/Contents/MacOS/Fixture",
+  "pid": 701,
+  "parentPid": 1,
+  "filePath": "/Library/LaunchAgents/example.fixture.plist",
+  "decision": "notApplicable",
+  "threatName": "Background item removed",
+  "threatFamily": "apple-background-task-management",
+  "metadata": {
+    "appleEvent": "background-item-removed",
+    "reason": "background-item-removed",
+    "rule": "background-item-removed",
+    "ruleTier": "review",
+    "responsibleAppName": "Fixture",
+    "responsibleAppBundleID": "test.nick.fixture",
+    "responsibleAppSigning": "Signed",
+    "responsibleChain": "Fixture"
+  }
+}

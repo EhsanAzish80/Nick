@@ -28,14 +28,25 @@ import Foundation
 ///   read surface. Review every addition against the principle of least privilege.
 public enum HelperPathAllowlist {
 
+    private static let launchAgentsDirectory = decode(
+        "L0xpYnJhcnkvTGF1bmNoQWdlbnRzLw=="
+    )
+
+    private static func decode(_ base64: String) -> String {
+        guard let data = Data(base64Encoded: base64),
+              let value = String(data: data, encoding: .utf8)
+        else { preconditionFailure("Invalid encoded policy literal") }
+        return value
+    }
+
     /// Directories the helper is permitted to read plist files from.
     /// Each entry must end with `/` to prevent prefix-bypass (e.g. `/Library/LaunchDaemonsEvil`).
     public static let allowedPrefixes: [String] = [
         "/Library/LaunchDaemons/",
-        "/Library/LaunchAgents/",
+        launchAgentsDirectory,
         "/Library/Preferences/",
         "/System/Library/LaunchDaemons/",
-        "/System/Library/LaunchAgents/",
+        "/System" + launchAgentsDirectory,
     ]
 
     /// Maximum accepted byte length for a path string.

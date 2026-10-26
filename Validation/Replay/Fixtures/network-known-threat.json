@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "host": "malware.invalid",
+  "appIdentifier": "com.example.fixture",
+  "decision": "observed",
+  "reason": "knownThreat",
+  "reasonTitle": "Known dangerous destination",
+  "port": 443
+}

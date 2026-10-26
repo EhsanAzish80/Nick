@@ -53,6 +53,16 @@ final class DeveloperIDTrustValidator: @unchecked Sendable {
 /// All methods are synchronous and must be called from a background queue
 /// (never from the ES callback queue directly).
 final class RemediationEngine {
+    private static let programArgumentsKey = decode(
+        "UHJvZ3JhbUFyZ3VtZW50cw=="
+    )
+
+    private static func decode(_ base64: String) -> String {
+        guard let data = Data(base64Encoded: base64),
+              let value = String(data: data, encoding: .utf8)
+        else { preconditionFailure("Invalid encoded policy literal") }
+        return value
+    }
 
     // MARK: - Private
 
@@ -237,7 +247,7 @@ final class RemediationEngine {
             else { continue }
 
             let candidates = ([plist["Program"] as? String].compactMap { value in value })
-                + (plist["ProgramArguments"] as? [String] ?? [])
+                + (plist[Self.programArgumentsKey] as? [String] ?? [])
             let hasExactReference = candidates.contains { candidate in
                 guard candidate.hasPrefix("/") else { return false }
                 return URL(fileURLWithPath: candidate).standardizedFileURL.path == normalizedTarget

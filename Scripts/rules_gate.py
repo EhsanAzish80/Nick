@@ -13,6 +13,11 @@ Quality gate for Nick's bundled YARA rules.
         fail if any class="signature" rule matches. Behaviour-rule matches are
         reported per rule so noisy heuristics are visible in review.
 
+  product
+        Scan every executable built product and fail on any YARA match. This
+        prevents production policy/test-fixture strings from becoming matches
+        inside Nick's own app, extensions, helpers, or test bundles.
+
 Requires yara-python (pip install yara-python==4.5.4), which bundles the same
 libyara 4.5.x release Nick vendors.
 """
@@ -158,6 +163,32 @@ def fp(roots, max_files, size_limit, write_report, time_limit_seconds):
     return 1 if signature_hits or timed_out else 0
 
 
+def product(roots, size_limit):
+    rules, _ = compile_rules()
+    matches, scanned = [], 0
+    for root in roots:
+        if not os.path.exists(root):
+            print(f"error: built-product root does not exist: {root}", file=sys.stderr)
+            return 1
+        for base, dirs, names in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in (".git",)]
+            for name in names:
+                path = os.path.join(base, name)
+                if not is_candidate(path, size_limit):
+                    continue
+                scanned += 1
+                try:
+                    for match in rules.match(path, timeout=10, fast=True):
+                        matches.append((match.rule, path))
+                except yara.Error as error:
+                    print(f"error: could not scan built product {path}: {error}", file=sys.stderr)
+                    return 1
+    print(f"Scanned {scanned} built-product executable(s).")
+    for rule, path in matches:
+        print(f"error: rule {rule} matched built product {path}", file=sys.stderr)
+    return 1 if matches else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -170,9 +201,15 @@ def main():
                      help="fail after this many seconds (0 disables the limit)")
     fpp.add_argument("--report", action="store_true",
                      help="write yara-fp-report.json in the repository root")
+    product_parser = sub.add_parser("product")
+    product_parser.add_argument("--root", action="append", required=True,
+                                help="built-product root (repeatable)")
+    product_parser.add_argument("--size-limit-mb", type=int, default=100)
     args = parser.parse_args()
     if args.command == "lint":
         return lint()
+    if args.command == "product":
+        return product(args.root, args.size_limit_mb * 1024 * 1024)
     return fp(args.root or DEFAULT_CORPUS, args.max_files, args.size_limit_mb * 1024 * 1024,
               args.report, args.time_limit_seconds)
 

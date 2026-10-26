@@ -272,6 +272,12 @@ private struct EventRow: View {
         case .notifyFork:  return "arrow.branch"
         case .notifyExit:  return "stop.circle"
         case .notifyOpen:  return "eye"
+        case .notifyXProtectMalwareDetected: return "shield.lefthalf.filled.badge.checkmark"
+        case .notifyXProtectMalwareRemediated: return "checkmark.shield"
+        case .notifyBTMLaunchItemAdd: return "plus.app"
+        case .notifyBTMLaunchItemRemove: return "minus.circle"
+        case .notifyGatekeeperUserOverride: return "lock.open.trianglebadge.exclamationmark"
+        case .notifyTCCModify: return "hand.raised"
         case .unknown:     return "questionmark.circle"
         }
     }

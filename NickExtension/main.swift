@@ -160,6 +160,10 @@ let usbScanner   = USBScanner(fileScanner: fileScanner)
 let processTree = ProcessTree()
 let tamperProtection = TamperProtection()
 let updateLeaseManager = NickUpdateLeaseManager()
+let protectionContinuityLedger = ProtectionContinuityLedger(
+    url: URL(fileURLWithPath: supportDir + "/state/protection-continuity.json")
+)
+let intentionalAppExitRegistry = IntentionalAppExitRegistry()
 
 // MARK: Phase 6 — Email attachment monitoring
 
@@ -185,7 +189,45 @@ eventHandler.processTree             = processTree
 eventHandler.emailAttachmentMonitor  = emailAttachmentMonitor
 eventHandler.tamperProtection        = tamperProtection
 eventHandler.updateLeaseManager      = updateLeaseManager
+eventHandler.intentionalAppExitRegistry = intentionalAppExitRegistry
 xpcServer.updateLeaseManager         = updateLeaseManager
+ESXPCServer.protectionContinuityLedgerRef = protectionContinuityLedger
+ESXPCServer.intentionalAppExitRegistryRef = intentionalAppExitRegistry
+
+if let continuityIncident = protectionContinuityLedger.evaluateStart(
+    now: Date(),
+    bootSessionUUID: ProtectionBootIdentity.sessionUUID(),
+    bootTime: ProtectionBootIdentity.bootTime()
+) {
+    let isGap = continuityIncident.kind == .interrupted
+    var metadata: [String: String] = [
+        "trust": "root-observed",
+        "endedAt": ISO8601DateFormatter().string(from: continuityIncident.endedAt),
+        "unobservedWindow": isGap ? "true" : "false",
+        "ruleTier": isGap ? "protected" : "review"
+    ]
+    if let startedAt = continuityIncident.startedAt {
+        metadata["startedAt"] = ISO8601DateFormatter().string(from: startedAt)
+    }
+    if !continuityIncident.appObservations.isEmpty {
+        metadata["appObserved"] = "true"
+        metadata["appObservationCount"] = String(continuityIncident.appObservations.count)
+    }
+    let event = ESEvent(
+        eventType: .notifyWrite,
+        processPath: Bundle.main.executableURL?.path ?? "",
+        pid: 0,
+        parentPid: 0,
+        filePath: nil,
+        decision: .notApplicable,
+        threat: .init(
+            threatName: isGap ? "Protection interrupted" : "Protection resumed after restart",
+            threatFamily: "protection-continuity",
+            metadata: metadata
+        )
+    )
+    if let data = try? JSONEncoder().encode(event) { xpcServer.sendThreatToApp(data) }
+}
 
 updateLeaseManager.onAudit = { audit in
     let event = ESEvent(
@@ -352,6 +394,7 @@ let phase4Events: [es_event_type_t] = [
     ES_EVENT_TYPE_AUTH_CLONE,        // protect Nick bundle destinations from clones
     ES_EVENT_TYPE_AUTH_RENAME,       // protect Nick files from replacement
     ES_EVENT_TYPE_AUTH_UNLINK,       // protect Nick files from deletion
+    ES_EVENT_TYPE_AUTH_SIGNAL,       // protect Nick processes from termination/suspension
 
     // --- NOTIFY (observational) ---
     ES_EVENT_TYPE_NOTIFY_CLOSE,      // one bounded check after a modified file closes
@@ -359,6 +402,14 @@ let phase4Events: [es_event_type_t] = [
     ES_EVENT_TYPE_NOTIFY_UNLINK,     // invalidate cache on delete
     ES_EVENT_TYPE_NOTIFY_FORK,       // process lifecycle
     ES_EVENT_TYPE_NOTIFY_EXIT,       // process lifecycle
+    ES_EVENT_TYPE_NOTIFY_SIGNAL,     // retain allowed killer/sender context
+
+    // --- Apple security signals ---
+    ES_EVENT_TYPE_NOTIFY_XP_MALWARE_DETECTED,
+    ES_EVENT_TYPE_NOTIFY_XP_MALWARE_REMEDIATED,
+    ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD,
+    ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_REMOVE,
+    ES_EVENT_TYPE_NOTIFY_GATEKEEPER_USER_OVERRIDE,
 
     // --- Phase 5: Network & Privacy ---
     ES_EVENT_TYPE_NOTIFY_MOUNT,      // external volume mounted → USB scan
@@ -376,10 +427,22 @@ guard esClient.subscribe(to: phase4Events) else {
 MuteManager.applyMutes(to: esClient)
 
 writeExtensionHealth()
+_ = protectionContinuityLedger.recordHeartbeat(
+    now: Date(), bootSessionUUID: ProtectionBootIdentity.sessionUUID()
+)
 let healthTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
 healthTimer.schedule(deadline: .now() + 10, repeating: 10)
 healthTimer.setEventHandler(handler: writeExtensionHealth)
 healthTimer.resume()
+
+let continuityHeartbeatTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+continuityHeartbeatTimer.schedule(deadline: .now() + 45, repeating: 45)
+continuityHeartbeatTimer.setEventHandler {
+    _ = protectionContinuityLedger.recordHeartbeat(
+        now: Date(), bootSessionUUID: ProtectionBootIdentity.sessionUUID()
+    )
+}
+continuityHeartbeatTimer.resume()
 
 let processTreeTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
 processTreeTimer.schedule(deadline: .now() + 3600, repeating: 3600)

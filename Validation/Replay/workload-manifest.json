@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "minimumActiveHours": 40,
+  "countBy": "incident-deduplication-key",
+  "protectedTierTarget": 0,
+  "reviewTierTarget": 1,
+  "workloads": [
+    {"id":"xcode","name":"Xcode build and test","required":true},
+    {"id":"cmake","name":"CMake configure, build and reconfigure","required":true},
+    {"id":"homebrew","name":"Homebrew update and package maintenance","required":true},
+    {"id":"coding-agent","name":"AI coding agent with ordinary non-shell pipelines","required":true},
+    {"id":"icloud","name":"iCloud Drive synchronization","required":true},
+    {"id":"sparkle","name":"Signed Sparkle update","required":true},
+    {"id":"normal-use","name":"Browser, Mail, Terminal and Finder use","required":true}
+  ]
+}

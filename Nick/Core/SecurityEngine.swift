@@ -390,7 +390,15 @@ final class SecurityEngine {
 
     /// Consumer-facing alerts that still have actionable evidence.
     var activeActionableAlerts: [ThreatAlert] {
-        alerts.filter { displayStatus(for: $0).contributesToProtectionStatus }
+        _ = incidentPresentationRevision
+        return alerts.filter { displayStatus(for: $0).contributesToProtectionStatus }
+    }
+
+    /// Observable projection for views that need incident metadata in addition
+    /// to the alert. Reading IncidentStore directly bypasses Observation.
+    var visibleIncidents: [SecurityIncident] {
+        _ = incidentPresentationRevision
+        return incidentStore.incidents
     }
 
     /// Per-user notification badge count. Seeing an incident clears only this
@@ -410,7 +418,8 @@ final class SecurityEngine {
     }
 
     func incident(for alert: ThreatAlert) -> SecurityIncident? {
-        incidentStore.incidents.first { $0.alert.id == alert.id }
+        _ = incidentPresentationRevision
+        return incidentStore.incidents.first { $0.alert.id == alert.id }
     }
 
     func displayStatus(for alert: ThreatAlert) -> IncidentDisplayStatus {
@@ -437,6 +446,9 @@ final class SecurityEngine {
     let correlator = ThreatCorrelator()
     private(set) var incidentStore = IncidentStore()
     private let incidentSeenStore: IncidentSeenStore
+    /// Invalidates presentation derived from the nested IncidentStore after
+    /// review, allow, dismiss, resolve, remediation, or recurrence mutations.
+    private var incidentPresentationRevision: UInt64 = 0
     /// True only after the authoritative root-owned incident snapshot has been
     /// installed. Live providers must not enter the incident pipeline before
     /// this flips: local pre-bootstrap generations cannot be durably confirmed.
@@ -949,6 +961,7 @@ final class SecurityEngine {
         alerts = incidentStore.visibleAlerts
         dismissedAlertKeys = incidentStore.dismissedAlertDeduplicationKeys
         rebuildUserFacingAlerts()
+        incidentPresentationRevision &+= 1
     }
 
     var learnedReviewEntries: [LearnedReviewEntry] {
