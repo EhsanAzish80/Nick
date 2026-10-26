@@ -1128,7 +1128,8 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             port: 53
         )
         delegate.networkProtection.ingestEvents([networkEvent])
-        XCTAssertNil(delegate.networkProtection.findingHandler)
+        XCTAssertNotNil(delegate.networkProtection.findingHandler)
+        XCTAssertTrue(delegate.engine.incidentStore.incidents.isEmpty)
 
         let esEvent = ESEvent(
             eventType: .authExec,
@@ -1155,8 +1156,8 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         XCTAssertNotNil(delegate.xpcClient.integrityAcknowledgementHandler)
     }
 
-    func test_5_0NetworkIncidentDeliveryIsOffWhileActivityCopyRemainsHonest() {
-        XCTAssertFalse(AppDelegate.networkIncidentIngestionEnabledFor5_0)
+    func test_networkIncidentDeliveryIsEnabledWhileActivityCopyRemainsHonest() {
+        XCTAssertTrue(AppDelegate.networkIncidentIngestionEnabled)
         let event = NetworkBlockEvent(
             host: "nick-scam-test.invalid",
             appIdentifier: "com.apple.curl",
@@ -1217,13 +1218,14 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         )
         let payload = try JSONEncoder().encode([firstEvent, repeatedEvent])
         let decoded = try XCTUnwrap(NetworkProtectionManager.decodeEvents(payload))
-        let manager = NetworkProtectionManager()
+        let manager = NetworkProtectionManager(eventsURLProvider: { nil })
         let store = IncidentStore(persistOnInit: false, now: { now })
         let delivered = expectation(description: "filter payload reached incident policy")
         delivered.expectedFulfillmentCount = 2
         var notificationCandidates: [ThreatAlert] = []
 
         manager.incidentPersistenceHandler = { generation in (generation, true) }
+        manager.activateDurableCursor(deliveredEventIDs: [])
         manager.findingHandler = { finding in
             let alert = ThreatAlert(
                 id: finding.signal.id,
@@ -1254,10 +1256,10 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         XCTAssertEqual(copy.headline, "Known dangerous destination")
         XCTAssertEqual(signal.metadata["reason"], "network_extension_knownThreat")
         XCTAssertEqual(signal.metadata["rule"], "network_knownThreat")
-        XCTAssertEqual(signal.metadata["ruleTier"], "protected")
+        XCTAssertEqual(signal.metadata["ruleTier"], "review")
     }
 
-    func test_eventWrittenBeforeHandlerIsDeliveredExactlyOnceAfterAttachment() async {
+    func test_firstSuccessfulStoreReadCreatesBaselineWithoutReplayingHistory() async {
         let event = NetworkBlockEvent(
             host: "nick-scam-test.invalid",
             appIdentifier: "com.apple.curl",
@@ -1266,23 +1268,26 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             reasonTitle: NetworkObservationReason.knownThreat.userTitle,
             port: 53
         )
-        let manager = NetworkProtectionManager()
-        manager.ingestEvents([event])
-        let delivered = expectation(description: "startup event delivered after handler attachment")
-        delivered.assertForOverFulfill = true
+        let manager = NetworkProtectionManager(eventsURLProvider: { nil })
+        let baselinePersisted = expectation(description: "startup baseline persisted")
         var deliveryCount = 0
+        manager.cursorBootstrapHandler = { eventIDs in
+            XCTAssertEqual(eventIDs, [event.id])
+            baselinePersisted.fulfill()
+            return eventIDs
+        }
         manager.incidentPersistenceHandler = { generation in (generation, true) }
         manager.findingHandler = { finding in
             XCTAssertEqual(finding.signal.id, event.id)
             deliveryCount += 1
-            delivered.fulfill()
             return .persisted(1)
         }
-        await fulfillment(of: [delivered], timeout: 2)
+        manager.ingestEvents([event])
+        await fulfillment(of: [baselinePersisted], timeout: 2)
 
         manager.ingestEvents([event])
         try? await Task.sleep(for: .milliseconds(100))
-        XCTAssertEqual(deliveryCount, 1)
+        XCTAssertEqual(deliveryCount, 0)
     }
 
     @MainActor
@@ -1315,6 +1320,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         var persistedGeneration: UInt64?
 
         manager.incidentPersistenceHandler = { generation in (generation, true) }
+        manager.activateDurableCursor(deliveredEventIDs: [])
         manager.findingHandler = { finding in
             deliveryCount += 1
             let alert = ThreatAlert(
@@ -1351,12 +1357,12 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         let incident = try XCTUnwrap(store.incidents.first)
         let signal = try XCTUnwrap(incident.alert.contributingSignals.first)
         XCTAssertEqual(store.incidents.count, 1)
-        XCTAssertTrue(incident.alert.hasProtectedEvidence)
+        XCTAssertFalse(incident.alert.hasProtectedEvidence)
         XCTAssertEqual(
             UserFacingAlertBuilder.shared.build(from: incident.alert).headline,
             "Known dangerous destination"
         )
-        XCTAssertEqual(signal.metadata["ruleTier"], "protected")
+        XCTAssertEqual(signal.metadata["ruleTier"], "review")
         let confirmed = notifications.confirm(generation: try XCTUnwrap(persistedGeneration))
         XCTAssertEqual(confirmed.count, 1)
         XCTAssertEqual(confirmed.first?.id, incident.alert.id)
@@ -1382,6 +1388,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             port: 53
         )
         let manager = NetworkProtectionManager()
+        manager.activateDurableCursor(deliveredEventIDs: [])
         let submitted = expectation(description: "failed event retried")
         submitted.expectedFulfillmentCount = 2
         var submissionCount = 0
@@ -1418,6 +1425,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             reasonTitle: NetworkObservationReason.scamGuardian.userTitle
         )
         let manager = NetworkProtectionManager()
+        manager.activateDurableCursor(deliveredEventIDs: [])
         let submitted = expectation(description: "policy suppression submitted once")
         var submissionCount = 0
         manager.findingHandler = { _ in
@@ -1443,6 +1451,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             reasonTitle: NetworkObservationReason.knownThreat.userTitle
         )
         let manager = NetworkProtectionManager()
+        manager.activateDurableCursor(deliveredEventIDs: [])
         let submitted = expectation(description: "single in-flight submission")
         var submissionCount = 0
         manager.findingHandler = { _ in
@@ -1473,6 +1482,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             )
         }
         let manager = NetworkProtectionManager()
+        manager.activateDurableCursor(deliveredEventIDs: [])
         manager.findingHandler = { _ in .suppressedByPolicy("review-tier") }
         manager.ingestEvents(events)
         while manager.deliveredEventCount < events.count { await Task.yield() }

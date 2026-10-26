@@ -77,6 +77,7 @@ struct SettingsView: View {
     @State private var showsLearnedReviewEntries = false
     @State private var showsLegacyDismissals = false
     @State private var verdictLearningStatus: String?
+    @State private var strictBlockingStatus: String?
     @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
     @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
     @AppStorage("nickUpdateAvailable") private var updateAvailable = false
@@ -967,6 +968,35 @@ struct SettingsView: View {
     private var dataSection: some View {
         Section("Data") {
             LabeledTile(
+                icon: "lock.shield.fill", tint: .red,
+                title: "Strict blocking",
+                subtitle: "Allow only high-confidence rules authorized by Nick's signed intelligence bundle to block. Off by default; exact known-malware hashes remain protected."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { engine.strictModeEnabled },
+                    set: { updateStrictMode($0) }
+                ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            LabeledTile(
+                icon: "hand.raised.slash.fill", tint: .orange,
+                title: "Emergency stop blocking",
+                subtitle: "Immediately allow all Endpoint Security authorization requests while keeping detection and reporting active."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { engine.blockingKillSwitch },
+                    set: { updateBlockingKillSwitch($0) }
+                ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            if let strictBlockingStatus {
+                Text(strictBlockingStatus)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            LabeledTile(
                 icon: "brain.head.profile", tint: .purple,
                 title: "Learn from my review decisions",
                 subtitle: "Lower the priority of matching review-only findings on this Mac. Malware signatures and protected detections are never affected."
@@ -1078,6 +1108,34 @@ struct SettingsView: View {
         } else {
             engine.setVerdictLearningEnabled(false)
             verdictLearningStatus = "Learning is off. Existing entries remain available to review or reset."
+        }
+    }
+
+    private func updateStrictMode(_ enabled: Bool) {
+        if !enabled {
+            guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
+                strictBlockingStatus = "Approval was cancelled. Strict blocking remains on."
+                return
+            }
+            engine.setStrictModeEnabled(false, authorizationExternalForm: authorization)
+            strictBlockingStatus = "Strict blocking is off. Detection remains active."
+        } else {
+            engine.setStrictModeEnabled(true)
+            strictBlockingStatus = "Strict blocking is on for signed high-confidence rules."
+        }
+    }
+
+    private func updateBlockingKillSwitch(_ enabled: Bool) {
+        if enabled {
+            guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
+                strictBlockingStatus = "Approval was cancelled. Blocking remains active."
+                return
+            }
+            engine.setBlockingKillSwitch(true, authorizationExternalForm: authorization)
+            strictBlockingStatus = "All blocking is stopped. Detection and reporting remain active."
+        } else {
+            engine.setBlockingKillSwitch(false)
+            strictBlockingStatus = "Blocking has resumed under the current protection policy."
         }
     }
 

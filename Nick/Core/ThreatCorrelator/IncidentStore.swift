@@ -219,6 +219,7 @@ struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
     var expectedCooldowns: [String: TimeInterval]
     var evictedIncidentCount: Int
     var learnedReviewEntries: [LearnedReviewEntry]
+    var networkIngestCursor: NetworkIngestCursor?
 
     init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -226,7 +227,8 @@ struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
         dismissalTombstones: [IncidentDismissalTombstone],
         expectedCooldowns: [String: TimeInterval],
         evictedIncidentCount: Int = 0,
-        learnedReviewEntries: [LearnedReviewEntry] = []
+        learnedReviewEntries: [LearnedReviewEntry] = [],
+        networkIngestCursor: NetworkIngestCursor? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.incidents = incidents
@@ -234,11 +236,12 @@ struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
         self.expectedCooldowns = expectedCooldowns
         self.evictedIncidentCount = max(0, evictedIncidentCount)
         self.learnedReviewEntries = learnedReviewEntries
+        self.networkIngestCursor = networkIngestCursor
     }
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, incidents, dismissalTombstones, expectedCooldowns, evictedIncidentCount
-        case learnedReviewEntries
+        case learnedReviewEntries, networkIngestCursor
     }
 
     init(from decoder: Decoder) throws {
@@ -249,7 +252,13 @@ struct IncidentStoreSnapshot: Codable, Sendable, Equatable {
         expectedCooldowns = try container.decode([String: TimeInterval].self, forKey: .expectedCooldowns)
         evictedIncidentCount = max(0, try container.decodeIfPresent(Int.self, forKey: .evictedIncidentCount) ?? 0)
         learnedReviewEntries = try container.decodeIfPresent([LearnedReviewEntry].self, forKey: .learnedReviewEntries) ?? []
+        networkIngestCursor = try container.decodeIfPresent(NetworkIngestCursor.self, forKey: .networkIngestCursor)
     }
+}
+
+struct NetworkIngestCursor: Codable, Sendable, Equatable {
+    let initializedAt: Date
+    var deliveredEventIDs: Set<UUID>
 }
 
 /// Persisted security incident. Evidence and its L0 classification live beside
@@ -373,6 +382,7 @@ final class IncidentStore {
     private var dismissalTombstones: [IncidentDismissalTombstone]
     private(set) var evictedIncidentCount = 0
     private(set) var learnedReviewEntries: [LearnedReviewEntry] = []
+    private(set) var networkIngestCursor: NetworkIngestCursor?
     private var verdictLearningEnabled = false
     private let now: () -> Date
     private let identityValidator: (String, String, String) -> Bool
@@ -450,6 +460,7 @@ final class IncidentStore {
         expectedCooldowns = snapshot.expectedCooldowns
         evictedIncidentCount = snapshot.evictedIncidentCount
         learnedReviewEntries = snapshot.learnedReviewEntries
+        networkIngestCursor = snapshot.networkIngestCursor
         migrateLegacyDismissals()
         boundInMemory()
         privilegedPersistence = persistence
@@ -465,6 +476,16 @@ final class IncidentStore {
         for key in Array(notificationIncidentIDsByGeneration.keys) where key <= generation {
             pendingNotificationIncidentIDs.subtract(notificationIncidentIDsByGeneration.removeValue(forKey: key) ?? [])
         }
+    }
+
+    @discardableResult
+    func initializeNetworkIngestCursor(eventIDs: Set<UUID>) -> UInt64 {
+        guard networkIngestCursor == nil else { return lastQueuedGeneration }
+        networkIngestCursor = NetworkIngestCursor(
+            initializedAt: now(),
+            deliveredEventIDs: Self.boundedNetworkEventIDs(eventIDs)
+        )
+        return persist(force: true)
     }
 
     func prepareLegacyMigration(defaults: UserDefaults = .standard) throws -> Data {
@@ -507,6 +528,19 @@ final class IncidentStore {
         var notificationIncidentIDs: Set<UUID> = []
 
         for rawCandidate in candidates {
+            let networkEventIDs = Set(rawCandidate.contributingSignals.compactMap { signal in
+                signal.source == .network ? signal.id : nil
+            })
+            if !networkEventIDs.isEmpty {
+                if networkIngestCursor == nil {
+                    networkIngestCursor = NetworkIngestCursor(initializedAt: now(), deliveredEventIDs: [])
+                }
+                networkIngestCursor?.deliveredEventIDs.formUnion(networkEventIDs)
+                if let ids = networkIngestCursor?.deliveredEventIDs {
+                    networkIngestCursor?.deliveredEventIDs = Self.boundedNetworkEventIDs(ids)
+                }
+                forcePersistence = true
+            }
             let candidate = applyLearnedPriority(to: applyTrustedDowngrade(to: rawCandidate))
             guard !isSuppressed(candidate) else {
                 outcomes.append(.suppressedByPolicy("suppression rule"))
@@ -836,7 +870,8 @@ final class IncidentStore {
             dismissalTombstones: dismissalTombstones,
             expectedCooldowns: expectedCooldowns,
             evictedIncidentCount: evictedIncidentCount,
-            learnedReviewEntries: learnedReviewEntries
+            learnedReviewEntries: learnedReviewEntries,
+            networkIngestCursor: networkIngestCursor
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -852,6 +887,10 @@ final class IncidentStore {
             ))
         }
         return snapshot
+    }
+
+    private static func boundedNetworkEventIDs(_ ids: Set<UUID>) -> Set<UUID> {
+        Set(ids.sorted { $0.uuidString < $1.uuidString }.suffix(5_000))
     }
 
     private static func migratedIncident(_ alert: ThreatAlert) -> SecurityIncident {

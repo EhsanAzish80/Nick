@@ -190,6 +190,9 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
     let reason: String
     let reasonTitle: String
     let port: Int?
+    let sourceVersion: Int?
+    let sourceIssuedAt: Date?
+    let sourceExpiresAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -199,7 +202,10 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
         decision: NetworkEventDecision,
         reason: String,
         reasonTitle: String,
-        port: Int? = nil
+        port: Int? = nil,
+        sourceVersion: Int? = nil,
+        sourceIssuedAt: Date? = nil,
+        sourceExpiresAt: Date? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -209,6 +215,9 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
         self.reason = reason
         self.reasonTitle = reasonTitle
         self.port = port
+        self.sourceVersion = sourceVersion
+        self.sourceIssuedAt = sourceIssuedAt
+        self.sourceExpiresAt = sourceExpiresAt
     }
 
     init(
@@ -233,6 +242,7 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, timestamp, host, appIdentifier, decision, reason, reasonTitle, port
+        case sourceVersion, sourceIssuedAt, sourceExpiresAt
     }
 
     init(from decoder: Decoder) throws {
@@ -248,6 +258,9 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
             ?? NetworkBlockReason(rawValue: reason)?.userTitle
             ?? reason
         port = try container.decodeIfPresent(Int.self, forKey: .port)
+        sourceVersion = try container.decodeIfPresent(Int.self, forKey: .sourceVersion)
+        sourceIssuedAt = try container.decodeIfPresent(Date.self, forKey: .sourceIssuedAt)
+        sourceExpiresAt = try container.decodeIfPresent(Date.self, forKey: .sourceExpiresAt)
     }
 }
 
@@ -387,6 +400,7 @@ enum NetworkProtectionSharedStore {
     static let eventsFileName = "network-block-events.json"
     static let signedRulesFileName = "network-rules-v1.json"
     static let signedRulesVersionFileName = "network-rules-version"
+    static let threatIntelligenceDirectoryName = "threat-intelligence"
     static let healthFileName = "network-filter-health.json"
     static let maximumEventCount = 500
 
@@ -400,6 +414,13 @@ enum NetworkProtectionSharedStore {
 
     static func signedRulesVersionURL(fileManager: FileManager = .default) -> URL? {
         systemSupportDirectory.appendingPathComponent(signedRulesVersionFileName)
+    }
+
+    static func threatIntelligenceDirectory(fileManager _: FileManager = .default) -> URL {
+        systemSupportDirectory.appendingPathComponent(
+            threatIntelligenceDirectoryName,
+            isDirectory: true
+        )
     }
 
     static func healthURL(fileManager: FileManager = .default) -> URL? {

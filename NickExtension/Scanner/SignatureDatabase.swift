@@ -87,6 +87,7 @@ final class SignatureDatabase {
         createTableIfNeeded()
         createMetadataTableIfNeeded()
         loadBundledCatalog(from: bundledCatalogURL)
+        reloadSignedThreatBundle()
         Self.logger.info("Signature database ready at \(path)")
     }
 
@@ -277,6 +278,42 @@ final class SignatureDatabase {
                 "Loaded bundled signature catalog version \(catalog.version) with \(databaseEntries.count) entries"
             )
         }
+    }
+
+    func reloadSignedThreatBundle() {
+        let store = SignedThreatIntelligenceBundleStore(
+            directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
+            publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,
+            updatesEnabled: ThreatIntelligenceBundleTrustAnchor.updatesEnabled
+        )
+        guard let (payload, _) = store.loadBestAvailable(),
+              payload.version > metadataInteger(for: "signed_bundle_version")
+        else { return }
+        let entries = payload.hashes.map {
+            ($0.sha256.lowercased(), $0.name, $0.family, $0.severity)
+        }
+        guard !entries.isEmpty else { return }
+        bulkUpsert(entries)
+        setMetadataInteger(payload.version, for: "signed_bundle_version")
+        Self.logger.info(
+            "Loaded signed intelligence bundle version \(payload.version) with \(entries.count) hashes"
+        )
+    }
+
+    private func setMetadataInteger(_ value: Int, for key: String) {
+        guard let db else { return }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?);",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, key, -1, sqliteTransient)
+        sqlite3_bind_text(statement, 2, String(value), -1, sqliteTransient)
+        _ = sqlite3_step(statement)
     }
 
     private func metadataInteger(for key: String) -> Int {

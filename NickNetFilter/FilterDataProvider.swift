@@ -231,7 +231,10 @@ final class FilterDataProvider: NEFilterDataProvider {
             decision: .observed,
             reason: reason.rawValue,
             reasonTitle: reason.userTitle,
-            port: port >= 0 ? port : nil
+            port: port >= 0 ? port : nil,
+            sourceVersion: reason == .knownThreat ? blocklist.provenance?.version : nil,
+            sourceIssuedAt: reason == .knownThreat ? blocklist.provenance?.issuedAt : nil,
+            sourceExpiresAt: reason == .knownThreat ? blocklist.provenance?.expiresAt : nil
         ))
         DistributedNotificationCenter.default().postNotificationName(
             Notification.Name("com.ehsanazish.nick.network-observation"),

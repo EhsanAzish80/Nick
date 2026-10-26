@@ -26,17 +26,26 @@ final class NetworkProtectionManager {
     var findingHandler: ((NetworkFinding) async -> IncidentIngestOutcome)? {
         didSet {
             guard findingHandler != nil else { return }
-            ingestEvents(blockEvents)
+            // Installing the consumer is not a successful shared-store read.
+            // Deliver buffered events only after a durable cursor exists; an
+            // empty in-memory array must never become the first-run baseline.
+            ingestEvents(blockEvents, permitsCursorBootstrap: false)
         }
     }
     /// Confirms that the root-owned incident-store snapshot covering a live
     /// finding was durably accepted. Network events are not claimed until this
     /// succeeds, matching the Endpoint Security delivery contract.
     var incidentPersistenceHandler: ((UInt64) async -> (UInt64, Bool)?)?
+    /// Creates the durable first-run baseline after the shared event store has
+    /// been decoded successfully. A failed or missing read must never create an
+    /// empty cursor, because doing so would replay historical events later.
+    var cursorBootstrapHandler: ((Set<UUID>) async -> Set<UUID>)?
     private var observationToken: NSObjectProtocol?
     private var eventDirectorySource: DispatchSourceFileSystemObject?
     private var deliveredEventIDs: Set<UUID> = []
     private var inFlightEventIDs: Set<UUID> = []
+    private var durableCursorReady = false
+    private var cursorBootstrapInFlight = false
     private let eventsURLProvider: () -> URL?
     private let logger = Logger(
         subsystem: "com.ehsanazish.nick",
@@ -46,6 +55,14 @@ final class NetworkProtectionManager {
     private(set) var reloadSummaryCount = 0
     var deliveredEventCount: Int { deliveredEventIDs.count }
     var inFlightEventCount: Int { inFlightEventIDs.count }
+    var currentEventIDs: Set<UUID> { Set(blockEvents.map(\.id)) }
+    var ruleSourceSummary: String {
+        guard let event = blockEvents.first(where: { $0.reason == NetworkObservationReason.knownThreat.rawValue }),
+              let version = event.sourceVersion,
+              let issuedAt = event.sourceIssuedAt else { return "Unavailable" }
+        let age = max(0, Calendar.current.dateComponents([.day], from: issuedAt, to: Date()).day ?? 0)
+        return "Curated list v\(version) · \(age)d old" + (age > 90 ? " · Stale" : "")
+    }
 
     init(eventsURLProvider: @escaping () -> URL? = {
         NetworkProtectionSharedStore.eventsURL()
@@ -246,6 +263,12 @@ final class NetworkProtectionManager {
         loadEvents(trigger: "explicit-reload")
     }
 
+    func activateDurableCursor(deliveredEventIDs: Set<UUID>) {
+        self.deliveredEventIDs = deliveredEventIDs
+        durableCursorReady = true
+        ingestEvents(blockEvents)
+    }
+
     private func loadEvents(trigger: String) {
         guard let url = eventsURLProvider() else {
             logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=no-url")
@@ -274,6 +297,13 @@ final class NetworkProtectionManager {
     /// an event arriving during app startup could be marked delivered and then
     /// permanently skipped when the live-finding handler is attached.
     func ingestEvents(_ decoded: [NetworkBlockEvent]) {
+        ingestEvents(decoded, permitsCursorBootstrap: true)
+    }
+
+    private func ingestEvents(
+        _ decoded: [NetworkBlockEvent],
+        permitsCursorBootstrap: Bool
+    ) {
         let sorted = decoded.sorted { $0.timestamp > $1.timestamp }
         blockEvents = sorted
         let skippedAlreadyDelivered = sorted.lazy.filter {
@@ -286,6 +316,20 @@ final class NetworkProtectionManager {
         logger.info(
             "reload summary decoded=\(sorted.count, privacy: .public) new=\(newEvents.count, privacy: .public) skipped-already-delivered=\(skippedAlreadyDelivered, privacy: .public)"
         )
+        guard durableCursorReady else {
+            if permitsCursorBootstrap,
+               !cursorBootstrapInFlight,
+               let cursorBootstrapHandler {
+                cursorBootstrapInFlight = true
+                let baselineIDs = Set(sorted.map(\.id))
+                Task {
+                    let persistedIDs = await cursorBootstrapHandler(baselineIDs)
+                    await self.finishCursorBootstrap(deliveredEventIDs: persistedIDs)
+                }
+            }
+            logger.info("event delivery deferred reason=cursor-not-ready count=\(newEvents.count, privacy: .public)")
+            return
+        }
         guard let findingHandler else {
             logger.info("event delivery skipped reason=handler-absent count=\(newEvents.count, privacy: .public)")
             return
@@ -301,6 +345,11 @@ final class NetworkProtectionManager {
                 await self.finishDelivery(outcome: outcome, eventID: event.id)
             }
         }
+    }
+
+    private func finishCursorBootstrap(deliveredEventIDs: Set<UUID>) {
+        cursorBootstrapInFlight = false
+        activateDurableCursor(deliveredEventIDs: deliveredEventIDs)
     }
 
     func openNetworkExtensionSettings() {
@@ -462,11 +511,16 @@ struct NetworkFinding: Sendable {
             context: ThreatSignalContext(metadata: [
                 "reason": "network_extension_\(event.reason)",
                 "rule": "network_\(event.reason)",
-                "ruleTier": reason == .knownThreat ? "protected" : "review",
+                "ruleTier": "review",
                 "destination": event.host,
                 "destinationClass": destinationClass,
                 "appIdentifier": event.appIdentifier ?? "unknown",
-                "port": event.port.map(String.init) ?? "unknown"
+                "port": event.port.map(String.init) ?? "unknown",
+                "sourceVersion": event.sourceVersion.map(String.init) ?? "unknown",
+                "sourceIssuedAt": event.sourceIssuedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown",
+                "sourceAge": event.sourceIssuedAt.map {
+                    String(max(0, Calendar.current.dateComponents([.day], from: $0, to: Date()).day ?? 0))
+                } ?? "unknown"
             ])
         )
         recommendedAction = reason == .scamGuardian
