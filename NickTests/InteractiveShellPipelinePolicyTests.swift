@@ -132,7 +132,7 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
         XCTAssertEqual(finding.reason, "download_pipe_interpreter")
     }
 
-    func test_networkAndURLAreBothRequired() {
+    func test_remoteURLAndDirectedPipeFindsPipelineWithoutSampledSocketAtMediumConfidence() throws {
         let policy = InteractiveShellPipelinePolicy()
         let time = Date()
         _ = policy.observe(.init(
@@ -140,9 +140,58 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
             arguments: ["fetch-helper", "https://example.test/payload"],
             standardOutputPipeIdentifier: 88, hasNetworkSocket: false, timestamp: time
         ))
-        XCTAssertNil(policy.observe(.init(
+        let finding = try XCTUnwrap(policy.observe(.init(
             pid: 31, parentPID: 5, executablePath: "/bin/sh",
             arguments: ["sh"], standardInputPipeIdentifier: 88,
+            codeIdentityValidated: true,
+            timestamp: time.addingTimeInterval(0.01)
+        )))
+        XCTAssertEqual(finding.confidence, "medium")
+    }
+
+    func test_sampledNetworkSocketRaisesPipelineConfidenceToHigh() throws {
+        let policy = InteractiveShellPipelinePolicy()
+        let time = Date()
+        _ = policy.observe(.init(
+            pid: 32, parentPID: 5, executablePath: "/tmp/fetch-helper",
+            arguments: ["fetch-helper", "https://example.test/payload"],
+            standardOutputPipeIdentifier: 89, hasNetworkSocket: true, timestamp: time
+        ))
+        let finding = try XCTUnwrap(policy.observe(.init(
+            pid: 33, parentPID: 5, executablePath: "/bin/sh",
+            arguments: ["sh"], standardInputPipeIdentifier: 89,
+            timestamp: time.addingTimeInterval(0.01)
+        )))
+        XCTAssertEqual(finding.confidence, "high")
+    }
+
+    func test_remoteURLPipeToPythonInlineDataConsumerStaysSilent() {
+        let policy = InteractiveShellPipelinePolicy()
+        let time = Date()
+        _ = policy.observe(.init(
+            pid: 34, parentPID: 5, executablePath: "/usr/bin/python3",
+            arguments: ["python3", "urllib", "https://example.test/payload"],
+            standardOutputPipeIdentifier: 90, hasNetworkSocket: false, timestamp: time
+        ))
+        XCTAssertNil(policy.observe(.init(
+            pid: 35, parentPID: 5, executablePath: "/usr/bin/python3",
+            arguments: ["python3", "-c", "import json, sys; json.load(sys.stdin)"],
+            standardInputPipeIdentifier: 90,
+            timestamp: time.addingTimeInterval(0.01)
+        )))
+    }
+
+    func test_directedPipeToShellWithoutRemoteURLStaysSilent() {
+        let policy = InteractiveShellPipelinePolicy()
+        let time = Date()
+        _ = policy.observe(.init(
+            pid: 36, parentPID: 5, executablePath: "/tmp/local-reader",
+            arguments: ["local-reader", "/tmp/payload"],
+            standardOutputPipeIdentifier: 91, hasNetworkSocket: true, timestamp: time
+        ))
+        XCTAssertNil(policy.observe(.init(
+            pid: 37, parentPID: 5, executablePath: "/bin/sh",
+            arguments: ["sh"], standardInputPipeIdentifier: 91,
             timestamp: time.addingTimeInterval(0.01)
         )))
     }
@@ -178,7 +227,7 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
             _ = policy.observe(.init(
                 pid: 50, parentPID: 5, executablePath: "/tmp/reader",
                 arguments: ["reader", "https://example.test/x"], standardOutputPipeIdentifier: 202,
-                hasNetworkSocket: true, codeIdentityValidated: validated, timestamp: time
+                hasNetworkSocket: false, codeIdentityValidated: validated, timestamp: time
             ))
             return try XCTUnwrap(policy.observe(.init(
                 pid: 51, parentPID: 5, executablePath: "/bin/sh", arguments: ["sh"],

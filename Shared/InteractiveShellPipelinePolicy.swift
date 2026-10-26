@@ -115,7 +115,8 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
                 reason: "download_pipe_interpreter",
                 matchedCommand: Self.redactedCommand(downloader, shell: shell),
                 actorPID: shell.pid,
-                confidence: downloader.codeIdentityValidated && shell.codeIdentityValidated
+                confidence: downloader.hasNetworkSocket
+                    || downloader.codeIdentityValidated
                     ? "high" : "medium"
             )
         }
@@ -134,8 +135,11 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
     }
 
     private static func role(for observation: Observation) -> Role? {
-        if observation.hasNetworkSocket,
-           observation.arguments.contains(where: containsRemoteURL) {
+        // A short-lived downloader can open and close its socket between the
+        // exec-time descriptor samples. The remote URL plus directed pipe into
+        // executable interpreter stdin is the eligibility evidence; a sampled
+        // network socket or validated identity raises confidence separately.
+        if observation.arguments.contains(where: containsRemoteURL) {
             return .downloader
         }
         let name = executableName(observation.executablePath)
