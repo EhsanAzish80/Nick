@@ -1491,7 +1491,7 @@ struct ExtensionFinding: Sendable {
         }
         if isLOLBinBehavior {
             switch event.metadata?["reason"] {
-            case "curl_pipe_shell", "wget_pipe_shell":
+            case "curl_pipe_shell", "wget_pipe_shell", "download_pipe_interpreter":
                 return "Nick saw a shell run a script supplied by a download command."
             case "osascript_shell":
                 return "Nick saw AppleScript start a shell command."

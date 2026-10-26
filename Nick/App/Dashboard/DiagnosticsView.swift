@@ -43,6 +43,9 @@ struct DiagnosticsView: View {
                     row("AUTH response p50", healthMilliseconds("authResponseP50Milliseconds"))
                     row("AUTH response p99", healthMilliseconds("authResponseP99Milliseconds"))
                     row("AUTH deadline misses", healthNumber("deadlineMissCount"))
+                    row("Credential paths observed", healthNumber("credentialPathCandidateCount"))
+                    row("Credential findings emitted", healthNumber("credentialOpenFindingCount"))
+                    row("Fork descriptor lookup p99", healthMilliseconds("forkDescriptorP99Milliseconds"))
                     row("Last AUTH deadline miss", healthDate("lastDeadlineMissAt")?.formatted(date: .abbreviated, time: .standard) ?? "None reported")
                     let rates = xpcClient.extensionHealth?["eventsPerSecond"] as? [String: Double] ?? [:]
                     row("Busiest event rate", rates.max(by: { $0.value < $1.value }).map { "\($0.key): \(String(format: "%.1f", $0.value))/s" } ?? "Unavailable")
