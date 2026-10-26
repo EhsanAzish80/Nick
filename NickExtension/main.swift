@@ -120,7 +120,19 @@ let yaraSetup: (engine: YARAEngine?, rulesReady: Bool) = {
 let yaraEngine = yaraSetup.engine
 let yaraRulesReady = yaraSetup.rulesReady
 
-let fileScanner  = FileScanner(signatureDB: signatureDB, cache: scanCache, yaraEngine: yaraEngine)
+let signedIntelligenceStore = SignedThreatIntelligenceBundleStore(
+    directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
+    publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,
+    updatesEnabled: ThreatIntelligenceBundleTrustAnchor.updatesEnabled
+)
+let signedRules = signedIntelligenceStore.loadBestAvailable()?.0.rules ?? []
+let strictBlockingPolicy = StrictBlockingPolicy(signedRules: signedRules)
+let fileScanner = FileScanner(
+    signatureDB: signatureDB,
+    cache: scanCache,
+    yaraEngine: yaraEngine,
+    strictBlockingPolicy: strictBlockingPolicy
+)
 
 logger.info("Signature database ready — \(signatureDB.count) signature(s) loaded")
 
@@ -174,6 +186,31 @@ let emailAttachmentMonitor = EmailAttachmentMonitor()
 let eventHandler = ESEventHandler()
 let xpcServer    = ESXPCServer()
 let esClient     = EndpointSecurityClient(eventHandler: eventHandler)
+
+strictBlockingPolicy.update(settingsRecord: xpcServer.currentSecuritySettingsRecord())
+xpcServer.securitySettingsDidChange = { record in
+    strictBlockingPolicy.update(settingsRecord: record)
+    scanCache.invalidateAll()
+}
+xpcServer.threatIntelligenceBundleInstaller = { data in
+    do {
+        _ = try signedIntelligenceStore.stageAndPromote(data) { payload in
+            payload.hashes.count <= 100_000
+                && payload.domains.count <= 100_000
+                && payload.ipAddresses.count <= 100_000
+                && payload.rules.count <= 10_000
+        }
+        signatureDB.reloadSignedThreatBundle()
+        if let payload = signedIntelligenceStore.loadBestAvailable()?.0 {
+            strictBlockingPolicy.update(signedRules: payload.rules)
+        }
+        scanCache.invalidateAll()
+        return true
+    } catch {
+        logger.error("Rejected threat-intelligence bundle: \(error.localizedDescription, privacy: .public)")
+        return false
+    }
+}
 
 // Wire cross-references
 eventHandler.xpcServer               = xpcServer

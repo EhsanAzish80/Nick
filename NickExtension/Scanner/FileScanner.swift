@@ -50,6 +50,7 @@ final class FileScanner {
 
     let cache: ScanCache
     private let signatureDB: SignatureDatabase
+    private let strictBlockingPolicy: StrictBlockingPolicy
 
     /// Optional YARA engine for pattern-based scanning. When non-nil, every
     /// cache-miss file is scanned with compiled YARA rules in addition to the
@@ -70,10 +71,16 @@ final class FileScanner {
     ///   - cache: Scan result cache (shared with `ESEventHandler`).
     ///   - yaraEngine: Optional pre-initialised YARA engine. Pass `nil` to
     ///     disable YARA scanning (e.g. if rules failed to compile at startup).
-    init(signatureDB: SignatureDatabase, cache: ScanCache, yaraEngine: YARAEngine? = nil) {
+    init(
+        signatureDB: SignatureDatabase,
+        cache: ScanCache,
+        yaraEngine: YARAEngine? = nil,
+        strictBlockingPolicy: StrictBlockingPolicy = StrictBlockingPolicy()
+    ) {
         self.signatureDB = signatureDB
         self.cache       = cache
         self.yaraEngine  = yaraEngine
+        self.strictBlockingPolicy = strictBlockingPolicy
     }
 
     // MARK: - Public API
@@ -146,10 +153,12 @@ final class FileScanner {
             YARAVerdictPolicy.isContextFreeThreat(ruleName: $0.ruleName, metadata: $0.metadata, tags: $0.tags)
         }
         let isThreat = hashMatch != nil || !actionableYARAMatches.isEmpty
-        // YARA rules are pattern/heuristic evidence. Even a high-severity rule
-        // can match a legitimate newly-linked executable (for example Xcode
-        // DerivedData). Only an exact curated hash is safe to auto-block.
-        let mayBlock = hashMatch != nil
+        // Exact curated hashes retain their existing enforcement eligibility.
+        // A YARA rule becomes eligible only when a signed intelligence bundle
+        // marks that exact high-confidence rule blockable and Strict Mode is on.
+        let mayBlock = hashMatch != nil || actionableYARAMatches.contains {
+            strictBlockingPolicy.allowsRule($0.ruleName)
+        }
         let threatName = hashMatch?.name
             ?? actionableYARAMatches.first.map { match in
                 // DRL 1.1 rules require the author in messages based on matches.
@@ -282,6 +291,12 @@ final class FileScanner {
             return cachedHasSignatures
         }
     }
+
+    func allowsEnforcement(of entry: ScanCache.Entry?) -> Bool {
+        (entry?.mayBlock ?? false) && strictBlockingPolicy.allowsAnyBlocking
+    }
+
+    var allowsAnyBlocking: Bool { strictBlockingPolicy.allowsAnyBlocking }
 
     private let signatureCountLock = NSLock()
     private var cachedHasSignatures = false

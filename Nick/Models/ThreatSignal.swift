@@ -340,6 +340,9 @@ enum EvidenceRulePolicy {
         "system_hardening",
         "endpoint_management_observed",
         "network_scamGuardian",
+        "network_knownThreat",
+        "network_connectionRate",
+        "network_unusualPort",
         // A validated GUI app using camera or microphone is a reviewable
         // privacy observation. Contextual foreground guesses remain ineligible
         // in IncidentStore.learningKey.

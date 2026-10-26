@@ -119,3 +119,103 @@ enum LOLBinExecutionPolicy {
         return false
     }
 }
+
+// MARK: - Credential access
+
+/// Pure metadata-only classifier for credential-store access. The Endpoint
+/// Security extension supplies identities that have already been validated by
+/// SecCode; this type never opens a credential file or records its contents.
+enum CredentialAccessPolicy {
+    struct ValidatedIdentity: Equatable, Sendable {
+        let bundleID: String?
+        let teamID: String?
+        let signingValidated: Bool
+        let isApplePlatform: Bool
+    }
+
+    enum Store: String, Equatable, Sendable {
+        case browserCookies = "Browser cookies"
+        case browserLogins = "Browser saved logins"
+        case keychain = "macOS Keychain"
+        case sshPrivateKey = "SSH private key"
+        case cryptocurrencyWallet = "Cryptocurrency wallet"
+    }
+
+    struct Finding: Equatable, Sendable {
+        let title: String
+        let reason: String
+        let store: Store
+    }
+
+    /// Exact validated identities which legitimately handle credential stores.
+    /// An identifier without the matching SecCode-derived signer never exempts
+    /// access. Names, paths and bundle layout are deliberately not inputs.
+    private static let trustedApplications: Set<String> = [
+        "APPLE_PLATFORM|com.apple.Safari",
+        "APPLE_PLATFORM|com.apple.SafariTechnologyPreview",
+        "APPLE_PLATFORM|com.apple.backupd",
+        "EQHXZ8M8AV|com.google.Chrome",
+        "43AQ936H96|org.mozilla.firefox",
+        "2BUA8C4S2C|com.1password.1password"
+    ]
+
+    static func findingForOpen(path: String, responsibleIdentity: ValidatedIdentity?) -> Finding? {
+        guard let store = sensitiveStore(at: path), !isTrustedCredentialApplication(responsibleIdentity) else {
+            return nil
+        }
+        return Finding(
+            title: "Credential store access needs review",
+            reason: "credential_store_access",
+            store: store
+        )
+    }
+
+    static func findingForExec(
+        executablePath: String,
+        arguments: [String],
+        responsibleIdentity: ValidatedIdentity?
+    ) -> Finding? {
+        guard URL(fileURLWithPath: executablePath).lastPathComponent == "security",
+              !isTrustedCredentialApplication(responsibleIdentity) else { return nil }
+        let lowered = arguments.map { $0.lowercased() }
+        if lowered.contains("dump-keychain") {
+            return Finding(title: "Keychain dump command needs review", reason: "keychain_dump", store: .keychain)
+        }
+        if lowered.contains("find-generic-password"), lowered.contains("-w") {
+            return Finding(title: "Keychain secret read needs review", reason: "keychain_secret_read", store: .keychain)
+        }
+        return nil
+    }
+
+    private static func isTrustedCredentialApplication(_ identity: ValidatedIdentity?) -> Bool {
+        guard let identity, identity.signingValidated, let bundleID = identity.bundleID else { return false }
+        let signer = identity.isApplePlatform ? "APPLE_PLATFORM" : (identity.teamID ?? "")
+        return trustedApplications.contains("\(signer)|\(bundleID)")
+    }
+
+    private static func sensitiveStore(at rawPath: String) -> Store? {
+        let path = URL(fileURLWithPath: rawPath).standardizedFileURL.path
+        let lower = path.lowercased()
+        if lower.hasSuffix("/cookies.binarycookies") || lower.hasSuffix("/cookies")
+            || lower.contains("/cookies.sqlite") {
+            return .browserCookies
+        }
+        if lower.hasSuffix("/login data") || lower.hasSuffix("/logins.json")
+            || lower.hasSuffix("/key4.db") {
+            return .browserLogins
+        }
+        if lower.contains("/.ssh/"), !lower.hasSuffix(".pub"),
+           !lower.hasSuffix("/known_hosts"), !lower.hasSuffix("/config"),
+           URL(fileURLWithPath: lower).lastPathComponent.hasPrefix("id_") {
+            return .sshPrivateKey
+        }
+        let walletMarkers = [
+            "/library/application support/bitcoin/wallets/",
+            "/library/application support/electrum/wallets/",
+            "/library/application support/exodus/exodus.wallet/",
+            "/library/application support/ethereum/keystore/"
+        ]
+        if walletMarkers.contains(where: lower.contains) { return .cryptocurrencyWallet }
+        return nil
+    }
+}

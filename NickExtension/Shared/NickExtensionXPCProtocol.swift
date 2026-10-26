@@ -247,7 +247,13 @@ enum SecuritySettingsWritePolicy {
         if newThreshold > oldThreshold { return true }
         let oldLearning = old["verdictLearningEnabled"] as? Bool ?? false
         let newLearning = new["verdictLearningEnabled"] as? Bool ?? false
-        return !oldLearning && newLearning
+        if !oldLearning && newLearning { return true }
+        let oldStrict = old["strictModeEnabled"] as? Bool ?? false
+        let newStrict = new["strictModeEnabled"] as? Bool ?? false
+        if oldStrict && !newStrict { return true }
+        let oldKillSwitch = old["blockingKillSwitch"] as? Bool ?? false
+        let newKillSwitch = new["blockingKillSwitch"] as? Bool ?? false
+        return !oldKillSwitch && newKillSwitch
     }
 }
 
@@ -383,6 +389,11 @@ enum IncidentStoreWritePolicy {
         authorizationExternalForm: Data?,
         reply: @escaping (Bool, Data) -> Void
     )
+
+    /// Verifies and atomically promotes a hosted threat-intelligence bundle.
+    /// The authenticated app transports bytes only; the root extension owns
+    /// signature, expiry, rollback and publish-gate decisions.
+    func installThreatIntelligenceBundle(_ data: Data, reply: @escaping (Bool) -> Void)
 
     /// Validates the canonical alert ID in the privileged incident store.
     /// Security-reducing verdicts return `authorizationRequired` before the app

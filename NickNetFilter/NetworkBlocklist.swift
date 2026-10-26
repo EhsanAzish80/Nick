@@ -19,6 +19,12 @@ import os
 /// any subdomain — e.g. blocking `evil.com` also blocks `cdn.evil.com`.
 final class NetworkBlocklist: @unchecked Sendable {
 
+    struct Provenance: Sendable {
+        let version: Int
+        let issuedAt: Date
+        let expiresAt: Date
+    }
+
     static let shared = NetworkBlocklist()
 
     // MARK: - Private
@@ -30,6 +36,9 @@ final class NetworkBlocklist: @unchecked Sendable {
 
     private var blockedDomains: Set<String> = []
     private var blockedIPs:     Set<String> = []
+    private var loadedProvenance: Provenance?
+    private var lastReloadCheck = Date.distantPast
+    private var loadedBundleModificationDate: Date?
     private let lock = NSLock()
 
     // MARK: - Init
@@ -42,6 +51,7 @@ final class NetworkBlocklist: @unchecked Sendable {
 
     /// Returns `true` if `host` is (or is a subdomain of) a blocked entry.
     func isBlocked(host: String) -> Bool {
+        reloadIfBundleChanged()
         let lower = host.lowercased()
 
         return lock.withLock {
@@ -57,17 +67,63 @@ final class NetworkBlocklist: @unchecked Sendable {
         }
     }
 
+    var provenance: Provenance? { lock.withLock { loadedProvenance } }
+
     func reload() {
         lock.withLock {
             blockedDomains = []
             blockedIPs = []
+            loadedProvenance = nil
         }
         loadSignedRules()
+        let modificationDate = Self.currentBundleModificationDate()
+        lock.withLock { loadedBundleModificationDate = modificationDate }
+    }
+
+    private func reloadIfBundleChanged() {
+        let shouldCheck = lock.withLock { () -> Bool in
+            guard Date().timeIntervalSince(lastReloadCheck) >= 60 else { return false }
+            lastReloadCheck = Date()
+            return true
+        }
+        guard shouldCheck,
+              Self.currentBundleModificationDate() != lock.withLock({ loadedBundleModificationDate })
+        else { return }
+        reload()
+    }
+
+    private static func currentBundleModificationDate() -> Date? {
+        let url = ThreatIntelligenceBundleTrustAnchor.productionDirectory
+            .appendingPathComponent("current.json")
+        return try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     }
 
     /// Loads only a versioned Ed25519-signed rule envelope. Invalid, expired,
     /// or downgraded data is ignored so a broken update always fails open.
     private func loadSignedRules() {
+        let bundleStore = SignedThreatIntelligenceBundleStore(
+            directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
+            publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,
+            updatesEnabled: ThreatIntelligenceBundleTrustAnchor.updatesEnabled
+        )
+        if let (payload, provenance) = bundleStore.loadBestAvailable() {
+            lock.withLock {
+                blockedDomains = Set(payload.domains.compactMap(
+                    NetworkProtectionConfiguration.normalizedDomain
+                ))
+                blockedIPs = Set(payload.ipAddresses.map { $0.lowercased() })
+                loadedProvenance = Provenance(
+                    version: provenance.version,
+                    issuedAt: provenance.issuedAt,
+                    expiresAt: provenance.expiresAt
+                )
+            }
+            Self.logger.info("NetworkBlocklist: loaded signed intelligence bundle version \(payload.version)")
+            return
+        }
+
+        // Legacy 5.0.x envelope fallback. It remains signature-checked and is
+        // removed once the 5.1 bundle service is enabled in production.
         guard let listURL = NetworkProtectionSharedStore.signedRulesURL() else { return }
         guard let data = try? Data(contentsOf: listURL) else { return }
         guard let envelope = try? JSONDecoder().decode(SignedNetworkRuleEnvelope.self, from: data),
@@ -88,6 +144,11 @@ final class NetworkBlocklist: @unchecked Sendable {
                 NetworkProtectionConfiguration.normalizedDomain
             ))
             blockedIPs = Set(envelope.payload.ipAddresses.map { $0.lowercased() })
+            loadedProvenance = Provenance(
+                version: envelope.payload.version,
+                issuedAt: envelope.payload.issuedAt,
+                expiresAt: envelope.payload.expiresAt
+            )
         }
         persistHighestAcceptedVersion(envelope.payload.version)
         Self.logger.info("NetworkBlocklist: loaded signed rule version \(envelope.payload.version)")
