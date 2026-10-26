@@ -232,6 +232,9 @@ final class IncidentStorePersistenceTests: XCTestCase {
         let store = IncidentStore(persistOnInit: false, now: { clock })
         let first = store.ingest([try tamperAlert(operation: .unlink)])
         XCTAssertEqual(first.newlyActionable.count, 1)
+        _ = store.markNotificationDelivered(
+            alertID: try XCTUnwrap(first.newlyActionable.first?.id), at: clock
+        )
 
         clock.addTimeInterval(599)
         let repeatResult = store.ingest([try tamperAlert(operation: .unlink)])
@@ -245,6 +248,7 @@ final class IncidentStorePersistenceTests: XCTestCase {
         let store = IncidentStore(persistOnInit: false, now: { clock })
         let first = try tamperAlert(operation: .unlink)
         _ = store.ingest([first])
+        _ = store.markNotificationDelivered(alertID: first.id, at: clock)
         let incidentID = try XCTUnwrap(store.incidents.first?.alert.id)
 
         clock.addTimeInterval(600)

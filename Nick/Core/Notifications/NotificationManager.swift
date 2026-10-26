@@ -28,6 +28,8 @@ import os
 @MainActor
 final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
+    enum DeliveryLevel: String, Equatable { case interrupt, inform, silent }
+
     // MARK: - Singleton
 
     /// Shared instance — created once and retained for the app lifetime.
@@ -43,6 +45,19 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     private override init() {
         super.init()
+    }
+
+    private var deliveredCount: UInt64 = 0
+    private let deliveryStartedAt = Date()
+    private struct PendingDigest {
+        var count: Int
+        let deadline: Date
+    }
+
+    private var pendingDigests: [String: PendingDigest] = [:]
+
+    var notificationsDeliveredPerActiveHour: Double {
+        Double(deliveredCount) / max(Date().timeIntervalSince(deliveryStartedAt) / 3600, 1.0 / 3600)
     }
 
     // MARK: - Setup
@@ -130,7 +145,12 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             content: content,
             trigger: nil
         )
-        try? await UNUserNotificationCenter.current().add(request)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            deliveredCount += 1
+        } catch {
+            Self.log.error("Failed to deliver protection-unavailable notification: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Delivery
@@ -141,9 +161,10 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     ///
     /// Silently returns when `alert.severity == .info` (trusted-app activity) or
     /// when the alert's severity is below the user-configured threshold.
-    func send(for alert: ThreatAlert) async {
+    @discardableResult
+    func send(for alert: ThreatAlert) async -> Bool {
         let presentation = Self.presentation(for: alert)
-        guard alert.severity != .info || presentation.requiresVisibleDelivery else { return }
+        guard presentation.deliveryLevel != .silent else { return false }
 
         // macOS does not throw from add() when permission is denied — it silently
         // discards the notification. Check authorization first and bail early with
@@ -153,22 +174,32 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         Self.log.info("Notification settings — auth:\(authStatus.rawValue) alertStyle:\(settings.alertStyle.rawValue) sound:\(settings.soundSetting.rawValue) badge:\(settings.badgeSetting.rawValue) (alertStyle: 0=none 1=banner 2=alert)")
         guard authStatus == .authorized || authStatus == .provisional else {
             Self.log.warning("Notifications not authorized (status=\(authStatus.rawValue)) — skipping delivery for '\(alert.title)'")
-            return
+            return false
         }
         guard settings.alertStyle != .none else {
             Self.log.warning("Nick's notification style is 'None' in System Settings — no banner will appear. Fix: System Settings → Notifications → Nick → set to Banners or Alerts")
-            return
+            return false
         }
 
         let threshold = notificationThreshold
         guard presentation.requiresVisibleDelivery || alert.severity >= threshold else {
             Self.log.debug("Alert '\(alert.title)' below threshold (\(threshold.displayName)) — suppressed")
-            return
+            return false
         }
 
         let content = UNMutableNotificationContent()
         content.title = presentation.title ?? "Nick — \(alert.severity.displayName) Alert"
-        if let body = presentation.body {
+        if presentation.deliveryLevel == .inform {
+            let now = Date()
+            let existing = pendingDigests[presentation.threadIdentifier]
+            let digest = existing.map { $0.deadline > now
+                ? PendingDigest(count: $0.count + 1, deadline: $0.deadline)
+                : PendingDigest(count: 1, deadline: now.addingTimeInterval(600))
+            } ?? PendingDigest(count: 1, deadline: now.addingTimeInterval(600))
+            pendingDigests[presentation.threadIdentifier] = digest
+            let count = digest.count
+            content.body = count == 1 ? (presentation.body ?? alert.title) : "\(count) updates from this app"
+        } else if let body = presentation.body {
             content.body = body
         } else if let tamper = alert.contributingSignals.first(where: {
             $0.metadata["reason"] == "endpoint_tamper_observed"
@@ -177,22 +208,34 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         } else {
             content.body = alert.title
         }
-        content.sound = presentation.isDocumentedUninstall ? nil : .default
-        content.interruptionLevel = presentation.isDocumentedUninstall ? .active : .timeSensitive
+        content.sound = presentation.deliveryLevel == .interrupt ? .default : nil
+        content.interruptionLevel = presentation.deliveryLevel == .interrupt ? .timeSensitive : .passive
         content.categoryIdentifier = presentation.categoryIdentifier
         content.userInfo = ["alertID": alert.id.uuidString]
+        content.threadIdentifier = presentation.threadIdentifier
 
         let request = UNNotificationRequest(
-            identifier: alert.id.uuidString,
+            identifier: presentation.deliveryLevel == .inform
+                ? "nick-digest-\(presentation.threadIdentifier)" : alert.id.uuidString,
             content: content,
-            trigger: nil
+            trigger: presentation.deliveryLevel == .inform
+                ? UNTimeIntervalNotificationTrigger(
+                    timeInterval: max(
+                        1,
+                        pendingDigests[presentation.threadIdentifier]?.deadline.timeIntervalSinceNow ?? 600
+                    ),
+                    repeats: false
+                ) : nil
         )
 
         do {
             try await UNUserNotificationCenter.current().add(request)
+            deliveredCount += 1
             Self.log.info("Notification delivered for '\(alert.title)'")
+            return true
         } catch {
             Self.log.error("Failed to deliver notification: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -202,6 +245,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let title: String?
         let body: String?
         let categoryIdentifier: String
+        let deliveryLevel: DeliveryLevel
+        let threadIdentifier: String
     }
 
     static func presentation(for alert: ThreatAlert) -> Presentation {
@@ -214,19 +259,46 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
                 isDocumentedUninstall: true,
                 title: "Nick is being moved to the Trash",
                 body: "Use Nick Uninstaller later if you also want to remove protection components and generated data.",
-                categoryIdentifier: "NICK_UNINSTALL"
+                categoryIdentifier: "NICK_UNINSTALL",
+                deliveryLevel: .inform,
+                threadIdentifier: "nick"
             )
         }
 
         let isCaptureActivation = alert.contributingSignals.contains {
             $0.source == .avCapture && $0.metadata["reason"] == "capture_device_active"
         }
+        let signals = alert.contributingSignals
+        let explicit = signals.compactMap { $0.metadata["deliveryLevel"] }.first
+        let reasonSet = Set(signals.compactMap { $0.metadata["reason"] ?? $0.metadata["rule"] })
+        let neverDowngrade = signals.contains { $0.source == .yara } || !reasonSet.isDisjoint(with: [
+            "curl_pipe_shell", "wget_pipe_shell", "hidden_password_prompt",
+            "credential_store_access", "yara_match", "exact_hash_match"
+        ]) || signals.contains { signal in
+            (signal.metadata["reason"] == "endpoint_tamper_observed"
+                && signal.metadata["responsibleAppSigning"] != "Apple platform")
+                || signal.metadata["remediationStatus"].map {
+                    ["blocked", "quarantined", "quarantine-failed"].contains($0)
+                } == true
+        }
+        let deliveryLevel: DeliveryLevel
+        if neverDowngrade { deliveryLevel = .interrupt }
+        else if explicit == "silent" { deliveryLevel = .silent }
+        else if explicit == "interrupt" { deliveryLevel = .interrupt }
+        else if alert.severity >= .high { deliveryLevel = .interrupt }
+        else if alert.severity == .info { deliveryLevel = .silent }
+        else { deliveryLevel = .inform }
+        let thread = signals.compactMap {
+            $0.metadata["responsibleAppBundleID"] ?? $0.metadata["responsibleAppName"]
+        }.first ?? "nick"
         return Presentation(
-            requiresVisibleDelivery: isCaptureActivation,
+            requiresVisibleDelivery: deliveryLevel != .silent,
             isDocumentedUninstall: false,
             title: isCaptureActivation ? alert.title : nil,
             body: isCaptureActivation ? alert.description : nil,
-            categoryIdentifier: "THREAT_ALERT"
+            categoryIdentifier: "THREAT_ALERT",
+            deliveryLevel: deliveryLevel,
+            threadIdentifier: thread
         )
     }
 
