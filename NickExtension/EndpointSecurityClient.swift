@@ -227,6 +227,8 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         var eventCounts: [String: UInt64] = [:]
         var deadlineMisses: UInt64 = 0
         var lastDeadlineMissAt: Date?
+        var credentialOpenEvaluations: UInt64 = 0
+        var credentialOpenFindings: UInt64 = 0
     }
     private let lock = NSLock()
     private var state = State()
@@ -249,6 +251,14 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         }
     }
 
+    func recordCredentialOpenEvaluation() {
+        lock.withLock { state.credentialOpenEvaluations += 1 }
+    }
+
+    func recordCredentialOpenFinding() {
+        lock.withLock { state.credentialOpenFindings += 1 }
+    }
+
     func recordAuthResponse(messageMachTime: UInt64, nowMachTime: UInt64 = mach_absolute_time()) {
         guard nowMachTime >= messageMachTime, let timebase = Self.machTimebase else { return }
         let elapsed = nowMachTime - messageMachTime
@@ -264,19 +274,29 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         eventsPerSecond: [String: Double],
         deadlineMisses: UInt64,
         lastDeadlineMissAt: Date?,
+        credentialOpenEvaluations: UInt64,
+        credentialOpenFindings: UInt64,
         authResponseP50Milliseconds: Double?,
         authResponseP99Milliseconds: Double?
     ) {
         let eventSnapshot = lock.withLock {
             let elapsed = max(Date().timeIntervalSince(state.startedAt), 1)
             let rates = state.eventCounts.mapValues { Double($0) / elapsed }
-            return (rates, state.deadlineMisses, state.lastDeadlineMissAt)
+            return (
+                rates,
+                state.deadlineMisses,
+                state.lastDeadlineMissAt,
+                state.credentialOpenEvaluations,
+                state.credentialOpenFindings
+            )
         }
         let latencySnapshot = authLatencyWindow.snapshot()
         return (
             eventSnapshot.0,
             eventSnapshot.1,
             eventSnapshot.2,
+            eventSnapshot.3,
+            eventSnapshot.4,
             latencySnapshot.p50Milliseconds,
             latencySnapshot.p99Milliseconds
         )

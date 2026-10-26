@@ -89,7 +89,7 @@ final class UserFacingAlertBuilder: Sendable {
         let displayProcess = userReadableProcessName(processName)
         let parentName     = firstProcess?.parentName.flatMap(userReadableProcessName)
         let protectedCommandReasons: Set<String> = [
-            "curl_pipe_shell", "wget_pipe_shell", "osascript_shell",
+            "curl_pipe_shell", "wget_pipe_shell", "download_pipe_interpreter", "osascript_shell",
             "quarantine_removal", "base64_payload", "launchctl_tmp",
             "crontab_modify", "mktemp_execute"
         ]
@@ -250,7 +250,9 @@ final class UserFacingAlertBuilder: Sendable {
         if hasProtectedCommandEvidence {
             let reason = signals.compactMap { $0.metadata["reason"] }
                 .first(where: protectedCommandReasons.contains) ?? ""
-            let isDownloadPipe = reason == "curl_pipe_shell" || reason == "wget_pipe_shell"
+            let isDownloadPipe = reason == "curl_pipe_shell"
+                || reason == "wget_pipe_shell"
+                || reason == "download_pipe_interpreter"
             return AlertPattern(
                 headline: isDownloadPipe
                     ? "Download-to-shell command detected"

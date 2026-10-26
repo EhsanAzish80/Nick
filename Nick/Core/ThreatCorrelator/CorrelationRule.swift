@@ -276,7 +276,8 @@ struct CorrelationRule: Sendable {
         let matches = signals.filter {
             $0.source == .process &&
             ($0.metadata["reason"] == "curl_pipe_shell" ||
-             $0.metadata["reason"] == "wget_pipe_shell")
+             $0.metadata["reason"] == "wget_pipe_shell" ||
+             $0.metadata["reason"] == "download_pipe_interpreter")
         }
         guard !matches.isEmpty else { return nil }
         let details = matches.compactMap { s -> String? in

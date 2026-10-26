@@ -78,4 +78,56 @@ final class CredentialAccessPolicyTests: XCTestCase {
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(path: "/Users/test/.ssh/known_hosts", responsibleIdentity: unknown))
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(path: "/Users/test/.ssh/config", responsibleIdentity: unknown))
     }
+
+    func testChromiumFamilyCredentialStoresUseSharedStoreNames() {
+        let paths = [
+            "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser/Default/Login Data",
+            "/Users/test/Library/Application Support/Microsoft Edge/Default/Cookies",
+            "/Users/test/Library/Application Support/Arc/User Data/Default/Login Data",
+            "/Users/test/Library/Application Support/com.operasoftware.Opera/Default/Cookies",
+            "/Users/test/Library/Application Support/Vivaldi/Default/Login Data"
+        ]
+        for path in paths {
+            XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+                path: path,
+                responsibleIdentity: unknown
+            ), path)
+        }
+    }
+
+    func testAdditionalCredentialStoresAreMetadataOnlyFindings() {
+        let paths = [
+            "/Users/test/Library/Keychains/login.keychain-db",
+            "/Users/test/Library/Safari/Form Values",
+            "/Users/test/.aws/credentials",
+            "/Users/test/.config/gcloud/credentials.db",
+            "/Users/test/.kube/config",
+            "/Users/test/.docker/config.json",
+            "/Users/test/Library/Application Support/Telegram Desktop/tdata/key_datas",
+            "/Users/test/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite",
+            "/Users/test/Library/Passes/example.pkpass",
+            "/Users/test/Library/Application Support/Google/Chrome/Default/Local Extension Settings/nkbihfbeogaeaoehlefnkodbefgpgknn/000003.log"
+        ]
+        for path in paths {
+            XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+                path: path,
+                responsibleIdentity: unknown
+            ), path)
+        }
+    }
+
+    func testHiddenAnswerAppleScriptProducesPasswordPromptFinding() {
+        let finding = CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/osascript",
+            arguments: ["osascript", "-e", "display dialog \"Password\" default answer \"\" with hidden answer"],
+            responsibleIdentity: unknown
+        )
+        XCTAssertEqual(finding?.reason, "hidden_password_prompt")
+        XCTAssertEqual(finding?.store, .passwordPrompt)
+        XCTAssertNil(CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/osascript",
+            arguments: ["osascript", "-e", "display dialog \"Continue?\""],
+            responsibleIdentity: unknown
+        ))
+    }
 }

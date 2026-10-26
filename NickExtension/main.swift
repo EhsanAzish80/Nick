@@ -53,7 +53,9 @@ func writeExtensionHealth() {
         "fimPendingViolationCount": fileIntegrityMonitor.pendingViolationCount,
         "canaryCount": ransomwareDetector.canaryManager.canaryPaths.count,
         "eventsPerSecond": esMetrics.eventsPerSecond,
-        "deadlineMissCount": esMetrics.deadlineMisses
+        "deadlineMissCount": esMetrics.deadlineMisses,
+        "credentialOpenEvaluationCount": esMetrics.credentialOpenEvaluations,
+        "credentialOpenFindingCount": esMetrics.credentialOpenFindings
     ]
     if let lastDeadlineMissAt = esMetrics.lastDeadlineMissAt {
         health["lastDeadlineMissAt"] = lastDeadlineMissAt.timeIntervalSince1970

@@ -139,6 +139,12 @@ enum CredentialAccessPolicy {
         case keychain = "macOS Keychain"
         case sshPrivateKey = "SSH private key"
         case cryptocurrencyWallet = "Cryptocurrency wallet"
+        case browserWallet = "Browser wallet data"
+        case cloudCredential = "Cloud service credentials"
+        case messagingSession = "Messaging session"
+        case notesData = "Notes data"
+        case walletPass = "Wallet pass data"
+        case passwordPrompt = "Hidden password prompt"
     }
 
     struct Finding: Equatable, Sendable {
@@ -154,6 +160,8 @@ enum CredentialAccessPolicy {
         "APPLE_PLATFORM|com.apple.Safari",
         "APPLE_PLATFORM|com.apple.SafariTechnologyPreview",
         "APPLE_PLATFORM|com.apple.backupd",
+        "APPLE_PLATFORM|com.apple.Notes",
+        "APPLE_PLATFORM|com.apple.Passbook",
         "EQHXZ8M8AV|com.google.Chrome",
         "43AQ936H96|org.mozilla.firefox",
         "2BUA8C4S2C|com.1password.1password"
@@ -175,7 +183,19 @@ enum CredentialAccessPolicy {
         arguments: [String],
         responsibleIdentity: ValidatedIdentity?
     ) -> Finding? {
-        guard URL(fileURLWithPath: executablePath).lastPathComponent == "security",
+        let executable = URL(fileURLWithPath: executablePath).lastPathComponent.lowercased()
+        let loweredCommand = arguments.joined(separator: " ").lowercased()
+        if executable == "osascript",
+           loweredCommand.contains("display dialog"),
+           loweredCommand.contains("hidden answer") {
+            return Finding(
+                title: "Hidden password prompt needs review",
+                reason: "hidden_password_prompt",
+                store: .passwordPrompt
+            )
+        }
+
+        guard executable == "security",
               !isTrustedCredentialApplication(responsibleIdentity) else { return nil }
         let lowered = arguments.map { $0.lowercased() }
         if lowered.contains("dump-keychain") {
@@ -201,8 +221,12 @@ enum CredentialAccessPolicy {
             return .browserCookies
         }
         if lower.hasSuffix("/login data") || lower.hasSuffix("/logins.json")
-            || lower.hasSuffix("/key4.db") {
+            || lower.hasSuffix("/key4.db") || lower.hasSuffix("/form values")
+            || lower.hasSuffix("/autofillcorrections.db") {
             return .browserLogins
+        }
+        if lower.hasSuffix("/login.keychain-db") || lower.contains("/library/keychains/") {
+            return .keychain
         }
         if lower.contains("/.ssh/"), !lower.hasSuffix(".pub"),
            !lower.hasSuffix("/known_hosts"), !lower.hasSuffix("/config"),
@@ -216,6 +240,27 @@ enum CredentialAccessPolicy {
             "/library/application support/ethereum/keystore/"
         ]
         if walletMarkers.contains(where: lower.contains) { return .cryptocurrencyWallet }
+        let browserWalletMarkers = [
+            "/local extension settings/nkbihfbeogaeaoehlefnkodbefgpgknn/", // MetaMask
+            "/local extension settings/bfhbdbfipfhmdofhnjickppdijkgdjlp/", // Phantom
+            "/local extension settings/hnfanknocfeofbddgcijnmhnfnkdnaad/"  // Coinbase Wallet
+        ]
+        if browserWalletMarkers.contains(where: lower.contains) { return .browserWallet }
+
+        let cloudCredentialPaths = [
+            "/.aws/credentials",
+            "/.config/gcloud/credentials.db",
+            "/.config/gcloud/application_default_credentials.json",
+            "/.kube/config",
+            "/.docker/config.json"
+        ]
+        if cloudCredentialPaths.contains(where: lower.hasSuffix) { return .cloudCredential }
+        if lower.contains("/telegram desktop/tdata/") { return .messagingSession }
+        if lower.contains("/group.com.apple.notes/")
+            && (lower.hasSuffix("/notestore.sqlite") || lower.contains("/notestore.sqlite-")) {
+            return .notesData
+        }
+        if lower.contains("/library/passes/") || lower.hasSuffix(".pkpass") { return .walletPass }
         return nil
     }
 }

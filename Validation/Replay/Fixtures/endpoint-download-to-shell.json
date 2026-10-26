@@ -9,8 +9,8 @@
   "threatName": "Download-to-shell command detected",
   "threatFamily": "lolbin-behavior",
   "metadata": {
-    "reason": "curl_pipe_shell",
-    "rule": "curl_pipe_shell",
+    "reason": "download_pipe_interpreter",
+    "rule": "download_pipe_interpreter",
     "detectionKind": "lolbin-behavior",
     "signalSeverity": "critical",
     "execTargetPath": "/bin/zsh",
