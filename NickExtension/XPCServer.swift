@@ -380,11 +380,12 @@ extension ESXPCServer: NickExtensionXPCProtocol {
                 metadata: [
                     "reason": String(reason.prefix(160)),
                     "trust": "root-observed",
-                    "ruleTier": "review"
+                    "ruleTier": "review",
+                    "deliveryLevel": "silent"
                 ]
             )
         )
-        if let data = try? JSONEncoder().encode(event) { sendThreatToApp(data) }
+        if let data = try? JSONEncoder().encode(event) { sendEventToApp(data) }
         reply(true)
     }
 
@@ -414,7 +415,8 @@ extension ESXPCServer: NickExtensionXPCProtocol {
                     "observationID": observation.id.uuidString,
                     "observedAt": ISO8601DateFormatter().string(from: observation.observedAt),
                     "reason": String(observation.reason.prefix(160)),
-                    "ruleTier": "protected"
+                    "ruleTier": "protected",
+                    "deliveryLevel": "inform"
                 ]
             )
         )

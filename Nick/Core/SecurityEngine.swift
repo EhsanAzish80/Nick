@@ -597,7 +597,9 @@ final class SecurityEngine {
         Task { @MainActor in
             let (formatter, outputs) = buildPipeline()
             for alert in confirmedAlerts {
-                await NotificationManager.shared.send(for: alert)
+                if await NotificationManager.shared.send(for: alert) {
+                    _ = incidentStore.markNotificationDelivered(alertID: alert.id, at: Date())
+                }
                 await emitAlert(alert, formatter: formatter, outputs: outputs)
             }
         }
@@ -791,7 +793,9 @@ final class SecurityEngine {
         genuinelyNew = Array(Dictionary(grouping: genuinelyNew, by: IncidentStore.incidentKey(for:))
             .compactMap { $0.value.max(by: { $0.severity < $1.severity }) })
         for alert in genuinelyNew {
-            await NotificationManager.shared.send(for: alert)
+            if await NotificationManager.shared.send(for: alert) {
+                _ = incidentStore.markNotificationDelivered(alertID: alert.id, at: Date())
+            }
             let (fmt, outs) = buildPipeline()
             await emitAlert(alert, formatter: fmt, outputs: outs)
         }

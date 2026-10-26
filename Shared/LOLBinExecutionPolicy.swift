@@ -8,6 +8,7 @@ import Foundation
 /// exec path and the app tests. It records evidence only; blocking and incident
 /// policy remain outside this type.
 enum LOLBinExecutionPolicy {
+    enum Tier: String, Equatable, Sendable { case review, protected }
     struct Finding: Equatable, Sendable {
         let title: String
         let reason: String
@@ -56,6 +57,19 @@ enum LOLBinExecutionPolicy {
             return Finding(title: "Shell creating and executing a temporary file", reason: "mktemp_execute", severity: "medium", matchedCommand: nil)
         }
         return nil
+    }
+
+    /// A temporary-file execution is routine only when both the actor and its
+    /// responsible app chain were validated, and there is no download or
+    /// quarantine provenance. Names and paths never qualify the downgrade.
+    static func mktempTier(
+        actorIdentityValidated: Bool,
+        responsibleChainValidated: Bool,
+        hasNetworkOrigin: Bool,
+        hasQuarantineOrigin: Bool
+    ) -> Tier {
+        actorIdentityValidated && responsibleChainValidated
+            && !hasNetworkOrigin && !hasQuarantineOrigin ? .review : .protected
     }
 
     /// Extracts the command supplied to a shell's command flag. A shell with no
@@ -174,12 +188,35 @@ enum CredentialAccessPolicy {
         actorIsOwnResponsibleProcess: Bool = false
     ) -> Finding? {
         guard let store = sensitiveStore(at: path) else { return nil }
+        if ownsStore(path: path, identity: responsibleIdentity) {
+            return nil
+        }
         return findingForOpen(
             store: store,
             responsibleIdentity: responsibleIdentity,
             actorIsValidatedApplePlatform: actorIsValidatedApplePlatform,
             actorIsOwnResponsibleProcess: actorIsOwnResponsibleProcess
         )
+    }
+
+    /// Returns true only when a SecCode-validated reader is accessing data in
+    /// the standard per-bundle locations for its own exact bundle identifier.
+    /// Paths and display names never establish identity by themselves.
+    static func ownsStore(path: String, identity: ValidatedIdentity?) -> Bool {
+        guard let identity,
+              identity.signingValidated,
+              let bundleID = identity.bundleID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bundleID.isEmpty else { return false }
+        let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        func containsSequence(_ sequence: [String]) -> Bool {
+            guard components.count >= sequence.count else { return false }
+            return (0...(components.count - sequence.count)).contains { offset in
+                Array(components[offset..<(offset + sequence.count)]) == sequence
+            }
+        }
+        return containsSequence(["Library", "Containers", bundleID])
+            || containsSequence(["Library", "HTTPStorages", bundleID])
+            || containsSequence(["Library", "Application Support", bundleID])
     }
 
     static func findingForOpen(
