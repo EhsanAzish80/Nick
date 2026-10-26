@@ -303,14 +303,17 @@ final class ESEventHandler {
 
             esClient?.respond(to: message, allow: !shouldBlock)
 
-            if isReadOpen, !shouldBlock {
+            if isReadOpen, !shouldBlock,
+               let credentialStore = CredentialAccessPolicy.sensitiveStore(at: filePath) {
                 dispatchQueue.async { [weak self] in
                     self?.observeCredentialStoreOpen(
+                        store: credentialStore,
                         path: filePath,
                         actorPath: processPath,
                         actorPID: pid,
                         parentPID: parentPid,
-                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil
+                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        actorIdentity: tamperActorIdentity
                     )
                 }
             }
@@ -898,6 +901,18 @@ final class ESEventHandler {
             )
             // Phase 6: record child exec in process tree
             processTree?.recordExec(pid: childPid, ppid: pid, path: processPath, args: [])
+            let forkLookupStart = CFAbsoluteTimeGetCurrent()
+            let forkEvidence = ProcessPipeResolver.evidence(pid: childPid)
+            EndpointSecurityClient.healthMetrics.recordForkDescriptorLookupLatency(
+                milliseconds: (CFAbsoluteTimeGetCurrent() - forkLookupStart) * 1_000
+            )
+            interactivePipelinePolicy.recordFork(
+                childPID: childPid,
+                parentPID: pid,
+                standardInputPipeIdentifier: forkEvidence.standardInputPipeIdentifier,
+                standardOutputPipeIdentifier: forkEvidence.standardOutputPipeIdentifier,
+                timestamp: Date()
+            )
             // Keep lifecycle data inside the extension. Forwarding every fork
             // invalidates the app's observable timeline at system-wide rates.
 
@@ -1315,14 +1330,20 @@ final class ESEventHandler {
             executablePath: targetPath,
             arguments: arguments
         )
-        let interactivePipelineFinding = interactivePipelinePolicy.observe(.init(
+        let pipelineEvidence = ProcessPipeResolver.evidence(pid: pid)
+        let pipelineObservation = InteractiveShellPipelinePolicy.Observation(
             pid: pid,
             parentPID: parentPid,
             executablePath: targetPath,
             arguments: arguments,
-            pipeIdentifiers: ProcessPipeResolver.identifiers(pid: pid),
+            standardInputPipeIdentifier: pipelineEvidence.standardInputPipeIdentifier,
+            standardOutputPipeIdentifier: pipelineEvidence.standardOutputPipeIdentifier,
+            hasNetworkSocket: pipelineEvidence.hasNetworkSocket,
+            codeIdentityValidated: trustedSigner,
+            signingIdentifier: signingID,
             timestamp: Date()
-        ))
+        )
+        let interactivePipelineFinding = interactivePipelinePolicy.observe(pipelineObservation)
         let attribution = processTree?.responsibleApp(
             actorPID: pid,
             responsiblePID: responsiblePID,
@@ -1358,7 +1379,7 @@ final class ESEventHandler {
                         "rule": finding.reason,
                         "ruleTier": "review",
                         "detectionKind": "credential-access",
-                        "signalSeverity": "medium",
+                        "signalSeverity": finding.store == .passwordPrompt ? "high" : "medium",
                         "credentialStore": finding.store.rawValue
                     ]
                     if let attribution {
@@ -1388,6 +1409,7 @@ final class ESEventHandler {
                         "ruleTier": "protected",
                         "detectionKind": "lolbin-behavior",
                         "signalSeverity": "critical",
+                        "signalConfidence": finding.confidence,
                         "matchedCommand": finding.matchedCommand,
                         "execTargetPath": targetPath
                     ]
@@ -1398,23 +1420,91 @@ final class ESEventHandler {
                 }
             )
         ))
+        if interactivePipelineFinding == nil,
+           interactivePipelinePolicy.shouldRetry(pipelineObservation) {
+            scheduleInteractivePipelineRetries(
+                observation: pipelineObservation,
+                responsiblePID: responsiblePID
+            )
+        }
+    }
+
+    private func scheduleInteractivePipelineRetries(
+        observation: InteractiveShellPipelinePolicy.Observation,
+        responsiblePID: Int32?
+    ) {
+        for delay in [0.02, 0.10, 0.30, 0.75] {
+            dispatchQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                let evidence = ProcessPipeResolver.evidence(pid: observation.pid)
+                let retry = InteractiveShellPipelinePolicy.Observation(
+                    pid: observation.pid,
+                    parentPID: observation.parentPID,
+                    executablePath: observation.executablePath,
+                    arguments: observation.arguments,
+                    standardInputPipeIdentifier: evidence.standardInputPipeIdentifier,
+                    standardOutputPipeIdentifier: evidence.standardOutputPipeIdentifier,
+                    hasNetworkSocket: evidence.hasNetworkSocket,
+                    codeIdentityValidated: observation.codeIdentityValidated,
+                    signingIdentifier: observation.signingIdentifier,
+                    timestamp: Date()
+                )
+                guard let finding = self.interactivePipelinePolicy.observe(retry) else { return }
+                var metadata = [
+                    "reason": finding.reason,
+                    "rule": finding.reason,
+                    "ruleTier": "protected",
+                    "detectionKind": "lolbin-behavior",
+                    "signalSeverity": "critical",
+                    "signalConfidence": finding.confidence,
+                    "matchedCommand": finding.matchedCommand,
+                    "execTargetPath": observation.executablePath
+                ]
+                if let attribution = self.processTree?.responsibleApp(
+                    actorPID: observation.pid,
+                    responsiblePID: responsiblePID,
+                    resolver: SecCodeResponsibleProcessIdentityResolver.shared
+                ) {
+                    metadata.merge(attribution.metadata) { current, _ in current }
+                }
+                self.reportThreat(ESEvent(
+                    eventType: .authExec,
+                    processPath: observation.executablePath,
+                    pid: observation.pid,
+                    parentPid: observation.parentPID,
+                    filePath: observation.executablePath,
+                    decision: .allow,
+                    threat: .init(
+                        threatName: "Download-to-shell command detected",
+                        threatFamily: "lolbin-behavior",
+                        metadata: metadata
+                    )
+                ))
+            }
+        }
     }
 
     private func observeCredentialStoreOpen(
+        store: CredentialAccessPolicy.Store,
         path: String,
         actorPath: String,
         actorPID: Int32,
         parentPID: Int32,
-        responsiblePID: Int32?
+        responsiblePID: Int32?,
+        actorIdentity: TamperActorIdentity
     ) {
+        EndpointSecurityClient.healthMetrics.recordCredentialOpenEvaluation()
         let attribution = processTree?.responsibleApp(
             actorPID: actorPID,
             responsiblePID: responsiblePID,
             resolver: SecCodeResponsibleProcessIdentityResolver.shared
         )
         guard let finding = CredentialAccessPolicy.findingForOpen(
-            path: path,
-            responsibleIdentity: attribution?.app.map(Self.credentialIdentity)
+            store: store,
+            responsibleIdentity: attribution?.app.map(Self.credentialIdentity),
+            actorIsValidatedApplePlatform: actorIdentity.isPlatformBinary
+                && actorIdentity.isValidIdentitySignature,
+            actorIsOwnResponsibleProcess: responsiblePID == actorPID
         ) else { return }
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor
@@ -1434,6 +1524,7 @@ final class ESEventHandler {
             return true
         }
         guard shouldReport else { return }
+        EndpointSecurityClient.healthMetrics.recordCredentialOpenFinding()
 
         var metadata = [
             "reason": finding.reason,
@@ -1451,6 +1542,7 @@ final class ESEventHandler {
             processPath: actorPath,
             pid: actorPID,
             parentPid: parentPID,
+            filePath: path,
             decision: .allow,
             threat: ESEvent.ThreatContext(
                 threatName: finding.title,

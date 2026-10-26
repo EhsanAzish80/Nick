@@ -145,11 +145,6 @@ jobs:
               ENABLE_USER_SCRIPT_SANDBOXING=NO
           done
 
-      - name: YARA built-product zero-match gate
-        run: |
-          .ci-venv/bin/python Scripts/rules_gate.py product \
-            --root "$RUNNER_TEMP/NickProductGateDerivedData/Build/Products/Debug"
-
       - name: Run Tests
         run: |
           rm -rf TestResults.xcresult
@@ -157,12 +152,18 @@ jobs:
             -project Nick.xcodeproj \
             -scheme Nick \
             -destination "platform=macOS" \
+            -derivedDataPath "$RUNNER_TEMP/NickProductGateDerivedData" \
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ENABLE_USER_SCRIPT_SANDBOXING=NO
+
+      - name: YARA built-product zero-match gate
+        run: |
+          .ci-venv/bin/python Scripts/rules_gate.py product \
+            --root "$RUNNER_TEMP/NickProductGateDerivedData/Build/Products/Debug"
 
       - name: Test Summary
         if: always()

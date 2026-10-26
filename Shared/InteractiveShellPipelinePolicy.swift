@@ -1,21 +1,51 @@
 import Foundation
 
 /// Correlates short-lived sibling processes only when the kernel shows that
-/// they share a pipe. Process names alone are insufficient evidence.
+/// the downloader's stdout feeds the interpreter's stdin. Process names alone
+/// are insufficient evidence.
 final class InteractiveShellPipelinePolicy: @unchecked Sendable {
     struct Observation: Sendable {
         let pid: Int32
         let parentPID: Int32
         let executablePath: String
         let arguments: [String]
-        let pipeIdentifiers: Set<UInt64>
+        let standardInputPipeIdentifier: UInt64?
+        let standardOutputPipeIdentifier: UInt64?
+        let hasNetworkSocket: Bool
+        let codeIdentityValidated: Bool
+        let signingIdentifier: String?
         let timestamp: Date
+
+        init(
+            pid: Int32,
+            parentPID: Int32,
+            executablePath: String,
+            arguments: [String],
+            standardInputPipeIdentifier: UInt64? = nil,
+            standardOutputPipeIdentifier: UInt64? = nil,
+            hasNetworkSocket: Bool = false,
+            codeIdentityValidated: Bool = false,
+            signingIdentifier: String? = nil,
+            timestamp: Date
+        ) {
+            self.pid = pid
+            self.parentPID = parentPID
+            self.executablePath = executablePath
+            self.arguments = arguments
+            self.standardInputPipeIdentifier = standardInputPipeIdentifier
+            self.standardOutputPipeIdentifier = standardOutputPipeIdentifier
+            self.hasNetworkSocket = hasNetworkSocket
+            self.codeIdentityValidated = codeIdentityValidated
+            self.signingIdentifier = signingIdentifier
+            self.timestamp = timestamp
+        }
     }
 
     struct Finding: Equatable, Sendable {
         let reason: String
         let matchedCommand: String
         let actorPID: Int32
+        let confidence: String
     }
 
     private struct Recent {
@@ -23,49 +53,258 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
         let role: Role
     }
 
+    private struct ForkEvidence {
+        let parentPID: Int32
+        let standardInputPipeIdentifier: UInt64?
+        let standardOutputPipeIdentifier: UInt64?
+        let timestamp: Date
+    }
+
     private enum Role { case downloader, shell }
     private let lock = NSLock()
     private var recent: [Int32: Recent] = [:]
+    private var forkEvidence: [Int32: ForkEvidence] = [:]
+    private var emittedFingerprints: [String: Date] = [:]
     private let window: TimeInterval
 
     init(window: TimeInterval = 3) { self.window = window }
 
+    func recordFork(
+        childPID: Int32,
+        parentPID: Int32,
+        standardInputPipeIdentifier: UInt64?,
+        standardOutputPipeIdentifier: UInt64?,
+        timestamp: Date = Date()
+    ) {
+        lock.withLock {
+            forkEvidence[childPID] = ForkEvidence(
+                parentPID: parentPID,
+                standardInputPipeIdentifier: standardInputPipeIdentifier,
+                standardOutputPipeIdentifier: standardOutputPipeIdentifier,
+                timestamp: timestamp
+            )
+            prune(now: timestamp)
+        }
+    }
+
     func observe(_ observation: Observation) -> Finding? {
-        guard !observation.pipeIdentifiers.isEmpty,
-              let role = Self.role(for: observation) else { return nil }
         return lock.withLock {
-            recent = recent.filter {
-                observation.timestamp.timeIntervalSince($0.value.observation.timestamp) <= window
-            }
+            prune(now: observation.timestamp)
+            let observation = mergingForkEvidence(into: observation)
+            guard let role = Self.role(for: observation) else { return nil }
             defer { recent[observation.pid] = Recent(observation: observation, role: role) }
             guard let sibling = recent.values.first(where: {
-                $0.observation.parentPID == observation.parentPID
-                    && $0.observation.pid != observation.pid
-                    && $0.role != role
-                    && !$0.observation.pipeIdentifiers.isDisjoint(with: observation.pipeIdentifiers)
+                guard $0.observation.parentPID == observation.parentPID,
+                      $0.observation.pid != observation.pid,
+                      $0.role != role else { return false }
+                if role == .downloader {
+                    guard let output = observation.standardOutputPipeIdentifier else { return false }
+                    return output == $0.observation.standardInputPipeIdentifier
+                }
+                guard let input = observation.standardInputPipeIdentifier else { return false }
+                return $0.observation.standardOutputPipeIdentifier == input
             }) else { return nil }
             let downloader = role == .downloader ? observation : sibling.observation
             let shell = role == .shell ? observation : sibling.observation
+            guard let sharedPipe = downloader.standardOutputPipeIdentifier,
+                  sharedPipe == shell.standardInputPipeIdentifier else { return nil }
+            let fingerprint = "\(downloader.parentPID)|\(sharedPipe)|\(downloader.pid)|\(shell.pid)"
+            guard emittedFingerprints[fingerprint] == nil else { return nil }
+            emittedFingerprints[fingerprint] = observation.timestamp
             return Finding(
-                reason: Self.executableName(downloader.executablePath) == "wget"
-                    ? "wget_pipe_shell" : "curl_pipe_shell",
+                reason: "download_pipe_interpreter",
                 matchedCommand: Self.redactedCommand(downloader, shell: shell),
-                actorPID: shell.pid
+                actorPID: shell.pid,
+                confidence: downloader.codeIdentityValidated && shell.codeIdentityValidated
+                    ? "high" : "medium"
             )
         }
     }
 
+    /// Descriptor state can appear shortly after AUTH_EXEC. Retry only when
+    /// the command already has one half of the correlation evidence; doing so
+    /// avoids scheduling work for every process launch on the Mac.
+    func shouldRetry(_ observation: Observation) -> Bool {
+        lock.withLock {
+            prune(now: observation.timestamp)
+            let observation = mergingForkEvidence(into: observation)
+            return observation.arguments.contains(where: Self.containsRemoteURL)
+                || observation.standardInputPipeIdentifier != nil
+        }
+    }
+
     private static func role(for observation: Observation) -> Role? {
+        if observation.hasNetworkSocket,
+           observation.arguments.contains(where: containsRemoteURL) {
+            return .downloader
+        }
         let name = executableName(observation.executablePath)
-        if ["curl", "wget"].contains(name),
-           observation.arguments.contains(where: { argument in
-               let value = argument.lowercased()
-               return value.hasPrefix("http://") || value.hasPrefix("https://")
-           }) { return .downloader }
-        if ["sh", "bash", "zsh", "dash", "ksh", "csh", "fish"].contains(name) {
+        let interpreters: Set<String> = [
+            "sh", "bash", "zsh", "dash", "ksh", "csh", "fish",
+            "python", "python3", "perl", "ruby", "node", "osascript", "php", "swift"
+        ]
+        let interpreterSigningIDs: Set<String> = [
+            "com.apple.sh", "com.apple.bash", "com.apple.zsh", "com.apple.osascript",
+            "org.python.python", "org.perl.perl", "org.ruby-lang.ruby"
+        ]
+        let familyName = interpreterFamilyName(
+            executableName: name,
+            signingIdentifier: observation.signingIdentifier
+        )
+        if observation.standardInputPipeIdentifier != nil,
+           (interpreters.contains(name)
+            || observation.signingIdentifier.map(interpreterSigningIDs.contains) == true),
+           executesStandardInputAsCode(observation.arguments, interpreterName: familyName) {
             return .shell
         }
         return nil
+    }
+
+    /// A pipe into an interpreter is dangerous only when stdin is executable
+    /// input. Inline programs and script-file invocations consume stdin as
+    /// ordinary data and must not become protected download-to-shell findings.
+    private static func executesStandardInputAsCode(
+        _ arguments: [String],
+        interpreterName: String
+    ) -> Bool {
+        let operands = Array(arguments.dropFirst())
+        if operands.isEmpty { return true }
+
+        let shellFamily: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "csh", "fish"]
+        if shellFamily.contains(interpreterName) {
+            var consumesOptionValue = false
+            for argument in operands {
+                if consumesOptionValue {
+                    consumesOptionValue = false
+                    continue
+                }
+                if argument == "-" || argument == "-s" { return true }
+                if argument == "-c" { return false }
+                if argument == "-o" {
+                    consumesOptionValue = true
+                    continue
+                }
+                if argument.hasPrefix("-") && !argument.hasPrefix("--") {
+                    let flags = argument.dropFirst()
+                    if flags.contains("c") { return false }
+                    if flags.contains("s") { return true }
+                    continue
+                }
+                if argument == "--" { continue }
+                return false
+            }
+            return true
+        }
+
+        if interpreterName == "python" || interpreterName == "python3" {
+            var consumesOptionValue = false
+            for argument in operands {
+                if consumesOptionValue {
+                    consumesOptionValue = false
+                    continue
+                }
+                if argument == "-" { return true }
+                if argument == "-c" || argument == "-m"
+                    || argument.hasPrefix("-c") || argument.hasPrefix("-m") {
+                    return false
+                }
+                if argument == "-W" || argument == "-X" || argument == "-Q" {
+                    consumesOptionValue = true
+                    continue
+                }
+                if argument.hasPrefix("-") { continue }
+                return false
+            }
+            return true
+        }
+
+        if ["perl", "ruby", "node"].contains(interpreterName) {
+            for argument in operands {
+                if argument == "-" || argument == "-s" { return true }
+                if argument == "-e" || argument == "-E" || argument == "--eval"
+                    || argument == "-p" || argument == "--print"
+                    || argument.hasPrefix("-e") || argument.hasPrefix("-E")
+                    || argument.hasPrefix("--eval=") {
+                    return false
+                }
+                if argument.hasPrefix("-") { continue }
+                return false
+            }
+            return true
+        }
+
+        var consumesOptionValue = false
+        for argument in operands {
+            if consumesOptionValue {
+                consumesOptionValue = false
+                continue
+            }
+            if argument == "-" || argument == "-s" { return true }
+            if argument == "-c" || argument == "-e" || argument == "-m"
+                || argument == "--command" || argument == "--eval" {
+                return false
+            }
+            if argument.hasPrefix("-c") || argument.hasPrefix("-e") || argument.hasPrefix("-m") {
+                return false
+            }
+            if argument.hasPrefix("--command=") || argument.hasPrefix("--eval=") {
+                return false
+            }
+            if argument == "-l" || argument == "--language" {
+                consumesOptionValue = true
+                continue
+            }
+            if argument.hasPrefix("-") { continue }
+            return false
+        }
+        return true
+    }
+
+    private static func interpreterFamilyName(
+        executableName: String,
+        signingIdentifier: String?
+    ) -> String {
+        switch signingIdentifier?.lowercased() {
+        case "com.apple.sh": return "sh"
+        case "com.apple.bash": return "bash"
+        case "com.apple.zsh": return "zsh"
+        case "com.apple.osascript": return "osascript"
+        case "org.python.python": return "python3"
+        case "org.perl.perl": return "perl"
+        case "org.ruby-lang.ruby": return "ruby"
+        default: return executableName
+        }
+    }
+
+    private static func containsRemoteURL(_ argument: String) -> Bool {
+        let value = argument.lowercased()
+        return value.range(of: #"https?://[^\s\"']+"#, options: .regularExpression) != nil
+    }
+
+    private func mergingForkEvidence(into observation: Observation) -> Observation {
+        guard let inherited = forkEvidence[observation.pid],
+              observation.timestamp.timeIntervalSince(inherited.timestamp) <= window,
+              inherited.parentPID == observation.parentPID else { return observation }
+        return Observation(
+            pid: observation.pid,
+            parentPID: observation.parentPID,
+            executablePath: observation.executablePath,
+            arguments: observation.arguments,
+            standardInputPipeIdentifier: observation.standardInputPipeIdentifier
+                ?? inherited.standardInputPipeIdentifier,
+            standardOutputPipeIdentifier: observation.standardOutputPipeIdentifier
+                ?? inherited.standardOutputPipeIdentifier,
+            hasNetworkSocket: observation.hasNetworkSocket,
+            codeIdentityValidated: observation.codeIdentityValidated,
+            signingIdentifier: observation.signingIdentifier,
+            timestamp: observation.timestamp
+        )
+    }
+
+    private func prune(now: Date) {
+        recent = recent.filter { now.timeIntervalSince($0.value.observation.timestamp) <= window }
+        forkEvidence = forkEvidence.filter { now.timeIntervalSince($0.value.timestamp) <= window }
+        emittedFingerprints = emittedFingerprints.filter { now.timeIntervalSince($0.value) <= window }
     }
 
     private static func executableName(_ path: String) -> String {

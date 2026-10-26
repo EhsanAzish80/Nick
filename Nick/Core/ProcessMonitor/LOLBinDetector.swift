@@ -158,7 +158,7 @@ enum LOLBinDetector {
     ) -> Bool {
         let lower = command.lowercased()
         switch reason {
-        case "curl_pipe_shell", "wget_pipe_shell":
+        case "curl_pipe_shell", "wget_pipe_shell", "download_pipe_interpreter":
             return lower.contains("|") && lower.range(
                 of: #"\b(bash|zsh|sh|ksh|csh|fish|dash)\b"#,
                 options: .regularExpression
@@ -209,7 +209,9 @@ enum LOLBinDetector {
         if let finding = LOLBinExecutionPolicy.finding(
             executablePath: proc.path,
             arguments: proc.arguments
-        ), finding.reason == "curl_pipe_shell" || finding.reason == "wget_pipe_shell" {
+        ), finding.reason == "curl_pipe_shell"
+            || finding.reason == "wget_pipe_shell"
+            || finding.reason == "download_pipe_interpreter" {
             let evidenceProcess = resolvedSigningEvidence(for: proc, resolver: signingResolver)
             var metadata = [
                 "reason": finding.reason,
@@ -238,7 +240,9 @@ enum LOLBinDetector {
             // These signatures are retained for compatibility documentation,
             // but detection is handled exclusively by the evidence-requiring
             // shared policy above.
-            guard sig.reason != "curl_pipe_shell", sig.reason != "wget_pipe_shell" else { continue }
+            guard sig.reason != "curl_pipe_shell",
+                  sig.reason != "wget_pipe_shell",
+                  sig.reason != "download_pipe_interpreter" else { continue }
             guard proc.name.lowercased() == sig.processName.lowercased() else { continue }
             guard argv.lowercased().contains(sig.argumentPattern.lowercased()) else { continue }
             guard isSpecificMatch(reason: sig.reason, arguments: proc.arguments, command: argv) else { continue }

@@ -103,6 +103,26 @@ Released 2026-10-16.
 - Add a built-product rule gate and keep production policy material out of
   built test artifacts.
 
+## Version 5.1.1: measurement and detector hardening
+
+- Prove the installed Endpoint Security `AUTH_OPEN` credential path with a
+  synthetic credential-store fixture before treating credential coverage as
+  measured.
+- Confirm Chromium-family stores with explicit Brave, Edge, Arc, Opera and
+  Vivaldi regression cases.
+- Detect hidden-answer AppleScript password prompts as review-tier credential
+  findings without recording prompt contents or entered secrets.
+- Correlate download-to-interpreter behavior from a network socket, remote-URL
+  argument, shared pipe and ancestry. Executable names and signing identifiers
+  do not establish downloader behavior; validated identity adjusts confidence
+  only.
+- Preserve inherited pipe evidence across short-lived fork/exec races and
+  verify the installed path with a safe local real-timing fixture.
+- Continue broadening interpreter-role evidence where neither a validated code
+  identity nor an executable role can be established safely.
+- Re-run the evidence scorecard after installed validation. No effectiveness
+  rating is claimed while required measurements remain pending.
+
 ## Version 5.1: trusted rule and signature updates
 
 ### Interface work

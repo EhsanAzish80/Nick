@@ -47,6 +47,23 @@ final class NetworkProtectionPolicyTests: XCTestCase {
         XCTAssertTrue(source.contains("Completed-write exact-signature check skipped over size cap"))
     }
 
+    func test_networkEventPersistenceRunsOffTheFlowVerdictPath() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("NickNetFilter/FilterDataProvider.swift"),
+            encoding: .utf8
+        )
+        let recordStart = try XCTUnwrap(source.range(of: "private func recordObservation("))
+        let signingStart = try XCTUnwrap(source.range(of: "private func signingIdentifier("))
+        let recordSection = String(source[recordStart.lowerBound..<signingStart.lowerBound])
+
+        XCTAssertTrue(recordSection.contains("eventWriteQueue.async"))
+        XCTAssertTrue(recordSection.contains("eventStore.append(event)"))
+        XCTAssertFalse(recordSection.contains("eventStore.append(NetworkBlockEvent("))
+    }
+
     func test_systemExtensionDeclaresFilterDataProvider() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

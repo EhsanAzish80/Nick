@@ -27,6 +27,13 @@ final class FilterDataProvider: NEFilterDataProvider {
     private let tracker        = ConnectionTracker()
     private let scamGuardian   = ScamGuardian()
     private let eventStore     = NetworkBlockEventStore()
+    /// Flow verdicts must never wait for filesystem persistence. The serial
+    /// writer preserves event ordering without blocking NetworkExtension's
+    /// connection-handling thread.
+    private let eventWriteQueue = DispatchQueue(
+        label: "com.ehsanazish.nick.network-event-writer",
+        qos: .utility
+    )
     private let observationLock = NSLock()
     private var observationTimestamps: [String: Date] = [:]
     private var healthTimer: DispatchSourceTimer?
@@ -224,7 +231,7 @@ final class FilterDataProvider: NEFilterDataProvider {
         }
         guard shouldRecord else { return }
 
-        eventStore.append(NetworkBlockEvent(
+        let event = NetworkBlockEvent(
             timestamp: now,
             host: normalizedHost,
             appIdentifier: appID == "unknown" ? nil : appID,
@@ -235,13 +242,16 @@ final class FilterDataProvider: NEFilterDataProvider {
             sourceVersion: reason == .knownThreat ? blocklist.provenance?.version : nil,
             sourceIssuedAt: reason == .knownThreat ? blocklist.provenance?.issuedAt : nil,
             sourceExpiresAt: reason == .knownThreat ? blocklist.provenance?.expiresAt : nil
-        ))
-        DistributedNotificationCenter.default().postNotificationName(
-            Notification.Name("com.ehsanazish.nick.network-observation"),
-            object: nil,
-            userInfo: nil,
-            deliverImmediately: true
         )
+        eventWriteQueue.async { [eventStore] in
+            eventStore.append(event)
+            DistributedNotificationCenter.default().postNotificationName(
+                Notification.Name("com.ehsanazish.nick.network-observation"),
+                object: nil,
+                userInfo: nil,
+                deliverImmediately: true
+            )
+        }
     }
 
     private func signingIdentifier(for auditToken: Data?) -> String? {
@@ -291,7 +301,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
 }
 
-private final class NetworkBlockEventStore {
+private final class NetworkBlockEventStore: @unchecked Sendable {
     private let lock = NSLock()
 
     func append(_ event: NetworkBlockEvent) {
