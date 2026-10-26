@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "eventType": "NOTIFY_TCC_MODIFY",
+  "processPath": "/Applications/Fixture.app/Contents/MacOS/Fixture",
+  "pid": 703,
+  "parentPid": 1,
+  "filePath": null,
+  "decision": "notApplicable",
+  "threatName": "Privacy permission granted",
+  "threatFamily": "apple-tcc",
+  "metadata": {
+    "appleEvent": "tcc-permission-modified",
+    "reason": "tcc-permission-modified",
+    "rule": "tcc-permission-modified",
+    "ruleTier": "review",
+    "service": "Camera",
+    "changeType": "granted",
+    "responsibleAppName": "Fixture",
+    "responsibleAppBundleID": "test.nick.fixture",
+    "responsibleAppSigning": "Signed",
+    "responsibleChain": "Fixture"
+  }
+}

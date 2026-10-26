@@ -122,6 +122,69 @@ final class ReplayHarnessTests: XCTestCase {
         XCTAssertEqual(alert.contributingSignals.first?.metadata["ruleTier"], "protected")
     }
 
+    func test_appleSecurityFixturesEachProduceOneAttributedIncident() async throws {
+        let fixtures = [
+            "apple-xprotect-detected.json",
+            "apple-xprotect-remediated.json",
+            "apple-btm-add.json",
+            "apple-btm-remove.json",
+            "apple-gatekeeper-override.json",
+            "apple-tcc-modify.json"
+        ]
+
+        for name in fixtures {
+            let fixture: EndpointFixture = try decode("Fixtures/\(name)")
+            let finding = try XCTUnwrap(ExtensionFinding(event: endpointEvent(fixture)))
+            let engine = try readyEngine()
+            let outcome = await engine.ingestLiveFinding(
+                finding.signal,
+                score: finding.score,
+                recommendedAction: finding.recommendedAction
+            )
+
+            guard case .persisted = outcome else {
+                XCTFail("\(name) was not persisted: \(outcome)")
+                continue
+            }
+            XCTAssertEqual(engine.alerts.count, 1, name)
+            let signal = try XCTUnwrap(engine.alerts.first?.contributingSignals.first)
+            XCTAssertFalse(signal.metadata["responsibleAppName", default: ""].isEmpty, name)
+            XCTAssertFalse(signal.metadata["responsibleChain", default: ""].isEmpty, name)
+        }
+    }
+
+    func test_benignAppleWorkloadFixturesStayReviewTier() throws {
+        let fixtures = [
+            "apple-xprotect-remediated.json",
+            "apple-btm-add.json",
+            "apple-btm-remove.json",
+            "apple-gatekeeper-override.json",
+            "apple-tcc-modify.json"
+        ]
+        for name in fixtures {
+            let fixture: EndpointFixture = try decode("Fixtures/\(name)")
+            let finding = try XCTUnwrap(ExtensionFinding(event: endpointEvent(fixture)))
+            XCTAssertEqual(finding.signal.metadata["ruleTier"], "review", name)
+            XCTAssertNotEqual(finding.signal.severity, .critical, name)
+        }
+    }
+
+    private func endpointEvent(_ fixture: EndpointFixture) -> ESEvent {
+        ESEvent(
+            eventType: fixture.eventType,
+            processPath: fixture.processPath,
+            pid: fixture.pid,
+            parentPid: fixture.parentPid,
+            filePath: fixture.filePath,
+            decision: fixture.decision,
+            threat: .init(
+                threatName: fixture.threatName,
+                threatFamily: fixture.threatFamily,
+                metadata: fixture.metadata
+            )
+        )
+    }
+
     private func readyEngine() throws -> SecurityEngine {
         let engine = SecurityEngine()
         let payload = try JSONEncoder().encode(IncidentStoreSnapshot(

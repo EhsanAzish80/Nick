@@ -360,6 +360,13 @@ let phase4Events: [es_event_type_t] = [
     ES_EVENT_TYPE_NOTIFY_FORK,       // process lifecycle
     ES_EVENT_TYPE_NOTIFY_EXIT,       // process lifecycle
 
+    // --- Apple security signals ---
+    ES_EVENT_TYPE_NOTIFY_XP_MALWARE_DETECTED,
+    ES_EVENT_TYPE_NOTIFY_XP_MALWARE_REMEDIATED,
+    ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD,
+    ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_REMOVE,
+    ES_EVENT_TYPE_NOTIFY_GATEKEEPER_USER_OVERRIDE,
+
     // --- Phase 5: Network & Privacy ---
     ES_EVENT_TYPE_NOTIFY_MOUNT,      // external volume mounted → USB scan
     ES_EVENT_TYPE_NOTIFY_UNMOUNT,    // stop scanning media after it is removed

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "eventType": "NOTIFY_GATEKEEPER_USER_OVERRIDE",
+  "processPath": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder",
+  "pid": 702,
+  "parentPid": 1,
+  "filePath": "/tmp/NickReplay/Untrusted.app",
+  "decision": "notApplicable",
+  "threatName": "Gatekeeper override used",
+  "threatFamily": "apple-gatekeeper",
+  "metadata": {
+    "appleEvent": "gatekeeper-user-override",
+    "reason": "gatekeeper-user-override",
+    "rule": "gatekeeper-user-override",
+    "ruleTier": "review",
+    "responsibleAppName": "Finder",
+    "responsibleAppBundleID": "com.apple.finder",
+    "responsibleAppSigning": "Apple platform",
+    "responsibleChain": "Finder"
+  }
+}

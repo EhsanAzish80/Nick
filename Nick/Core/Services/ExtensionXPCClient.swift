@@ -1183,6 +1183,7 @@ struct ExtensionFinding: Sendable {
         let isNickMaintenance = event.threatFamily == "nick-maintenance"
         let isDocumentedUninstall = event.threatFamily == "nick-documented-uninstall"
         let isManagementObservation = event.threatFamily == "endpoint-management"
+        let isAppleReviewEvent = event.metadata?["ruleTier"] == "review"
         let isRansomwareBehavior = event.metadata?["detectionKind"] == "ransomware-behavior"
         let isLOLBinBehavior = event.metadata?["detectionKind"] == "lolbin-behavior"
         let severity: SignalSeverity
@@ -1190,6 +1191,8 @@ struct ExtensionFinding: Sendable {
             severity = .critical
         } else if isManagementObservation || isNickMaintenance || isDocumentedUninstall {
             severity = .info
+        } else if isAppleReviewEvent {
+            severity = .medium
         } else if isLOLBinBehavior {
             switch event.metadata?["signalSeverity"] {
             case "critical": severity = .critical
@@ -1220,7 +1223,7 @@ struct ExtensionFinding: Sendable {
         )
         let isAuditEvent = isManagementObservation || isNickMaintenance || isDocumentedUninstall
         let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : ((isRansomwareBehavior || isLOLBinBehavior) ? "behavior" : "signature"))
-        let ruleTier = isAuditEvent ? "review" : "protected"
+        let ruleTier = event.metadata?["ruleTier"] ?? (isAuditEvent ? "review" : "protected")
         var metadata = [
             "reason": isTamper
                 ? "endpoint_tamper_observed"
@@ -1278,8 +1281,8 @@ struct ExtensionFinding: Sendable {
                 metadata: metadata
             )
         )
-        score = event.decision == .deny ? 0.98 : (isAuditEvent ? 0.1 : 0.9)
-        recommendedAction = isAuditEvent
+        score = event.decision == .deny ? 0.98 : ((isAuditEvent || isAppleReviewEvent) ? 0.35 : 0.9)
+        recommendedAction = (isAuditEvent || isAppleReviewEvent)
             ? "No action is needed if you ran this command."
             : "Review the event and investigate it if you do not recognise the activity."
     }
@@ -1292,6 +1295,24 @@ struct ExtensionFinding: Sendable {
         isDocumentedUninstall: Bool,
         isLOLBinBehavior: Bool
     ) -> String {
+        switch event.metadata?["appleEvent"] {
+        case "xprotect-malware-detected":
+            return "Apple XProtect detected known malware at the recorded path."
+        case "xprotect-malware-remediated":
+            return event.metadata?["remediationSucceeded"] == "true"
+                ? "Apple XProtect reports that it remediated the detected malware."
+                : "Apple XProtect attempted remediation but reported that it did not complete."
+        case "background-item-added":
+            return "macOS recorded a background item being added. Review it if you did not expect this change."
+        case "background-item-removed":
+            return "macOS recorded a background item being removed."
+        case "gatekeeper-user-override":
+            return "A user overrode Gatekeeper for this item. Review the item before opening it again."
+        case "tcc-permission-modified":
+            return "macOS recorded a privacy-permission change for the identified app."
+        default:
+            break
+        }
         if isManagementObservation {
             return "Nick observed routine use of Apple's system-extension management tool."
         }
