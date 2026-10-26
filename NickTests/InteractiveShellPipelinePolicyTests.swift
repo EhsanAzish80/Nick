@@ -2,6 +2,28 @@ import XCTest
 @testable import Nick
 
 final class InteractiveShellPipelinePolicyTests: XCTestCase {
+    func testForkHandlerDoesNotInspectProcessDescriptorsOnESCallbackQueue() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("NickExtension/EventHandler.swift"),
+            encoding: .utf8
+        )
+        let forkStart = try XCTUnwrap(source.range(of: "case ES_EVENT_TYPE_NOTIFY_FORK:"))
+        let exitStart = try XCTUnwrap(
+            source.range(of: "case ES_EVENT_TYPE_NOTIFY_EXIT:", range: forkStart.upperBound..<source.endIndex)
+        )
+        let forkHandler = source[forkStart.lowerBound..<exitStart.lowerBound]
+            .split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+
+        XCTAssertFalse(forkHandler.contains("ProcessPipeResolver"))
+        XCTAssertFalse(forkHandler.contains("proc_pidinfo"))
+        XCTAssertFalse(forkHandler.contains("proc_pidfdinfo"))
+    }
+
     func test_retriesOnlyPlausiblePipelineParticipants() {
         let policy = InteractiveShellPipelinePolicy()
         let now = Date()
