@@ -26,7 +26,10 @@ final class NetworkProtectionManager {
     var findingHandler: ((NetworkFinding) async -> IncidentIngestOutcome)? {
         didSet {
             guard findingHandler != nil else { return }
-            ingestEvents(blockEvents)
+            // Installing the consumer is not a successful shared-store read.
+            // Deliver buffered events only after a durable cursor exists; an
+            // empty in-memory array must never become the first-run baseline.
+            ingestEvents(blockEvents, permitsCursorBootstrap: false)
         }
     }
     /// Confirms that the root-owned incident-store snapshot covering a live
@@ -294,6 +297,13 @@ final class NetworkProtectionManager {
     /// an event arriving during app startup could be marked delivered and then
     /// permanently skipped when the live-finding handler is attached.
     func ingestEvents(_ decoded: [NetworkBlockEvent]) {
+        ingestEvents(decoded, permitsCursorBootstrap: true)
+    }
+
+    private func ingestEvents(
+        _ decoded: [NetworkBlockEvent],
+        permitsCursorBootstrap: Bool
+    ) {
         let sorted = decoded.sorted { $0.timestamp > $1.timestamp }
         blockEvents = sorted
         let skippedAlreadyDelivered = sorted.lazy.filter {
@@ -307,7 +317,9 @@ final class NetworkProtectionManager {
             "reload summary decoded=\(sorted.count, privacy: .public) new=\(newEvents.count, privacy: .public) skipped-already-delivered=\(skippedAlreadyDelivered, privacy: .public)"
         )
         guard durableCursorReady else {
-            if !cursorBootstrapInFlight, let cursorBootstrapHandler {
+            if permitsCursorBootstrap,
+               !cursorBootstrapInFlight,
+               let cursorBootstrapHandler {
                 cursorBootstrapInFlight = true
                 let baselineIDs = Set(sorted.map(\.id))
                 Task {
