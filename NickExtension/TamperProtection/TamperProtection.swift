@@ -53,6 +53,7 @@ final class TamperActorValidator: @unchecked Sendable {
         signingID: String,
         identity: TamperActorIdentity
     ) -> Bool {
+        ESCallbackSafetyGuard.requireOffCallbackThread("SecCodeCopyGuest")
 
         var token = auditToken
         let tokenData = Data(bytes: &token, count: MemoryLayout<audit_token_t>.size)
@@ -126,6 +127,10 @@ final class NickUpdateLeaseManager: @unchecked Sendable {
     private let now: @Sendable () -> Date
     private let uptime: @Sendable () -> TimeInterval
     private var state: NickUpdateLeaseState
+    private let persistenceQueue = DispatchQueue(
+        label: "com.ehsanazish.nick.update-lease.persistence",
+        qos: .utility
+    )
     var onAudit: ((NickUpdateLeaseAudit) -> Void)?
 
     init(
@@ -245,12 +250,23 @@ final class NickUpdateLeaseManager: @unchecked Sendable {
     private func appendLocked(_ entry: NickUpdateLeaseAudit) -> Bool {
         state.audit.append(entry)
         state.audit = Array(state.audit.suffix(100))
+        if ESCallbackSafetyGuard.isOnCallbackThread {
+            let snapshot = state
+            let callback = onAudit
+            persistenceQueue.async { [weak self] in
+                guard let self else { return }
+                _ = self.persist(snapshot)
+                callback?(entry)
+            }
+            return true
+        }
         guard persist(state) else { return false }
         onAudit?(entry)
         return true
     }
 
     private func persist(_ state: NickUpdateLeaseState) -> Bool {
+        ESCallbackSafetyGuard.requireOffCallbackThread("update-lease file I/O")
         do {
             let directory = stateURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(

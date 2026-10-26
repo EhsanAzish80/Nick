@@ -4,6 +4,52 @@
 
 import Foundation
 import Security
+
+enum ESCallbackSafetyGuard {
+    private static let key = "com.ehsanazish.nick.es-callback"
+
+    static var isOnCallbackThread: Bool {
+        Thread.current.threadDictionary[key] as? Bool == true
+    }
+
+    static func enter() { Thread.current.threadDictionary[key] = true }
+    static func leave() { Thread.current.threadDictionary.removeObject(forKey: key) }
+
+    static func requireOffCallbackThread(
+        _ operation: StaticString,
+        file: StaticString = #fileID,
+        line: UInt = #line
+    ) {
+#if DEBUG
+        assert(
+            !isOnCallbackThread,
+            "\(operation) must not run on the Endpoint Security callback thread",
+            file: file,
+            line: line
+        )
+#endif
+    }
+}
+
+/// Testable boundary for work that may inspect another process. Scheduling is
+/// deliberately fire-and-forget so a wedged resolver cannot hold an ES reply.
+final class ESForeignProcessWorkScheduler: @unchecked Sendable {
+    private let queue: DispatchQueue
+
+    init(queue: DispatchQueue = DispatchQueue(
+        label: "com.ehsanazish.nick.foreign-process-resolver",
+        qos: .utility
+    )) {
+        self.queue = queue
+    }
+
+    func schedule<Result: Sendable>(
+        operation: @escaping @Sendable () -> Result,
+        completion: @escaping @Sendable (Result) -> Void
+    ) {
+        queue.async { completion(operation()) }
+    }
+}
 import Darwin
 import os
 
@@ -69,6 +115,7 @@ final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentit
     static let shared = SecCodeResponsibleProcessIdentityResolver()
 
     func identity(pid: Int32, pathHint: String?) -> ResponsibleAppIdentity? {
+        ESCallbackSafetyGuard.requireOffCallbackThread("SecCodeCopyGuest/proc_pidpath")
         let path = executablePath(pid: pid) ?? pathHint
         guard let path, !path.isEmpty else { return nil }
         let appURL = Self.appBundleURL(for: path)
@@ -125,6 +172,7 @@ final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentit
     }
 
     func liveProcess(pid: Int32) -> ResponsibleLiveProcess? {
+        ESCallbackSafetyGuard.requireOffCallbackThread("proc_pidinfo/proc_pidpath")
         guard let path = executablePath(pid: pid) else { return nil }
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.stride)

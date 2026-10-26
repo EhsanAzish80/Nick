@@ -5,6 +5,27 @@ struct ProcessInstanceIdentity: Equatable, Sendable {
     let pid: Int32
     let startSeconds: UInt64
     let startMicroseconds: UInt64
+    /// Kernel pid-version copied from the Endpoint Security audit token.
+    /// Zero is retained for legacy callers that capture outside an ES message.
+    let pidVersion: Int32
+    let processGroupID: Int32
+    let sessionID: UInt32
+
+    init(
+        pid: Int32,
+        startSeconds: UInt64,
+        startMicroseconds: UInt64,
+        pidVersion: Int32 = 0,
+        processGroupID: Int32 = 0,
+        sessionID: UInt32 = 0
+    ) {
+        self.pid = pid
+        self.startSeconds = startSeconds
+        self.startMicroseconds = startMicroseconds
+        self.pidVersion = pidVersion
+        self.processGroupID = processGroupID
+        self.sessionID = sessionID
+    }
 
     static func capture(pid: Int32) -> Self? {
         guard pid > 1 else { return nil }
@@ -14,7 +35,10 @@ struct ProcessInstanceIdentity: Equatable, Sendable {
         return Self(
             pid: pid,
             startSeconds: info.pbi_start_tvsec,
-            startMicroseconds: info.pbi_start_tvusec
+            startMicroseconds: info.pbi_start_tvusec,
+            pidVersion: 0,
+            processGroupID: Int32(bitPattern: info.pbi_pgid),
+            sessionID: 0
         )
     }
 }
@@ -32,7 +56,15 @@ enum RansomwareTerminationPolicy {
 
     static func maySignalKill(expected: ProcessInstanceIdentity?, current: ProcessInstanceIdentity?) -> Bool {
         guard let expected, let current else { return false }
-        return expected == current
+        guard expected.pid == current.pid,
+              expected.startSeconds == current.startSeconds,
+              expected.startMicroseconds == current.startMicroseconds
+        else { return false }
+        // pidversion is authoritative when both identities came from ES. A
+        // remediation-time proc snapshot cannot recover it, so zero means
+        // unavailable rather than mismatch.
+        return expected.pidVersion == 0 || current.pidVersion == 0
+            || expected.pidVersion == current.pidVersion
     }
 }
 

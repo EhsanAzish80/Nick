@@ -2,6 +2,62 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+    @MainActor
+    func testMainActorOneShotAcceptsBackgroundXPCRepliesExactlyOnce() async {
+        let completed = expectation(description: "main actor completion")
+        var values: [Bool] = []
+        let reply = MainActorOneShot<Bool> { value in
+            XCTAssertTrue(Thread.isMainThread)
+            values.append(value)
+            completed.fulfill()
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            XCTAssertTrue(reply.resolve(true))
+            XCTAssertFalse(reply.resolve(false))
+        }
+
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertEqual(values, [true])
+    }
+
+    @MainActor
+    func testEveryExtensionProtocolReplyShapeCanArriveOnBackgroundQueue() async {
+        // Keep this list aligned with every reply-bearing call made by
+        // ExtensionXPCClient. The payload is immaterial here: all callbacks
+        // cross the same nonisolated, Sendable, exactly-once boundary before
+        // touching MainActor state.
+        let methods = [
+            "getStatus", "installThreatIntelligenceBundle", "getExtensionHealth",
+            "ingestAppObservedProtectionGap", "getPendingFIMViolations",
+            "migrateSecuritySettings", "replaceSecuritySettings", "getIncidentStore",
+            "migrateIncidentStore", "replaceIncidentStore", "validateIncidentVerdictTarget",
+            "requestUpdateLease", "recordAuthorizedProtectionStop",
+            "recordIntentionalAppExit", "getPersistedEvents", "requestQuarantineFile",
+            "requestAllowFileOnce", "requestBlockReviewedFile", "requestRebuildFIMBaseline",
+            "acknowledgeFIMViolation", "requestDeployCanaries",
+            "requestRestoreQuarantinedFile", "debugValidateProtectionAuthorization",
+            "requestDeleteQuarantinedFile"
+        ]
+        let completed = methods.map { expectation(description: $0) }
+        var delivered: [String] = []
+
+        for (index, method) in methods.enumerated() {
+            let reply = MainActorOneShot<String> { value in
+                XCTAssertTrue(Thread.isMainThread)
+                delivered.append(value)
+                completed[index].fulfill()
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                XCTAssertTrue(reply.resolve(method))
+                XCTAssertFalse(reply.resolve("duplicate-\(method)"))
+            }
+        }
+
+        await fulfillment(of: completed, timeout: 2)
+        XCTAssertEqual(Set(delivered), Set(methods))
+    }
+
     func testOneShotDataReplyCompletesOnlyOnceAcrossReplyErrorAndTimeout() {
         let recorder = LockedDataRecorder()
         let reply = OneShotDataReply { data in
@@ -24,6 +80,24 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         XCTAssertTrue(client.reconnectScheduledForTesting)
         XCTAssertFalse(client.isConnected)
         client.disconnect()
+    }
+
+    @MainActor
+    func testDisconnectResumesIncidentPersistenceWaiterExactlyOnce() async {
+        let client = ExtensionXPCClient()
+        client.registerIncidentWriteGenerationForTesting(1)
+        let waiter = Task { @MainActor in
+            await client.awaitIncidentStorePersistenceForTesting(generation: 1)
+        }
+        await Task.yield()
+        XCTAssertEqual(client.pendingIncidentWriteWaiterCount, 1)
+
+        client.disconnect()
+
+        let result = await waiter.value
+        XCTAssertEqual(result.0, 1)
+        XCTAssertFalse(result.1)
+        XCTAssertEqual(client.pendingIncidentWriteWaiterCount, 0)
     }
 #endif
 

@@ -81,6 +81,9 @@ final class ESEventHandler {
 
     private let encoder = JSONEncoder()
     private let interactivePipelinePolicy = InteractiveShellPipelinePolicy()
+    var processPipeEvidenceProvider: @Sendable (Int32) -> ProcessPipeResolver.Evidence = {
+        ProcessPipeResolver.evidence(pid: $0)
+    }
     private let credentialReportLock = NSLock()
     private var lastCredentialReport: [String: Date] = [:]
     private static let credentialReportWindow: TimeInterval = 60
@@ -88,6 +91,8 @@ final class ESEventHandler {
     // MARK: - Public Entry Point
 
     func handle(message: UnsafePointer<es_message_t>) {
+        ESCallbackSafetyGuard.enter()
+        defer { ESCallbackSafetyGuard.leave() }
         var msg = message.pointee
 
         // --- Extract process info synchronously (pointer only valid here) ---
@@ -96,9 +101,19 @@ final class ESEventHandler {
         let pid         = audit_token_to_pid(process.audit_token)
         let parentPid   = audit_token_to_pid(process.parent_audit_token)
         let responsiblePid = audit_token_to_pid(process.responsible_audit_token)
-        let observedProcessGroupID = getpgid(pid)
-        let processGroupID = observedProcessGroupID > 0 ? observedProcessGroupID : pid
-        let processIdentity = ProcessInstanceIdentity.capture(pid: pid)
+        // Never query another process from the ES callback queue. A process can
+        // be suspended in AUTH_EXEC while the same queue is expected to answer
+        // that authorization, turning getpgid/proc_pidinfo into a deadlock.
+        // All of this identity is already supplied atomically by EndpointSecurity.
+        let processGroupID = process.group_id > 0 ? process.group_id : pid
+        let processIdentity = ProcessInstanceIdentity(
+            pid: pid,
+            startSeconds: msg.version >= 3 ? UInt64(process.start_time.tv_sec) : 0,
+            startMicroseconds: msg.version >= 3 ? UInt64(process.start_time.tv_usec) : 0,
+            pidVersion: Int32(audit_token_to_pidversion(process.audit_token)),
+            processGroupID: process.group_id,
+            sessionID: UInt32(process.session_id)
+        )
         let tamperActorIdentity = TamperActorIdentity(
             teamID: esOptionalString(process.team_id),
             signingID: esOptionalString(process.signing_id),
@@ -131,13 +146,16 @@ final class ESEventHandler {
                 codesigningFlags: effectiveSender.codesigning_flags,
                 isPlatformBinary: effectiveSender.is_platform_binary
             )
-            let senderNickValidated = TamperActorValidator.shared.validatesNickActor(
-                auditToken: effectiveSender.audit_token,
-                identity: senderIdentity
-            ) || TamperActorValidator.shared.validatesNickUpdateActor(
-                auditToken: effectiveSender.audit_token,
-                identity: senderIdentity
-            )
+            // ES fields are kernel-authored and safe on the callback queue.
+            // Full SecCode validation is never performed while an AUTH reply is
+            // outstanding.
+            let senderNickValidated = senderIdentity.isValidIdentitySignature
+                && senderIdentity.teamID == TamperProtectionPolicy.nickTeamID
+                && [TamperProtectionPolicy.nickMaintenanceSigningIDs,
+                    TamperProtectionPolicy.nickLeasedUpdateSigningIDs]
+                    .contains { ids in
+                        senderIdentity.signingID.map(ids.contains) == true
+                    }
             let deadlineExpired = mach_absolute_time() >= msg.deadline
             let deny = !deadlineExpired && NickSignalProtectionPolicy.shouldDeny(
                 signal: signalNumber,
@@ -203,8 +221,7 @@ final class ESEventHandler {
             let cached   = fileScanner?.cache.lookup(path: targetPath, identity: targetIdentity)
             let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
                 path: targetPath,
-                identity: targetIdentity,
-                currentHash: { fileScanner?.contentHash(path: targetPath) }
+                identity: targetIdentity
             ) ?? false
             let shouldBlock = !explicitlyAllowed && (fileScanner?.allowsEnforcement(of: cached) ?? false)
 
@@ -276,14 +293,16 @@ final class ESEventHandler {
                     identity: tamperActorIdentity
                 )
                 writeBlocked = writeBlocked && !leaseAllowed
-                tamperProtection?.handleWriteEvent(
+                dispatchQueue.async { [weak self] in
+                    self?.tamperProtection?.handleWriteEvent(
                     targetPath: filePath,
                     actorPath: processPath,
                     actorPid: pid,
                     identity: tamperActorIdentity,
                     blocked: writeBlocked,
                     operation: .openWrite
-                )
+                    )
+                }
                 if writeBlocked {
                     esClient?.respond(to: message, allow: false)
                     break
@@ -296,8 +315,7 @@ final class ESEventHandler {
             )
             let explicitlyAllowed = fileScanner?.cache.consumeOneTimeAllowance(
                 path: filePath,
-                identity: fileIdentity,
-                currentHash: { fileScanner?.contentHash(path: filePath) }
+                identity: fileIdentity
             ) ?? false
             let shouldBlock = !explicitlyAllowed && (fileScanner?.allowsEnforcement(of: cached) ?? false)
 
@@ -371,25 +389,29 @@ final class ESEventHandler {
             }
             if createBlocked {
                 esClient?.respond(to: message, allow: false)
-                tamperProtection?.handleWriteEvent(
+                dispatchQueue.async { [weak self] in
+                    self?.tamperProtection?.handleWriteEvent(
                     targetPath: filePath,
                     actorPath: processPath,
                     actorPid: pid,
                     identity: tamperActorIdentity,
                     blocked: true,
                     operation: .create
-                )
+                    )
+                }
                 break
             }
             if tamperProtection?.protects(path: filePath) == true {
-                tamperProtection?.handleWriteEvent(
+                dispatchQueue.async { [weak self] in
+                    self?.tamperProtection?.handleWriteEvent(
                     targetPath: filePath,
                     actorPath: processPath,
                     actorPid: pid,
                     identity: tamperActorIdentity,
                     blocked: false,
                     operation: .create
-                )
+                    )
+                }
             }
 
             // This is heuristic-only: there is no file to hash yet. Observe and
@@ -667,7 +689,9 @@ final class ESEventHandler {
             }
             let protectsRename = tamperProtection?.protects(path: srcPath) == true
                 || tamperProtection?.protects(path: destinationPath) == true
-            let consoleUser = protectsRename ? TamperConsoleUserResolver.current() : nil
+            let consoleUser = protectsRename
+                ? callbackSafeConsoleUser(destinationPath: destinationPath, process: process)
+                : nil
             let renameBlocked: Bool
             if protectsRename {
                 let ordinarilyBlocked = tamperProtection?.shouldBlockRename(
@@ -692,23 +716,28 @@ final class ESEventHandler {
             } else {
                 renameBlocked = false
             }
-            if !renameBlocked,
-               behaviorTracker?.wasRecentlyCreated(
-                path: srcPath, by: pid, processGroupID: processGroupID
-            ) == true,
-               FileManager.default.fileExists(atPath: destinationPath) {
-                let renameReplacementEvidence = BehaviorTracker.RenameReplacementEvidence(
-                    sourceData: self.boundedFileSample(at: srcPath, maximumBytes: 65_536),
-                    destinationData: self.boundedFileSample(at: destinationPath, maximumBytes: 65_536),
-                    destinationExisted: true
-                )
-                behaviorTracker?.recordRenameIntent(
-                    pid: pid, source: srcPath, destination: destinationPath,
-                    evidence: renameReplacementEvidence
-                )
-            }
             esClient?.respond(to: message, allow: !renameBlocked)
-            tamperProtection?.handleRenameEvent(
+            if !renameBlocked {
+                dispatchQueue.async { [weak self] in
+                    guard let self,
+                          self.behaviorTracker?.wasRecentlyCreated(
+                            path: srcPath, by: pid, processGroupID: processGroupID
+                          ) == true,
+                          FileManager.default.fileExists(atPath: destinationPath)
+                    else { return }
+                    let evidence = BehaviorTracker.RenameReplacementEvidence(
+                        sourceData: self.boundedFileSample(at: srcPath, maximumBytes: 65_536),
+                        destinationData: self.boundedFileSample(at: destinationPath, maximumBytes: 65_536),
+                        destinationExisted: true
+                    )
+                    self.behaviorTracker?.recordRenameIntent(
+                        pid: pid, source: srcPath, destination: destinationPath,
+                        evidence: evidence
+                    )
+                }
+            }
+            dispatchQueue.async { [weak self] in
+                self?.tamperProtection?.handleRenameEvent(
                 srcPath: srcPath,
                 destinationPath: destinationPath,
                 actorPath: processPath,
@@ -716,7 +745,8 @@ final class ESEventHandler {
                 identity: tamperActorIdentity,
                 blocked: renameBlocked,
                 consoleUser: consoleUser
-            )
+                )
+            }
             // Behaviour is recorded from NOTIFY_RENAME, which reflects only
             // renames that actually happened (recording both double-counted).
             fileScanner?.cache.invalidate(path: srcPath)
@@ -845,13 +875,15 @@ final class ESEventHandler {
                 unlinkBlocked = false
             }
             esClient?.respond(to: message, allow: !unlinkBlocked)
-            tamperProtection?.handleUnlinkEvent(
-                targetPath: unlinkTarget,
-                actorPath: processPath,
-                actorPid: pid,
-                identity: tamperActorIdentity,
-                blocked: unlinkBlocked
-            )
+            dispatchQueue.async { [weak self] in
+                self?.tamperProtection?.handleUnlinkEvent(
+                    targetPath: unlinkTarget,
+                    actorPath: processPath,
+                    actorPid: pid,
+                    identity: tamperActorIdentity,
+                    blocked: unlinkBlocked
+                )
+            }
             if !unlinkBlocked {
                 fileScanner?.cache.invalidate(path: unlinkTarget)
             }
@@ -1176,6 +1208,34 @@ final class ESEventHandler {
         ruleTier: String,
         metadata: [String: String]
     ) {
+        dispatchQueue.async { [weak self] in
+            self?.reportAppleSecurityEventOffCallbackQueue(
+                type: type,
+                actorPath: actorPath,
+                actorPID: actorPID,
+                parentPID: parentPID,
+                responsiblePID: responsiblePID,
+                filePath: filePath,
+                title: title,
+                family: family,
+                ruleTier: ruleTier,
+                metadata: metadata
+            )
+        }
+    }
+
+    private func reportAppleSecurityEventOffCallbackQueue(
+        type: ESEventType,
+        actorPath: String,
+        actorPID: Int32,
+        parentPID: Int32,
+        responsiblePID: Int32?,
+        filePath: String?,
+        title: String,
+        family: String,
+        ruleTier: String,
+        metadata: [String: String]
+    ) {
         var evidence = metadata
         evidence["reason"] = metadata["appleEvent"] ?? "apple-security-event"
         evidence["rule"] = metadata["appleEvent"] ?? "apple-security-event"
@@ -1330,7 +1390,7 @@ final class ESEventHandler {
             executablePath: targetPath,
             arguments: arguments
         )
-        let pipelineEvidence = ProcessPipeResolver.evidence(pid: pid)
+        let pipelineEvidence = processPipeEvidenceProvider(pid)
         let pipelineObservation = InteractiveShellPipelinePolicy.Observation(
             pid: pid,
             parentPID: parentPid,
@@ -1436,7 +1496,7 @@ final class ESEventHandler {
         for delay in [0.02, 0.10, 0.30, 0.75] {
             dispatchQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self else { return }
-                let evidence = ProcessPipeResolver.evidence(pid: observation.pid)
+                let evidence = self.processPipeEvidenceProvider(observation.pid)
                 let retry = InteractiveShellPipelinePolicy.Observation(
                     pid: observation.pid,
                     parentPID: observation.parentPID,
@@ -1875,10 +1935,13 @@ final class ESEventHandler {
         auditToken: audit_token_t,
         identity: TamperActorIdentity
     ) -> Bool {
-        TamperActorValidator.shared.validatesNickActor(
-            auditToken: auditToken,
-            identity: identity
-        )
+        // auditToken is retained in the signature for call-site clarity. ES
+        // already supplied the identity fields from the kernel; invoking
+        // Security.framework here can block an outstanding AUTH response.
+        _ = auditToken
+        return identity.isValidIdentitySignature
+            && identity.teamID == TamperProtectionPolicy.nickTeamID
+            && identity.signingID.map(TamperProtectionPolicy.nickMaintenanceSigningIDs.contains) == true
     }
 
     private func leasedUpdateAuthorization(
@@ -1895,11 +1958,24 @@ final class ESEventHandler {
             operation: operation,
             actorPath: processPath,
             identity: identity,
-            nickUpdateIdentityValidated: TamperActorValidator.shared.validatesNickUpdateActor(
-                auditToken: process.audit_token,
-                identity: identity
-            )
+            nickUpdateIdentityValidated: identity.isValidIdentitySignature
+                && identity.teamID == TamperProtectionPolicy.nickTeamID
+                && identity.signingID.map(TamperProtectionPolicy.nickLeasedUpdateSigningIDs.contains) == true
         ) ?? false
+    }
+
+    /// Derives the Finder Trash owner only from kernel-authored event values.
+    /// Console-user APIs can block and therefore cannot run before an AUTH reply.
+    private func callbackSafeConsoleUser(
+        destinationPath: String,
+        process: es_process_t
+    ) -> TamperConsoleUser? {
+        let parts = destinationPath.split(separator: "/", omittingEmptySubsequences: true)
+        guard parts.count >= 3, parts[0] == "Users", parts[2] == ".Trash" else { return nil }
+        return TamperConsoleUser(
+            uid: audit_token_to_euid(process.audit_token),
+            homeDirectory: "/Users/\(parts[1])"
+        )
     }
 
     private func handleProtectedWriteAuthorization(
@@ -1932,14 +2008,16 @@ final class ESEventHandler {
         )
         let blocked = ordinarilyBlocked && !leaseAllowed
         esClient?.respond(to: message, allow: !blocked)
-        tamperProtection?.handleWriteEvent(
-            targetPath: targetPath,
-            actorPath: processPath,
-            actorPid: pid,
-            identity: identity,
-            blocked: blocked,
-            operation: operation
-        )
+        dispatchQueue.async { [weak self] in
+            self?.tamperProtection?.handleWriteEvent(
+                targetPath: targetPath,
+                actorPath: processPath,
+                actorPid: pid,
+                identity: identity,
+                blocked: blocked,
+                operation: operation
+            )
+        }
     }
 
     /// Safely converts an `es_string_token_t` to a Swift `String`.

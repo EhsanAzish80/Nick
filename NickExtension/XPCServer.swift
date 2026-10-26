@@ -247,7 +247,11 @@ final class ESXPCServer: NSObject {
     private func withAppProxy(_ block: (NickAppXPCProtocol) -> Void) {
         let connections = connectionLock.withLock { Array(appConnections.values) }
         for connection in connections {
-            guard let proxy = connection.remoteObjectProxy as? NickAppXPCProtocol else {
+            let errorHandler: @Sendable (Error) -> Void = { error in
+                Self.logger.warning("App XPC proxy failed: \(error.localizedDescription, privacy: .public)")
+            }
+            guard let proxy = connection.remoteObjectProxyWithErrorHandler(errorHandler)
+                as? NickAppXPCProtocol else {
                 continue
             }
             block(proxy)
