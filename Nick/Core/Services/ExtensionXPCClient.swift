@@ -184,6 +184,7 @@ public final class ExtensionXPCClient: NSObject {
     private var healthRefreshTask: Task<Void, Never>?
     private var lastHealthyExtensionTime: Date?
     private var lastProtectionGapObservationAt: Date?
+    private var attemptedThreatBundleRefresh = false
     /// Deterministic persistence completion seam used by unit tests. Production
     /// always uses the privileged XPC write/reply path.
     var incidentPersistenceOverride: ((UInt64) async -> (UInt64, Bool)?)?
@@ -286,6 +287,7 @@ public final class ExtensionXPCClient: NSObject {
                     self?.startHealthRefresh()
                     self?.loadPersistedEvents()
                     self?.loadPendingFIMViolations()
+                    self?.refreshThreatIntelligenceBundleIfEnabled()
                     if self?.incidentBootstrapCompleted == true {
                         self?.drainIncidentStoreWrites()
                         self?.flushSecuritySettingsIfNeeded()
@@ -301,6 +303,38 @@ public final class ExtensionXPCClient: NSObject {
             }
         }
         proxy.getStatus(reply: statusReply)
+    }
+
+    private func refreshThreatIntelligenceBundleIfEnabled() {
+        guard !attemptedThreatBundleRefresh,
+              ThreatIntelligenceBundleTrustAnchor.updatesEnabled,
+              let rawURL = Bundle.main.object(forInfoDictionaryKey: "NickThreatBundleURL") as? String,
+              let url = URL(string: rawURL),
+              ThreatBundleUpdateEndpointPolicy.allows(url) else { return }
+        attemptedThreatBundleRefresh = true
+        Task { [weak self] in
+            do {
+                var request = URLRequest(url: url)
+                request.cachePolicy = .reloadRevalidatingCacheData
+                request.timeoutInterval = 30
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse,
+                      http.statusCode == 200,
+                      data.count <= ThreatBundleUpdateEndpointPolicy.maximumDownloadBytes,
+                      let proxy = self?.connection?.remoteObjectProxy as? NickExtensionXPCProtocol
+                else { return }
+                let accepted: Bool = await withCheckedContinuation { continuation in
+                    proxy.installThreatIntelligenceBundle(data) {
+                        continuation.resume(returning: $0)
+                    }
+                }
+                if !accepted {
+                    Self.logger.error("The endpoint extension rejected the downloaded intelligence bundle")
+                }
+            } catch {
+                Self.logger.warning("Threat-intelligence refresh failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private func startHealthRefresh() {

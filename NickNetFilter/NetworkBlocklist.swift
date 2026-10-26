@@ -37,6 +37,8 @@ final class NetworkBlocklist: @unchecked Sendable {
     private var blockedDomains: Set<String> = []
     private var blockedIPs:     Set<String> = []
     private var loadedProvenance: Provenance?
+    private var lastReloadCheck = Date.distantPast
+    private var loadedBundleModificationDate: Date?
     private let lock = NSLock()
 
     // MARK: - Init
@@ -49,6 +51,7 @@ final class NetworkBlocklist: @unchecked Sendable {
 
     /// Returns `true` if `host` is (or is a subdomain of) a blocked entry.
     func isBlocked(host: String) -> Bool {
+        reloadIfBundleChanged()
         let lower = host.lowercased()
 
         return lock.withLock {
@@ -73,6 +76,26 @@ final class NetworkBlocklist: @unchecked Sendable {
             loadedProvenance = nil
         }
         loadSignedRules()
+        let modificationDate = Self.currentBundleModificationDate()
+        lock.withLock { loadedBundleModificationDate = modificationDate }
+    }
+
+    private func reloadIfBundleChanged() {
+        let shouldCheck = lock.withLock { () -> Bool in
+            guard Date().timeIntervalSince(lastReloadCheck) >= 60 else { return false }
+            lastReloadCheck = Date()
+            return true
+        }
+        guard shouldCheck,
+              Self.currentBundleModificationDate() != lock.withLock({ loadedBundleModificationDate })
+        else { return }
+        reload()
+    }
+
+    private static func currentBundleModificationDate() -> Date? {
+        let url = ThreatIntelligenceBundleTrustAnchor.productionDirectory
+            .appendingPathComponent("current.json")
+        return try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     }
 
     /// Loads only a versioned Ed25519-signed rule envelope. Invalid, expired,

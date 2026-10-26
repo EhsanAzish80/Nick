@@ -390,6 +390,11 @@ enum IncidentStoreWritePolicy {
         reply: @escaping (Bool, Data) -> Void
     )
 
+    /// Verifies and atomically promotes a hosted threat-intelligence bundle.
+    /// The authenticated app transports bytes only; the root extension owns
+    /// signature, expiry, rollback and publish-gate decisions.
+    func installThreatIntelligenceBundle(_ data: Data, reply: @escaping (Bool) -> Void)
+
     /// Validates the canonical alert ID in the privileged incident store.
     /// Security-reducing verdicts return `authorizationRequired` before the app
     /// prompts, then require a verified right on the second call.

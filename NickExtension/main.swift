@@ -192,6 +192,25 @@ xpcServer.securitySettingsDidChange = { record in
     strictBlockingPolicy.update(settingsRecord: record)
     scanCache.invalidateAll()
 }
+xpcServer.threatIntelligenceBundleInstaller = { data in
+    do {
+        _ = try signedIntelligenceStore.stageAndPromote(data) { payload in
+            payload.hashes.count <= 100_000
+                && payload.domains.count <= 100_000
+                && payload.ipAddresses.count <= 100_000
+                && payload.rules.count <= 10_000
+        }
+        signatureDB.reloadSignedThreatBundle()
+        if let payload = signedIntelligenceStore.loadBestAvailable()?.0 {
+            strictBlockingPolicy.update(signedRules: payload.rules)
+        }
+        scanCache.invalidateAll()
+        return true
+    } catch {
+        logger.error("Rejected threat-intelligence bundle: \(error.localizedDescription, privacy: .public)")
+        return false
+    }
+}
 
 // Wire cross-references
 eventHandler.xpcServer               = xpcServer

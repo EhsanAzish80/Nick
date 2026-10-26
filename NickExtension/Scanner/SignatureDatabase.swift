@@ -87,7 +87,7 @@ final class SignatureDatabase {
         createTableIfNeeded()
         createMetadataTableIfNeeded()
         loadBundledCatalog(from: bundledCatalogURL)
-        loadSignedThreatBundle()
+        reloadSignedThreatBundle()
         Self.logger.info("Signature database ready at \(path)")
     }
 
@@ -280,7 +280,7 @@ final class SignatureDatabase {
         }
     }
 
-    private func loadSignedThreatBundle() {
+    func reloadSignedThreatBundle() {
         let store = SignedThreatIntelligenceBundleStore(
             directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
             publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,

@@ -66,6 +66,21 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
             XCTAssertEqual(error as? ThreatIntelligenceBundleValidationError, .invalidEntry)
         }
     }
+
+    func test_updateEndpointIsPinnedToExpectedHTTPSLocation() {
+        XCTAssertTrue(ThreatBundleUpdateEndpointPolicy.allows(
+            URL(string: "https://3nsofts.com/nick/threat-intelligence/current.json")!
+        ))
+        XCTAssertFalse(ThreatBundleUpdateEndpointPolicy.allows(
+            URL(string: "http://3nsofts.com/nick/threat-intelligence/current.json")!
+        ))
+        XCTAssertFalse(ThreatBundleUpdateEndpointPolicy.allows(
+            URL(string: "https://example.com/nick/threat-intelligence/current.json")!
+        ))
+        XCTAssertFalse(ThreatBundleUpdateEndpointPolicy.allows(
+            URL(string: "https://3nsofts.com/nick/threat-intelligence/other.json")!
+        ))
+    }
 }
 
 private extension SignedThreatIntelligenceBundleTests {

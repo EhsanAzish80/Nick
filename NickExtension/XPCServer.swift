@@ -81,6 +81,7 @@ final class ESXPCServer: NSObject {
     )
     weak var updateLeaseManager: NickUpdateLeaseManager?
     var securitySettingsDidChange: ((Data) -> Void)?
+    var threatIntelligenceBundleInstaller: ((Data) -> Bool)?
 
     // MARK: - Init
 
@@ -470,6 +471,15 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 
     func currentSecuritySettingsRecord() -> Data {
         settingsStore.load()
+    }
+
+    func installThreatIntelligenceBundle(_ data: Data, reply: @escaping (Bool) -> Void) {
+        guard data.count <= 10 * 1_024 * 1_024,
+              let installer = threatIntelligenceBundleInstaller else {
+            reply(false)
+            return
+        }
+        reply(installer(data))
     }
 
     func migrateIncidentStore(_ payload: Data, reply: @escaping (Bool, Data) -> Void) {

@@ -18,6 +18,19 @@ enum ThreatIntelligenceBundleTrustAnchor {
     )
 }
 
+enum ThreatBundleUpdateEndpointPolicy {
+    static let maximumDownloadBytes = 10 * 1_024 * 1_024
+
+    static func allows(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https"
+            && url.host?.lowercased() == "3nsofts.com"
+            && url.path == "/nick/threat-intelligence/current.json"
+            && url.user == nil
+            && url.password == nil
+            && url.port == nil
+    }
+}
+
 struct ThreatIntelligenceBundlePayload: Codable, Equatable, Sendable {
     struct HashEntry: Codable, Equatable, Hashable, Sendable {
         let sha256: String
