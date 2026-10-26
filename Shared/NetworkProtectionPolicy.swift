@@ -416,7 +416,7 @@ enum NetworkProtectionSharedStore {
         systemSupportDirectory.appendingPathComponent(signedRulesVersionFileName)
     }
 
-    static func threatIntelligenceDirectory(fileManager: FileManager = .default) -> URL {
+    static func threatIntelligenceDirectory(fileManager _: FileManager = .default) -> URL {
         systemSupportDirectory.appendingPathComponent(
             threatIntelligenceDirectoryName,
             isDirectory: true

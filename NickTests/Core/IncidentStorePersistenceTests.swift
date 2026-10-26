@@ -49,7 +49,9 @@ final class IncidentStorePersistenceTests: XCTestCase {
         XCTAssertEqual(decoded.networkIngestCursor?.deliveredEventIDs, [oldID, newID])
 
         let restored = IncidentStore(persistOnInit: false)
-        try restored.installPrivilegedSnapshot(persisted) { _, _ in }
+        try restored.installPrivilegedSnapshot(persisted) { _, _ in
+            // Restoring this fixture must not write another privileged snapshot.
+        }
         XCTAssertEqual(restored.networkIngestCursor?.deliveredEventIDs, [oldID, newID])
     }
 

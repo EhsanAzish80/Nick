@@ -6,7 +6,7 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
     func test_validBundlePromotesAndReportsProvenance() throws {
         let fixture = try Fixture()
         let store = fixture.store(enabled: true)
-        let provenance = try store.stageAndPromote(fixture.data(version: 1)) { payload in
+        let provenance = try store.stageAndPromote(try fixture.data(version: 1)) { payload in
             payload.hashes.count == 1 && payload.domains.count == 1
         }
         XCTAssertEqual(provenance.version, 1)
@@ -18,28 +18,28 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
     func test_invalidSignatureMalformedExpiryAndRollbackLeaveCurrentUntouched() throws {
         let fixture = try Fixture()
         let store = fixture.store(enabled: true)
-        _ = try store.stageAndPromote(fixture.data(version: 2)) { _ in true }
+        _ = try store.stageAndPromote(try fixture.data(version: 2)) { _ in true }
 
         XCTAssertThrowsError(try store.stageAndPromote(Data("{".utf8)) { _ in true })
-        XCTAssertThrowsError(try store.stageAndPromote(fixture.data(version: 3, tamper: true)) { _ in true })
-        XCTAssertThrowsError(try store.stageAndPromote(fixture.data(version: 3, expired: true)) { _ in true })
-        XCTAssertThrowsError(try store.stageAndPromote(fixture.data(version: 1)) { _ in true })
+        XCTAssertThrowsError(try store.stageAndPromote(try fixture.data(version: 3, tamper: true)) { _ in true })
+        XCTAssertThrowsError(try store.stageAndPromote(try fixture.data(version: 3, expired: true)) { _ in true })
+        XCTAssertThrowsError(try store.stageAndPromote(try fixture.data(version: 1)) { _ in true })
         XCTAssertEqual(store.loadBestAvailable()?.0.version, 2)
     }
 
     func test_publishGateRejectsCandidateWithoutReplacingCurrent() throws {
         let fixture = try Fixture()
         let store = fixture.store(enabled: true)
-        _ = try store.stageAndPromote(fixture.data(version: 1)) { _ in true }
-        XCTAssertThrowsError(try store.stageAndPromote(fixture.data(version: 2)) { _ in false })
+        _ = try store.stageAndPromote(try fixture.data(version: 1)) { _ in true }
+        XCTAssertThrowsError(try store.stageAndPromote(try fixture.data(version: 2)) { _ in false })
         XCTAssertEqual(store.loadBestAvailable()?.0.version, 1)
     }
 
     func test_corruptCurrentFallsBackToLastKnownGood() throws {
         let fixture = try Fixture()
         let store = fixture.store(enabled: true)
-        _ = try store.stageAndPromote(fixture.data(version: 1)) { _ in true }
-        _ = try store.stageAndPromote(fixture.data(version: 2)) { _ in true }
+        _ = try store.stageAndPromote(try fixture.data(version: 1)) { _ in true }
+        _ = try store.stageAndPromote(try fixture.data(version: 2)) { _ in true }
         try Data("corrupt".utf8).write(
             to: fixture.directory.appendingPathComponent("current.json"),
             options: .atomic
@@ -52,7 +52,7 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
     func test_updatesRemainOffWithoutExplicitFeatureFlag() throws {
         let fixture = try Fixture()
         let store = fixture.store(enabled: false)
-        XCTAssertThrowsError(try store.stageAndPromote(fixture.data(version: 1)) { _ in true }) { error in
+        XCTAssertThrowsError(try store.stageAndPromote(try fixture.data(version: 1)) { _ in true }) { error in
             XCTAssertEqual(error as? ThreatIntelligenceBundleValidationError, .updatesDisabled)
         }
     }
@@ -61,7 +61,7 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
         let fixture = try Fixture()
         let store = fixture.store(enabled: true)
         XCTAssertThrowsError(
-            try store.stageAndPromote(fixture.data(version: 1, invalidBlockableRule: true)) { _ in true }
+            try store.stageAndPromote(try fixture.data(version: 1, invalidBlockableRule: true)) { _ in true }
         ) { error in
             XCTAssertEqual(error as? ThreatIntelligenceBundleValidationError, .invalidEntry)
         }
@@ -110,7 +110,7 @@ private extension SignedThreatIntelligenceBundleTests {
             expired: Bool = false,
             tamper: Bool = false,
             invalidBlockableRule: Bool = false
-        ) -> Data {
+        ) throws -> Data {
             var payload = ThreatIntelligenceBundlePayload(
                 schemaVersion: 1,
                 version: version,
@@ -131,7 +131,7 @@ private extension SignedThreatIntelligenceBundleTests {
                     blockable: true
                 )]
             )
-            let signature = try! privateKey.signature(
+            let signature = try privateKey.signature(
                 for: SignedThreatIntelligenceBundle.canonicalEncoder.encode(payload)
             )
             if tamper {
@@ -148,7 +148,7 @@ private extension SignedThreatIntelligenceBundleTests {
                 )
             }
             let envelope = SignedThreatIntelligenceBundle(payload: payload, signature: signature)
-            return try! SignedThreatIntelligenceBundle.canonicalEncoder.encode(envelope)
+            return try SignedThreatIntelligenceBundle.canonicalEncoder.encode(envelope)
         }
     }
 }
