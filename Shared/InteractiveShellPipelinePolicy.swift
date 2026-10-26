@@ -117,7 +117,6 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
                 actorPID: shell.pid,
                 confidence: downloader.hasNetworkSocket
                     || downloader.codeIdentityValidated
-                    || shell.codeIdentityValidated
                     ? "high" : "medium"
             )
         }

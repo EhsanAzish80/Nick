@@ -143,6 +143,7 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
         let finding = try XCTUnwrap(policy.observe(.init(
             pid: 31, parentPID: 5, executablePath: "/bin/sh",
             arguments: ["sh"], standardInputPipeIdentifier: 88,
+            codeIdentityValidated: true,
             timestamp: time.addingTimeInterval(0.01)
         )))
         XCTAssertEqual(finding.confidence, "medium")
