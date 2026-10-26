@@ -1360,6 +1360,55 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(attempts, 2)
     }
 
+    func test_reviewAndAllowActionsInvalidateAllLiveIncidentProjections() async throws {
+        for action in [IncidentActionKind.reviewed, .allowedOnce] {
+            let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
+                incidents: [],
+                dismissalTombstones: [],
+                expectedCooldowns: [:]
+            ))
+            let engine = SecurityEngine()
+            try engine.installPrivilegedIncidentStore(
+                payload: payload,
+                persistence: { _, _, _ in },
+                authorizer: { _, requestedAction in
+                    XCTAssertEqual(requestedAction, action)
+                    return .approved(IncidentActionApproval(authorizationExternalForm: nil))
+                },
+                removeLegacyState: false
+            )
+            let alert = makeAlert(signal: makeSignal(
+                severity: .high,
+                metadata: [
+                    "reason": "live_projection_\(action.rawValue)",
+                    "ruleTier": "protected"
+                ]
+            ), severity: .high)
+            engine.addAlert(alert)
+            XCTAssertEqual(engine.displayStatus(for: alert), .needsReview)
+            XCTAssertEqual(engine.activeActionableAlerts.map(\.id), [alert.id])
+
+            let changed = expectation(description: "incident projections invalidated for \(action.rawValue)")
+            withObservationTracking {
+                _ = engine.displayStatus(for: alert)
+                _ = engine.activeActionableAlerts
+                _ = engine.visibleIncidents
+            } onChange: {
+                changed.fulfill()
+            }
+
+            if action == .reviewed {
+                engine.markAlertReviewed(alert.id)
+            } else {
+                engine.allowAlertOnce(alert.id)
+            }
+            await fulfillment(of: [changed], timeout: 1)
+
+            XCTAssertEqual(engine.displayStatus(for: alert), .resolved)
+            XCTAssertTrue(engine.activeActionableAlerts.isEmpty)
+        }
+    }
+
     func test_incidentActionFailuresUseDistinctHonestMessages() async throws {
         let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
             incidents: [],

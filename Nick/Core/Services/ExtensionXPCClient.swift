@@ -179,8 +179,8 @@ public final class ExtensionXPCClient: NSObject {
     private var incidentBootstrapCompleted = false
     private var bootstrapLegacyPayload: Data?
     private var bootstrapCompletion: (@MainActor @Sendable (PrivilegedIncidentStoreRecord?, Bool) -> Void)?
-    private var bootstrapReconnectTask: Task<Void, Never>?
-    private var bootstrapReconnectAttempt = 0
+    private var reconnectTask: Task<Void, Never>?
+    private var reconnectAttempt = 0
     private var healthRefreshTask: Task<Void, Never>?
     /// Deterministic persistence completion seam used by unit tests. Production
     /// always uses the privileged XPC write/reply path.
@@ -205,7 +205,7 @@ public final class ExtensionXPCClient: NSObject {
             incidentBootstrapCompleted = false
             bootstrapLegacyPayload = legacyIncidentPayload
             bootstrapCompletion = incidentStoreReady
-            bootstrapReconnectAttempt = 0
+            reconnectAttempt = 0
             if isConnected {
                 bootstrapIncidentStore(
                     legacyPayload: legacyIncidentPayload,
@@ -217,12 +217,12 @@ public final class ExtensionXPCClient: NSObject {
         incidentBootstrapCompleted = false
         bootstrapLegacyPayload = legacyIncidentPayload
         bootstrapCompletion = incidentStoreReady
-        bootstrapReconnectAttempt = 0
+        reconnectAttempt = 0
         openConnection()
     }
 
     private func openConnection() {
-        guard connection == nil, !incidentBootstrapCompleted else { return }
+        guard connection == nil else { return }
 
         let conn = NSXPCConnection(machServiceName: NickExtensionConstants.machServiceName)
 
@@ -239,9 +239,7 @@ public final class ExtensionXPCClient: NSObject {
                 Self.logger.warning("XPC connection to extension invalidated")
                 self.isConnected = false
                 self.connection = nil
-                if !self.incidentBootstrapCompleted {
-                    self.scheduleBootstrapReconnect()
-                }
+                self.scheduleReconnect()
             }
         }
         conn.interruptionHandler = { [weak self] in
@@ -249,9 +247,7 @@ public final class ExtensionXPCClient: NSObject {
                 guard let self else { return }
                 Self.logger.warning("XPC connection to extension interrupted — extension may have crashed")
                 self.isConnected = false
-                if !self.incidentBootstrapCompleted {
-                    self.scheduleBootstrapReconnect()
-                }
+                self.scheduleReconnect()
             }
         }
 
@@ -266,13 +262,12 @@ public final class ExtensionXPCClient: NSObject {
         let errorHandler: @Sendable (Error) -> Void = { [weak self] error in
             Self.logger.warning("Extension status verification failed: \(error.localizedDescription)")
             Task { @MainActor [weak self] in
-                guard let self, !self.incidentBootstrapCompleted else { return }
-                self.scheduleBootstrapReconnect()
+                self?.scheduleReconnect()
             }
         }
         guard let proxy = conn.remoteObjectProxyWithErrorHandler(errorHandler)
             as? NickExtensionXPCProtocol else {
-            scheduleBootstrapReconnect()
+            scheduleReconnect()
             return
         }
         let statusReply: @Sendable (Bool) -> Void = { [weak self] active in
@@ -280,15 +275,23 @@ public final class ExtensionXPCClient: NSObject {
                 self?.isConnected = active
                 Self.logger.info("Verified extension status: isActive=\(active)")
                 if active {
+                    self?.reconnectAttempt = 0
+                    self?.reconnectTask?.cancel()
+                    self?.reconnectTask = nil
                     self?.startHealthRefresh()
                     self?.loadPersistedEvents()
                     self?.loadPendingFIMViolations()
-                    self?.bootstrapIncidentStore(
-                        legacyPayload: self?.bootstrapLegacyPayload,
-                        completion: self?.bootstrapCompletion
-                    )
+                    if self?.incidentBootstrapCompleted == true {
+                        self?.drainIncidentStoreWrites()
+                        self?.flushSecuritySettingsIfNeeded()
+                    } else {
+                        self?.bootstrapIncidentStore(
+                            legacyPayload: self?.bootstrapLegacyPayload,
+                            completion: self?.bootstrapCompletion
+                        )
+                    }
                 } else {
-                    self?.scheduleBootstrapReconnect()
+                    self?.scheduleReconnect()
                 }
             }
         }
@@ -383,27 +386,30 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    private func scheduleBootstrapReconnect() {
-        guard !incidentBootstrapCompleted, bootstrapReconnectTask == nil else { return }
-        guard bootstrapReconnectAttempt < 12 else {
+    private func scheduleReconnect() {
+        guard reconnectTask == nil else { return }
+        guard incidentBootstrapCompleted || reconnectAttempt < 12 else {
             Self.logger.error("Incident-store bootstrap failed after repeated XPC reconnects")
             finishIncidentBootstrap(record: nil, migrated: false)
             return
         }
 
-        bootstrapReconnectAttempt += 1
-        let delayNanoseconds = UInt64(min(bootstrapReconnectAttempt, 4)) * 500_000_000
+        reconnectAttempt += 1
+        let delayNanoseconds = UInt64(min(reconnectAttempt, 4)) * 500_000_000
+        isConnected = false
+        healthRefreshTask?.cancel()
+        healthRefreshTask = nil
         connection?.invalidationHandler = nil
         connection?.interruptionHandler = nil
         connection?.invalidate()
         connection = nil
 
-        bootstrapReconnectTask = Task { @MainActor [weak self] in
+        reconnectTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard let self, !Task.isCancelled, !self.incidentBootstrapCompleted else { return }
-            self.bootstrapReconnectTask = nil
+            guard let self, !Task.isCancelled else { return }
+            self.reconnectTask = nil
             Self.logger.notice(
-                "Retrying incident-store bootstrap after extension replacement (attempt \(self.bootstrapReconnectAttempt))"
+                "Retrying XPC connection after extension replacement (attempt \(self.reconnectAttempt))"
             )
             self.openConnection()
         }
@@ -415,8 +421,8 @@ public final class ExtensionXPCClient: NSObject {
     ) {
         guard !incidentBootstrapCompleted else { return }
         incidentBootstrapCompleted = true
-        bootstrapReconnectTask?.cancel()
-        bootstrapReconnectTask = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
         let completion = bootstrapCompletion
         bootstrapCompletion = nil
         bootstrapLegacyPayload = nil
@@ -430,12 +436,12 @@ public final class ExtensionXPCClient: NSObject {
         let errorHandler: @Sendable (Error) -> Void = { [weak self] error in
             Self.logger.warning("Incident-store bootstrap failed: \(error.localizedDescription)")
             Task { @MainActor [weak self] in
-                self?.scheduleBootstrapReconnect()
+                self?.scheduleReconnect()
             }
         }
         guard let proxy = connection?.remoteObjectProxyWithErrorHandler(errorHandler)
             as? NickExtensionXPCProtocol else {
-            scheduleBootstrapReconnect()
+            scheduleReconnect()
             return
         }
         proxy.getIncidentStore { [weak self] data in
@@ -713,15 +719,15 @@ public final class ExtensionXPCClient: NSObject {
 
     /// Closes the XPC connection.
     public func disconnect() {
-        bootstrapReconnectTask?.cancel()
-        bootstrapReconnectTask = nil
+        reconnectTask?.cancel()
+        reconnectTask = nil
         connection?.invalidate()
         connection  = nil
         isConnected = false
         incidentBootstrapCompleted = false
         bootstrapLegacyPayload = nil
         bootstrapCompletion = nil
-        bootstrapReconnectAttempt = 0
+        reconnectAttempt = 0
         for authorization in activeProtectionAuthorizations.values {
             AuthorizationFree(authorization, [.destroyRights])
         }
@@ -1087,6 +1093,16 @@ public final class ExtensionXPCClient: NSObject {
     }
 
 #if DEBUG
+    var reconnectScheduledForTesting: Bool { reconnectTask != nil }
+
+    /// Reproduces a post-bootstrap interruption without requiring a live
+    /// system extension. Reconnection must remain enabled after startup.
+    func simulateEstablishedConnectionLossForTesting(previousAttempts: Int = 20) {
+        incidentBootstrapCompleted = true
+        reconnectAttempt = previousAttempts
+        scheduleReconnect()
+    }
+
     public func debugSendNeverAuthorizedProtectionCall(
         completion: @escaping @MainActor @Sendable (DebugAuthorizationHarnessResult) -> Void
     ) {

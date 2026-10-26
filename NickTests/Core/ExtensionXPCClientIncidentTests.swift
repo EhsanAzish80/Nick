@@ -2,6 +2,19 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+#if DEBUG
+    @MainActor
+    func test_establishedConnectionLossSchedulesReconnectAfterBootstrap() {
+        let client = ExtensionXPCClient()
+
+        client.simulateEstablishedConnectionLossForTesting(previousAttempts: 20)
+
+        XCTAssertTrue(client.reconnectScheduledForTesting)
+        XCTAssertFalse(client.isConnected)
+        client.disconnect()
+    }
+#endif
+
     func test_platformShellBehaviorUsesAppleSigningAndHasNoFileEvidence() throws {
         let event = ESEvent(
             eventType: .authExec,
