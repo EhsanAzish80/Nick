@@ -233,5 +233,12 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
         XCTAssertNotNil(finding(interpreter: "/usr/bin/python3", arguments: ["python3"]))
         XCTAssertNotNil(finding(interpreter: "/bin/sh", arguments: ["sh"]))
         XCTAssertNil(finding(interpreter: "/bin/sh", arguments: ["sh", "-c", "cat"]))
+        XCTAssertNotNil(finding(interpreter: "/bin/bash", arguments: ["bash", "-e"]))
+        XCTAssertNotNil(finding(interpreter: "/bin/sh", arguments: ["sh", "-ex"]))
+        XCTAssertNil(finding(interpreter: "/bin/sh", arguments: ["sh", "-ec", "cat"]))
+        XCTAssertNotNil(finding(
+            interpreter: "/usr/bin/python3",
+            arguments: ["python3", "-W", "ignore"]
+        ))
     }
 }

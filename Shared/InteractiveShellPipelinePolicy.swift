@@ -147,10 +147,14 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
             "com.apple.sh", "com.apple.bash", "com.apple.zsh", "com.apple.osascript",
             "org.python.python", "org.perl.perl", "org.ruby-lang.ruby"
         ]
+        let familyName = interpreterFamilyName(
+            executableName: name,
+            signingIdentifier: observation.signingIdentifier
+        )
         if observation.standardInputPipeIdentifier != nil,
            (interpreters.contains(name)
             || observation.signingIdentifier.map(interpreterSigningIDs.contains) == true),
-           executesStandardInputAsCode(observation.arguments) {
+           executesStandardInputAsCode(observation.arguments, interpreterName: familyName) {
             return .shell
         }
         return nil
@@ -159,14 +163,80 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
     /// A pipe into an interpreter is dangerous only when stdin is executable
     /// input. Inline programs and script-file invocations consume stdin as
     /// ordinary data and must not become protected download-to-shell findings.
-    private static func executesStandardInputAsCode(_ arguments: [String]) -> Bool {
+    private static func executesStandardInputAsCode(
+        _ arguments: [String],
+        interpreterName: String
+    ) -> Bool {
         let operands = Array(arguments.dropFirst())
         if operands.isEmpty { return true }
 
-        var expectsOptionValue = false
+        let shellFamily: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "csh", "fish"]
+        if shellFamily.contains(interpreterName) {
+            var consumesOptionValue = false
+            for argument in operands {
+                if consumesOptionValue {
+                    consumesOptionValue = false
+                    continue
+                }
+                if argument == "-" || argument == "-s" { return true }
+                if argument == "-c" { return false }
+                if argument == "-o" {
+                    consumesOptionValue = true
+                    continue
+                }
+                if argument.hasPrefix("-") && !argument.hasPrefix("--") {
+                    let flags = argument.dropFirst()
+                    if flags.contains("c") { return false }
+                    if flags.contains("s") { return true }
+                    continue
+                }
+                if argument == "--" { continue }
+                return false
+            }
+            return true
+        }
+
+        if interpreterName == "python" || interpreterName == "python3" {
+            var consumesOptionValue = false
+            for argument in operands {
+                if consumesOptionValue {
+                    consumesOptionValue = false
+                    continue
+                }
+                if argument == "-" { return true }
+                if argument == "-c" || argument == "-m"
+                    || argument.hasPrefix("-c") || argument.hasPrefix("-m") {
+                    return false
+                }
+                if argument == "-W" || argument == "-X" || argument == "-Q" {
+                    consumesOptionValue = true
+                    continue
+                }
+                if argument.hasPrefix("-") { continue }
+                return false
+            }
+            return true
+        }
+
+        if ["perl", "ruby", "node"].contains(interpreterName) {
+            for argument in operands {
+                if argument == "-" || argument == "-s" { return true }
+                if argument == "-e" || argument == "-E" || argument == "--eval"
+                    || argument == "-p" || argument == "--print"
+                    || argument.hasPrefix("-e") || argument.hasPrefix("-E")
+                    || argument.hasPrefix("--eval=") {
+                    return false
+                }
+                if argument.hasPrefix("-") { continue }
+                return false
+            }
+            return true
+        }
+
+        var consumesOptionValue = false
         for argument in operands {
-            if expectsOptionValue {
-                expectsOptionValue = false
+            if consumesOptionValue {
+                consumesOptionValue = false
                 continue
             }
             if argument == "-" || argument == "-s" { return true }
@@ -181,13 +251,29 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
                 return false
             }
             if argument == "-l" || argument == "--language" {
-                expectsOptionValue = true
+                consumesOptionValue = true
                 continue
             }
             if argument.hasPrefix("-") { continue }
             return false
         }
         return true
+    }
+
+    private static func interpreterFamilyName(
+        executableName: String,
+        signingIdentifier: String?
+    ) -> String {
+        switch signingIdentifier?.lowercased() {
+        case "com.apple.sh": return "sh"
+        case "com.apple.bash": return "bash"
+        case "com.apple.zsh": return "zsh"
+        case "com.apple.osascript": return "osascript"
+        case "org.python.python": return "python3"
+        case "org.perl.perl": return "perl"
+        case "org.ruby-lang.ruby": return "ruby"
+        default: return executableName
+        }
     }
 
     private static func containsRemoteURL(_ argument: String) -> Bool {

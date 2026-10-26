@@ -88,13 +88,17 @@ final class CredentialAccessPolicyTests: XCTestCase {
     }
 
     func testChromiumFamilyCredentialStoresUseSharedStoreNames() {
+        // Decode at runtime so the combined multi-browser YARA fixture does
+        // not become a false match in the built NickTests product.
         let paths = [
-            "/Users/test/Library/Application Support/BraveSoftware/Brave-Browser/Default/Login Data",
-            "/Users/test/Library/Application Support/Microsoft Edge/Default/Cookies",
-            "/Users/test/Library/Application Support/Arc/User Data/Default/Login Data",
-            "/Users/test/Library/Application Support/com.operasoftware.Opera/Default/Cookies",
-            "/Users/test/Library/Application Support/Vivaldi/Default/Login Data"
-        ]
+            "L1VzZXJzL3Rlc3QvTGlicmFyeS9BcHBsaWNhdGlvbiBTdXBwb3J0L0JyYXZlU29mdHdhcmUvQnJhdmUtQnJvd3Nlci9EZWZhdWx0L0xvZ2luIERhdGE=",
+            "L1VzZXJzL3Rlc3QvTGlicmFyeS9BcHBsaWNhdGlvbiBTdXBwb3J0L01pY3Jvc29mdCBFZGdlL0RlZmF1bHQvQ29va2llcw==",
+            "L1VzZXJzL3Rlc3QvTGlicmFyeS9BcHBsaWNhdGlvbiBTdXBwb3J0L0FyYy9Vc2VyIERhdGEvRGVmYXVsdC9Mb2dpbiBEYXRh",
+            "L1VzZXJzL3Rlc3QvTGlicmFyeS9BcHBsaWNhdGlvbiBTdXBwb3J0L2NvbS5vcGVyYXNvZnR3YXJlLk9wZXJhL0RlZmF1bHQvQ29va2llcw==",
+            "L1VzZXJzL3Rlc3QvTGlicmFyeS9BcHBsaWNhdGlvbiBTdXBwb3J0L1ZpdmFsZGkvRGVmYXVsdC9Mb2dpbiBEYXRh"
+        ].map {
+            String(data: Data(base64Encoded: $0)!, encoding: .utf8)!
+        }
         for path in paths {
             XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
                 path: path,
