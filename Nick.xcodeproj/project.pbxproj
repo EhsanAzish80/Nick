@@ -38,6 +38,8 @@
 		E40000000000000000000502 /* TamperProtectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000500 /* TamperProtectionPolicy.swift */; };
 		E40000000000000000000601 /* LOLBinExecutionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000600 /* LOLBinExecutionPolicy.swift */; };
 		E40000000000000000000602 /* LOLBinExecutionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000600 /* LOLBinExecutionPolicy.swift */; };
+		E40000000000000000000701 /* InteractiveShellPipelinePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */; };
+		E40000000000000000000702 /* InteractiveShellPipelinePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */; };
 		F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */; };
 		F60000000000000000000001 /* QuarantineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000003 /* QuarantineManager.swift */; };
 		F60000000000000000000002 /* QuarantineDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004 /* QuarantineDatabase.swift */; };
@@ -141,6 +143,7 @@
 		E40000000000000000000100 /* YARAVerdictPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAVerdictPolicy.swift; path = Shared/YARAVerdictPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000200 /* ExecutionTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ExecutionTrustPolicy.swift; path = Shared/ExecutionTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000600 /* LOLBinExecutionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LOLBinExecutionPolicy.swift; path = Shared/LOLBinExecutionPolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = InteractiveShellPipelinePolicy.swift; path = Shared/InteractiveShellPipelinePolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000300 /* ScanCandidatePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScanCandidatePolicy.swift; path = Shared/ScanCandidatePolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000400 /* BundledHashCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BundledHashCatalog.swift; path = Shared/BundledHashCatalog.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000500 /* TamperProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TamperProtectionPolicy.swift; path = Shared/TamperProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
@@ -309,6 +312,7 @@
 				E40000000000000000000300 /* ScanCandidatePolicy.swift */,
 				E40000000000000000000200 /* ExecutionTrustPolicy.swift */,
 				E40000000000000000000600 /* LOLBinExecutionPolicy.swift */,
+				E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */,
 				E40000000000000000000100 /* YARAVerdictPolicy.swift */,
 				E40000000000000000000400 /* BundledHashCatalog.swift */,
 				E40000000000000000000500 /* TamperProtectionPolicy.swift */,
@@ -718,6 +722,7 @@
 				E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */,
 				E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */,
 				E40000000000000000000602 /* LOLBinExecutionPolicy.swift in Sources */,
+				E40000000000000000000702 /* InteractiveShellPipelinePolicy.swift in Sources */,
 				E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */,
 				E40000000000000000000402 /* BundledHashCatalog.swift in Sources */,
 				E40000000000000000000502 /* TamperProtectionPolicy.swift in Sources */,
@@ -763,6 +768,7 @@
 				E40000000000000000000301 /* ScanCandidatePolicy.swift in Sources */,
 				E40000000000000000000201 /* ExecutionTrustPolicy.swift in Sources */,
 				E40000000000000000000601 /* LOLBinExecutionPolicy.swift in Sources */,
+				E40000000000000000000701 /* InteractiveShellPipelinePolicy.swift in Sources */,
 				E40000000000000000000101 /* YARAVerdictPolicy.swift in Sources */,
 				E40000000000000000000401 /* BundledHashCatalog.swift in Sources */,
 				E40000000000000000000501 /* TamperProtectionPolicy.swift in Sources */,

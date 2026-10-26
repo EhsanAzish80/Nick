@@ -19,6 +19,12 @@ import os
 /// any subdomain — e.g. blocking `evil.com` also blocks `cdn.evil.com`.
 final class NetworkBlocklist: @unchecked Sendable {
 
+    struct Provenance: Sendable {
+        let version: Int
+        let issuedAt: Date
+        let expiresAt: Date
+    }
+
     static let shared = NetworkBlocklist()
 
     // MARK: - Private
@@ -30,6 +36,7 @@ final class NetworkBlocklist: @unchecked Sendable {
 
     private var blockedDomains: Set<String> = []
     private var blockedIPs:     Set<String> = []
+    private var loadedProvenance: Provenance?
     private let lock = NSLock()
 
     // MARK: - Init
@@ -57,10 +64,13 @@ final class NetworkBlocklist: @unchecked Sendable {
         }
     }
 
+    var provenance: Provenance? { lock.withLock { loadedProvenance } }
+
     func reload() {
         lock.withLock {
             blockedDomains = []
             blockedIPs = []
+            loadedProvenance = nil
         }
         loadSignedRules()
     }
@@ -88,6 +98,11 @@ final class NetworkBlocklist: @unchecked Sendable {
                 NetworkProtectionConfiguration.normalizedDomain
             ))
             blockedIPs = Set(envelope.payload.ipAddresses.map { $0.lowercased() })
+            loadedProvenance = Provenance(
+                version: envelope.payload.version,
+                issuedAt: envelope.payload.issuedAt,
+                expiresAt: envelope.payload.expiresAt
+            )
         }
         persistHighestAcceptedVersion(envelope.payload.version)
         Self.logger.info("NetworkBlocklist: loaded signed rule version \(envelope.payload.version)")

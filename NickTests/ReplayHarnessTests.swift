@@ -119,7 +119,8 @@ final class ReplayHarnessTests: XCTestCase {
         }
         let alert = try XCTUnwrap(engine.alerts.first)
         XCTAssertEqual(alert.contributingSignals.first?.metadata["destination"], fixture.host)
-        XCTAssertEqual(alert.contributingSignals.first?.metadata["ruleTier"], "protected")
+        XCTAssertEqual(alert.contributingSignals.first?.metadata["ruleTier"], "review")
+        XCTAssertFalse(alert.hasProtectedEvidence)
     }
 
     func test_appleSecurityFixturesEachProduceOneAttributedIncident() async throws {

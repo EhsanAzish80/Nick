@@ -3,6 +3,57 @@ import XCTest
 
 final class IncidentStorePersistenceTests: XCTestCase {
     @MainActor
+    func test_networkIngestCursorPersistsAndRestoresWithoutReplayingHistory() throws {
+        let oldID = UUID()
+        let newID = UUID()
+        let snapshot = IncidentStoreSnapshot(
+            incidents: [],
+            dismissalTombstones: [],
+            expectedCooldowns: [:],
+            networkIngestCursor: NetworkIngestCursor(
+                initializedAt: Date(timeIntervalSince1970: 100),
+                deliveredEventIDs: [oldID]
+            )
+        )
+        var persistedPayload: Data?
+        let store = IncidentStore(persistOnInit: false)
+        try store.installPrivilegedSnapshot(try JSONEncoder().encode(snapshot)) { payload, _ in
+            persistedPayload = payload
+        }
+
+        let finding = NetworkFinding(event: NetworkBlockEvent(
+            id: newID,
+            timestamp: Date(timeIntervalSince1970: 200),
+            host: "review.example",
+            appIdentifier: "com.example.browser",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: NetworkObservationReason.knownThreat.userTitle
+        ))
+        let alert = ThreatAlert(
+            id: finding.signal.id,
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: finding.signal.timestamp
+        )
+        _ = store.ingest([alert])
+
+        let persisted = try XCTUnwrap(persistedPayload)
+        let decoded = try JSONDecoder().decode(IncidentStoreSnapshot.self, from: persisted)
+        XCTAssertEqual(decoded.networkIngestCursor?.deliveredEventIDs, [oldID, newID])
+
+        let restored = IncidentStore(persistOnInit: false)
+        try restored.installPrivilegedSnapshot(persisted) { _, _ in }
+        XCTAssertEqual(restored.networkIngestCursor?.deliveredEventIDs, [oldID, newID])
+    }
+
+    @MainActor
     func test_manualEROFSQuarantineFailurePersistsNeedsActionWithoutNotification() throws {
         let store = try privilegedStore()
         let alert = Self.malwareAlert()

@@ -53,6 +53,7 @@ struct DiagnosticsView: View {
                     row("Network health updated", NetworkProtectionSharedStore.currentHealthDate(
                         expectedProviderVersion: NetworkProtectionSharedStore.bundledProviderVersion()
                     )?.formatted(date: .abbreviated, time: .standard) ?? "Unavailable")
+                    row("Network intelligence", networkProtection.ruleSourceSummary)
                     row("Last update check", updateLastCheckTime > 0
                         ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(date: .abbreviated, time: .standard)
                         : "Never")

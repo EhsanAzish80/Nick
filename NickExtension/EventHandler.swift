@@ -80,6 +80,10 @@ final class ESEventHandler {
     )
 
     private let encoder = JSONEncoder()
+    private let interactivePipelinePolicy = InteractiveShellPipelinePolicy()
+    private let credentialReportLock = NSLock()
+    private var lastCredentialReport: [String: Date] = [:]
+    private static let credentialReportWindow: TimeInterval = 60
 
     // MARK: - Public Entry Point
 
@@ -252,6 +256,7 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_OPEN:
             let filePath = esString(msg.event.open.file.pointee.path)
+            let isReadOpen = msg.event.open.fflag & FREAD != 0
             let isWriteOpen = msg.event.open.fflag & (FWRITE | O_TRUNC | O_APPEND) != 0
             let isProtectedWrite = isWriteOpen && tamperProtection?.protects(path: filePath) == true
             if isProtectedWrite {
@@ -297,6 +302,18 @@ final class ESEventHandler {
             let shouldBlock = !explicitlyAllowed && (cached?.mayBlock ?? false)
 
             esClient?.respond(to: message, allow: !shouldBlock)
+
+            if isReadOpen, !shouldBlock {
+                dispatchQueue.async { [weak self] in
+                    self?.observeCredentialStoreOpen(
+                        path: filePath,
+                        actorPath: processPath,
+                        actorPID: pid,
+                        parentPID: parentPid,
+                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil
+                    )
+                }
+            }
 
             // Normal file opens are extremely high-volume and add no useful
             // user-facing information. Forward only an actual blocked threat.
@@ -1297,6 +1314,28 @@ final class ESEventHandler {
             executablePath: targetPath,
             arguments: arguments
         )
+        let interactivePipelineFinding = interactivePipelinePolicy.observe(.init(
+            pid: pid,
+            parentPID: parentPid,
+            executablePath: targetPath,
+            arguments: arguments,
+            pipeIdentifiers: ProcessPipeResolver.identifiers(pid: pid),
+            timestamp: Date()
+        ))
+        let attribution = processTree?.responsibleApp(
+            actorPID: pid,
+            responsiblePID: responsiblePID,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
+        let credentialFinding = CredentialAccessPolicy.findingForExec(
+            executablePath: targetPath,
+            arguments: arguments,
+            responsibleIdentity: attribution?.app.map(Self.credentialIdentity)
+        )
+        let behaviorTitle = credentialFinding?.title
+            ?? lolbinFinding?.title
+            ?? interactivePipelineFinding.map { _ in "Download-to-shell command detected" }
+        let behaviorFamily = credentialFinding == nil ? "lolbin-behavior" : "credential-access"
 
         pushEvent(ESEvent(
             eventType:   .authExec,
@@ -1307,12 +1346,25 @@ final class ESEventHandler {
             decision:    blocked ? .deny : .allow,
             threat:      ESEvent.ThreatContext(
                 sha256:       verdict?.hash,
-                threatName:   verdict?.threatName ?? lolbinFinding?.title,
-                threatFamily: verdict?.threatFamily ?? (lolbinFinding == nil ? nil : "lolbin-behavior"),
+                threatName:   verdict?.threatName ?? behaviorTitle,
+                threatFamily: verdict?.threatFamily ?? (behaviorTitle == nil ? nil : behaviorFamily),
                 isCodeSigned: trustedSigner,
                 teamID: teamID,
                 signingID: signingID,
-                metadata: lolbinFinding.map { finding in
+                metadata: credentialFinding.map { finding in
+                    var metadata = [
+                        "reason": finding.reason,
+                        "rule": finding.reason,
+                        "ruleTier": "review",
+                        "detectionKind": "credential-access",
+                        "signalSeverity": "medium",
+                        "credentialStore": finding.store.rawValue
+                    ]
+                    if let attribution {
+                        metadata.merge(attribution.metadata) { current, _ in current }
+                    }
+                    return metadata
+                } ?? lolbinFinding.map { finding in
                     var metadata = [
                         "reason": finding.reason,
                         "rule": finding.reason,
@@ -1324,17 +1376,98 @@ final class ESEventHandler {
                     if let matchedCommand = finding.matchedCommand {
                         metadata["matchedCommand"] = matchedCommand
                     }
-                    if let attribution = processTree?.responsibleApp(
-                        actorPID: pid,
-                        responsiblePID: responsiblePID,
-                        resolver: SecCodeResponsibleProcessIdentityResolver.shared
-                    ) {
+                    if let attribution {
+                        metadata.merge(attribution.metadata) { current, _ in current }
+                    }
+                    return metadata
+                } ?? interactivePipelineFinding.map { finding in
+                    var metadata = [
+                        "reason": finding.reason,
+                        "rule": finding.reason,
+                        "ruleTier": "protected",
+                        "detectionKind": "lolbin-behavior",
+                        "signalSeverity": "critical",
+                        "matchedCommand": finding.matchedCommand,
+                        "execTargetPath": targetPath
+                    ]
+                    if let attribution {
                         metadata.merge(attribution.metadata) { current, _ in current }
                     }
                     return metadata
                 }
             )
         ))
+    }
+
+    private func observeCredentialStoreOpen(
+        path: String,
+        actorPath: String,
+        actorPID: Int32,
+        parentPID: Int32,
+        responsiblePID: Int32?
+    ) {
+        let attribution = processTree?.responsibleApp(
+            actorPID: actorPID,
+            responsiblePID: responsiblePID,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
+        guard let finding = CredentialAccessPolicy.findingForOpen(
+            path: path,
+            responsibleIdentity: attribution?.app.map(Self.credentialIdentity)
+        ) else { return }
+
+        // High-volume stores may be opened repeatedly. Coalesce at the sensor
+        // boundary as well as in Core so a noisy reader cannot flood delivery.
+        let key = "\(actorPID)|\(finding.store.rawValue)"
+        let now = Date()
+        let shouldReport = credentialReportLock.withLock { () -> Bool in
+            if let previous = lastCredentialReport[key],
+               now.timeIntervalSince(previous) < Self.credentialReportWindow {
+                return false
+            }
+            lastCredentialReport[key] = now
+            if lastCredentialReport.count > 1_024 {
+                let cutoff = now.addingTimeInterval(-Self.credentialReportWindow)
+                lastCredentialReport = lastCredentialReport.filter { $0.value >= cutoff }
+            }
+            return true
+        }
+        guard shouldReport else { return }
+
+        var metadata = [
+            "reason": finding.reason,
+            "rule": finding.reason,
+            "ruleTier": "review",
+            "detectionKind": "credential-access",
+            "signalSeverity": "medium",
+            "credentialStore": finding.store.rawValue
+        ]
+        if let attribution {
+            metadata.merge(attribution.metadata) { current, _ in current }
+        }
+        reportThreat(ESEvent(
+            eventType: .authOpen,
+            processPath: actorPath,
+            pid: actorPID,
+            parentPid: parentPID,
+            decision: .allow,
+            threat: ESEvent.ThreatContext(
+                threatName: finding.title,
+                threatFamily: "credential-access",
+                metadata: metadata
+            )
+        ))
+    }
+
+    private static func credentialIdentity(
+        _ identity: ResponsibleAppIdentity
+    ) -> CredentialAccessPolicy.ValidatedIdentity {
+        CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: identity.bundleID,
+            teamID: identity.teamID,
+            signingValidated: identity.signing == .signed || identity.signing == .applePlatform,
+            isApplePlatform: identity.signing == .applePlatform
+        )
     }
 
     // MARK: - Private Helpers

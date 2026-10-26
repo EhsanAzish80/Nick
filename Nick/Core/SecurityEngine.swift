@@ -586,6 +586,15 @@ final class SecurityEngine {
         }
     }
 
+    var networkIngestCursorEventIDs: Set<UUID>? {
+        incidentStore.networkIngestCursor?.deliveredEventIDs
+    }
+
+    @discardableResult
+    func initializeNetworkIngestCursor(eventIDs: Set<UUID>) -> UInt64 {
+        incidentStore.initializeNetworkIngestCursor(eventIDs: eventIDs)
+    }
+
 #if DEBUG
     /// Validation-only retention flood. This deliberately enters through the
     /// same privileged IncidentStore persistence boundary as live findings,

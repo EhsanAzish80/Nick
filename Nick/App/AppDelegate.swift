@@ -20,9 +20,7 @@ import SystemExtensions
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    /// Time-boxed 5.0 policy: the filter remains an honest observation surface,
-    /// while durable network-to-incident cursoring is completed for 5.0.1.
-    static let networkIncidentIngestionEnabledFor5_0 = false
+    static let networkIncidentIngestionEnabled = true
 
     // MARK: - Shared State
 
@@ -187,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             },
                             removeLegacyState: true
                         )
+                        self.prepareNetworkIncidentDelivery()
                         self.xpcClient.incidentStoreDidBecomeReady()
 #if DEBUG
                         self.runRequestedRetentionValidation()
@@ -255,7 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #endif
 
     private func wireLiveFindingHandlers() {
-        if Self.networkIncidentIngestionEnabledFor5_0 {
+        if Self.networkIncidentIngestionEnabled {
             networkProtection.findingHandler = { [weak self] finding in
                 guard let self, self.engine.incidentStoreReady else { return .failed }
                 return await self.engine.ingestLiveFinding(
@@ -296,6 +295,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         esIngestLogger.info(
             "handler attached kind=integrity-ack elapsedMs=\(self.launchElapsedMilliseconds, privacy: .public)"
         )
+    }
+
+    private func prepareNetworkIncidentDelivery() {
+        if let existing = engine.networkIngestCursorEventIDs {
+            networkProtection.activateDurableCursor(deliveredEventIDs: existing)
+            networkProtection.loadEvents()
+            return
+        }
+        networkProtection.cursorBootstrapHandler = { [weak self] baselineIDs in
+            guard let self else { return baselineIDs }
+            let generation = self.engine.initializeNetworkIngestCursor(eventIDs: baselineIDs)
+            if generation > 0 {
+                _ = await self.xpcClient.awaitIncidentStorePersistence(generation: generation)
+            }
+            return self.engine.networkIngestCursorEventIDs ?? baselineIDs
+        }
+        networkProtection.loadEvents()
     }
 
     private var launchElapsedMilliseconds: Int {
