@@ -78,6 +78,29 @@ final class NetworkBlocklist: @unchecked Sendable {
     /// Loads only a versioned Ed25519-signed rule envelope. Invalid, expired,
     /// or downgraded data is ignored so a broken update always fails open.
     private func loadSignedRules() {
+        let bundleStore = SignedThreatIntelligenceBundleStore(
+            directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
+            publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,
+            updatesEnabled: ThreatIntelligenceBundleTrustAnchor.updatesEnabled
+        )
+        if let (payload, provenance) = bundleStore.loadBestAvailable() {
+            lock.withLock {
+                blockedDomains = Set(payload.domains.compactMap(
+                    NetworkProtectionConfiguration.normalizedDomain
+                ))
+                blockedIPs = Set(payload.ipAddresses.map { $0.lowercased() })
+                loadedProvenance = Provenance(
+                    version: provenance.version,
+                    issuedAt: provenance.issuedAt,
+                    expiresAt: provenance.expiresAt
+                )
+            }
+            Self.logger.info("NetworkBlocklist: loaded signed intelligence bundle version \(payload.version)")
+            return
+        }
+
+        // Legacy 5.0.x envelope fallback. It remains signature-checked and is
+        // removed once the 5.1 bundle service is enabled in production.
         guard let listURL = NetworkProtectionSharedStore.signedRulesURL() else { return }
         guard let data = try? Data(contentsOf: listURL) else { return }
         guard let envelope = try? JSONDecoder().decode(SignedNetworkRuleEnvelope.self, from: data),

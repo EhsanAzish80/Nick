@@ -54,6 +54,7 @@ struct DiagnosticsView: View {
                         expectedProviderVersion: NetworkProtectionSharedStore.bundledProviderVersion()
                     )?.formatted(date: .abbreviated, time: .standard) ?? "Unavailable")
                     row("Network intelligence", networkProtection.ruleSourceSummary)
+                    row("Signed intelligence bundle", threatBundleSummary)
                     row("Last update check", updateLastCheckTime > 0
                         ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(date: .abbreviated, time: .standard)
                         : "Never")
@@ -132,6 +133,19 @@ struct DiagnosticsView: View {
               date != "unavailable"
         else { return "Unavailable" }
         return "\(count.intValue) entries · \(date)"
+    }
+
+    private var threatBundleSummary: String {
+        let store = SignedThreatIntelligenceBundleStore(
+            directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
+            publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,
+            updatesEnabled: ThreatIntelligenceBundleTrustAnchor.updatesEnabled
+        )
+        guard let (_, provenance) = store.loadBestAvailable() else {
+            return ThreatIntelligenceBundleTrustAnchor.updatesEnabled ? "Unavailable" : "Disabled"
+        }
+        let fallback = provenance.usingLastKnownGood ? " · last-known-good" : ""
+        return "v\(provenance.version) · \(provenance.source) · expires \(provenance.expiresAt.formatted(date: .abbreviated, time: .omitted))\(fallback)"
     }
 
     @ViewBuilder

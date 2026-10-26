@@ -400,6 +400,7 @@ enum NetworkProtectionSharedStore {
     static let eventsFileName = "network-block-events.json"
     static let signedRulesFileName = "network-rules-v1.json"
     static let signedRulesVersionFileName = "network-rules-version"
+    static let threatIntelligenceDirectoryName = "threat-intelligence"
     static let healthFileName = "network-filter-health.json"
     static let maximumEventCount = 500
 
@@ -413,6 +414,13 @@ enum NetworkProtectionSharedStore {
 
     static func signedRulesVersionURL(fileManager: FileManager = .default) -> URL? {
         systemSupportDirectory.appendingPathComponent(signedRulesVersionFileName)
+    }
+
+    static func threatIntelligenceDirectory(fileManager: FileManager = .default) -> URL {
+        systemSupportDirectory.appendingPathComponent(
+            threatIntelligenceDirectoryName,
+            isDirectory: true
+        )
     }
 
     static func healthURL(fileManager: FileManager = .default) -> URL? {

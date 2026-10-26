@@ -40,6 +40,9 @@
 		E40000000000000000000602 /* LOLBinExecutionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000600 /* LOLBinExecutionPolicy.swift */; };
 		E40000000000000000000701 /* InteractiveShellPipelinePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */; };
 		E40000000000000000000702 /* InteractiveShellPipelinePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */; };
+		E40000000000000000000801 /* SignedThreatIntelligenceBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */; };
+		E40000000000000000000802 /* SignedThreatIntelligenceBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */; };
+		E40000000000000000000803 /* SignedThreatIntelligenceBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */; };
 		F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */; };
 		F60000000000000000000001 /* QuarantineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000003 /* QuarantineManager.swift */; };
 		F60000000000000000000002 /* QuarantineDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004 /* QuarantineDatabase.swift */; };
@@ -144,6 +147,7 @@
 		E40000000000000000000200 /* ExecutionTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ExecutionTrustPolicy.swift; path = Shared/ExecutionTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000600 /* LOLBinExecutionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LOLBinExecutionPolicy.swift; path = Shared/LOLBinExecutionPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = InteractiveShellPipelinePolicy.swift; path = Shared/InteractiveShellPipelinePolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SignedThreatIntelligenceBundle.swift; path = Shared/SignedThreatIntelligenceBundle.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000300 /* ScanCandidatePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScanCandidatePolicy.swift; path = Shared/ScanCandidatePolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000400 /* BundledHashCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BundledHashCatalog.swift; path = Shared/BundledHashCatalog.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000500 /* TamperProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TamperProtectionPolicy.swift; path = Shared/TamperProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
@@ -168,9 +172,38 @@
 		885ADC712FBFAF9F00664E7B /* Exceptions for "Nick" folder in "Nick" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				"App/Dashboard/DiagnosticsView 2.swift",
+				"Core/DeepScan/BundledHashFileScanner 2.swift",
+				"Core/Metrics/AuthLatencyWindow 2.swift",
+				"Core/ThreatCorrelator/IncidentSeenStore 2.swift",
+				"Core/ThreatCorrelator/IncidentStore 2.swift",
+				"Core/ThreatCorrelator/PrivilegedIncidentFileStore 2.swift",
 				Info.plist,
+				"Models/BehaviorIncidentPresentation 2.swift",
+				"Models/ProtectionStatus 2.swift",
 			);
 			target = A7068781809A7A01D520A3F7 /* Nick */;
+		};
+		885ADC862FBFAFA900664E7B /* Exceptions for "NickTests" folder in "NickTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				"App/AppDelegateTerminationPolicyTests 2.swift",
+				"BundledHashFileScannerTests 2.swift",
+				"Core/ExtensionXPCClientIncidentTests 2.swift",
+				"Core/IncidentStorePersistenceTests 2.swift",
+				"Core/PrivilegedIncidentFileStoreTests 2.swift",
+				"Core/ProtectionStatusTests 2.swift",
+				"FileIdentityAllowanceTests 2.swift",
+				"FileIntegrityPathPolicyTests 2.swift",
+				"LOLBinExecutionPolicyTests 2.swift",
+				"LOLBinTestFixtures 2.swift",
+				"QuarantineManagerFailureTests 2.swift",
+				"QuarantineManagerTestImports 2.swift",
+				"ResponsibleAppAttributionTests 2.swift",
+				"SignalTelemetryTests 2.swift",
+				"WebhookURLPolicyTests 2.swift",
+			);
+			target = F41503E0B5121344E9E560D5 /* NickTests */;
 		};
 		BB55CC11DDEEFF00AA220003 /* Exceptions for "NickNetFilter" folder in "NickNetFilter" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -217,6 +250,9 @@
 		};
 		885ADC842FBFAFA900664E7B /* NickTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				885ADC862FBFAFA900664E7B /* Exceptions for "NickTests" folder in "NickTests" target */,
+			);
 			path = NickTests;
 			sourceTree = "<group>";
 		};
@@ -313,6 +349,7 @@
 				E40000000000000000000200 /* ExecutionTrustPolicy.swift */,
 				E40000000000000000000600 /* LOLBinExecutionPolicy.swift */,
 				E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */,
+				E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */,
 				E40000000000000000000100 /* YARAVerdictPolicy.swift */,
 				E40000000000000000000400 /* BundledHashCatalog.swift */,
 				E40000000000000000000500 /* TamperProtectionPolicy.swift */,
@@ -723,6 +760,7 @@
 				E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */,
 				E40000000000000000000602 /* LOLBinExecutionPolicy.swift in Sources */,
 				E40000000000000000000702 /* InteractiveShellPipelinePolicy.swift in Sources */,
+				E40000000000000000000803 /* SignedThreatIntelligenceBundle.swift in Sources */,
 				E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */,
 				E40000000000000000000402 /* BundledHashCatalog.swift in Sources */,
 				E40000000000000000000502 /* TamperProtectionPolicy.swift in Sources */,
@@ -737,6 +775,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E40000000000000000000002 /* NetworkProtectionPolicy.swift in Sources */,
+				E40000000000000000000802 /* SignedThreatIntelligenceBundle.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -769,6 +808,7 @@
 				E40000000000000000000201 /* ExecutionTrustPolicy.swift in Sources */,
 				E40000000000000000000601 /* LOLBinExecutionPolicy.swift in Sources */,
 				E40000000000000000000701 /* InteractiveShellPipelinePolicy.swift in Sources */,
+				E40000000000000000000801 /* SignedThreatIntelligenceBundle.swift in Sources */,
 				E40000000000000000000101 /* YARAVerdictPolicy.swift in Sources */,
 				E40000000000000000000401 /* BundledHashCatalog.swift in Sources */,
 				E40000000000000000000501 /* TamperProtectionPolicy.swift in Sources */,
