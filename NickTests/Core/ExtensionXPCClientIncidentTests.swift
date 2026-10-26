@@ -2,6 +2,18 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+    func testOneShotDataReplyCompletesOnlyOnceAcrossReplyErrorAndTimeout() {
+        let recorder = LockedDataRecorder()
+        let reply = OneShotDataReply { data in
+            recorder.append(data)
+        }
+
+        XCTAssertTrue(reply.resolve(Data("reply".utf8)))
+        XCTAssertFalse(reply.resolve(Data("error".utf8)))
+        XCTAssertFalse(reply.resolve(Data("timeout".utf8)))
+        XCTAssertEqual(recorder.values(), [Data("reply".utf8)])
+    }
+
 #if DEBUG
     @MainActor
     func test_establishedConnectionLossSchedulesReconnectAfterBootstrap() {
@@ -362,4 +374,17 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
     }
 
+}
+
+private final class LockedDataRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [Data] = []
+
+    func append(_ data: Data) {
+        lock.withLock { recorded.append(data) }
+    }
+
+    func values() -> [Data] {
+        lock.withLock { recorded }
+    }
 }

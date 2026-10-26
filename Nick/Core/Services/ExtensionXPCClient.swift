@@ -49,6 +49,28 @@ private final class UpdateLeaseReplyBox: @unchecked Sendable {
     func value() -> Bool { lock.withLock { stored } }
 }
 
+/// Bridges an XPC reply or error back to async code exactly once without
+/// inheriting MainActor isolation into the XPC callback queue.
+final class OneShotDataReply: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completion: (@Sendable (Data) -> Void)?
+
+    init(completion: @escaping @Sendable (Data) -> Void) {
+        self.completion = completion
+    }
+
+    @discardableResult
+    func resolve(_ data: Data) -> Bool {
+        let callback = lock.withLock {
+            let callback = completion
+            completion = nil
+            return callback
+        }
+        callback?(data)
+        return callback != nil
+    }
+}
+
 enum IncidentVerdictAuthorizationFlow {
     @MainActor
     static func complete(
@@ -348,13 +370,31 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     public func refreshExtensionHealth() async {
-        guard let proxy = connection?.remoteObjectProxy as? NickExtensionXPCProtocol else {
+        guard let connection else {
             extensionHealth = nil
             recordAppObservedProtectionGap(reason: "Endpoint Security heartbeat unavailable")
             return
         }
         let data: Data = await withCheckedContinuation { continuation in
-            proxy.getExtensionHealth { continuation.resume(returning: $0) }
+            let reply = OneShotDataReply { data in
+                continuation.resume(returning: data)
+            }
+            let errorHandler: @Sendable (Error) -> Void = { error in
+                Self.logger.warning("Extension health request failed: \(error.localizedDescription)")
+                reply.resolve(Data())
+            }
+            guard let proxy = connection.remoteObjectProxyWithErrorHandler(errorHandler)
+                as? NickExtensionXPCProtocol else {
+                reply.resolve(Data())
+                return
+            }
+            let xpcReply: @Sendable (Data) -> Void = { data in
+                reply.resolve(data)
+            }
+            proxy.getExtensionHealth(reply: xpcReply)
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
+                reply.resolve(Data())
+            }
         }
         extensionHealth = data.isEmpty
             ? nil

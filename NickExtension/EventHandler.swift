@@ -901,16 +901,16 @@ final class ESEventHandler {
             )
             // Phase 6: record child exec in process tree
             processTree?.recordExec(pid: childPid, ppid: pid, path: processPath, args: [])
-            let forkLookupStart = CFAbsoluteTimeGetCurrent()
-            let forkEvidence = ProcessPipeResolver.evidence(pid: childPid)
-            EndpointSecurityClient.healthMetrics.recordForkDescriptorLookupLatency(
-                milliseconds: (CFAbsoluteTimeGetCurrent() - forkLookupStart) * 1_000
-            )
+            // Never inspect a just-forked child's descriptors from the ES callback
+            // queue. The child may already be suspended in AUTH_EXEC; proc_pidinfo
+            // can then wait for that exec while this same queue is responsible for
+            // answering it. Exec observation and its bounded retries collect the
+            // directional pipe evidence after AUTH_EXEC has been answered.
             interactivePipelinePolicy.recordFork(
                 childPID: childPid,
                 parentPID: pid,
-                standardInputPipeIdentifier: forkEvidence.standardInputPipeIdentifier,
-                standardOutputPipeIdentifier: forkEvidence.standardOutputPipeIdentifier,
+                standardInputPipeIdentifier: nil,
+                standardOutputPipeIdentifier: nil,
                 timestamp: Date()
             )
             // Keep lifecycle data inside the extension. Forwarding every fork
