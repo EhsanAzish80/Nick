@@ -1499,19 +1499,12 @@ final class ESEventHandler {
             responsiblePID: responsiblePID,
             resolver: SecCodeResponsibleProcessIdentityResolver.shared
         )
-        let responsibleIdentity = attribution?.app.map(Self.credentialIdentity)
-        let validatedPlatformActor = actorIdentity.isPlatformBinary
-            && actorIdentity.isValidIdentitySignature
-            ? CredentialAccessPolicy.ValidatedIdentity(
-                bundleID: actorIdentity.signingID,
-                teamID: actorIdentity.teamID,
-                signingValidated: true,
-                isApplePlatform: true
-            )
-            : nil
         guard let finding = CredentialAccessPolicy.findingForOpen(
             store: store,
-            responsibleIdentity: responsibleIdentity ?? validatedPlatformActor
+            responsibleIdentity: attribution?.app.map(Self.credentialIdentity),
+            actorIsValidatedApplePlatform: actorIdentity.isPlatformBinary
+                && actorIdentity.isValidIdentitySignature,
+            actorIsOwnResponsibleProcess: responsiblePID == actorPID
         ) else { return }
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor

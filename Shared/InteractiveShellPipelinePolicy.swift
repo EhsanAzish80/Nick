@@ -148,11 +148,46 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
             "org.python.python", "org.perl.perl", "org.ruby-lang.ruby"
         ]
         if observation.standardInputPipeIdentifier != nil,
-           interpreters.contains(name)
-            || observation.signingIdentifier.map(interpreterSigningIDs.contains) == true {
+           (interpreters.contains(name)
+            || observation.signingIdentifier.map(interpreterSigningIDs.contains) == true),
+           executesStandardInputAsCode(observation.arguments) {
             return .shell
         }
         return nil
+    }
+
+    /// A pipe into an interpreter is dangerous only when stdin is executable
+    /// input. Inline programs and script-file invocations consume stdin as
+    /// ordinary data and must not become protected download-to-shell findings.
+    private static func executesStandardInputAsCode(_ arguments: [String]) -> Bool {
+        let operands = Array(arguments.dropFirst())
+        if operands.isEmpty { return true }
+
+        var expectsOptionValue = false
+        for argument in operands {
+            if expectsOptionValue {
+                expectsOptionValue = false
+                continue
+            }
+            if argument == "-" || argument == "-s" { return true }
+            if argument == "-c" || argument == "-e" || argument == "-m"
+                || argument == "--command" || argument == "--eval" {
+                return false
+            }
+            if argument.hasPrefix("-c") || argument.hasPrefix("-e") || argument.hasPrefix("-m") {
+                return false
+            }
+            if argument.hasPrefix("--command=") || argument.hasPrefix("--eval=") {
+                return false
+            }
+            if argument == "-l" || argument == "--language" {
+                expectsOptionValue = true
+                continue
+            }
+            if argument.hasPrefix("-") { continue }
+            return false
+        }
+        return true
     }
 
     private static func containsRemoteURL(_ argument: String) -> Bool {

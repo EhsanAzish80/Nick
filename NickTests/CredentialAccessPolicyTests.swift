@@ -139,17 +139,30 @@ final class CredentialAccessPolicyTests: XCTestCase {
         ))
     }
 
-    func testValidatedApplePlatformKeychainReaderIsExemptOnlyForKeychain() {
-        let appleDaemon = CredentialAccessPolicy.ValidatedIdentity(
-            bundleID: nil, teamID: nil, signingValidated: true, isApplePlatform: true
+    func testPlatformCPLaunchedFromTerminalReadingKeychainAlerts() {
+        let terminal = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.apple.Terminal", teamID: nil,
+            signingValidated: true, isApplePlatform: true
         )
+        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/Keychains/login.keychain-db",
+            responsibleIdentity: terminal,
+            actorIsValidatedApplePlatform: true,
+            actorIsOwnResponsibleProcess: false
+        ))
+    }
+
+    func testSelfResponsibleValidatedPlatformDaemonReadingKeychainStaysSilent() {
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(
             path: "/Users/test/Library/Keychains/login.keychain-db",
-            responsibleIdentity: appleDaemon
+            responsibleIdentity: nil,
+            actorIsValidatedApplePlatform: true,
+            actorIsOwnResponsibleProcess: true
         ))
         XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
-            path: "/Users/test/.aws/credentials",
-            responsibleIdentity: appleDaemon
+            path: "/Users/test/.aws/credentials", responsibleIdentity: nil,
+            actorIsValidatedApplePlatform: true,
+            actorIsOwnResponsibleProcess: true
         ))
     }
 

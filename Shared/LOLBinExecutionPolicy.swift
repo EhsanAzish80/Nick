@@ -167,15 +167,30 @@ enum CredentialAccessPolicy {
         "2BUA8C4S2C|com.1password.1password"
     ]
 
-    static func findingForOpen(path: String, responsibleIdentity: ValidatedIdentity?) -> Finding? {
+    static func findingForOpen(
+        path: String,
+        responsibleIdentity: ValidatedIdentity?,
+        actorIsValidatedApplePlatform: Bool = false,
+        actorIsOwnResponsibleProcess: Bool = false
+    ) -> Finding? {
         guard let store = sensitiveStore(at: path) else { return nil }
-        return findingForOpen(store: store, responsibleIdentity: responsibleIdentity)
+        return findingForOpen(
+            store: store,
+            responsibleIdentity: responsibleIdentity,
+            actorIsValidatedApplePlatform: actorIsValidatedApplePlatform,
+            actorIsOwnResponsibleProcess: actorIsOwnResponsibleProcess
+        )
     }
 
-    static func findingForOpen(store: Store, responsibleIdentity: ValidatedIdentity?) -> Finding? {
+    static func findingForOpen(
+        store: Store,
+        responsibleIdentity: ValidatedIdentity?,
+        actorIsValidatedApplePlatform: Bool = false,
+        actorIsOwnResponsibleProcess: Bool = false
+    ) -> Finding? {
         if store == .keychain,
-           responsibleIdentity?.signingValidated == true,
-           responsibleIdentity?.isApplePlatform == true {
+           actorIsValidatedApplePlatform,
+           actorIsOwnResponsibleProcess {
             return nil
         }
         guard !isTrustedCredentialApplication(responsibleIdentity) else {

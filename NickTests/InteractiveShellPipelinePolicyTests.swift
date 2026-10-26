@@ -209,4 +209,29 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
         )))
         XCTAssertEqual(finding.actorPID, 71)
     }
+
+    func test_interpreterMustExecuteStandardInputAsCode() {
+        func finding(interpreter: String, arguments: [String]) -> InteractiveShellPipelinePolicy.Finding? {
+            let policy = InteractiveShellPipelinePolicy()
+            let time = Date()
+            _ = policy.observe(.init(
+                pid: 80, parentPID: 5, executablePath: "/tmp/network-reader",
+                arguments: ["reader", "https://example.test/x"],
+                standardOutputPipeIdentifier: 1_001, hasNetworkSocket: true, timestamp: time
+            ))
+            return policy.observe(.init(
+                pid: 81, parentPID: 5, executablePath: interpreter,
+                arguments: arguments, standardInputPipeIdentifier: 1_001,
+                timestamp: time.addingTimeInterval(0.01)
+            ))
+        }
+
+        XCTAssertNil(finding(
+            interpreter: "/usr/bin/python3",
+            arguments: ["python3", "-c", "import json, sys; json.load(sys.stdin)"]
+        ))
+        XCTAssertNotNil(finding(interpreter: "/usr/bin/python3", arguments: ["python3"]))
+        XCTAssertNotNil(finding(interpreter: "/bin/sh", arguments: ["sh"]))
+        XCTAssertNil(finding(interpreter: "/bin/sh", arguments: ["sh", "-c", "cat"]))
+    }
 }

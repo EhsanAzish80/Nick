@@ -112,7 +112,6 @@ Released 2026-10-16.
   Vivaldi regression cases.
 - Detect hidden-answer AppleScript password prompts as review-tier credential
   findings without recording prompt contents or entered secrets.
-- Extend scripted password-prompt inspection beyond inline argument forms.
 - Correlate download-to-interpreter behavior from a network socket, remote-URL
   argument, shared pipe and ancestry. Executable names and signing identifiers
   do not establish downloader behavior; validated identity adjusts confidence
