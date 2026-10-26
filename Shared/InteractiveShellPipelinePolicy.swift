@@ -1,17 +1,19 @@
 import Foundation
 
 /// Correlates short-lived sibling processes only when the kernel shows that
-/// they share a pipe. Process names alone are insufficient evidence.
+/// the downloader's stdout feeds the interpreter's stdin. Process names alone
+/// are insufficient evidence.
 final class InteractiveShellPipelinePolicy: @unchecked Sendable {
     struct Observation: Sendable {
         let pid: Int32
         let parentPID: Int32
         let executablePath: String
         let arguments: [String]
-        let pipeIdentifiers: Set<UInt64>
         let standardInputPipeIdentifier: UInt64?
+        let standardOutputPipeIdentifier: UInt64?
         let hasNetworkSocket: Bool
         let codeIdentityValidated: Bool
+        let signingIdentifier: String?
         let timestamp: Date
 
         init(
@@ -19,20 +21,22 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
             parentPID: Int32,
             executablePath: String,
             arguments: [String],
-            pipeIdentifiers: Set<UInt64>,
             standardInputPipeIdentifier: UInt64? = nil,
+            standardOutputPipeIdentifier: UInt64? = nil,
             hasNetworkSocket: Bool = false,
             codeIdentityValidated: Bool = false,
+            signingIdentifier: String? = nil,
             timestamp: Date
         ) {
             self.pid = pid
             self.parentPID = parentPID
             self.executablePath = executablePath
             self.arguments = arguments
-            self.pipeIdentifiers = pipeIdentifiers
             self.standardInputPipeIdentifier = standardInputPipeIdentifier
+            self.standardOutputPipeIdentifier = standardOutputPipeIdentifier
             self.hasNetworkSocket = hasNetworkSocket
             self.codeIdentityValidated = codeIdentityValidated
+            self.signingIdentifier = signingIdentifier
             self.timestamp = timestamp
         }
     }
@@ -51,8 +55,8 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
 
     private struct ForkEvidence {
         let parentPID: Int32
-        let pipeIdentifiers: Set<UInt64>
         let standardInputPipeIdentifier: UInt64?
+        let standardOutputPipeIdentifier: UInt64?
         let timestamp: Date
     }
 
@@ -68,15 +72,15 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
     func recordFork(
         childPID: Int32,
         parentPID: Int32,
-        pipeIdentifiers: Set<UInt64>,
         standardInputPipeIdentifier: UInt64?,
+        standardOutputPipeIdentifier: UInt64?,
         timestamp: Date = Date()
     ) {
         lock.withLock {
             forkEvidence[childPID] = ForkEvidence(
                 parentPID: parentPID,
-                pipeIdentifiers: pipeIdentifiers,
                 standardInputPipeIdentifier: standardInputPipeIdentifier,
+                standardOutputPipeIdentifier: standardOutputPipeIdentifier,
                 timestamp: timestamp
             )
             prune(now: timestamp)
@@ -87,19 +91,23 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
         return lock.withLock {
             prune(now: observation.timestamp)
             let observation = mergingForkEvidence(into: observation)
-            guard !observation.pipeIdentifiers.isEmpty,
-                  let role = Self.role(for: observation) else { return nil }
+            guard let role = Self.role(for: observation) else { return nil }
             defer { recent[observation.pid] = Recent(observation: observation, role: role) }
             guard let sibling = recent.values.first(where: {
-                $0.observation.parentPID == observation.parentPID
-                    && $0.observation.pid != observation.pid
-                    && $0.role != role
-                    && !$0.observation.pipeIdentifiers.isDisjoint(with: observation.pipeIdentifiers)
+                guard $0.observation.parentPID == observation.parentPID,
+                      $0.observation.pid != observation.pid,
+                      $0.role != role else { return false }
+                if role == .downloader {
+                    guard let output = observation.standardOutputPipeIdentifier else { return false }
+                    return output == $0.observation.standardInputPipeIdentifier
+                }
+                guard let input = observation.standardInputPipeIdentifier else { return false }
+                return $0.observation.standardOutputPipeIdentifier == input
             }) else { return nil }
             let downloader = role == .downloader ? observation : sibling.observation
             let shell = role == .shell ? observation : sibling.observation
-            let sharedPipes = downloader.pipeIdentifiers.intersection(shell.pipeIdentifiers)
-            guard let sharedPipe = sharedPipes.sorted().first else { return nil }
+            guard let sharedPipe = downloader.standardOutputPipeIdentifier,
+                  sharedPipe == shell.standardInputPipeIdentifier else { return nil }
             let fingerprint = "\(downloader.parentPID)|\(sharedPipe)|\(downloader.pid)|\(shell.pid)"
             guard emittedFingerprints[fingerprint] == nil else { return nil }
             emittedFingerprints[fingerprint] = observation.timestamp
@@ -135,8 +143,13 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
             "sh", "bash", "zsh", "dash", "ksh", "csh", "fish",
             "python", "python3", "perl", "ruby", "node", "osascript", "php", "swift"
         ]
+        let interpreterSigningIDs: Set<String> = [
+            "com.apple.sh", "com.apple.bash", "com.apple.zsh", "com.apple.osascript",
+            "org.python.python", "org.perl.perl", "org.ruby-lang.ruby"
+        ]
         if observation.standardInputPipeIdentifier != nil,
-           interpreters.contains(name) {
+           interpreters.contains(name)
+            || observation.signingIdentifier.map(interpreterSigningIDs.contains) == true {
             return .shell
         }
         return nil
@@ -156,11 +169,13 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
             parentPID: observation.parentPID,
             executablePath: observation.executablePath,
             arguments: observation.arguments,
-            pipeIdentifiers: observation.pipeIdentifiers.union(inherited.pipeIdentifiers),
             standardInputPipeIdentifier: observation.standardInputPipeIdentifier
                 ?? inherited.standardInputPipeIdentifier,
+            standardOutputPipeIdentifier: observation.standardOutputPipeIdentifier
+                ?? inherited.standardOutputPipeIdentifier,
             hasNetworkSocket: observation.hasNetworkSocket,
             codeIdentityValidated: observation.codeIdentityValidated,
+            signingIdentifier: observation.signingIdentifier,
             timestamp: observation.timestamp
         )
     }

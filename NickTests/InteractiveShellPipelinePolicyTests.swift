@@ -10,7 +10,6 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
             parentPID: 0,
             executablePath: "/usr/bin/true",
             arguments: ["true"],
-            pipeIdentifiers: [],
             timestamp: now
         )))
         XCTAssertTrue(policy.shouldRetry(.init(
@@ -18,7 +17,6 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
             parentPID: 1,
             executablePath: "/private/tmp/reader",
             arguments: ["reader", "https://example.test/x"],
-            pipeIdentifiers: [],
             timestamp: now
         )))
         XCTAssertTrue(policy.shouldRetry(.init(
@@ -26,7 +24,6 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
             parentPID: 1,
             executablePath: "/bin/zsh",
             arguments: ["zsh"],
-            pipeIdentifiers: [42],
             standardInputPipeIdentifier: 42,
             timestamp: now
         )))
@@ -40,7 +37,7 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
             parentPID: 5,
             executablePath: "/usr/bin/curl",
             arguments: ["curl", "https://user:secret@example.test/x?token=secret"],
-            pipeIdentifiers: [99],
+            standardOutputPipeIdentifier: 99,
             hasNetworkSocket: true,
             timestamp: time
         )))
@@ -49,7 +46,6 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
             parentPID: 5,
             executablePath: "/bin/sh",
             arguments: ["sh"],
-            pipeIdentifiers: [99],
             standardInputPipeIdentifier: 99,
             timestamp: time.addingTimeInterval(0.1)
         )))
@@ -68,7 +64,7 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
                 parentPID: 5,
                 executablePath: "/usr/bin/curl",
                 arguments: ["curl", "https://example.test/x"],
-                pipeIdentifiers: [42],
+                standardOutputPipeIdentifier: 42,
                 hasNetworkSocket: true,
                 timestamp: time
             ))
@@ -77,7 +73,6 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
                 parentPID: 5,
                 executablePath: "/usr/bin/\(consumer)",
                 arguments: [consumer],
-                pipeIdentifiers: [42],
                 standardInputPipeIdentifier: 42,
                 timestamp: time.addingTimeInterval(0.1)
             )), consumer)
@@ -89,12 +84,12 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
         let time = Date()
         _ = policy.observe(.init(
             pid: 10, parentPID: 5, executablePath: "/usr/bin/wget",
-            arguments: ["wget", "https://example.test/x"], pipeIdentifiers: [1],
+            arguments: ["wget", "https://example.test/x"], standardOutputPipeIdentifier: 1,
             hasNetworkSocket: true, timestamp: time
         ))
         XCTAssertNil(policy.observe(.init(
             pid: 11, parentPID: 5, executablePath: "/bin/zsh",
-            arguments: ["zsh"], pipeIdentifiers: [2], standardInputPipeIdentifier: 2,
+            arguments: ["zsh"], standardInputPipeIdentifier: 2,
             timestamp: time.addingTimeInterval(0.1)
         )))
     }
@@ -105,11 +100,11 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
         XCTAssertNil(policy.observe(.init(
             pid: 20, parentPID: 5, executablePath: "/private/tmp/fetch-helper",
             arguments: ["fetch-helper", "https://example.test/payload"],
-            pipeIdentifiers: [77], hasNetworkSocket: true, timestamp: time
+            standardOutputPipeIdentifier: 77, hasNetworkSocket: true, timestamp: time
         )))
         let finding = try XCTUnwrap(policy.observe(.init(
             pid: 21, parentPID: 5, executablePath: "/bin/zsh",
-            arguments: ["zsh"], pipeIdentifiers: [77], standardInputPipeIdentifier: 77,
+            arguments: ["zsh"], standardInputPipeIdentifier: 77,
             timestamp: time.addingTimeInterval(0.02)
         )))
         XCTAssertEqual(finding.reason, "download_pipe_interpreter")
@@ -121,11 +116,11 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
         _ = policy.observe(.init(
             pid: 30, parentPID: 5, executablePath: "/tmp/fetch-helper",
             arguments: ["fetch-helper", "https://example.test/payload"],
-            pipeIdentifiers: [88], hasNetworkSocket: false, timestamp: time
+            standardOutputPipeIdentifier: 88, hasNetworkSocket: false, timestamp: time
         ))
         XCTAssertNil(policy.observe(.init(
             pid: 31, parentPID: 5, executablePath: "/bin/sh",
-            arguments: ["sh"], pipeIdentifiers: [88], standardInputPipeIdentifier: 88,
+            arguments: ["sh"], standardInputPipeIdentifier: 88,
             timestamp: time.addingTimeInterval(0.01)
         )))
     }
@@ -134,21 +129,21 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
         let policy = InteractiveShellPipelinePolicy()
         let time = Date()
         policy.recordFork(
-            childPID: 40, parentPID: 5, pipeIdentifiers: [101],
-            standardInputPipeIdentifier: nil, timestamp: time
+            childPID: 40, parentPID: 5,
+            standardInputPipeIdentifier: nil, standardOutputPipeIdentifier: 101, timestamp: time
         )
         policy.recordFork(
-            childPID: 41, parentPID: 5, pipeIdentifiers: [101],
-            standardInputPipeIdentifier: 101, timestamp: time
+            childPID: 41, parentPID: 5,
+            standardInputPipeIdentifier: 101, standardOutputPipeIdentifier: nil, timestamp: time
         )
         XCTAssertNil(policy.observe(.init(
             pid: 40, parentPID: 5, executablePath: "/tmp/renamed-reader",
             arguments: ["renamed-reader", "https://example.test/x"],
-            pipeIdentifiers: [], hasNetworkSocket: true, timestamp: time.addingTimeInterval(0.01)
+            hasNetworkSocket: true, timestamp: time.addingTimeInterval(0.01)
         )))
         let finding = try XCTUnwrap(policy.observe(.init(
             pid: 41, parentPID: 5, executablePath: "/bin/bash",
-            arguments: ["bash"], pipeIdentifiers: [],
+            arguments: ["bash"],
             timestamp: time.addingTimeInterval(0.02)
         )))
         XCTAssertEqual(finding.actorPID, 41)
@@ -160,17 +155,58 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
             let time = Date()
             _ = policy.observe(.init(
                 pid: 50, parentPID: 5, executablePath: "/tmp/reader",
-                arguments: ["reader", "https://example.test/x"], pipeIdentifiers: [202],
+                arguments: ["reader", "https://example.test/x"], standardOutputPipeIdentifier: 202,
                 hasNetworkSocket: true, codeIdentityValidated: validated, timestamp: time
             ))
             return try XCTUnwrap(policy.observe(.init(
                 pid: 51, parentPID: 5, executablePath: "/bin/sh", arguments: ["sh"],
-                pipeIdentifiers: [202], standardInputPipeIdentifier: 202,
+                standardInputPipeIdentifier: 202,
                 codeIdentityValidated: validated, timestamp: time.addingTimeInterval(0.01)
             )))
         }
 
         XCTAssertEqual(try finding(validated: false).confidence, "medium")
         XCTAssertEqual(try finding(validated: true).confidence, "high")
+    }
+
+    func test_sharedInheritedPipeWithoutDownloaderStdoutToShellStdinStaysSilent() {
+        let policy = InteractiveShellPipelinePolicy()
+        let time = Date()
+        policy.recordFork(
+            childPID: 60, parentPID: 5,
+            standardInputPipeIdentifier: 700, standardOutputPipeIdentifier: 701,
+            timestamp: time
+        )
+        policy.recordFork(
+            childPID: 61, parentPID: 5,
+            standardInputPipeIdentifier: 702, standardOutputPipeIdentifier: 700,
+            timestamp: time
+        )
+        _ = policy.observe(.init(
+            pid: 60, parentPID: 5, executablePath: "/tmp/reader",
+            arguments: ["reader", "https://example.test/x"],
+            hasNetworkSocket: true, timestamp: time.addingTimeInterval(0.01)
+        ))
+        XCTAssertNil(policy.observe(.init(
+            pid: 61, parentPID: 5, executablePath: "/bin/zsh", arguments: ["zsh"],
+            timestamp: time.addingTimeInterval(0.02)
+        )))
+    }
+
+    func test_validatedInterpreterIdentitySurvivesRenamedExecutable() throws {
+        let policy = InteractiveShellPipelinePolicy()
+        let time = Date()
+        _ = policy.observe(.init(
+            pid: 70, parentPID: 5, executablePath: "/tmp/reader",
+            arguments: ["reader", "https://example.test/x"],
+            standardOutputPipeIdentifier: 900, hasNetworkSocket: true, timestamp: time
+        ))
+        let finding = try XCTUnwrap(policy.observe(.init(
+            pid: 71, parentPID: 5, executablePath: "/tmp/copied-interpreter",
+            arguments: ["copied-interpreter"], standardInputPipeIdentifier: 900,
+            codeIdentityValidated: true, signingIdentifier: "com.apple.zsh",
+            timestamp: time.addingTimeInterval(0.01)
+        )))
+        XCTAssertEqual(finding.actorPID, 71)
     }
 }

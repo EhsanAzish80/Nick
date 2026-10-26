@@ -22,14 +22,20 @@ print(walk(value))
 ' "$incidents"
 }
 
-before="$(count_findings 2>/dev/null || echo 0)"
 /bin/cp /usr/bin/curl "$work/network-reader"
 
-/usr/bin/python3 -c '
+run_case() {
+  local label="$1"
+  local delay="$2"
+  local port="$3"
+  local before
+  before="$(count_findings 2>/dev/null || echo 0)"
+
+  /usr/bin/python3 -c '
 import http.server, socketserver, sys, time
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        time.sleep(0.4)
+        time.sleep(float(sys.argv[2]))
         body = b": nick-safe-pipeline-fixture\n"
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
@@ -38,23 +44,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
 with socketserver.TCPServer(("127.0.0.1", int(sys.argv[1])), Handler) as server:
     server.handle_request()
-' 18765 &
-server_pid=$!
-sleep 0.1
+' "$port" "$delay" &
+  server_pid=$!
+  sleep 0.1
 
-echo 'DECLARED VALIDATION: renamed network reader -> zsh; local no-op payload only'
-"$work/network-reader" -sS http://127.0.0.1:18765/fixture | /bin/zsh
-wait "$server_pid"
-server_pid=''
+  echo "DECLARED VALIDATION: ${label}; renamed network reader -> zsh; local no-op payload only"
+  "$work/network-reader" -sS "http://127.0.0.1:${port}/fixture" | /bin/zsh
+  wait "$server_pid"
+  server_pid=''
 
-for _ in {1..30}; do
-  sleep 0.2
-  after="$(count_findings 2>/dev/null || echo 0)"
-  if (( after > before )); then
-    echo 'PASS: generic download-to-interpreter finding persisted'
-    exit 0
-  fi
-done
+  for _ in {1..30}; do
+    sleep 0.2
+    after="$(count_findings 2>/dev/null || echo 0)"
+    if (( after > before )); then
+      echo "PASS: ${label} finding persisted"
+      return 0
+    fi
+  done
 
-echo "FAIL: download_pipe_interpreter count stayed at ${before}"
-exit 1
+  echo "FAIL: ${label} download_pipe_interpreter count stayed at ${before}"
+  return 1
+}
+
+# The delayed case proves retry behavior; the immediate case is the honest
+# short-lived-process race check and must pass independently.
+run_case "delayed response" 0.4 18765
+run_case "immediate response" 0 18766

@@ -303,14 +303,17 @@ final class ESEventHandler {
 
             esClient?.respond(to: message, allow: !shouldBlock)
 
-            if isReadOpen, !shouldBlock {
+            if isReadOpen, !shouldBlock,
+               let credentialStore = CredentialAccessPolicy.sensitiveStore(at: filePath) {
                 dispatchQueue.async { [weak self] in
                     self?.observeCredentialStoreOpen(
+                        store: credentialStore,
                         path: filePath,
                         actorPath: processPath,
                         actorPID: pid,
                         parentPID: parentPid,
-                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil
+                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        actorIdentity: tamperActorIdentity
                     )
                 }
             }
@@ -898,12 +901,16 @@ final class ESEventHandler {
             )
             // Phase 6: record child exec in process tree
             processTree?.recordExec(pid: childPid, ppid: pid, path: processPath, args: [])
+            let forkLookupStart = CFAbsoluteTimeGetCurrent()
             let forkEvidence = ProcessPipeResolver.evidence(pid: childPid)
+            EndpointSecurityClient.healthMetrics.recordForkDescriptorLookupLatency(
+                milliseconds: (CFAbsoluteTimeGetCurrent() - forkLookupStart) * 1_000
+            )
             interactivePipelinePolicy.recordFork(
                 childPID: childPid,
                 parentPID: pid,
-                pipeIdentifiers: forkEvidence.pipeIdentifiers,
                 standardInputPipeIdentifier: forkEvidence.standardInputPipeIdentifier,
+                standardOutputPipeIdentifier: forkEvidence.standardOutputPipeIdentifier,
                 timestamp: Date()
             )
             // Keep lifecycle data inside the extension. Forwarding every fork
@@ -1329,10 +1336,11 @@ final class ESEventHandler {
             parentPID: parentPid,
             executablePath: targetPath,
             arguments: arguments,
-            pipeIdentifiers: pipelineEvidence.pipeIdentifiers,
             standardInputPipeIdentifier: pipelineEvidence.standardInputPipeIdentifier,
+            standardOutputPipeIdentifier: pipelineEvidence.standardOutputPipeIdentifier,
             hasNetworkSocket: pipelineEvidence.hasNetworkSocket,
             codeIdentityValidated: trustedSigner,
+            signingIdentifier: signingID,
             timestamp: Date()
         )
         let interactivePipelineFinding = interactivePipelinePolicy.observe(pipelineObservation)
@@ -1434,10 +1442,11 @@ final class ESEventHandler {
                     parentPID: observation.parentPID,
                     executablePath: observation.executablePath,
                     arguments: observation.arguments,
-                    pipeIdentifiers: evidence.pipeIdentifiers,
                     standardInputPipeIdentifier: evidence.standardInputPipeIdentifier,
+                    standardOutputPipeIdentifier: evidence.standardOutputPipeIdentifier,
                     hasNetworkSocket: evidence.hasNetworkSocket,
                     codeIdentityValidated: observation.codeIdentityValidated,
+                    signingIdentifier: observation.signingIdentifier,
                     timestamp: Date()
                 )
                 guard let finding = self.interactivePipelinePolicy.observe(retry) else { return }
@@ -1476,11 +1485,13 @@ final class ESEventHandler {
     }
 
     private func observeCredentialStoreOpen(
+        store: CredentialAccessPolicy.Store,
         path: String,
         actorPath: String,
         actorPID: Int32,
         parentPID: Int32,
-        responsiblePID: Int32?
+        responsiblePID: Int32?,
+        actorIdentity: TamperActorIdentity
     ) {
         EndpointSecurityClient.healthMetrics.recordCredentialOpenEvaluation()
         let attribution = processTree?.responsibleApp(
@@ -1488,9 +1499,19 @@ final class ESEventHandler {
             responsiblePID: responsiblePID,
             resolver: SecCodeResponsibleProcessIdentityResolver.shared
         )
+        let responsibleIdentity = attribution?.app.map(Self.credentialIdentity)
+        let validatedPlatformActor = actorIdentity.isPlatformBinary
+            && actorIdentity.isValidIdentitySignature
+            ? CredentialAccessPolicy.ValidatedIdentity(
+                bundleID: actorIdentity.signingID,
+                teamID: actorIdentity.teamID,
+                signingValidated: true,
+                isApplePlatform: true
+            )
+            : nil
         guard let finding = CredentialAccessPolicy.findingForOpen(
-            path: path,
-            responsibleIdentity: attribution?.app.map(Self.credentialIdentity)
+            store: store,
+            responsibleIdentity: responsibleIdentity ?? validatedPlatformActor
         ) else { return }
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor

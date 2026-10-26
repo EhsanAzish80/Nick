@@ -34,7 +34,7 @@ if [[ ! -r "$health" ]]; then
   exit 1
 fi
 
-before_evaluated="$(read_health_count credentialOpenEvaluationCount)"
+before_evaluated="$(read_health_count credentialPathCandidateCount)"
 before_findings="$(read_health_count credentialOpenFindingCount)"
 before_incidents="$(count_fixture_incidents 2>/dev/null || echo 0)"
 
@@ -48,7 +48,7 @@ printf '%s\n' '#include <fcntl.h>' '#include <unistd.h>' \
 
 for _ in {1..30}; do
   sleep 0.2
-  after_evaluated="$(read_health_count credentialOpenEvaluationCount)"
+  after_evaluated="$(read_health_count credentialPathCandidateCount)"
   after_findings="$(read_health_count credentialOpenFindingCount)"
   after_incidents="$(count_fixture_incidents 2>/dev/null || echo 0)"
   if (( after_evaluated > before_evaluated && after_findings > before_findings && after_incidents > before_incidents )); then

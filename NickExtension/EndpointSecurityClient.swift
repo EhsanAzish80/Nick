@@ -233,6 +233,9 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
     private let lock = NSLock()
     private var state = State()
     private let authLatencyWindow = AuthLatencyWindow(capacity: AuthLatencyWindow.productionCapacity)
+    private let forkDescriptorLatencyWindow = AuthLatencyWindow(
+        capacity: AuthLatencyWindow.productionCapacity
+    )
 
     private static let machTimebase: mach_timebase_info_data_t? = {
         var timebase = mach_timebase_info_data_t()
@@ -270,6 +273,10 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         authLatencyWindow.record(milliseconds: milliseconds)
     }
 
+    func recordForkDescriptorLookupLatency(milliseconds: Double) {
+        forkDescriptorLatencyWindow.record(milliseconds: milliseconds)
+    }
+
     func snapshot() -> (
         eventsPerSecond: [String: Double],
         deadlineMisses: UInt64,
@@ -277,7 +284,8 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         credentialOpenEvaluations: UInt64,
         credentialOpenFindings: UInt64,
         authResponseP50Milliseconds: Double?,
-        authResponseP99Milliseconds: Double?
+        authResponseP99Milliseconds: Double?,
+        forkDescriptorP99Milliseconds: Double?
     ) {
         let eventSnapshot = lock.withLock {
             let elapsed = max(Date().timeIntervalSince(state.startedAt), 1)
@@ -291,6 +299,7 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
             )
         }
         let latencySnapshot = authLatencyWindow.snapshot()
+        let forkLatencySnapshot = forkDescriptorLatencyWindow.snapshot()
         return (
             eventSnapshot.0,
             eventSnapshot.1,
@@ -298,7 +307,8 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
             eventSnapshot.3,
             eventSnapshot.4,
             latencySnapshot.p50Milliseconds,
-            latencySnapshot.p99Milliseconds
+            latencySnapshot.p99Milliseconds,
+            forkLatencySnapshot.p99Milliseconds
         )
     }
 

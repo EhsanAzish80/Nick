@@ -54,7 +54,7 @@ func writeExtensionHealth() {
         "canaryCount": ransomwareDetector.canaryManager.canaryPaths.count,
         "eventsPerSecond": esMetrics.eventsPerSecond,
         "deadlineMissCount": esMetrics.deadlineMisses,
-        "credentialOpenEvaluationCount": esMetrics.credentialOpenEvaluations,
+        "credentialPathCandidateCount": esMetrics.credentialOpenEvaluations,
         "credentialOpenFindingCount": esMetrics.credentialOpenFindings
     ]
     if let lastDeadlineMissAt = esMetrics.lastDeadlineMissAt {
@@ -65,6 +65,9 @@ func writeExtensionHealth() {
     }
     if let p99 = esMetrics.authResponseP99Milliseconds {
         health["authResponseP99Milliseconds"] = p99
+    }
+    if let p99 = esMetrics.forkDescriptorP99Milliseconds {
+        health["forkDescriptorP99Milliseconds"] = p99
     }
 
     do {

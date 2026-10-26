@@ -5,11 +5,13 @@ enum ProcessPipeResolver {
     struct Evidence: Equatable, Sendable {
         let pipeIdentifiers: Set<UInt64>
         let standardInputPipeIdentifier: UInt64?
+        let standardOutputPipeIdentifier: UInt64?
         let hasNetworkSocket: Bool
 
         static let empty = Self(
             pipeIdentifiers: [],
             standardInputPipeIdentifier: nil,
+            standardOutputPipeIdentifier: nil,
             hasNetworkSocket: false
         )
     }
@@ -30,10 +32,24 @@ enum ProcessPipeResolver {
 
         var pipes = Set<UInt64>()
         var standardInputPipe: UInt64?
+        var standardOutputPipe: UInt64?
         var hasSocket = false
         for descriptor in descriptors.prefix(Int(readCount) / MemoryLayout<proc_fdinfo>.stride) {
             if descriptor.proc_fdtype == PROX_FDTYPE_SOCKET {
-                hasSocket = true
+                var info = socket_fdinfo()
+                let result = withUnsafeMutablePointer(to: &info) { pointer in
+                    proc_pidfdinfo(
+                        pid,
+                        descriptor.proc_fd,
+                        PROC_PIDFDSOCKETINFO,
+                        pointer,
+                        Int32(MemoryLayout<socket_fdinfo>.size)
+                    )
+                }
+                if result == MemoryLayout<socket_fdinfo>.size,
+                   info.psi.soi_family == AF_INET || info.psi.soi_family == AF_INET6 {
+                    hasSocket = true
+                }
                 continue
             }
             guard descriptor.proc_fdtype == PROX_FDTYPE_PIPE else { continue }
@@ -51,10 +67,12 @@ enum ProcessPipeResolver {
             let identifier = UInt64(info.pipeinfo.pipe_stat.vst_ino)
             pipes.insert(identifier)
             if descriptor.proc_fd == STDIN_FILENO { standardInputPipe = identifier }
+            if descriptor.proc_fd == STDOUT_FILENO { standardOutputPipe = identifier }
         }
         return Evidence(
             pipeIdentifiers: pipes,
             standardInputPipeIdentifier: standardInputPipe,
+            standardOutputPipeIdentifier: standardOutputPipe,
             hasNetworkSocket: hasSocket
         )
     }

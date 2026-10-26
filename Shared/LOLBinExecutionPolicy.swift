@@ -168,7 +168,17 @@ enum CredentialAccessPolicy {
     ]
 
     static func findingForOpen(path: String, responsibleIdentity: ValidatedIdentity?) -> Finding? {
-        guard let store = sensitiveStore(at: path), !isTrustedCredentialApplication(responsibleIdentity) else {
+        guard let store = sensitiveStore(at: path) else { return nil }
+        return findingForOpen(store: store, responsibleIdentity: responsibleIdentity)
+    }
+
+    static func findingForOpen(store: Store, responsibleIdentity: ValidatedIdentity?) -> Finding? {
+        if store == .keychain,
+           responsibleIdentity?.signingValidated == true,
+           responsibleIdentity?.isApplePlatform == true {
+            return nil
+        }
+        guard !isTrustedCredentialApplication(responsibleIdentity) else {
             return nil
         }
         return Finding(
@@ -185,9 +195,16 @@ enum CredentialAccessPolicy {
     ) -> Finding? {
         let executable = URL(fileURLWithPath: executablePath).lastPathComponent.lowercased()
         let loweredCommand = arguments.joined(separator: " ").lowercased()
+        let normalizedCommand = loweredCommand
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
         if executable == "osascript",
-           loweredCommand.contains("display dialog"),
-           loweredCommand.contains("hidden answer") {
+           (normalizedCommand.range(of: #"display\s*dialog"#, options: .regularExpression) != nil
+                && normalizedCommand.range(of: #"hidden\s*answer"#, options: .regularExpression) != nil
+            || normalizedCommand.range(
+                of: #"display\s*dialog.*hidden\s*answer\s*:\s*true"#,
+                options: .regularExpression
+            ) != nil) {
             return Finding(
                 title: "Hidden password prompt needs review",
                 reason: "hidden_password_prompt",
@@ -213,7 +230,7 @@ enum CredentialAccessPolicy {
         return trustedApplications.contains("\(signer)|\(bundleID)")
     }
 
-    private static func sensitiveStore(at rawPath: String) -> Store? {
+    static func sensitiveStore(at rawPath: String) -> Store? {
         let path = URL(fileURLWithPath: rawPath).standardizedFileURL.path
         let lower = path.lowercased()
         if lower.hasSuffix("/cookies.binarycookies") || lower.hasSuffix("/cookies")

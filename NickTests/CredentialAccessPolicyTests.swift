@@ -50,11 +50,15 @@ final class CredentialAccessPolicyTests: XCTestCase {
     }
 
     func testKeychainDumpAndSecretReadCommandsAlertWithoutRecordingArguments() {
+        let appleSecurityCLI = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.apple.security", teamID: nil,
+            signingValidated: true, isApplePlatform: true
+        )
         XCTAssertEqual(
             CredentialAccessPolicy.findingForExec(
                 executablePath: "/usr/bin/security",
                 arguments: ["security", "dump-keychain", "-d", "login.keychain-db"],
-                responsibleIdentity: unknown
+                responsibleIdentity: appleSecurityCLI
             )?.reason,
             "keychain_dump"
         )
@@ -77,6 +81,10 @@ final class CredentialAccessPolicyTests: XCTestCase {
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(path: "/Users/test/.ssh/id_ed25519.pub", responsibleIdentity: unknown))
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(path: "/Users/test/.ssh/known_hosts", responsibleIdentity: unknown))
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(path: "/Users/test/.ssh/config", responsibleIdentity: unknown))
+    }
+
+    func testUnrelatedReadPathIsRejectedBeforeIdentityWork() {
+        XCTAssertNil(CredentialAccessPolicy.sensitiveStore(at: "/tmp/ordinary-document.txt"))
     }
 
     func testChromiumFamilyCredentialStoresUseSharedStoreNames() {
@@ -127,6 +135,36 @@ final class CredentialAccessPolicyTests: XCTestCase {
         XCTAssertNil(CredentialAccessPolicy.findingForExec(
             executablePath: "/usr/bin/osascript",
             arguments: ["osascript", "-e", "display dialog \"Continue?\""],
+            responsibleIdentity: unknown
+        ))
+    }
+
+    func testValidatedApplePlatformKeychainReaderIsExemptOnlyForKeychain() {
+        let appleDaemon = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: nil, teamID: nil, signingValidated: true, isApplePlatform: true
+        )
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/Keychains/login.keychain-db",
+            responsibleIdentity: appleDaemon
+        ))
+        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/.aws/credentials",
+            responsibleIdentity: appleDaemon
+        ))
+    }
+
+    func testHiddenPromptNormalizesWhitespaceAndRecognizesJXA() {
+        XCTAssertNotNil(CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/osascript",
+            arguments: ["osascript", "-e", "display\n\tdialog \"Password\" with hidden\tanswer"],
+            responsibleIdentity: unknown
+        ))
+        XCTAssertNotNil(CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/osascript",
+            arguments: [
+                "osascript", "-l", "JavaScript", "-e",
+                "Application('System Events').displayDialog('Password', { hiddenAnswer: true })"
+            ],
             responsibleIdentity: unknown
         ))
     }
