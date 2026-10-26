@@ -1588,15 +1588,15 @@ struct ExtensionFinding: Sendable {
         let ruleTier = event.metadata?["ruleTier"] ?? (isAuditEvent ? "review" : "protected")
         var metadata = [
             "reason": isTamper
-                ? "endpoint_tamper_observed"
+                ? (event.metadata?["reason"] ?? "endpoint_tamper_observed")
                 : (isDocumentedUninstall ? "nick_documented_uninstall" : (isNickMaintenance ? "nick_protected_path_maintenance" : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat"))),
-            "rule": isDocumentedUninstall
+            "rule": event.metadata?["reason"] ?? (isDocumentedUninstall
                 ? "nick_documented_uninstall"
                 : (isNickMaintenance
                     ? "nick_protected_path_maintenance"
                     : (isManagementObservation
                         ? "endpoint_management_observed"
-                        : (event.threatName ?? "endpoint_known_threat"))),
+                        : (event.threatName ?? "endpoint_known_threat")))),
             "class": ruleClass,
             "ruleTier": ruleTier,
             "threatFamily": event.threatFamily ?? "unknown"
@@ -1608,7 +1608,7 @@ struct ExtensionFinding: Sendable {
             metadata["reason"] = event.metadata?["reason"] ?? "lolbin_behavior"
             metadata["rule"] = event.metadata?["rule"] ?? metadata["reason"]
             metadata["class"] = "behavior"
-            metadata["ruleTier"] = "protected"
+            metadata["ruleTier"] = event.metadata?["ruleTier"] ?? "protected"
         }
         if isTamper {
             metadata["tamperDisposition"] = event.decision == .deny ? "blocked" : "observed"

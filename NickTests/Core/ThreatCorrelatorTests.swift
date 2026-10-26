@@ -255,6 +255,51 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(store.incidents.first?.alert.contributingSignals.first?.metadata["reason"], "capture_device_inactive")
     }
 
+    @MainActor
+    func test_mustNotifyFixturesCannotBeDowngradedToSilent() {
+        let fixtures: [(MonitorType, String)] = [
+            (.process, "curl_pipe_shell"),
+            (.process, "wget_pipe_shell"),
+            (.process, "hidden_password_prompt"),
+            (.endpointSecurity, "credential_store_access"),
+            (.yara, "arbitrary_yara_rule"),
+            (.process, "exact_hash_match")
+        ]
+        for (source, reason) in fixtures {
+            let alert = makeAlert(
+                signal: makeSignal(
+                    source: source,
+                    severity: .medium,
+                    metadata: ["reason": reason, "deliveryLevel": "silent"]
+                )
+            )
+            XCTAssertEqual(
+                NotificationManager.presentation(for: alert).deliveryLevel,
+                .interrupt,
+                "reason=\(reason)"
+            )
+            XCTAssertTrue(IncidentStore.isNeverDowngrade(alert), "reason=\(reason)")
+        }
+    }
+
+    @MainActor
+    func test_deliveryLevelsHonorSilentInformAndInterruptMetadata() {
+        for expected in [
+            NotificationManager.DeliveryLevel.silent,
+            .inform,
+            .interrupt
+        ] {
+            let alert = makeAlert(signal: makeSignal(metadata: [
+                "reason": "review_only",
+                "deliveryLevel": expected.rawValue,
+                "responsibleAppBundleID": "com.example.app"
+            ]))
+            let presentation = NotificationManager.presentation(for: alert)
+            XCTAssertEqual(presentation.deliveryLevel, expected)
+            XCTAssertEqual(presentation.threadIdentifier, "com.example.app")
+        }
+    }
+
     func test_captureInactiveWithoutExistingIncidentIsLoggedAndIgnored() {
         let store = IncidentStore(defaults: isolatedDefaults())
         let inactive = makeCaptureAlert(
@@ -904,7 +949,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(result.visibleAlerts.count, 1)
     }
 
-    func test_verdictLearningRequiresExactContextMatch() throws {
+    func test_verdictLearningKeysOnlyValidatedIdentityAndRuleNotPath() throws {
         let store = IncidentStore(defaults: isolatedDefaults(), identityValidator: { _, _, _ in true })
         store.configure(
             trustedProcessList: TrustedProcessList(),
@@ -928,7 +973,7 @@ final class ThreatCorrelatorTests: XCTestCase {
         )
         let result = store.ingest([makeAlert(signal: temporarySignal)])
 
-        XCTAssertEqual(result.visibleAlerts.first?.severity, .medium)
+        XCTAssertEqual(result.visibleAlerts.first?.severity, .info)
     }
 
     func test_verdictLearningExpiresResetsAndCapsPerIdentity() throws {
@@ -1781,7 +1826,8 @@ final class ThreatCorrelatorTests: XCTestCase {
                 "mediaType": "camera",
                 "deviceName": "HD Web Camera",
                 "attributionConfidence": "contextual",
-                "process": "Photo Booth"
+                "process": "Photo Booth",
+                "deliveryLevel": reason == "capture_device_active" ? "interrupt" : "silent"
             ])
         )
         return ThreatAlert(

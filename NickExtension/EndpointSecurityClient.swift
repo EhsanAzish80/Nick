@@ -229,6 +229,7 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         var lastDeadlineMissAt: Date?
         var credentialOpenEvaluations: UInt64 = 0
         var credentialOpenFindings: UInt64 = 0
+        var nickProtectedPathMaintenance: UInt64 = 0
     }
     private let lock = NSLock()
     private var state = State()
@@ -262,6 +263,10 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         lock.withLock { state.credentialOpenFindings += 1 }
     }
 
+    func recordNickProtectedPathMaintenance() {
+        lock.withLock { state.nickProtectedPathMaintenance += 1 }
+    }
+
     func recordAuthResponse(messageMachTime: UInt64, nowMachTime: UInt64 = mach_absolute_time()) {
         guard nowMachTime >= messageMachTime, let timebase = Self.machTimebase else { return }
         let elapsed = nowMachTime - messageMachTime
@@ -283,6 +288,7 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         lastDeadlineMissAt: Date?,
         credentialOpenEvaluations: UInt64,
         credentialOpenFindings: UInt64,
+        nickProtectedPathMaintenance: UInt64,
         authResponseP50Milliseconds: Double?,
         authResponseP99Milliseconds: Double?,
         forkDescriptorP99Milliseconds: Double?
@@ -295,7 +301,8 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
                 state.deadlineMisses,
                 state.lastDeadlineMissAt,
                 state.credentialOpenEvaluations,
-                state.credentialOpenFindings
+                state.credentialOpenFindings,
+                state.nickProtectedPathMaintenance
             )
         }
         let latencySnapshot = authLatencyWindow.snapshot()
@@ -306,6 +313,7 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
             eventSnapshot.2,
             eventSnapshot.3,
             eventSnapshot.4,
+            eventSnapshot.5,
             latencySnapshot.p50Milliseconds,
             latencySnapshot.p99Milliseconds,
             forkLatencySnapshot.p99Milliseconds

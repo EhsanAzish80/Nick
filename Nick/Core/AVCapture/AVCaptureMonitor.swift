@@ -237,6 +237,7 @@ final class AVCaptureMonitor: MonitorProtocol {
             )
         }
 
+        let deliveryLevel = active ? captureDeliveryLevel(for: process) : "silent"
         return ThreatSignal(
             source:      .avCapture,
             severity:    severity,
@@ -254,10 +255,42 @@ final class AVCaptureMonitor: MonitorProtocol {
                     "process":    processName,
                     "reason": active ? "capture_device_active" : "capture_device_inactive",
                     "captureState": active ? "active" : "inactive",
-                    "attributionConfidence": process?.confidence ?? "unavailable"
+                    "attributionConfidence": process?.confidence ?? "unavailable",
+                    "deliveryLevel": deliveryLevel
                 ]
             )
         )
+    }
+
+    private func captureDeliveryLevel(for process: DetectedCaptureProcess?) -> String {
+        guard let process,
+              process.confidence == "authoritative",
+              case .signed(let teamID, let signingID?) = process.signingStatus else {
+            return "interrupt"
+        }
+        let identityKey = "\(teamID)|\(signingID)"
+            .data(using: .utf8)?.base64EncodedString() ?? "invalid"
+        let firstUseKey = "nickCaptureSeenValidatedIdentity.\(identityKey)"
+        let firstUse = !UserDefaults.standard.bool(forKey: firstUseKey)
+        UserDefaults.standard.set(true, forKey: firstUseKey)
+        let application = NSRunningApplication(processIdentifier: process.pid)
+        let isBackground = application?.activationPolicy == .prohibited
+            || !Self.hasVisibleWindow(pid: process.pid)
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        let screenLocked = (session?["CGSSessionScreenIsLocked"] as? Bool) == true
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .null) >= 300
+        return firstUse || isBackground || screenLocked || idle ? "interrupt" : "silent"
+    }
+
+    private static func hasVisibleWindow(pid: pid_t) -> Bool {
+        guard let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return false }
+        return windows.contains { window in
+            (window[kCGWindowOwnerPID as String] as? pid_t) == pid
+                && (window[kCGWindowAlpha as String] as? Double ?? 0) > 0
+                && (window[kCGWindowLayer as String] as? Int ?? 1) == 0
+        }
     }
 
     private func captureDescription(

@@ -49,6 +49,46 @@ final class CredentialAccessPolicyTests: XCTestCase {
         ))
     }
 
+    func testValidatedAppsReadingTheirOwnStoresStaySilentButCrossAppReadsAlert() {
+        let fixtures: [(String, String)] = [
+            ("com.openai.chat", "ChatGPT"),
+            ("com.tinyspeck.slackmacgap", "Slack"),
+            ("com.anthropic.claudefordesktop", "Claude")
+        ]
+        for (bundleID, name) in fixtures {
+            let identity = CredentialAccessPolicy.ValidatedIdentity(
+                bundleID: bundleID, teamID: "VALIDTEAM", signingValidated: true,
+                isApplePlatform: false
+            )
+            let ownPaths = [
+                "/Users/test/Library/Containers/\(bundleID)/Data/Library/Cookies/Cookies",
+                "/Users/test/Library/HTTPStorages/\(bundleID)/Cookies",
+                "/Users/test/Library/Application Support/\(bundleID)/Cookies"
+            ]
+            for path in ownPaths {
+                XCTAssertNil(
+                    CredentialAccessPolicy.findingForOpen(path: path, responsibleIdentity: identity),
+                    "\(name) own-store read should stay silent: \(path)"
+                )
+            }
+            XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+                path: "/Users/test/Library/HTTPStorages/com.example.other/Cookies",
+                responsibleIdentity: identity
+            ))
+        }
+    }
+
+    func testUnvalidatedReaderNeverQualifiesForStoreOwnership() {
+        let spoof = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.openai.chat", teamID: "SPOOF", signingValidated: false,
+            isApplePlatform: false
+        )
+        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/HTTPStorages/com.openai.chat/Cookies",
+            responsibleIdentity: spoof
+        ))
+    }
+
     func testKeychainDumpAndSecretReadCommandsAlertWithoutRecordingArguments() {
         let appleSecurityCLI = CredentialAccessPolicy.ValidatedIdentity(
             bundleID: "com.apple.security", teamID: nil,

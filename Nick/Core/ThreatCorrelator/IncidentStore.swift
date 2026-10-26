@@ -478,6 +478,16 @@ final class IncidentStore {
         }
     }
 
+    /// Records a notification timestamp only after the notification center has
+    /// accepted the delivery request. Suppressed, unauthorized and failed
+    /// requests must not consume the recurrence window.
+    @discardableResult
+    func markNotificationDelivered(alertID: UUID, at timestamp: Date) -> UInt64? {
+        guard let index = incidents.firstIndex(where: { $0.alert.id == alertID }) else { return nil }
+        incidents[index].lastNotifiedAt = timestamp
+        return persist(force: true)
+    }
+
     @discardableResult
     func initializeNetworkIngestCursor(eventIDs: Set<UUID>) -> UInt64 {
         guard networkIngestCursor == nil else { return lastQueuedGeneration }
@@ -573,7 +583,7 @@ final class IncidentStore {
                         state: .new,
                         actions: [action(.detected, actor: .automatic)],
                         previouslyDismissedAt: tombstone.dismissedAt,
-                        lastNotifiedAt: now()
+                        lastNotifiedAt: nil
                     )
                     incident.isVisible = true
                     incidents.append(incident)
@@ -639,7 +649,6 @@ final class IncidentStore {
                         recordAction(.reopened, actor: .automatic, at: index)
                     }
                     if shouldReopen || outsideNotificationWindow {
-                        incidents[index].lastNotifiedAt = currentTime
                         newlyActionable.append(incidents[index].alert)
                         notificationIncidentIDs.insert(incidents[index].alert.id)
                         notificationSignalIDs.formUnion(candidateSignalIDs)
@@ -687,7 +696,6 @@ final class IncidentStore {
                     incident.actions.append(remediation)
                 }
                 if isProtected(candidate) {
-                    incident.lastNotifiedAt = now()
                     notificationSignalIDs.formUnion(candidate.contributingSignals.map(\.id))
                     notificationIncidentIDs.insert(candidate.id)
                 }
@@ -1123,7 +1131,7 @@ final class IncidentStore {
     }
 
     private func applyLearnedPriority(to alert: ThreatAlert) -> ThreatAlert {
-        guard verdictLearningEnabled, !isProtected(alert),
+        guard verdictLearningEnabled, !isProtected(alert), !Self.isNeverDowngrade(alert),
               let key = learningKey(for: alert),
               learnedReviewEntries.contains(where: {
                   $0.expiresAt > now()
@@ -1178,6 +1186,7 @@ final class IncidentStore {
     private func learningKey(for alert: ThreatAlert) -> (
         teamID: String, signingIdentifier: String, identityKey: String, ruleID: String, contextKey: String
     )? {
+        guard !Self.isNeverDowngrade(alert) else { return nil }
         let evidence = alert.contributingSignals.map(Evidence.init(signal:))
         guard !evidence.isEmpty,
               evidence.allSatisfy({ $0.ruleTier == .review }),
@@ -1203,21 +1212,30 @@ final class IncidentStore {
                       } == true
               }),
               let ruleID = first.ruleID else { return nil }
-        let parents = (first.parentChain ?? []).prefix(8).map { ancestor in
-            if let team = ancestor.teamID, let signing = ancestor.signingIdentifier {
-                return "signed:\(team.lowercased())|\(signing.lowercased())"
-            }
-            if let path = ancestor.executablePath {
-                return "name:\(URL(fileURLWithPath: path).lastPathComponent.lowercased())"
-            }
-            return "unknown"
-        }.joined(separator: ">")
-        let context = [
-            "parents=\(parents)",
-            "path=\(first.pathClass?.rawValue ?? "none")",
-            "destination=\(first.destinationClass?.rawValue ?? "none")"
-        ].joined(separator: ";")
-        return (teamID, signingIdentifier, "\(teamID.lowercased())|\(signingIdentifier.lowercased())", ruleID, context)
+        return (
+            teamID,
+            signingIdentifier,
+            "\(teamID.lowercased())|\(signingIdentifier.lowercased())",
+            ruleID,
+            "validated-identity+rule"
+        )
+    }
+
+    static func isNeverDowngrade(_ alert: ThreatAlert) -> Bool {
+        let protectedReasons: Set<String> = [
+            "curl_pipe_shell", "wget_pipe_shell", "hidden_password_prompt",
+            "credential_store_access", "yara_match", "exact_hash_match"
+        ]
+        return alert.contributingSignals.contains { signal in
+            let reason = signal.metadata["reason"] ?? signal.metadata["rule"] ?? ""
+            return signal.source == .yara
+                || protectedReasons.contains(reason)
+                || (reason == "endpoint_tamper_observed"
+                    && signal.metadata["responsibleAppSigning"] != "Apple platform")
+                || signal.metadata["remediationStatus"].map {
+                    ["blocked", "quarantined", "quarantine-failed"].contains($0)
+                } == true
+        }
     }
 
     private func pruneExpiredLearnedEntries() {

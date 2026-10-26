@@ -55,7 +55,8 @@ func writeExtensionHealth() {
         "eventsPerSecond": esMetrics.eventsPerSecond,
         "deadlineMissCount": esMetrics.deadlineMisses,
         "credentialPathCandidateCount": esMetrics.credentialOpenEvaluations,
-        "credentialOpenFindingCount": esMetrics.credentialOpenFindings
+        "credentialOpenFindingCount": esMetrics.credentialOpenFindings,
+        "nickProtectedPathMaintenanceCount": esMetrics.nickProtectedPathMaintenance
     ]
     if let lastDeadlineMissAt = esMetrics.lastDeadlineMissAt {
         health["lastDeadlineMissAt"] = lastDeadlineMissAt.timeIntervalSince1970
@@ -246,10 +247,15 @@ if let continuityIncident = protectionContinuityLedger.evaluateStart(
         "trust": "root-observed",
         "endedAt": ISO8601DateFormatter().string(from: continuityIncident.endedAt),
         "unobservedWindow": isGap ? "true" : "false",
-        "ruleTier": isGap ? "protected" : "review"
+        "ruleTier": isGap ? "protected" : "review",
+        "deliveryLevel": isGap ? "interrupt" : "silent",
+        "continuityCause": continuityIncident.detail
     ]
     if let startedAt = continuityIncident.startedAt {
         metadata["startedAt"] = ISO8601DateFormatter().string(from: startedAt)
+        metadata["gapDurationSeconds"] = String(
+            max(0, Int(continuityIncident.endedAt.timeIntervalSince(startedAt)))
+        )
     }
     if !continuityIncident.appObservations.isEmpty {
         metadata["appObserved"] = "true"
@@ -289,7 +295,13 @@ updateLeaseManager.onAudit = { audit in
         )
     )
     if let data = try? JSONEncoder().encode(event) {
-        xpcServer.sendThreatToApp(data)
+        if audit.action == .rejected {
+            xpcServer.sendThreatToApp(data)
+        } else {
+            // Authorized update-lease lifecycle is audit timeline evidence,
+            // not a protection incident.
+            xpcServer.sendEventToApp(data)
+        }
     }
 }
 
@@ -297,6 +309,13 @@ tamperProtection.onTamperAttempt = { attempt in
     let event: ESEvent
     switch attempt {
     case .deleteProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
+        if disposition == .maintenance,
+           identity.teamID == TamperProtectionPolicy.nickTeamID,
+           identity.isValidIdentitySignature,
+           identity.signingID.map(TamperProtectionPolicy.nickMaintenanceSigningIDs.contains) == true {
+            EndpointSecurityClient.healthMetrics.recordNickProtectedPathMaintenance()
+            return
+        }
         let attribution = processTree.responsibleApp(
             actorPID: pid, responsiblePID: nil,
             resolver: SecCodeResponsibleProcessIdentityResolver.shared
@@ -323,6 +342,13 @@ tamperProtection.onTamperAttempt = { attempt in
             )
         )
     case .renameProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
+        if disposition == .maintenance,
+           identity.teamID == TamperProtectionPolicy.nickTeamID,
+           identity.isValidIdentitySignature,
+           identity.signingID.map(TamperProtectionPolicy.nickMaintenanceSigningIDs.contains) == true {
+            EndpointSecurityClient.healthMetrics.recordNickProtectedPathMaintenance()
+            return
+        }
         let isDocumentedUninstall = disposition == .documentedUninstall
         let attribution = processTree.responsibleApp(
             actorPID: pid, responsiblePID: nil,
@@ -354,6 +380,7 @@ tamperProtection.onTamperAttempt = { attempt in
             )
         )
     case .systemExtensionsCtlExec(let pid, let isSensitive):
+        guard isSensitive else { return }
         let attribution = processTree.responsibleApp(
             actorPID: pid, responsiblePID: nil,
             resolver: SecCodeResponsibleProcessIdentityResolver.shared

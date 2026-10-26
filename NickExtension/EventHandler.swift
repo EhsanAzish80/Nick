@@ -979,7 +979,8 @@ final class ESEventHandler {
                                     "reason": "nick_unexpected_exit",
                                     "killerPID": signal.map { String($0.senderPID) } ?? "unknown",
                                     "killerPath": signal?.senderPath ?? "unknown",
-                                    "signal": signal.map { String($0.signal) } ?? "unknown"
+                                    "signal": signal.map { String($0.signal) } ?? "unknown",
+                                    "deliveryLevel": "inform"
                                 ]
                             )
                         )
@@ -1447,12 +1448,23 @@ final class ESEventHandler {
                     }
                     return metadata
                 } ?? lolbinFinding.map { finding in
+                    let validatedSameChain = trustedSigner
+                        && (attribution?.app?.signing == .signed
+                            || attribution?.app?.signing == .applePlatform)
+                    let localTemporaryExecution = finding.reason == "mktemp_execute"
+                        && LOLBinExecutionPolicy.mktempTier(
+                            actorIdentityValidated: trustedSigner,
+                            responsibleChainValidated: validatedSameChain,
+                            hasNetworkOrigin: pipelineEvidence.hasNetworkSocket
+                                || interactivePipelineFinding != nil,
+                            hasQuarantineOrigin: Self.hasQuarantineOrigin(at: targetPath)
+                        ) == .review
                     var metadata = [
                         "reason": finding.reason,
                         "rule": finding.reason,
-                        "ruleTier": "protected",
+                        "ruleTier": localTemporaryExecution ? "review" : "protected",
                         "detectionKind": "lolbin-behavior",
-                        "signalSeverity": finding.severity,
+                        "signalSeverity": localTemporaryExecution ? "medium" : finding.severity,
                         "execTargetPath": targetPath
                     ]
                     if let matchedCommand = finding.matchedCommand {
@@ -1560,7 +1572,7 @@ final class ESEventHandler {
             resolver: SecCodeResponsibleProcessIdentityResolver.shared
         )
         guard let finding = CredentialAccessPolicy.findingForOpen(
-            store: store,
+            path: path,
             responsibleIdentity: attribution?.app.map(Self.credentialIdentity),
             actorIsValidatedApplePlatform: actorIdentity.isPlatformBinary
                 && actorIdentity.isValidIdentitySignature,
@@ -1822,6 +1834,14 @@ final class ESEventHandler {
             }
         }
         return nil
+    }
+
+    private static func hasQuarantineOrigin(at path: String) -> Bool {
+        path.withCString { filePath in
+            "com.apple.quarantine".withCString { attribute in
+                getxattr(filePath, attribute, nil, 0, 0, 0) >= 0
+            }
+        }
     }
 
     /// Encodes and pushes an `ESEvent` to the container app via XPC.

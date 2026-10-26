@@ -2,6 +2,32 @@ import XCTest
 @testable import Nick
 
 final class LOLBinExecutionPolicyTests: XCTestCase {
+    func test_mktempTierRequiresValidatedSameChainWithoutDownloadOrQuarantine() {
+        XCTAssertEqual(LOLBinExecutionPolicy.mktempTier(
+            actorIdentityValidated: true,
+            responsibleChainValidated: true,
+            hasNetworkOrigin: false,
+            hasQuarantineOrigin: false
+        ), .review)
+        XCTAssertEqual(LOLBinExecutionPolicy.mktempTier(
+            actorIdentityValidated: true,
+            responsibleChainValidated: true,
+            hasNetworkOrigin: true,
+            hasQuarantineOrigin: false
+        ), .protected)
+        XCTAssertEqual(LOLBinExecutionPolicy.mktempTier(
+            actorIdentityValidated: true,
+            responsibleChainValidated: true,
+            hasNetworkOrigin: false,
+            hasQuarantineOrigin: true
+        ), .protected)
+        XCTAssertEqual(LOLBinExecutionPolicy.mktempTier(
+            actorIdentityValidated: false,
+            responsibleChainValidated: true,
+            hasNetworkOrigin: false,
+            hasQuarantineOrigin: false
+        ), .protected)
+    }
     func test_shortLivedCurlPipeIsClassifiedAtExec() throws {
         let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
             executablePath: "/bin/sh",
