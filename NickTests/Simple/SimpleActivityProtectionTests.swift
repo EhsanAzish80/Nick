@@ -423,7 +423,7 @@ final class SimpleActivityFeedTests: XCTestCase {
         let items = SimpleActivityFeed.items(
             alerts: inputs, quarantine: [], blocked: [], calendar: calendar
         )
-        XCTAssertEqual(items.first?.title, "File integrity change needs review")
+        XCTAssertTrue(items.first?.title.hasPrefix("Changed a protected file:") == true)
         XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
     }
 

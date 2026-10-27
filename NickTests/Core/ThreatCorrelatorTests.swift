@@ -1222,6 +1222,73 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(store.visibleAlerts.first?.occurrenceCount, 2)
     }
 
+    func test_incidentStoreMergesBTMAndFIMWhenFIMArrivesFirstAndKeepsWriter() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let path = "/Library/LaunchDaemons/com.example.root.plist"
+        let observed = Date(timeIntervalSince1970: 100)
+        let writer = NickProcessInfo(
+            pid: 90, path: "/bin/cp", name: "cp", parentPID: 80,
+            parentName: "Terminal", signingStatus: .signed(teamID: "APPLE_PLATFORM")
+        )
+        let fim = ThreatSignal(
+            source: .filesystem, severity: .high, timestamp: observed,
+            title: "Launch daemon changed", description: "FIM",
+            context: .init(
+                processInfo: writer,
+                fileInfo: .init(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: ["fimStatus": "created", "ruleTier": "protected", "responsibleAppName": "Terminal"]
+            )
+        )
+        let btm = ThreatSignal(
+            source: .persistence, severity: .high, timestamp: observed.addingTimeInterval(4),
+            title: "Background item added", description: "BTM",
+            context: .init(
+                fileInfo: .init(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "appleEvent": "background-item-added", "persistencePath": path,
+                    "launchItemLabel": "com.example.root", "instigatorName": "smd",
+                    "ruleTier": "protected"
+                ]
+            )
+        )
+
+        _ = store.ingest([makeAlert(signal: fim, severity: .high, timestamp: observed)])
+        _ = store.ingest([makeAlert(signal: btm, severity: .high, timestamp: observed.addingTimeInterval(4))])
+
+        let merged = try XCTUnwrap(store.visibleAlerts.first)
+        XCTAssertEqual(store.visibleAlerts.count, 1)
+        XCTAssertEqual(merged.contributingSignals.count, 2)
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: merged).headline,
+            "Added a launch daemon: com.example.root (cp, via Terminal)"
+        )
+    }
+
+    func test_incidentStoreDoesNotReopenDifferentLaunchItem() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        func signal(_ label: String) -> ThreatSignal {
+            let path = "/Users/test/Library/LaunchAgents/\(label).plist"
+            return ThreatSignal(
+                source: .persistence, severity: .medium, title: "Background item added", description: "BTM",
+                context: .init(
+                    fileInfo: .init(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                    metadata: [
+                        "appleEvent": "background-item-added", "persistencePath": path,
+                        "launchItemLabel": label, "ruleTier": "review"
+                    ]
+                )
+            )
+        }
+        _ = store.ingest([makeAlert(signal: signal("com.example.first"))])
+        let firstID = try XCTUnwrap(store.visibleAlerts.first?.id)
+        store.performAuthenticatedUserAction(.reviewed, alertID: firstID)
+        _ = store.ingest([makeAlert(signal: signal("com.example.second"))])
+
+        XCTAssertEqual(store.incidents.count, 2)
+        XCTAssertEqual(store.incidents.first(where: { $0.alert.id == firstID })?.state, .reviewed)
+        XCTAssertEqual(store.incidents.filter { $0.state == .new }.count, 1)
+    }
+
     func test_incidentStoreAttachesBackgroundItemRemovalToExistingAdd() {
         let store = IncidentStore(defaults: isolatedDefaults())
         let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"

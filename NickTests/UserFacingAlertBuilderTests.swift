@@ -369,8 +369,53 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         )
     }
 
+    func test_launchDaemonUsesDaemonTitleExplanationAndHighRiskPresentation() {
+        let path = "/Library/LaunchDaemons/com.example.root.plist"
+        let signal = ThreatSignal(
+            source: .persistence, severity: .high, title: "Background item added", description: "BTM",
+            context: .init(
+                fileInfo: .init(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "appleEvent": "background-item-added", "persistencePath": path,
+                    "launchItemLabel": "com.example.root", "instigatorName": "cp",
+                    "responsibleAppName": "Terminal", "ruleTier": "protected"
+                ]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: .init(title: "Persistence", description: "Test", severity: .high, recommendedAction: "Review"),
+            contributingSignals: [signal]
+        )
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+        XCTAssertEqual(result.headline, "Added a launch daemon: com.example.root (cp, via Terminal)")
+        XCTAssertTrue(result.explanation.contains("start as root when your Mac boots"))
+    }
+
+    func test_launchFileIntegrityUsesBehaviorTitleInsteadOfFallback() {
+        let path = "/Library/LaunchDaemons/com.example.root.plist"
+        let signal = ThreatSignal(
+            source: .filesystem, severity: .high, title: "Protected file created", description: "FIM",
+            context: .init(
+                fileInfo: .init(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "fimStatus": "pending", "fimWriterName": "cp",
+                    "responsibleAppName": "Terminal", "ruleTier": "protected"
+                ]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: .init(title: "FIM", description: "Test", severity: .high, recommendedAction: "Review"),
+            contributingSignals: [signal]
+        )
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+        XCTAssertEqual(result.headline, "Changed a launch daemon file: \(path) (cp, via Terminal)")
+        XCTAssertFalse(result.headline.contains("File integrity change needs review"))
+    }
+
     func testSimpleCatalogNeverUsesForbiddenFallbackTitles() {
-        for reason in ["unknown_rule", "endpoint_management_observed", "storage-operation-completed"] {
+        for reason in ["unknown_rule", "endpoint_management_observed", "storage-operation-completed", "file_integrity_created"] {
             let signal = ThreatSignal(
                 source: .endpointSecurity, severity: .info,
                 title: "helper activity observed", description: "Observed",

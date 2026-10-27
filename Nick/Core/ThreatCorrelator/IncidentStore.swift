@@ -606,6 +606,8 @@ final class IncidentStore {
                 : nil
             if let index = exactIndex ?? relatedLaunchItemIndex {
                 let prior = incidents[index]
+                let mergesRelatedLaunchItemEvidence = Self.shouldMergeLaunchItemEvidence(prior.alert, candidate)
+                    || Self.shouldAttachLaunchItemRemoval(prior.alert, candidate)
                 let priorSignalIDs = Set(prior.alert.contributingSignals.map(\.id))
                 let candidateSignalIDs = Set(candidate.contributingSignals.map(\.id))
                 if !candidateSignalIDs.isEmpty, candidateSignalIDs.isSubset(of: priorSignalIDs) {
@@ -625,7 +627,7 @@ final class IncidentStore {
                 let mergedAlert: ThreatAlert
                 if isCaptureInactive {
                     mergedAlert = prior.alert.mergingLifecycleTransition(candidate)
-                } else if relatedLaunchItemIndex != nil {
+                } else if mergesRelatedLaunchItemEvidence {
                     mergedAlert = prior.alert.mergingRelatedEvidence(candidate)
                 } else {
                     mergedAlert = prior.alert.mergingOccurrence(candidate)
@@ -998,6 +1000,12 @@ final class IncidentStore {
     }
 
     static func incidentKey(for alert: ThreatAlert) -> String {
+        if let launchPath = launchItemPath(alert) {
+            return "launch-item|path:\(normalize(launchPath))"
+        }
+        if let label = alert.contributingSignals.compactMap({ $0.metadata["launchItemLabel"] }).first {
+            return "launch-item|label:\(label.lowercased())"
+        }
         let captureSignals = alert.contributingSignals.filter { $0.source == .avCapture }
         if !captureSignals.isEmpty, captureSignals.count == alert.contributingSignals.count {
             let subjects = Set(captureSignals.map {
