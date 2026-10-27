@@ -22,12 +22,17 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
             .flatMap { try? JSONDecoder().decode(State.self, from: $0) } ?? State()
     }
 
-    func recordHeartbeat(now: Date, bootSessionUUID: String) -> ProtectionHeartbeat? {
+    func recordHeartbeat(
+        now: Date,
+        bootSessionUUID: String,
+        extensionBuild: String? = nil
+    ) -> ProtectionHeartbeat? {
         lock.withLock {
             let next = (state.heartbeat?.sequence ?? 0) &+ 1
             guard next > (state.heartbeat?.sequence ?? 0) else { return nil }
             let heartbeat = ProtectionHeartbeat(
-                sequence: next, wallTime: now, bootSessionUUID: bootSessionUUID
+                sequence: next, wallTime: now, bootSessionUUID: bootSessionUUID,
+                extensionBuild: extensionBuild
             )
             state.heartbeat = heartbeat
             return persistLocked() ? heartbeat : nil
@@ -74,7 +79,9 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
     func evaluateStart(
         now: Date,
         bootSessionUUID: String,
-        bootTime: Date
+        bootTime: Date,
+        currentExtensionBuild: String? = nil,
+        previousObservedExtensionBuild: String? = nil
     ) -> ProtectionContinuityIncident? {
         lock.withLock {
             guard let previous = state.heartbeat else { return nil }
@@ -93,7 +100,9 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
             guard let decision = ProtectionContinuityPolicy.evaluate(
                 previous: previous,
                 currentBootSessionUUID: bootSessionUUID,
-                bootTime: bootTime
+                bootTime: bootTime,
+                currentExtensionBuild: currentExtensionBuild,
+                previousObservedExtensionBuild: previousObservedExtensionBuild
             ) else { return nil }
             let kind = decision.kind
             let key = decision.transitionKey
@@ -111,6 +120,8 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
                 detail = "Protection resumed after the Mac restarted."
             case .authorizedStop:
                 detail = "Protection was turned off by the user with authorization."
+            case .updated:
+                detail = "Protection was replaced by a different Nick build."
             }
             return ProtectionContinuityIncident(
                 kind: kind,

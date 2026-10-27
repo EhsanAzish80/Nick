@@ -47,6 +47,7 @@ final class SimpleAlertCopyTests: XCTestCase {
         let copy = SimpleAlertCopy.make(alert: alert(severity: .critical), user: user(.critical),
                                         isQuarantined: false, fileStillPresent: true)
         XCTAssertEqual(copy.status, .needsReview)
+        XCTAssertEqual(copy.badgeText, "High risk")
         XCTAssertFalse(copy.whatNickDid.localizedCaseInsensitiveContains("blocked"))
         XCTAssertEqual(copy.whatToDo, "Move it to the Trash.")
     }

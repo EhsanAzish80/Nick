@@ -20,6 +20,17 @@ let healthPath   = (supportDir as NSString).appendingPathComponent("extension_he
 let signatureDB  = SignatureDatabase()
 let scanCache    = ScanCache()
 
+/// Read the health record left by the previously active extension before this
+/// process replaces it. Build 5058 and earlier heartbeats did not persist the
+/// build number, so this preserves correct update attribution across that
+/// one-time schema transition.
+let previouslyObservedExtensionBuild: String? = {
+    guard let data = FileManager.default.contents(atPath: healthPath),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    return object["version"] as? String
+}()
+
 /// Publishes a deliberately short-lived proof that the Endpoint Security client
 /// is running. The container app treats this as stale after 30 seconds, so a
 /// crashed or stopped extension can never leave Smart Scan falsely green.
@@ -240,9 +251,12 @@ ESXPCServer.intentionalAppExitRegistryRef = intentionalAppExitRegistry
 if let continuityIncident = protectionContinuityLedger.evaluateStart(
     now: Date(),
     bootSessionUUID: ProtectionBootIdentity.sessionUUID(),
-    bootTime: ProtectionBootIdentity.bootTime()
+    bootTime: ProtectionBootIdentity.bootTime(),
+    currentExtensionBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+    previousObservedExtensionBuild: previouslyObservedExtensionBuild
 ) {
     let isGap = continuityIncident.kind == .interrupted
+    let isUpdate = continuityIncident.kind == .updated
     var metadata: [String: String] = [
         "trust": "root-observed",
         "endedAt": ISO8601DateFormatter().string(from: continuityIncident.endedAt),
@@ -269,12 +283,19 @@ if let continuityIncident = protectionContinuityLedger.evaluateStart(
         filePath: nil,
         decision: .notApplicable,
         threat: .init(
-            threatName: isGap ? "Protection interrupted" : "Protection resumed after restart",
+            threatName: isGap ? "Protection interrupted"
+                : (isUpdate ? "Protection updated" : "Protection resumed after restart"),
             threatFamily: "protection-continuity",
             metadata: metadata
         )
     )
-    if let data = try? JSONEncoder().encode(event) { xpcServer.sendThreatToApp(data) }
+    if let data = try? JSONEncoder().encode(event) {
+        if isUpdate {
+            xpcServer.sendEventToApp(data)
+        } else {
+            xpcServer.sendThreatToApp(data)
+        }
+    }
 }
 
 updateLeaseManager.onAudit = { audit in
@@ -310,9 +331,10 @@ tamperProtection.onTamperAttempt = { attempt in
     switch attempt {
     case .deleteProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
         if disposition == .maintenance,
-           identity.teamID == TamperProtectionPolicy.nickTeamID,
-           identity.isValidIdentitySignature,
-           identity.signingID.map(TamperProtectionPolicy.nickMaintenanceSigningIDs.contains) == true {
+           (identity.teamID == TamperProtectionPolicy.nickTeamID
+                && identity.isValidIdentitySignature
+                && identity.signingID.map(TamperProtectionPolicy.nickMaintenanceSigningIDs.contains) == true
+            || TamperProtectionPolicy.isValidatedInstallerMaintenanceIdentity(identity)) {
             EndpointSecurityClient.healthMetrics.recordNickProtectedPathMaintenance()
             return
         }
@@ -343,9 +365,10 @@ tamperProtection.onTamperAttempt = { attempt in
         )
     case .renameProtectedPath(let path, let pid, let actorPath, let identity, let disposition, let operation):
         if disposition == .maintenance,
-           identity.teamID == TamperProtectionPolicy.nickTeamID,
-           identity.isValidIdentitySignature,
-           identity.signingID.map(TamperProtectionPolicy.nickMaintenanceSigningIDs.contains) == true {
+           (identity.teamID == TamperProtectionPolicy.nickTeamID
+                && identity.isValidIdentitySignature
+                && identity.signingID.map(TamperProtectionPolicy.nickMaintenanceSigningIDs.contains) == true
+            || TamperProtectionPolicy.isValidatedInstallerMaintenanceIdentity(identity)) {
             EndpointSecurityClient.healthMetrics.recordNickProtectedPathMaintenance()
             return
         }
@@ -498,7 +521,8 @@ MuteManager.applyMutes(to: esClient)
 
 writeExtensionHealth()
 _ = protectionContinuityLedger.recordHeartbeat(
-    now: Date(), bootSessionUUID: ProtectionBootIdentity.sessionUUID()
+    now: Date(), bootSessionUUID: ProtectionBootIdentity.sessionUUID(),
+    extensionBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
 )
 let healthTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
 healthTimer.schedule(deadline: .now() + 10, repeating: 10)
@@ -509,7 +533,8 @@ let continuityHeartbeatTimer = DispatchSource.makeTimerSource(queue: .global(qos
 continuityHeartbeatTimer.schedule(deadline: .now() + 45, repeating: 45)
 continuityHeartbeatTimer.setEventHandler {
     _ = protectionContinuityLedger.recordHeartbeat(
-        now: Date(), bootSessionUUID: ProtectionBootIdentity.sessionUUID()
+        now: Date(), bootSessionUUID: ProtectionBootIdentity.sessionUUID(),
+        extensionBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
     )
 }
 continuityHeartbeatTimer.resume()

@@ -18,8 +18,13 @@ struct SimpleAlertCopy: Equatable {
     let whatHappened: String
     let whatNickDid: String
     let whatToDo: String
+    let isHighRisk: Bool
     /// "rule · confidence · signer", shown collapsed under Technical details.
     let technicalSummary: String
+
+    var badgeText: String {
+        isHighRisk && status == .needsReview ? "High risk" : status.rawValue
+    }
 
     static func make(
         alert: ThreatAlert,
@@ -93,6 +98,7 @@ struct SimpleAlertCopy: Equatable {
             whatHappened: user.explanation.isEmpty ? user.headline : user.explanation,
             whatNickDid: didText,
             whatToDo: todo,
+            isHighRisk: alert.severity == .critical && alert.hasProtectedEvidence,
             technicalSummary: technicalSummary(for: alert)
         )
     }

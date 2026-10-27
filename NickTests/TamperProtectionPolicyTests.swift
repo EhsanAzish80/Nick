@@ -306,6 +306,47 @@ final class TamperProtectionPolicyTests: XCTestCase {
         ), "sleep/wake without an extension restart is not a protection gap")
     }
 
+    func test_continuityPolicyDifferentExtensionBuildIsUpdateNotGap() {
+        let now = Date(timeIntervalSince1970: 20_000)
+        let decision = ProtectionContinuityPolicy.evaluate(
+            previous: .init(
+                sequence: 12, wallTime: now.addingTimeInterval(-20),
+                bootSessionUUID: "A", extensionBuild: "5058"
+            ),
+            currentBootSessionUUID: "A",
+            bootTime: now.addingTimeInterval(-3_600),
+            currentExtensionBuild: "5059"
+        )
+        XCTAssertEqual(decision?.kind, .updated)
+    }
+
+    func test_legacyHeartbeatUsesPreviousHealthBuildForUpdate() {
+        let now = Date(timeIntervalSince1970: 20_000)
+        let decision = ProtectionContinuityPolicy.evaluate(
+            previous: .init(
+                sequence: 13, wallTime: now.addingTimeInterval(-20),
+                bootSessionUUID: "A"
+            ),
+            currentBootSessionUUID: "A",
+            bootTime: now.addingTimeInterval(-3_600),
+            currentExtensionBuild: "5059",
+            previousObservedExtensionBuild: "5058"
+        )
+        XCTAssertEqual(decision?.kind, .updated)
+    }
+
+    func test_validatedShoveIdentityIsDiagnosticsOnlyMaintenance() {
+        XCTAssertTrue(TamperProtectionPolicy.isValidatedInstallerMaintenanceIdentity(
+            identity(signing: "com.apple.shove", platform: true)
+        ))
+        XCTAssertFalse(TamperProtectionPolicy.isValidatedInstallerMaintenanceIdentity(
+            identity(signing: "com.apple.shove", platform: false)
+        ))
+        XCTAssertFalse(TamperProtectionPolicy.isValidatedInstallerMaintenanceIdentity(
+            identity(signing: "local.shove", platform: true, flags: adhoc)
+        ))
+    }
+
     func test_continuityHeartbeatSequenceRejectsRollbackAndReplay() {
         XCTAssertTrue(ProtectionContinuityPolicy.acceptsSequence(current: nil, proposed: 1))
         XCTAssertTrue(ProtectionContinuityPolicy.acceptsSequence(current: 41, proposed: 42))

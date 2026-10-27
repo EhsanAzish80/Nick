@@ -9,6 +9,14 @@ struct ProtectionHeartbeat: Codable, Equatable, Sendable {
     let sequence: UInt64
     let wallTime: Date
     let bootSessionUUID: String
+    let extensionBuild: String?
+
+    init(sequence: UInt64, wallTime: Date, bootSessionUUID: String, extensionBuild: String? = nil) {
+        self.sequence = sequence
+        self.wallTime = wallTime
+        self.bootSessionUUID = bootSessionUUID
+        self.extensionBuild = extensionBuild
+    }
 }
 
 struct ProtectionCleanStop: Codable, Equatable, Sendable {
@@ -26,7 +34,9 @@ struct AppObservedProtectionGap: Codable, Equatable, Sendable {
 }
 
 struct ProtectionContinuityIncident: Equatable, Sendable {
-    enum Kind: String, Equatable, Sendable { case interrupted, resumedAfterRestart, authorizedStop }
+    enum Kind: String, Equatable, Sendable {
+        case interrupted, resumedAfterRestart, authorizedStop, updated
+    }
     let kind: Kind
     let startedAt: Date?
     let endedAt: Date
@@ -44,11 +54,22 @@ enum ProtectionContinuityPolicy {
         previous: ProtectionHeartbeat,
         currentBootSessionUUID: String,
         bootTime: Date,
+        currentExtensionBuild: String? = nil,
+        previousObservedExtensionBuild: String? = nil,
         extensionRestarted: Bool = true
     ) -> Decision? {
         // Sleep and wake do not restart the extension. Treating a long wall-clock
         // interval alone as a gap would turn every normal sleep into an alert.
         guard extensionRestarted else { return nil }
+        if previous.bootSessionUUID == currentBootSessionUUID,
+           let previousBuild = previous.extensionBuild ?? previousObservedExtensionBuild,
+           let currentExtensionBuild,
+           previousBuild != currentExtensionBuild {
+            return Decision(
+                kind: .updated,
+                transitionKey: "update:\(previousBuild):\(currentExtensionBuild):\(previous.sequence)"
+            )
+        }
         if previous.bootSessionUUID == currentBootSessionUUID {
             return Decision(
                 kind: .interrupted,
@@ -330,4 +351,10 @@ enum TamperProtectionPolicy {
         // platform binary rather than installd itself.
         "com.apple.shove",
     ]
+
+    static func isValidatedInstallerMaintenanceIdentity(_ identity: TamperActorIdentity) -> Bool {
+        identity.isPlatformBinary
+            && identity.isValidIdentitySignature
+            && identity.signingID.map(appleInstallerSigningIDs.contains) == true
+    }
 }

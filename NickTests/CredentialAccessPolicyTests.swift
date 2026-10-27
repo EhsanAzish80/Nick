@@ -231,6 +231,28 @@ final class CredentialAccessPolicyTests: XCTestCase {
         XCTAssertEqual(correlated?.severity, "critical")
     }
 
+    func testAtomicCloneWithinKeychainsIsSilentButCopyToTmpIsCritical() {
+        let source = "/Users/test/Library/Keychains/login.keychain-db"
+        XCTAssertFalse(CredentialAccessPolicy.shouldReportKeychainTransfer(
+            sourcePath: source,
+            destinationPath: "/Users/test/Library/Keychains/login.keychain-db.sb-123",
+            actorIsValidatedApplePlatform: true,
+            actorParentIsLaunchd: true
+        ))
+        XCTAssertFalse(CredentialAccessPolicy.shouldReportKeychainTransfer(
+            sourcePath: "/Library/Keychains/System.keychain",
+            destinationPath: "/Library/Keychains/System.keychain-new"
+        ))
+        XCTAssertTrue(CredentialAccessPolicy.shouldReportKeychainTransfer(
+            sourcePath: source,
+            destinationPath: "/tmp/login.keychain-db"
+        ))
+        XCTAssertEqual(
+            CredentialAccessPolicy.findingForKeychainTransfer().severity,
+            "critical"
+        )
+    }
+
     func testSecuritySecretReadDoesNotArmKeychainCorrelation() throws {
         let finding = try XCTUnwrap(CredentialAccessPolicy.findingForExec(
             executablePath: "/usr/bin/security",

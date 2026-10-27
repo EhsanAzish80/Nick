@@ -26,6 +26,7 @@ final class UserFacingAlertBuilderTests: XCTestCase {
                 processInfo: process,
                 metadata: [
                     "detectionKind": "credential-access",
+                    "reason": "keychain_secret_read",
                     "credentialStore": CredentialAccessPolicy.Store.keychain.rawValue,
                     "responsibleChain": "ChatGPT → Codex CLI → security",
                     "ruleTier": "protected"
@@ -47,6 +48,50 @@ final class UserFacingAlertBuilderTests: XCTestCase {
 
         XCTAssertEqual(result.headline, "Read a Keychain secret (security, via Codex CLI)")
         XCTAssertFalse(result.headline.contains("needs your review"))
+        XCTAssertTrue(result.explanation.contains("security"))
+        XCTAssertTrue(result.explanation.contains("ChatGPT → Codex CLI → security"))
+        XCTAssertTrue(result.explanation.contains("stored Keychain secret"))
+    }
+
+    func testCredentialTitlesAreDerivedFromReasonForPersistedIncidents() {
+        let cases = [
+            ("credential_store_access", "Opened the Keychain"),
+            ("keychain_store_transfer", "Copied the Keychain"),
+            ("keychain_secret_read", "Read a Keychain secret"),
+            ("keychain_command_correlation", "Read a Keychain secret")
+        ]
+        for (reason, expected) in cases {
+            let signal = ThreatSignal(
+                source: .endpointSecurity,
+                severity: .critical,
+                title: "Legacy stored title",
+                description: "Legacy copy",
+                context: ThreatSignalContext(
+                    processInfo: NickProcessInfo(
+                        pid: 42, path: "/usr/bin/security", name: "security",
+                        parentPID: 1, parentName: "launchd", signingStatus: .unknown
+                    ),
+                    metadata: [
+                        "detectionKind": "credential-access",
+                        "reason": reason,
+                        "credentialStore": CredentialAccessPolicy.Store.keychain.rawValue,
+                        "ruleTier": "protected"
+                    ]
+                )
+            )
+            let alert = ThreatAlert(
+                score: 0.9,
+                content: .init(
+                    title: "Legacy stored title", description: "Legacy copy",
+                    severity: .critical, recommendedAction: "Review"
+                ),
+                contributingSignals: [signal]
+            )
+            XCTAssertTrue(
+                UserFacingAlertBuilder.shared.build(from: alert).headline.hasPrefix(expected),
+                reason
+            )
+        }
     }
 
     func test_behaviorIncidentOnPlatformShellHasNoFileRemediationAction() {
