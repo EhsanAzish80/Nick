@@ -25,6 +25,8 @@ actor SizeCalculator {
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
 
+        let rootValues = try? url.resourceValues(forKeys: [.isSymbolicLinkKey])
+        guard rootValues?.isSymbolicLink != true else { return 0 }
         if isDir.boolValue {
             return directorySize(url)
         } else {
@@ -46,13 +48,22 @@ actor SizeCalculator {
     private func directorySize(_ url: URL) -> Int64 {
         guard let enumerator = fm.enumerator(
             at: url,
-            includingPropertiesForKeys: [.fileSizeKey],
+            includingPropertiesForKeys: [.fileSizeKey, .isSymbolicLinkKey, .isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return 0 }
 
         var total: Int64 = 0
         for case let fileURL as URL in enumerator {
-            total += fileSize(fileURL)
+            let values = try? fileURL.resourceValues(
+                forKeys: [.fileSizeKey, .isSymbolicLinkKey, .isRegularFileKey]
+            )
+            if values?.isSymbolicLink == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            if values?.isRegularFile == true {
+                total += Int64(values?.fileSize ?? 0)
+            }
         }
         return total
     }

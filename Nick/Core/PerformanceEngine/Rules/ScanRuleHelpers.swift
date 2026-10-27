@@ -60,11 +60,22 @@ enum ScanRuleHelpers {
         guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
         if isDir.boolValue {
             guard let enumerator = fm.enumerator(
-                at: url, includingPropertiesForKeys: [.fileSizeKey], options: []
+                at: url,
+                includingPropertiesForKeys: [.fileSizeKey, .isSymbolicLinkKey, .isRegularFileKey],
+                options: [.skipsPackageDescendants]
             ) else { return 0 }
             var total: Int64 = 0
             for case let f as URL in enumerator {
-                total += (try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init) ?? 0
+                let values = try? f.resourceValues(
+                    forKeys: [.fileSizeKey, .isSymbolicLinkKey, .isRegularFileKey]
+                )
+                if values?.isSymbolicLink == true {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                if values?.isRegularFile == true {
+                    total += Int64(values?.fileSize ?? 0)
+                }
             }
             return total
         }

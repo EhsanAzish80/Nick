@@ -9,15 +9,16 @@ struct ChromeCacheRule: ScanRule {
     let category = JunkCategory.browserCache
     let displayName = "Chrome Cache"
 
-    private let chromePaths: [(URL, String)] = [
+    static let cachePaths: [(URL, String)] = [
         (ScanRuleHelpers.homeURL("Library", "Application Support", "Google", "Chrome", "Default", "Cache"), "Chrome Default Cache"),
         (ScanRuleHelpers.homeURL("Library", "Application Support", "Google", "Chrome", "Default", "Code Cache"), "Chrome Code Cache"),
         (ScanRuleHelpers.homeURL("Library", "Application Support", "Chromium", "Default", "Cache"), "Chromium Cache"),
         (ScanRuleHelpers.homeURL("Library", "Application Support", "BraveSoftware", "Brave-Browser", "Default", "Cache"), "Brave Cache"),
+        (ScanRuleHelpers.homeURL("Library", "Application Support", "BraveSoftware", "Brave-Browser", "Default", "Code Cache"), "Brave Code Cache"),
     ]
 
     func scan() async -> [JunkItem] {
-        chromePaths.compactMap { (url, label) in
+        Self.cachePaths.compactMap { (url, label) in
             guard ScanRuleHelpers.exists(url) else { return nil }
             let size = ScanRuleHelpers.size(of: url)
             guard size > 0 else { return nil }

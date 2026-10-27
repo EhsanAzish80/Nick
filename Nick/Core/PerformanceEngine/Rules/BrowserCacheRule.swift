@@ -9,17 +9,25 @@ struct BrowserCacheRule: ScanRule {
     let category = JunkCategory.browserCache
     let displayName = "Browser Cache"
 
-    private let paths: [(URL, String)] = [
+    static var cachePaths: [(URL, String)] {
+        var result: [(URL, String)] = [
         (ScanRuleHelpers.homeURL("Library", "Caches", "com.apple.Safari"),           "Safari Cache"),
         (ScanRuleHelpers.homeURL("Library", "Caches", "com.apple.SafariTechnologyPreview"), "Safari TP Cache"),
-        (ScanRuleHelpers.homeURL("Library", "Application Support", "Firefox", "Profiles"), "Firefox Profile Cache"),
         (ScanRuleHelpers.homeURL("Library", "Application Support", "Microsoft Edge", "Default", "Cache"), "Edge Cache"),
+        (ScanRuleHelpers.homeURL("Library", "Application Support", "Microsoft Edge", "Default", "Code Cache"), "Edge Code Cache"),
         (ScanRuleHelpers.homeURL("Library", "Application Support", "Opera Software", "Opera Stable", "Cache"), "Opera Cache"),
+        (ScanRuleHelpers.homeURL("Library", "Application Support", "Opera Software", "Opera Stable", "Code Cache"), "Opera Code Cache"),
         (ScanRuleHelpers.homeURL("Library", "Caches", "com.operasoftware.Opera"),    "Opera Caches"),
-    ]
+        ]
+        let profiles = ScanRuleHelpers.homeURL("Library", "Application Support", "Firefox", "Profiles")
+        for profile in ScanRuleHelpers.subdirectories(of: profiles) {
+            result.append((profile.appending(path: "cache2"), "Firefox Cache"))
+        }
+        return result
+    }
 
     func scan() async -> [JunkItem] {
-        paths.compactMap { (url, label) in
+        Self.cachePaths.compactMap { (url, label) in
             guard ScanRuleHelpers.exists(url) else { return nil }
             let size = ScanRuleHelpers.size(of: url)
             guard size > 0 else { return nil }

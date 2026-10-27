@@ -37,7 +37,8 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
             "requestAllowFileOnce", "requestBlockReviewedFile", "requestRebuildFIMBaseline",
             "acknowledgeFIMViolation", "requestDeployCanaries",
             "requestRestoreQuarantinedFile", "debugValidateProtectionAuthorization",
-            "requestDeleteQuarantinedFile"
+            "requestDeleteQuarantinedFile", "registerStorageOperation",
+            "completeStorageOperation"
         ]
         let completed = methods.map { expectation(description: $0) }
         var delivered: [String] = []

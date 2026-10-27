@@ -321,10 +321,16 @@ final class ESEventHandler {
                 identity: fileIdentity
             ) ?? false
             let shouldBlock = !explicitlyAllowed && (fileScanner?.allowsEnforcement(of: cached) ?? false)
+            let approvedStorageMetadataRead = isReadOpen && !isWriteOpen && !shouldBlock
+                && xpcServer?.storageOperationRegistry.permits(
+                    pid: pid,
+                    pidVersion: processIdentity.pidVersion,
+                    event: .metadataRead(path: filePath)
+                ) == true
 
             esClient?.respond(to: message, allow: !shouldBlock)
 
-            if isReadOpen, !shouldBlock,
+            if isReadOpen, !shouldBlock, !approvedStorageMetadataRead,
                let credentialStore = CredentialAccessPolicy.sensitiveStore(at: filePath) {
                 dispatchQueue.async { [weak self] in
                     self?.observeCredentialStoreOpen(
@@ -748,6 +754,15 @@ final class ESEventHandler {
                 let directory = esString(msg.event.rename.destination.new_path.dir.pointee.path)
                 destinationPath = directory + "/" + esString(msg.event.rename.destination.new_path.filename)
             }
+            if xpcServer?.storageOperationRegistry.permits(
+                pid: pid,
+                pidVersion: processIdentity.pidVersion,
+                event: .trashRename(source: srcPath, destination: destinationPath)
+            ) == true {
+                esClient?.respond(to: message, allow: true)
+                fileScanner?.cache.invalidate(path: srcPath)
+                break
+            }
             let protectsRename = tamperProtection?.protects(path: srcPath) == true
                 || tamperProtection?.protects(path: destinationPath) == true
             let consoleUser = protectsRename
@@ -837,6 +852,15 @@ final class ESEventHandler {
                 let dir  = esString(msg.event.rename.destination.new_path.dir.pointee.path)
                 let name = esString(msg.event.rename.destination.new_path.filename)
                 notifyDestPath = dir + "/" + name
+            }
+            if xpcServer?.storageOperationRegistry.permits(
+                pid: pid,
+                pidVersion: processIdentity.pidVersion,
+                event: .trashRename(source: notifySrcPath, destination: notifyDestPath)
+            ) == true {
+                fileScanner?.cache.invalidate(path: notifySrcPath)
+                fileScanner?.cache.invalidate(path: notifyDestPath)
+                break
             }
             fileScanner?.cache.invalidate(path: notifyDestPath)
             let renameActorIsPlatform = process.is_platform_binary

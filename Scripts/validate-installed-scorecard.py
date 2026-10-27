@@ -10,8 +10,13 @@ an observed prevention. Skipped and inconclusive rows remain pending.
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import os
+import pwd
+import subprocess
+import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -52,8 +57,20 @@ INSTRUCTIONS = {
 }
 
 
+def decode_privileged_store(raw: bytes) -> Any:
+    """Decode PrivilegedIncidentStoreRecord's JSON/base64 payload wrapper."""
+    record = json.loads(raw.decode("utf-8"))
+    if not isinstance(record, dict) or not isinstance(record.get("payload"), str):
+        raise ValueError("incident store is not a PrivilegedIncidentStoreRecord")
+    payload = base64.b64decode(record["payload"], validate=True)
+    snapshot = json.loads(payload.decode("utf-8"))
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("incidents"), list):
+        raise ValueError("privileged payload is not an incident snapshot")
+    return snapshot
+
+
 def load_incident_fingerprints() -> dict[str, str]:
-    data: Any = json.loads(INCIDENTS.read_text(encoding="utf-8"))
+    data = decode_privileged_store(INCIDENTS.read_bytes())
     found: dict[str, str] = {}
 
     def walk(value: Any) -> None:
@@ -62,11 +79,14 @@ def load_incident_fingerprints() -> dict[str, str]:
             if isinstance(signals, list):
                 encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
                 identifier = str(value.get("id") or hashlib.sha256(encoded.encode()).hexdigest())
+                occurrence = max(1, int(value.get("occurrenceCount", 1)))
                 reasons = sorted({
                     str(signal.get("context", {}).get("metadata", {}).get("reason", ""))
                     for signal in signals if isinstance(signal, dict)
                 } - {""})
-                found[identifier] = ", ".join(reasons) or str(value.get("title", "incident"))
+                found[f"{identifier}:{occurrence}"] = (
+                    ", ".join(reasons) or str(value.get("title", "incident"))
+                )
             for child in value.values():
                 walk(child)
         elif isinstance(value, list):
@@ -79,7 +99,7 @@ def load_incident_fingerprints() -> dict[str, str]:
 
 def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[str, str]]) -> None:
     rows = [
-        "## Installed ATT&CK replay — build 5062",
+        "## Installed ATT&CK replay — build 5063",
         "",
         f"Measured {datetime.now(timezone.utc).isoformat(timespec='seconds')}. Unmeasured rows remain pending; this table makes no rating claim.",
         "",
@@ -114,13 +134,40 @@ def main() -> int:
     print(f"Nick installed {total}-technique replay. Use declared synthetic fixtures only.")
     for index, technique in enumerate(techniques, 1):
         print(f"\n[{index}/{total}] {technique['id']} — {technique['name']}")
-        print(INSTRUCTIONS[technique["fixture"]])
+        fixture_name = technique["fixture"]
+        print(INSTRUCTIONS[fixture_name])
         before = load_incident_fingerprints()
-        action = input("Press Return after the fixture, or type s to leave pending / q to stop: ").strip().lower()
+        action = input("Run? [Y/n], s to leave pending, q to stop: ").strip().lower()
         if action == "q":
             break
-        if action == "s":
+        if action in {"n", "s"}:
             continue
+        fixture = (ROOT / "Scripts" / "fixtures" / f"{fixture_name}.sh").resolve()
+        fixtures_root = (ROOT / "Scripts" / "fixtures").resolve()
+        if fixture.parent != fixtures_root or not fixture.is_file():
+            print("Fixture is missing; row remains pending.")
+            continue
+        with tempfile.TemporaryDirectory(prefix="nick-scorecard-") as scratch:
+            environment = os.environ.copy()
+            environment["NICK_FIXTURE_ROOT"] = scratch
+            uid = int(os.environ.get("SUDO_UID", "0"))
+            if uid > 0:
+                user = pwd.getpwuid(uid).pw_name
+                command = ["/usr/bin/sudo", "-u", user, "--", str(fixture)]
+            else:
+                command = [str(fixture)]
+            completed = subprocess.run(
+                command, env=environment, check=False, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60
+            )
+            print(completed.stdout.rstrip())
+            if completed.returncode == 64:
+                print("Manual GUI approval required; row remains pending.")
+                continue
+            if completed.returncode != 0:
+                print(f"Fixture exited {completed.returncode}; row remains pending.")
+                continue
+            time.sleep(3)
         after = load_incident_fingerprints()
         new_ids = sorted(set(after) - set(before))
         if new_ids:

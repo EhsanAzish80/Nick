@@ -10,6 +10,7 @@ import SwiftUI
 struct CleanupProgressView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
     @Environment(\.dismiss) private var dismiss
 
     private var monitor: PerformanceMonitor? { engine.performanceMonitor }
@@ -116,7 +117,10 @@ struct CleanupProgressView: View {
 
             HStack {
                 Button("Clean Selected") {
-                    monitor?.coordinator.startCleanup()
+                    let selected = monitor?.foundItems.filter {
+                        monitor?.coordinator.selectedItemIDs.contains($0.id) == true
+                    } ?? []
+                    monitor?.startCleanup(items: selected, operationClient: xpcClient)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(monitor?.coordinator.selectedItemIDs.isEmpty ?? true)

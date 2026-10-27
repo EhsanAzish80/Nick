@@ -92,7 +92,15 @@ final class PerformanceMonitor: MonitorProtocol {
 
     // MARK: Public API
 
-    func runPerformanceScan() async {
+    func runPerformanceScan(operationClient: ExtensionXPCClient? = nil) async {
+        let scopes = Self.browserCacheScopePaths
+        let operationID = await operationClient?.beginStorageOperation(
+            kind: .sizeScan,
+            scopedPaths: scopes
+        )
+        // An installed UI scan must never run under an unapproved
+        // self-suppression window. Tests and previews can omit the client.
+        guard operationClient == nil || operationID != nil else { return }
         coordinator.startScan()
         // Wait for scan to complete by polling state
         while coordinator.isScanning {
@@ -113,11 +121,36 @@ final class PerformanceMonitor: MonitorProtocol {
         } else {
             signals = []
         }
+        if let operationID {
+            await operationClient?.finishStorageOperation(
+                operationID: operationID, itemCount: 0, bytesMoved: 0
+            )
+        }
     }
 
-    func startCleanup(items: [JunkItem]) {
+    func startCleanup(items: [JunkItem], operationClient: ExtensionXPCClient? = nil) {
         coordinator.selectedItemIDs = Set(items.map(\.id))
-        coordinator.startCleanup()
+        Task {
+            let operationID = await operationClient?.beginStorageOperation(
+                kind: .trashCleanup,
+                scopedPaths: items.map { $0.url.path }
+            )
+            // A disconnected or rejected approval fails closed: Storage never
+            // proceeds under an unapproved self-alert suppression window.
+            guard operationClient == nil || operationID != nil else { return }
+            let result = await coordinator.performCleanup()
+            if let operationID {
+                await operationClient?.finishStorageOperation(
+                    operationID: operationID,
+                    itemCount: result.count,
+                    bytesMoved: result.bytes
+                )
+            }
+        }
+    }
+
+    static var browserCacheScopePaths: [String] {
+        (ChromeCacheRule.cachePaths + BrowserCacheRule.cachePaths).map { $0.0.path }
     }
 
     func findItemsForProcess(processPath: String) -> [JunkItem] {

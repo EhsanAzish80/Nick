@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    { "identifier": "ESET_Keydnap_Backdoor", "confidence": "high", "blockable": true },
+    { "identifier": "ESET_Keydnap_Downloader", "confidence": "high", "blockable": true },
+    { "identifier": "TRELLIX_ARC_MALW_Thiefquest", "confidence": "high", "blockable": true },
+    { "identifier": "VOLEXITY_Apt_Malware_Macos_Gimmick", "confidence": "high", "blockable": true }
+  ]
+}
