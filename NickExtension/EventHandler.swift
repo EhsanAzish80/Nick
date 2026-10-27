@@ -86,7 +86,7 @@ final class ESEventHandler {
     }
     private let credentialReportLock = NSLock()
     private var lastCredentialReport: [String: Date] = [:]
-    private var recentKeychainCommands: [String: Date] = [:]
+    private var recentKeychainCommands: [String: CredentialAccessPolicy.RecentHiddenPrompt] = [:]
     private static let credentialReportWindow: TimeInterval = 60
 
     // MARK: - Public Entry Point
@@ -252,7 +252,8 @@ final class ESEventHandler {
                         teamID: targetTeamID,
                         signingID: targetSigningID,
                         arguments: execArguments,
-                        responsiblePID: responsiblePID > 0 ? responsiblePID : nil
+                        responsiblePID: responsiblePID > 0 ? responsiblePID : nil,
+                        processIdentity: processIdentity
                     )
                 }
             }
@@ -332,6 +333,7 @@ final class ESEventHandler {
                         actorPID: pid,
                         parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
                         actorIdentity: tamperActorIdentity
                     )
                 }
@@ -474,6 +476,7 @@ final class ESEventHandler {
                         sourcePath: cloneSource, actorPath: processPath,
                         actorPID: pid, parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
                         operation: "clone"
                     )
                 }
@@ -532,6 +535,7 @@ final class ESEventHandler {
                         sourcePath: srcPath, actorPath: processPath,
                         actorPID: pid, parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
                         operation: "copyfile"
                     )
                 }
@@ -548,6 +552,7 @@ final class ESEventHandler {
                         sourcePath: sourcePath, actorPath: processPath,
                         actorPID: pid, parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
                         operation: "exchangedata"
                     )
                 }
@@ -761,6 +766,7 @@ final class ESEventHandler {
                         sourcePath: srcPath, actorPath: processPath,
                         actorPID: pid, parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
                         operation: "rename"
                     )
                 }
@@ -1417,7 +1423,8 @@ final class ESEventHandler {
         teamID: String?,
         signingID: String?,
         arguments: [String],
-        responsiblePID: Int32?
+        responsiblePID: Int32?,
+        processIdentity: ProcessInstanceIdentity
     ) {
         var verdict = verdict
         // Skip the content scan only for identity-signed code outside
@@ -1465,11 +1472,15 @@ final class ESEventHandler {
             responsibleIdentity: attribution?.app.map(Self.credentialIdentity)
         )
         if let credentialFinding,
-           ["hidden_password_prompt", "keychain_dump", "keychain_secret_read"].contains(credentialFinding.reason) {
+           CredentialAccessPolicy.armsKeychainCorrelation(reason: credentialFinding.reason) {
             credentialReportLock.withLock {
-                recentKeychainCommands[self.credentialChainKey(
-                    attribution: attribution, actorPID: pid
-                )] = Date()
+                let chainKey = self.credentialChainKey(attribution: attribution, actorPID: pid)
+                recentKeychainCommands[chainKey] = .init(
+                    chainKey: chainKey,
+                    armedAt: Date(),
+                    processPID: processIdentity.pid,
+                    processPIDVersion: processIdentity.pidVersion
+                )
             }
         }
         let behaviorTitle = credentialFinding?.title
@@ -1620,6 +1631,7 @@ final class ESEventHandler {
         actorPID: Int32,
         parentPID: Int32,
         responsiblePID: Int32?,
+        processIdentity: ProcessInstanceIdentity,
         actorIdentity: TamperActorIdentity
     ) {
         EndpointSecurityClient.healthMetrics.recordCredentialOpenEvaluation()
@@ -1632,9 +1644,14 @@ final class ESEventHandler {
         let hasRecentKeychainCommand = credentialReportLock.withLock { () -> Bool in
             let now = Date()
             recentKeychainCommands = recentKeychainCommands.filter {
-                now.timeIntervalSince($0.value) <= 600
+                now.timeIntervalSince($0.value.armedAt) <= 600
             }
-            return recentKeychainCommands[chainKey].map { now.timeIntervalSince($0) <= 600 } ?? false
+            return recentKeychainCommands[chainKey]?.matchesFollowUp(
+                chainKey: chainKey,
+                processPID: processIdentity.pid,
+                processPIDVersion: processIdentity.pidVersion,
+                at: now
+            ) ?? false
         }
         guard let finding = CredentialAccessPolicy.findingForOpen(
             path: path,
@@ -1699,9 +1716,30 @@ final class ESEventHandler {
         actorPID: Int32,
         parentPID: Int32,
         responsiblePID: Int32?,
+        processIdentity: ProcessInstanceIdentity,
         operation: String
     ) {
-        let finding = CredentialAccessPolicy.findingForKeychainTransfer()
+        let attribution = processTree?.responsibleApp(
+            actorPID: actorPID,
+            responsiblePID: responsiblePID,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
+        let chainKey = credentialChainKey(attribution: attribution, actorPID: actorPID)
+        let correlated = credentialReportLock.withLock { () -> Bool in
+            let now = Date()
+            recentKeychainCommands = recentKeychainCommands.filter {
+                now.timeIntervalSince($0.value.armedAt) <= 600
+            }
+            return recentKeychainCommands[chainKey]?.matchesFollowUp(
+                chainKey: chainKey,
+                processPID: processIdentity.pid,
+                processPIDVersion: processIdentity.pidVersion,
+                at: now
+            ) ?? false
+        }
+        let finding = correlated
+            ? CredentialAccessPolicy.findingForKeychainCorrelation()
+            : CredentialAccessPolicy.findingForKeychainTransfer()
         var metadata = [
             "reason": finding.reason,
             "rule": finding.reason,
@@ -1712,11 +1750,7 @@ final class ESEventHandler {
             "credentialOperation": operation,
             "deliveryLevel": "interrupt"
         ]
-        if let attribution = processTree?.responsibleApp(
-            actorPID: actorPID,
-            responsiblePID: responsiblePID,
-            resolver: SecCodeResponsibleProcessIdentityResolver.shared
-        ) {
+        if let attribution {
             metadata.merge(attribution.metadata) { current, _ in current }
         }
         reportThreat(ESEvent(

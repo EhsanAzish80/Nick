@@ -140,6 +140,27 @@ enum LOLBinExecutionPolicy {
 /// Security extension supplies identities that have already been validated by
 /// SecCode; this type never opens a credential file or records its contents.
 enum CredentialAccessPolicy {
+    struct RecentHiddenPrompt: Equatable, Sendable {
+        let chainKey: String
+        let armedAt: Date
+        let processPID: Int32
+        let processPIDVersion: Int32
+
+        func matchesFollowUp(
+            chainKey: String,
+            processPID: Int32,
+            processPIDVersion: Int32,
+            at now: Date,
+            window: TimeInterval = 600
+        ) -> Bool {
+            guard self.chainKey == chainKey,
+                  now >= armedAt,
+                  now.timeIntervalSince(armedAt) <= window else { return false }
+            return self.processPID != processPID
+                || self.processPIDVersion != processPIDVersion
+        }
+    }
+
     struct ValidatedIdentity: Equatable, Sendable {
         let bundleID: String?
         let teamID: String?
@@ -291,6 +312,20 @@ enum CredentialAccessPolicy {
             tier: "protected",
             severity: "critical"
         )
+    }
+
+    static func findingForKeychainCorrelation() -> Finding {
+        Finding(
+            title: "Read a Keychain secret after a hidden password prompt",
+            reason: "keychain_command_correlation",
+            store: .keychain,
+            tier: "protected",
+            severity: "critical"
+        )
+    }
+
+    static func armsKeychainCorrelation(reason: String) -> Bool {
+        reason == "hidden_password_prompt"
     }
 
     static func findingForExec(

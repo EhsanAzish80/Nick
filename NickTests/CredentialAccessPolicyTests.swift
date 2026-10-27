@@ -231,6 +231,74 @@ final class CredentialAccessPolicyTests: XCTestCase {
         XCTAssertEqual(correlated?.severity, "critical")
     }
 
+    func testSecuritySecretReadDoesNotArmKeychainCorrelation() throws {
+        let finding = try XCTUnwrap(CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/security",
+            arguments: ["security", "find-generic-password", "-w"],
+            responsibleIdentity: unknown
+        ))
+
+        XCTAssertEqual(finding.reason, "keychain_secret_read")
+        XCTAssertFalse(CredentialAccessPolicy.armsKeychainCorrelation(reason: finding.reason))
+        XCTAssertTrue(CredentialAccessPolicy.armsKeychainCorrelation(reason: "hidden_password_prompt"))
+    }
+
+    func testHiddenPromptFollowUpByDifferentProcessCorrelatesWithinTenMinutes() throws {
+        let start = Date(timeIntervalSince1970: 50_000)
+        let arm = CredentialAccessPolicy.RecentHiddenPrompt(
+            chainKey: "TEAM|app|chain",
+            armedAt: start,
+            processPID: 100,
+            processPIDVersion: 7
+        )
+
+        XCTAssertFalse(arm.matchesFollowUp(
+            chainKey: "TEAM|app|chain",
+            processPID: 100,
+            processPIDVersion: 7,
+            at: start.addingTimeInterval(30)
+        ), "The hidden-prompt process must not correlate with its own keychain open")
+        XCTAssertTrue(arm.matchesFollowUp(
+            chainKey: "TEAM|app|chain",
+            processPID: 101,
+            processPIDVersion: 1,
+            at: start.addingTimeInterval(9 * 60)
+        ))
+
+        let critical = CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/Keychains/login.keychain-db",
+            responsibleIdentity: unknown,
+            actorIdentityValidated: true,
+            hasRecentKeychainCommand: true
+        )
+        XCTAssertEqual(critical?.reason, "keychain_command_correlation")
+        XCTAssertEqual(critical?.tier, "protected")
+        XCTAssertEqual(critical?.severity, "critical")
+    }
+
+    func testHiddenPromptFollowUpAfterElevenMinutesDoesNotCorrelate() {
+        let start = Date(timeIntervalSince1970: 60_000)
+        let arm = CredentialAccessPolicy.RecentHiddenPrompt(
+            chainKey: "TEAM|app|chain",
+            armedAt: start,
+            processPID: 100,
+            processPIDVersion: 7
+        )
+
+        XCTAssertFalse(arm.matchesFollowUp(
+            chainKey: "TEAM|app|chain",
+            processPID: 102,
+            processPIDVersion: 1,
+            at: start.addingTimeInterval(11 * 60)
+        ))
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/Keychains/login.keychain-db",
+            responsibleIdentity: unknown,
+            actorIdentityValidated: true,
+            hasRecentKeychainCommand: false
+        ))
+    }
+
     func testLaunchdOwnedPlatformDaemonIsSilentForOtherStoresButInterpreterIsNot() {
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(
             path: "/Users/test/.aws/credentials",
