@@ -58,7 +58,9 @@ final class UserFacingAlertBuilderTests: XCTestCase {
             ("credential_store_access", "Opened the Keychain"),
             ("keychain_store_transfer", "Copied the Keychain"),
             ("keychain_secret_read", "Read a Keychain secret"),
-            ("keychain_command_correlation", "Read a Keychain secret")
+            ("keychain_command_correlation", "Read a Keychain secret"),
+            ("keychain_dump", "Read a Keychain secret"),
+            ("hidden_password_prompt", "Requested a hidden password")
         ]
         for (reason, expected) in cases {
             let signal = ThreatSignal(
@@ -90,6 +92,48 @@ final class UserFacingAlertBuilderTests: XCTestCase {
             XCTAssertTrue(
                 UserFacingAlertBuilder.shared.build(from: alert).headline.hasPrefix(expected),
                 reason
+            )
+        }
+    }
+
+    func testCredentialStoreAccessTitlesAreDerivedFromStoreReasonPair() {
+        let cases: [(CredentialAccessPolicy.Store, String)] = [
+            (.browserCookies, "Opened browser cookies"),
+            (.browserLogins, "Opened saved browser logins"),
+            (.keychain, "Opened the Keychain"),
+            (.sshPrivateKey, "Opened an SSH private key"),
+            (.cryptocurrencyWallet, "Opened cryptocurrency wallet data"),
+            (.browserWallet, "Opened browser wallet data"),
+            (.cloudCredential, "Opened cloud credentials"),
+            (.messagingSession, "Opened a messaging session"),
+            (.notesData, "Opened Notes data"),
+            (.walletPass, "Opened Wallet passes"),
+            (.passwordPrompt, "Requested a hidden password")
+        ]
+        for (store, expected) in cases {
+            let signal = ThreatSignal(
+                source: .endpointSecurity,
+                severity: .medium,
+                title: "Legacy stored title",
+                description: "Legacy copy",
+                context: ThreatSignalContext(metadata: [
+                    "detectionKind": "credential-access",
+                    "reason": "credential_store_access",
+                    "credentialStore": store.rawValue,
+                    "ruleTier": "review"
+                ])
+            )
+            let alert = ThreatAlert(
+                score: 0.5,
+                content: .init(
+                    title: "Legacy stored title", description: "Legacy copy",
+                    severity: .medium, recommendedAction: "Review"
+                ),
+                contributingSignals: [signal]
+            )
+            XCTAssertTrue(
+                UserFacingAlertBuilder.shared.build(from: alert).headline.hasPrefix(expected),
+                store.rawValue
             )
         }
     }

@@ -171,19 +171,12 @@ final class UserFacingAlertBuilder: Sendable {
             let storeName = credential.metadata["credentialStore"] ?? "credential data"
             let reason = credential.metadata["reason"] ?? credential.metadata["rule"] ?? ""
             let behavior: String = switch reason {
-            case "credential_store_access": "Opened the Keychain"
+            case "credential_store_access": Self.credentialStoreAccessTitle(storeName)
             case "keychain_store_transfer": "Copied the Keychain"
-            case "keychain_secret_read", "keychain_command_correlation": "Read a Keychain secret"
-            default: switch storeName {
-                case CredentialAccessPolicy.Store.browserCookies.rawValue: "Opened browser cookies"
-                case CredentialAccessPolicy.Store.browserLogins.rawValue: "Opened saved browser logins"
-                case CredentialAccessPolicy.Store.walletPass.rawValue: "Opened Wallet passes"
-                case CredentialAccessPolicy.Store.cloudCredential.rawValue: "Opened cloud credentials"
-                case CredentialAccessPolicy.Store.messagingSession.rawValue: "Opened a messaging session"
-                case CredentialAccessPolicy.Store.notesData.rawValue: "Opened Notes data"
-                case CredentialAccessPolicy.Store.keychain.rawValue: "Opened the Keychain"
-                default: "Opened \(storeName)"
-                }
+            case "keychain_secret_read", "keychain_command_correlation", "keychain_dump":
+                "Read a Keychain secret"
+            case "hidden_password_prompt": "Requested a hidden password"
+            default: Self.credentialStoreAccessTitle(storeName)
             }
             let actor = credential.processInfo?.name
                 ?? credential.processInfo.map { URL(fileURLWithPath: $0.path).lastPathComponent }
@@ -198,11 +191,21 @@ final class UserFacingAlertBuilder: Sendable {
             case "keychain_command_correlation": "a recent hidden password prompt in the same responsible chain"
             case "keychain_secret_read": "a command that requested a stored Keychain secret"
             case "credential_store_access": "a credential-store access rule"
+            case "hidden_password_prompt": "a hidden password prompt"
+            case "keychain_dump": "a command that requested Keychain contents"
             default: "the \(reason.isEmpty ? "credential access" : reason) rule"
+            }
+            let explanation: String
+            if reason == "keychain_store_transfer" {
+                let source = credential.metadata["credentialSource"] ?? "an unknown Keychain path"
+                let destination = credential.metadata["credentialDestination"] ?? "an unknown destination"
+                explanation = "\(actor) copied Keychain data from \(source) → \(destination) in the responsible chain \(chainText), triggering \(trigger)."
+            } else {
+                explanation = "\(actor) performed \(behavior.lowercased()) in the responsible chain \(chainText), triggering \(trigger)."
             }
             return AlertPattern(
                 headline: "\(behavior) (\(context))",
-                explanation: "\(actor) performed \(behavior.lowercased()) in the responsible chain \(chainText), triggering \(trigger).",
+                explanation: explanation,
                 assessment: "Needs your review",
                 recommendedAction: "Check whether you expected this app to access the credential store.",
                 severity: credential.metadata["ruleTier"] == "protected" ? .critical : .warning,
@@ -487,6 +490,23 @@ final class UserFacingAlertBuilder: Sendable {
         case "copyfile": "copy"
         case .some(let value) where !value.isEmpty: value
         default: "change"
+        }
+    }
+
+    private static func credentialStoreAccessTitle(_ storeName: String) -> String {
+        switch storeName {
+        case CredentialAccessPolicy.Store.browserCookies.rawValue: "Opened browser cookies"
+        case CredentialAccessPolicy.Store.browserLogins.rawValue: "Opened saved browser logins"
+        case CredentialAccessPolicy.Store.keychain.rawValue: "Opened the Keychain"
+        case CredentialAccessPolicy.Store.sshPrivateKey.rawValue: "Opened an SSH private key"
+        case CredentialAccessPolicy.Store.cryptocurrencyWallet.rawValue: "Opened cryptocurrency wallet data"
+        case CredentialAccessPolicy.Store.browserWallet.rawValue: "Opened browser wallet data"
+        case CredentialAccessPolicy.Store.cloudCredential.rawValue: "Opened cloud credentials"
+        case CredentialAccessPolicy.Store.messagingSession.rawValue: "Opened a messaging session"
+        case CredentialAccessPolicy.Store.notesData.rawValue: "Opened Notes data"
+        case CredentialAccessPolicy.Store.walletPass.rawValue: "Opened Wallet passes"
+        case CredentialAccessPolicy.Store.passwordPrompt.rawValue: "Requested a hidden password"
+        default: "Opened \(storeName)"
         }
     }
 

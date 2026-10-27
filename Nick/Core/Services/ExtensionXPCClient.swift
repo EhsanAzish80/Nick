@@ -1606,6 +1606,15 @@ struct ExtensionFinding: Sendable {
             "ruleTier": ruleTier,
             "threatFamily": event.threatFamily ?? "unknown"
         ].merging(event.metadata ?? [:]) { current, _ in current }
+        // The extension's classifier owns the concrete behavior identity.
+        // Defaults above exist only for older events that did not persist one;
+        // they must never flatten a specific reason into endpoint_threat.
+        if let reason = event.metadata?["reason"], !reason.isEmpty {
+            metadata["reason"] = reason
+        }
+        if let rule = event.metadata?["rule"], !rule.isEmpty {
+            metadata["rule"] = rule
+        }
         if isLOLBinBehavior {
             // The classifier's concrete reason is the behavior identity used
             // by presentation and deduplication. The generic endpoint default

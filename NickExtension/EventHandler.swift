@@ -339,21 +339,6 @@ final class ESEventHandler {
                     )
                 }
             }
-            if isWriteOpen, !shouldBlock {
-                dispatchQueue.async { [weak self] in
-                    self?.observePotentialKeychainTransferDestination(
-                        destinationPath: filePath,
-                        actorPath: processPath,
-                        actorPID: pid,
-                        parentPID: parentPid,
-                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
-                        processIdentity: processIdentity,
-                        actorIdentity: tamperActorIdentity,
-                        operation: "write"
-                    )
-                }
-            }
-
             // Normal file opens are extremely high-volume and add no useful
             // user-facing information. Forward only an actual blocked threat.
             if shouldBlock {
@@ -439,18 +424,6 @@ final class ESEventHandler {
             let destSuspect    = fileScanner?.isUntrustedLocation(filePath) ?? false
             let isSuspicious   = processSuspect && destSuspect
             esClient?.respond(to: message, allow: true)
-            dispatchQueue.async { [weak self] in
-                self?.observePotentialKeychainTransferDestination(
-                    destinationPath: filePath,
-                    actorPath: processPath,
-                    actorPID: pid,
-                    parentPID: parentPid,
-                    responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
-                    processIdentity: processIdentity,
-                    actorIdentity: tamperActorIdentity,
-                    operation: "create"
-                )
-            }
             behaviorTracker?.recordCreate(
                 pid: pid,
                 processGroupID: processGroupID,
@@ -605,6 +578,16 @@ final class ESEventHandler {
 
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
+
+                self.verifyPotentialKeychainTransferOnClose(
+                    destinationPath: filePath,
+                    actorPath: processPath,
+                    actorPID: pid,
+                    parentPID: parentPid,
+                    responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                    processIdentity: processIdentity,
+                    actorIdentity: tamperActorIdentity
+                )
 
                 // One event per completed modification replaces the former
                 // per-write XPC stream, which could deliver thousands of main
@@ -1735,7 +1718,7 @@ final class ESEventHandler {
         // byte copying. Briefly defer its review item so a following external
         // create/write can replace it with one protected transfer incident.
         if store == .keychain, finding.reason == "credential_store_access" {
-            dispatchQueue.asyncAfter(deadline: .now() + 5.1) { [weak self] in
+            dispatchQueue.asyncAfter(deadline: .now() + 30.1) { [weak self] in
                 guard let self,
                       let pendingKeychainRead,
                       self.keychainTransferFallback.hasPendingRead(
@@ -1820,21 +1803,31 @@ final class ESEventHandler {
         ))
     }
 
-    private func observePotentialKeychainTransferDestination(
+    private func verifyPotentialKeychainTransferOnClose(
         destinationPath: String,
         actorPath: String,
         actorPID: Int32,
         parentPID: Int32,
         responsiblePID: Int32?,
         processIdentity: ProcessInstanceIdentity,
-        actorIdentity: TamperActorIdentity,
-        operation: String
+        actorIdentity: TamperActorIdentity
     ) {
-        guard let pending = keychainTransferFallback.consumeExternalWrite(
+        guard let pending = keychainTransferFallback.pendingReadForExternalClose(
             destinationPath: destinationPath,
             process: processIdentity,
             at: Date()
         ) else { return }
+        guard let sourceSize = fileSize(at: pending.sourcePath),
+              let destinationSize = fileSize(at: destinationPath),
+              let sourcePrefix = boundedFileSample(at: pending.sourcePath, maximumBytes: 65_536),
+              let destinationPrefix = boundedFileSample(at: destinationPath, maximumBytes: 65_536),
+              KeychainTransferContentPolicy.isVerifiedTransfer(
+                  sourcePrefix: sourcePrefix,
+                  sourceSize: sourceSize,
+                  destinationPrefix: destinationPrefix,
+                  destinationSize: destinationSize
+              )
+        else { return }
         reportKeychainTransfer(
             sourcePath: pending.sourcePath,
             destinationPath: destinationPath,
@@ -1844,7 +1837,7 @@ final class ESEventHandler {
             responsiblePID: responsiblePID,
             processIdentity: processIdentity,
             actorIdentity: actorIdentity,
-            operation: operation
+            operation: "verified-close"
         )
     }
 
@@ -1896,6 +1889,7 @@ final class ESEventHandler {
             "signalSeverity": finding.severity,
             "credentialStore": finding.store.rawValue,
             "credentialOperation": operation,
+            "credentialSource": sourcePath,
             "credentialDestination": destinationPath,
             "deliveryLevel": "interrupt"
         ]
@@ -2219,6 +2213,12 @@ final class ESEventHandler {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
         return try? handle.read(upToCount: maximumBytes)
+    }
+
+    private func fileSize(at path: String) -> UInt64? {
+        guard let number = try? FileManager.default.attributesOfItem(atPath: path)[.size]
+            as? NSNumber else { return nil }
+        return number.uint64Value
     }
 
     private func isTrustedPlatformActor(_ path: String) -> Bool {

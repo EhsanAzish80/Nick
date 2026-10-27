@@ -98,7 +98,7 @@ struct SimpleAlertCopy: Equatable {
             whatHappened: user.explanation.isEmpty ? user.headline : user.explanation,
             whatNickDid: didText,
             whatToDo: todo,
-            isHighRisk: alert.severity == .critical && alert.hasProtectedEvidence,
+            isHighRisk: user.severity == .critical && alert.hasProtectedEvidence,
             technicalSummary: technicalSummary(for: alert)
         )
     }

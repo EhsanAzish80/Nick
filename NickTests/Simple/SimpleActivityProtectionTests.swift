@@ -503,29 +503,46 @@ final class SimpleActivityFeedTests: XCTestCase {
     }
 
     func testKeychainTransferUsesReasonForTitleAndProtectedTierForHighRiskBadge() throws {
-        let signal = ThreatSignal(
-            source: .process,
-            severity: .critical,
-            title: "Credential store event",
-            description: "Credential store event",
-            context: ThreatSignalContext(metadata: [
-                "reason": "keychain_store_transfer",
-                "rule": "keychain_store_transfer",
-                "ruleTier": "protected",
-                "detectionKind": "credential-access",
-                "credentialStore": CredentialAccessPolicy.Store.keychain.rawValue
-            ])
+        let source = "/Users/test/Library/Keychains/login.keychain-db"
+        let destination = "/tmp/copied.db"
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI",
+            pid: 42,
+            parentPid: 41,
+            filePath: destination,
+            decision: .allow,
+            threat: .init(
+                threatName: "Keychain store copied",
+                threatFamily: "credential-access",
+                isCodeSigned: true,
+                teamID: "2DC432GLL2",
+                signingID: "com.openai.codex",
+                metadata: [
+                    "reason": "keychain_store_transfer",
+                    "rule": "keychain_store_transfer",
+                    "ruleTier": "protected",
+                    "detectionKind": "credential-access",
+                    "credentialStore": CredentialAccessPolicy.Store.keychain.rawValue,
+                    "credentialSource": source,
+                    "credentialDestination": destination,
+                    "responsibleChain": "ChatGPT Computer Use → Codex CLI"
+                ]
+            )
         )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.metadata["reason"], "keychain_store_transfer")
         let alert = ThreatAlert(
-            score: 0.95,
+            score: finding.score,
             content: AlertContent(
-                title: "Credential store event",
-                description: "Credential store event",
-                severity: .critical,
-                recommendedAction: "Review"
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
             ),
-            contributingSignals: [signal]
+            contributingSignals: [finding.signal]
         )
+        let copy = UserFacingAlertBuilder.shared.build(from: alert)
         let input = try XCTUnwrap(SimpleActivityFeed.alertInputs(
             from: [alert], actionable: [alert.id]
         ).first)
@@ -535,6 +552,9 @@ final class SimpleActivityFeedTests: XCTestCase {
 
         XCTAssertTrue(input.headline.hasPrefix("Copied the Keychain"))
         XCTAssertEqual(item.badgeText, "High risk")
+        XCTAssertTrue(copy.explanation.contains("\(source) → \(destination)"))
+        XCTAssertTrue(copy.explanation.contains("ChatGPT Computer Use → Codex CLI"))
+        XCTAssertFalse(copy.explanation.contains("endpoint_threat"))
     }
 
     func test_informationalRowsNeverSayNeedsYourReview() {

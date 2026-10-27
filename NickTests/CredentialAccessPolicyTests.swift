@@ -364,7 +364,7 @@ final class CredentialAccessPolicyTests: XCTestCase {
         ))
     }
 
-    func testPlainReadThenExternalWriteDetectsUserSpaceKeychainCopies() {
+    func testContentVerifiedCloseDetectsCpDittoAndPythonKeychainCopies() {
         let process = Nick.ProcessInstanceIdentity(
             pid: 77, startSeconds: 100, startMicroseconds: 2, pidVersion: 9
         )
@@ -378,13 +378,44 @@ final class CredentialAccessPolicyTests: XCTestCase {
         ].enumerated() {
             var tracker = KeychainTransferFallbackTracker()
             tracker.recordRead(sourcePath: source, process: process, at: base)
-            let transfer = tracker.consumeExternalWrite(
+            let transfer = tracker.pendingReadForExternalClose(
                 destinationPath: destination,
                 process: process,
                 at: base.addingTimeInterval(Double(offset) + 1)
             )
             XCTAssertEqual(transfer?.sourcePath, source)
+            XCTAssertTrue(KeychainTransferContentPolicy.isVerifiedTransfer(
+                sourcePrefix: Data("kych source".utf8),
+                sourceSize: 11,
+                destinationPrefix: Data("kych copy".utf8),
+                destinationSize: 9
+            ), destination)
         }
+    }
+
+    func testContentVerifiedCloseRejectsUnrelatedLogAfterKeychainRead() {
+        XCTAssertFalse(KeychainTransferContentPolicy.isVerifiedTransfer(
+            sourcePrefix: Data("kych source".utf8),
+            sourceSize: 11,
+            destinationPrefix: Data("ordinary release log".utf8),
+            destinationSize: 20
+        ))
+    }
+
+    func testSQLiteKeychainCopyRequiresSameSizeAndMatchingFirst64KBHash() {
+        let prefix = Data("SQLite format 3\0".utf8) + Data(repeating: 0x41, count: 256)
+        XCTAssertTrue(KeychainTransferContentPolicy.isVerifiedTransfer(
+            sourcePrefix: prefix, sourceSize: 1_024,
+            destinationPrefix: prefix, destinationSize: 1_024
+        ))
+        XCTAssertFalse(KeychainTransferContentPolicy.isVerifiedTransfer(
+            sourcePrefix: prefix, sourceSize: 1_024,
+            destinationPrefix: prefix, destinationSize: 2_048
+        ))
+        XCTAssertFalse(KeychainTransferContentPolicy.isVerifiedTransfer(
+            sourcePrefix: prefix, sourceSize: 1_024,
+            destinationPrefix: Data("ordinary release log".utf8), destinationSize: 1_024
+        ))
     }
 
     func testInFolderAppleDaemonMaintenanceDoesNotBecomeFallbackTransfer() {
@@ -398,7 +429,7 @@ final class CredentialAccessPolicyTests: XCTestCase {
             process: process,
             at: base
         )
-        XCTAssertNil(tracker.consumeExternalWrite(
+        XCTAssertNil(tracker.pendingReadForExternalClose(
             destinationPath: "/Users/test/Library/Keychains/login.keychain-db-new",
             process: process,
             at: base.addingTimeInterval(1)

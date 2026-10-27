@@ -162,7 +162,7 @@ enum SimpleActivityFeed {
                 needsAction: displayStatus == .needsReview && actionable.contains(alert.id),
                 isBlocked: displayStatus == .blocked,
                 displayStatus: displayStatus,
-                isHighRisk: alert.severity == .critical && alert.hasProtectedEvidence
+                isHighRisk: user.severity == .critical && alert.hasProtectedEvidence
             )
         }
     }

@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import CryptoKit
 
 /// Pure, allocation-bounded command classifier shared by the Endpoint Security
 /// exec path and the app tests. It records evidence only; blocking and incident
@@ -497,7 +498,7 @@ struct KeychainTransferFallbackTracker: Sendable {
     private var reads: [ProcessInstanceIdentity: PendingRead] = [:]
     let window: TimeInterval
 
-    init(window: TimeInterval = 5) {
+    init(window: TimeInterval = 30) {
         self.window = window
     }
 
@@ -514,14 +515,14 @@ struct KeychainTransferFallbackTracker: Sendable {
         return pending
     }
 
-    mutating func consumeExternalWrite(
+    mutating func pendingReadForExternalClose(
         destinationPath: String,
         process: ProcessInstanceIdentity,
         at date: Date
     ) -> PendingRead? {
         prune(at: date)
         guard !CredentialAccessPolicy.isInsideKeychainsDirectory(destinationPath),
-              let pending = reads.removeValue(forKey: process),
+              let pending = reads[process],
               date.timeIntervalSince(pending.recordedAt) >= 0,
               date.timeIntervalSince(pending.recordedAt) <= window
         else { return nil }
@@ -544,5 +545,30 @@ struct KeychainTransferFallbackTracker: Sendable {
             date.timeIntervalSince($0.value.recordedAt) >= 0
                 && date.timeIntervalSince($0.value.recordedAt) <= window
         }
+    }
+}
+
+/// Content proof for user-space keychain copies which appear to Endpoint
+/// Security as ordinary OPEN + CREATE/WRITE + CLOSE events. Callers obtain the
+/// bounded samples off the ES callback thread.
+enum KeychainTransferContentPolicy {
+    private static let keychainMagic = Data("kych".utf8)
+    private static let sqliteMagic = Data("SQLite format 3\0".utf8)
+
+    static func isVerifiedTransfer(
+        sourcePrefix: Data,
+        sourceSize: UInt64,
+        destinationPrefix: Data,
+        destinationSize: UInt64
+    ) -> Bool {
+        if destinationPrefix.starts(with: keychainMagic) {
+            return true
+        }
+        guard sourcePrefix.starts(with: sqliteMagic),
+              sourceSize == destinationSize,
+              !sourcePrefix.isEmpty,
+              sourcePrefix.count == destinationPrefix.count
+        else { return false }
+        return SHA256.hash(data: sourcePrefix) == SHA256.hash(data: destinationPrefix)
     }
 }
