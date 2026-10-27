@@ -427,6 +427,116 @@ final class SimpleActivityFeedTests: XCTestCase {
         XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
     }
 
+    func testValidatedAppleInstallerMaintenanceStaysOutOfSimpleMode() throws {
+        for signingID in ["com.apple.installd", "com.apple.shove"] {
+            let event = ESEvent(
+                eventType: .notifyWrite,
+                processPath: "/System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/runner",
+                pid: 46,
+                parentPid: 1,
+                filePath: "/Applications/Nick.app/Contents/MacOS/Nick",
+                decision: .allow,
+                threat: .init(
+                    threatName: "Nick maintenance updated protected files",
+                    threatFamily: "nick-maintenance",
+                    isCodeSigned: true,
+                    teamID: "APPLE_PLATFORM",
+                    signingID: signingID
+                )
+            )
+            let finding = try XCTUnwrap(ExtensionFinding(event: event))
+            let alert = ThreatAlert(
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+
+            XCTAssertEqual(finding.signal.metadata["class"], "audit")
+            XCTAssertEqual(finding.signal.metadata["rule"], "nick_protected_path_maintenance")
+            XCTAssertNotNil(
+                event.threatName,
+                "The source event must remain available to Advanced timeline and Diagnostics"
+            )
+            XCTAssertTrue(
+                SimpleActivityFeed.alertInputs(from: [alert], actionable: []).isEmpty,
+                "Simple mode must omit \(signingID) maintenance history"
+            )
+        }
+    }
+
+    func testUnvalidatedMaintenanceLookalikeIsNotHiddenFromSimpleMode() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/tmp/shove",
+            pid: 47,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app/Contents/MacOS/Nick",
+            decision: .allow,
+            threat: .init(
+                threatName: "Nick maintenance updated protected files",
+                threatFamily: "nick-maintenance",
+                isCodeSigned: true,
+                teamID: "UNTRUSTED",
+                signingID: "com.apple.shove"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        let alert = ThreatAlert(
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: finding.signal.timestamp
+        )
+
+        XCTAssertEqual(SimpleActivityFeed.alertInputs(from: [alert], actionable: []).count, 1)
+    }
+
+    func testKeychainTransferUsesReasonForTitleAndProtectedTierForHighRiskBadge() throws {
+        let signal = ThreatSignal(
+            source: .process,
+            severity: .critical,
+            title: "Credential store event",
+            description: "Credential store event",
+            context: ThreatSignalContext(metadata: [
+                "reason": "keychain_store_transfer",
+                "rule": "keychain_store_transfer",
+                "ruleTier": "protected",
+                "detectionKind": "credential-access",
+                "credentialStore": CredentialAccessPolicy.Store.keychain.rawValue
+            ])
+        )
+        let alert = ThreatAlert(
+            score: 0.95,
+            content: AlertContent(
+                title: "Credential store event",
+                description: "Credential store event",
+                severity: .critical,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+        let input = try XCTUnwrap(SimpleActivityFeed.alertInputs(
+            from: [alert], actionable: [alert.id]
+        ).first)
+        let item = try XCTUnwrap(SimpleActivityFeed.items(
+            alerts: [input], quarantine: [], blocked: []
+        ).first)
+
+        XCTAssertTrue(input.headline.hasPrefix("Copied the Keychain"))
+        XCTAssertEqual(item.badgeText, "High risk")
+    }
+
     func test_informationalRowsNeverSayNeedsYourReview() {
         let input = SimpleActivityFeed.AlertInput(
             id: UUID(),

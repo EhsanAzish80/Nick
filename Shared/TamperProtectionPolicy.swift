@@ -291,7 +291,7 @@ enum TamperProtectionPolicy {
         if identity.teamID == nickTeamID {
             return nickIdentityValidated && nickMaintenanceSigningIDs.contains(signingID)
         }
-        return identity.isPlatformBinary && appleInstallerSigningIDs.contains(signingID)
+        return identity.isPlatformBinary && isAppleInstallerSigningID(signingID)
     }
 
     static func isDocumentedFinderUninstall(
@@ -352,9 +352,13 @@ enum TamperProtectionPolicy {
         "com.apple.shove",
     ]
 
+    static func isAppleInstallerSigningID(_ signingID: String) -> Bool {
+        appleInstallerSigningIDs.contains(signingID)
+    }
+
     static func isValidatedInstallerMaintenanceIdentity(_ identity: TamperActorIdentity) -> Bool {
         identity.isPlatformBinary
             && identity.isValidIdentitySignature
-            && identity.signingID.map(appleInstallerSigningIDs.contains) == true
+            && identity.signingID.map(isAppleInstallerSigningID) == true
     }
 }

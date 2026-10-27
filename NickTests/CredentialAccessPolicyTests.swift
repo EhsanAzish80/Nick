@@ -342,6 +342,69 @@ final class CredentialAccessPolicyTests: XCTestCase {
         ))
     }
 
+    func testSimulatorLaunchServiceOwnedPlatformDaemonIsSilentForOwnCookieStore() {
+        XCTAssertTrue(CredentialAccessPolicy.isValidatedAppleLaunchService(
+            signingID: "com.apple.xpc.launchd_sim",
+            isValidatedAppleCode: true
+        ))
+        XCTAssertFalse(CredentialAccessPolicy.isValidatedAppleLaunchService(
+            signingID: "com.apple.xpc.launchd_sim",
+            isValidatedAppleCode: false
+        ), "A copied name or self-reported identifier must not create trust")
+
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/HTTPStorages/com.apple.amsaccountsd/Cookies.binarycookies",
+            responsibleIdentity: nil,
+            actorIdentityValidated: true,
+            actorIsValidatedApplePlatform: true,
+            actorIsOwnResponsibleProcess: true,
+            actorParentIsLaunchd: false,
+            actorParentIsValidatedAppleLaunchService: true,
+            actorIsInterpreter: false
+        ))
+    }
+
+    func testPlainReadThenExternalWriteDetectsUserSpaceKeychainCopies() {
+        let process = Nick.ProcessInstanceIdentity(
+            pid: 77, startSeconds: 100, startMicroseconds: 2, pidVersion: 9
+        )
+        let source = "/tmp/home/Library/Keychains/login.keychain-db"
+        let base = Date(timeIntervalSince1970: 1_000)
+
+        for (offset, destination) in [
+            "/tmp/copied-by-cp.db",
+            "/tmp/copied-by-ditto.db",
+            "/tmp/copied-by-python.db"
+        ].enumerated() {
+            var tracker = KeychainTransferFallbackTracker()
+            tracker.recordRead(sourcePath: source, process: process, at: base)
+            let transfer = tracker.consumeExternalWrite(
+                destinationPath: destination,
+                process: process,
+                at: base.addingTimeInterval(Double(offset) + 1)
+            )
+            XCTAssertEqual(transfer?.sourcePath, source)
+        }
+    }
+
+    func testInFolderAppleDaemonMaintenanceDoesNotBecomeFallbackTransfer() {
+        var tracker = KeychainTransferFallbackTracker()
+        let process = Nick.ProcessInstanceIdentity(
+            pid: 88, startSeconds: 200, startMicroseconds: 3, pidVersion: 10
+        )
+        let base = Date(timeIntervalSince1970: 2_000)
+        tracker.recordRead(
+            sourcePath: "/Users/test/Library/Keychains/login.keychain-db",
+            process: process,
+            at: base
+        )
+        XCTAssertNil(tracker.consumeExternalWrite(
+            destinationPath: "/Users/test/Library/Keychains/login.keychain-db-new",
+            process: process,
+            at: base.addingTimeInterval(1)
+        ))
+    }
+
     func testTodayCredentialWorkloadReplayStaysBelowNoiseBudget() {
         let validatedTool = CredentialAccessPolicy.ValidatedIdentity(
             bundleID: "com.example.release-tool", teamID: "VALIDTEAM",

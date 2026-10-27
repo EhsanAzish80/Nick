@@ -91,10 +91,71 @@ final class ProtectionStatusTests: XCTestCase {
         XCTAssertEqual(status.count, 0)
     }
 
-    private func makeAlert(metadata: [String: String]) -> ThreatAlert {
+    func testCriticalProtectedIncidentStaysRedAfterProcessEndsUntilUserReview() {
+        let alert = makeAlert(
+            metadata: ["reason": "curl_pipe_shell", "ruleTier": "protected"],
+            severity: .critical
+        )
+        let automaticResolution = IncidentActionRecord(
+            action: .resolved,
+            actor: .automatic,
+            timestamp: Date()
+        )
+        var incident = SecurityIncident(
+            key: "critical",
+            alert: alert,
+            evidence: alert.contributingSignals.map(Evidence.init(signal:)),
+            state: .resolved,
+            actions: [automaticResolution]
+        )
+
+        XCTAssertEqual(incident.displayStatus, .needsReview)
+        XCTAssertEqual(ProtectionStatus.evaluate(
+            actionableAlerts: [],
+            incidents: [incident],
+            auditIssueCount: 0,
+            sensorRunning: true
+        ), ProtectionStatus(state: .remediationNeeded, count: 1))
+
+        incident.actions.append(IncidentActionRecord(
+            action: .reviewed,
+            actor: .user,
+            timestamp: Date()
+        ))
+        XCTAssertEqual(incident.displayStatus, .resolved)
+        XCTAssertEqual(ProtectionStatus.evaluate(
+            actionableAlerts: [],
+            incidents: [incident],
+            auditIssueCount: 0,
+            sensorRunning: true
+        ), ProtectionStatus(state: .protected, count: 0))
+    }
+
+    func testReviewTierIncidentUsesOrangeAttentionState() {
+        let alert = makeAlert(
+            metadata: ["reason": "credential_store_access", "ruleTier": "review"],
+            severity: .medium
+        )
+        let incident = SecurityIncident(
+            key: "review",
+            alert: alert,
+            evidence: alert.contributingSignals.map(Evidence.init(signal:))
+        )
+        XCTAssertEqual(ProtectionStatus.evaluate(
+            actionableAlerts: [alert],
+            incidents: [incident],
+            auditIssueCount: 0,
+            sensorRunning: true
+        ), ProtectionStatus(state: .attentionNeeded, count: 1))
+    }
+
+    private func makeAlert(
+        metadata: [String: String],
+        severity: SignalSeverity = .medium
+    ) -> ThreatAlert {
         let signal = ThreatSignal(
             source: .process,
-            severity: .medium,
+            severity: severity,
             title: "Review activity",
             description: "Review activity",
             context: ThreatSignalContext(metadata: metadata)
@@ -104,7 +165,7 @@ final class ProtectionStatusTests: XCTestCase {
             content: AlertContent(
                 title: "Review activity",
                 description: "Review activity",
-                severity: .medium,
+                severity: severity,
                 recommendedAction: "Review"
             ),
             contributingSignals: [signal]

@@ -218,6 +218,22 @@ enum CredentialAccessPolicy {
         "2BUA8C4S2C|com.1password.1password"
     ]
 
+    /// Apple launch services which legitimately own long-lived platform
+    /// daemons. The caller must validate the code object first; an executable
+    /// name or path alone never satisfies this policy.
+    private static let appleLaunchServiceSigningIDs: Set<String> = [
+        "com.apple.xpc.launchd",
+        "com.apple.xpc.launchd_sim"
+    ]
+
+    static func isValidatedAppleLaunchService(
+        signingID: String?,
+        isValidatedAppleCode: Bool
+    ) -> Bool {
+        isValidatedAppleCode
+            && signingID.map(appleLaunchServiceSigningIDs.contains) == true
+    }
+
     static func findingForOpen(
         path: String,
         responsibleIdentity: ValidatedIdentity?,
@@ -225,6 +241,7 @@ enum CredentialAccessPolicy {
         actorIsValidatedApplePlatform: Bool = false,
         actorIsOwnResponsibleProcess: Bool = false,
         actorParentIsLaunchd: Bool = false,
+        actorParentIsValidatedAppleLaunchService: Bool = false,
         actorIsInterpreter: Bool = false,
         hasRecentKeychainCommand: Bool = false
     ) -> Finding? {
@@ -257,6 +274,7 @@ enum CredentialAccessPolicy {
             actorIsValidatedApplePlatform: actorIsValidatedApplePlatform,
             actorIsOwnResponsibleProcess: actorIsOwnResponsibleProcess,
             actorParentIsLaunchd: actorParentIsLaunchd,
+            actorParentIsValidatedAppleLaunchService: actorParentIsValidatedAppleLaunchService,
             actorIsInterpreter: actorIsInterpreter
         )
     }
@@ -287,10 +305,11 @@ enum CredentialAccessPolicy {
         actorIsValidatedApplePlatform: Bool = false,
         actorIsOwnResponsibleProcess: Bool = false,
         actorParentIsLaunchd: Bool = false,
+        actorParentIsValidatedAppleLaunchService: Bool = false,
         actorIsInterpreter: Bool = false
     ) -> Finding? {
         if actorIsValidatedApplePlatform,
-           actorParentIsLaunchd,
+           (actorParentIsLaunchd || actorParentIsValidatedAppleLaunchService),
            !actorIsInterpreter {
             return nil
         }
@@ -406,7 +425,7 @@ enum CredentialAccessPolicy {
         }
     }
 
-    private static func isInsideKeychainsDirectory(_ rawPath: String) -> Bool {
+    static func isInsideKeychainsDirectory(_ rawPath: String) -> Bool {
         let components = URL(fileURLWithPath: rawPath)
             .standardizedFileURL.pathComponents.map { $0.lowercased() }
         guard let library = components.lastIndex(of: "library"),
@@ -463,5 +482,67 @@ enum CredentialAccessPolicy {
         }
         if lower.contains("/library/passes/") || lower.hasSuffix(".pkpass") { return .walletPass }
         return nil
+    }
+}
+
+/// Correlates the ordinary OPEN + CREATE/WRITE sequence used by tools which
+/// copy bytes in user space instead of asking the kernel for COPYFILE/CLONE.
+/// Process-instance identity prevents PID reuse from joining unrelated I/O.
+struct KeychainTransferFallbackTracker: Sendable {
+    struct PendingRead: Equatable, Sendable {
+        let sourcePath: String
+        let recordedAt: Date
+    }
+
+    private var reads: [ProcessInstanceIdentity: PendingRead] = [:]
+    let window: TimeInterval
+
+    init(window: TimeInterval = 5) {
+        self.window = window
+    }
+
+    @discardableResult
+    mutating func recordRead(
+        sourcePath: String,
+        process: ProcessInstanceIdentity,
+        at date: Date
+    ) -> PendingRead? {
+        guard CredentialAccessPolicy.sensitiveStore(at: sourcePath) == .keychain else { return nil }
+        prune(at: date)
+        let pending = PendingRead(sourcePath: sourcePath, recordedAt: date)
+        reads[process] = pending
+        return pending
+    }
+
+    mutating func consumeExternalWrite(
+        destinationPath: String,
+        process: ProcessInstanceIdentity,
+        at date: Date
+    ) -> PendingRead? {
+        prune(at: date)
+        guard !CredentialAccessPolicy.isInsideKeychainsDirectory(destinationPath),
+              let pending = reads.removeValue(forKey: process),
+              date.timeIntervalSince(pending.recordedAt) >= 0,
+              date.timeIntervalSince(pending.recordedAt) <= window
+        else { return nil }
+        return pending
+    }
+
+    mutating func cancel(process: ProcessInstanceIdentity) {
+        reads.removeValue(forKey: process)
+    }
+
+    func hasPendingRead(
+        process: ProcessInstanceIdentity,
+        matching pending: PendingRead
+    ) -> Bool {
+        reads[process] == pending
+    }
+
+    private mutating func prune(at date: Date) {
+        reads = reads.filter {
+            date.timeIntervalSince($0.value.recordedAt) >= 0
+                && date.timeIntervalSince($0.value.recordedAt) <= window
+        }
     }
 }

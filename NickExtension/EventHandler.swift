@@ -87,6 +87,7 @@ final class ESEventHandler {
     private let credentialReportLock = NSLock()
     private var lastCredentialReport: [String: Date] = [:]
     private var recentKeychainCommands: [String: CredentialAccessPolicy.RecentHiddenPrompt] = [:]
+    private var keychainTransferFallback = KeychainTransferFallbackTracker()
     private static let credentialReportWindow: TimeInterval = 60
 
     // MARK: - Public Entry Point
@@ -338,6 +339,20 @@ final class ESEventHandler {
                     )
                 }
             }
+            if isWriteOpen, !shouldBlock {
+                dispatchQueue.async { [weak self] in
+                    self?.observePotentialKeychainTransferDestination(
+                        destinationPath: filePath,
+                        actorPath: processPath,
+                        actorPID: pid,
+                        parentPID: parentPid,
+                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
+                        actorIdentity: tamperActorIdentity,
+                        operation: "write"
+                    )
+                }
+            }
 
             // Normal file opens are extremely high-volume and add no useful
             // user-facing information. Forward only an actual blocked threat.
@@ -424,6 +439,18 @@ final class ESEventHandler {
             let destSuspect    = fileScanner?.isUntrustedLocation(filePath) ?? false
             let isSuspicious   = processSuspect && destSuspect
             esClient?.respond(to: message, allow: true)
+            dispatchQueue.async { [weak self] in
+                self?.observePotentialKeychainTransferDestination(
+                    destinationPath: filePath,
+                    actorPath: processPath,
+                    actorPID: pid,
+                    parentPID: parentPid,
+                    responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                    processIdentity: processIdentity,
+                    actorIdentity: tamperActorIdentity,
+                    operation: "create"
+                )
+            }
             behaviorTracker?.recordCreate(
                 pid: pid,
                 processGroupID: processGroupID,
@@ -1657,6 +1684,15 @@ final class ESEventHandler {
             responsiblePID: responsiblePID,
             resolver: SecCodeResponsibleProcessIdentityResolver.shared
         )
+        let parentIdentity = parentPID > 1
+            ? SecCodeResponsibleProcessIdentityResolver.shared.identity(pid: parentPID, pathHint: nil)
+            : nil
+        let parentIsValidatedAppleLaunchService = CredentialAccessPolicy.isValidatedAppleLaunchService(
+            signingID: parentIdentity?.bundleID,
+            isValidatedAppleCode: parentIdentity.map {
+                $0.signing == .applePlatform || $0.signing == .appleSigned
+            } ?? false
+        )
         let chainKey = credentialChainKey(attribution: attribution, actorPID: actorPID)
         let hasRecentKeychainCommand = credentialReportLock.withLock { () -> Bool in
             let now = Date()
@@ -1670,7 +1706,7 @@ final class ESEventHandler {
                 at: now
             ) ?? false
         }
-        guard let finding = CredentialAccessPolicy.findingForOpen(
+        let finding = CredentialAccessPolicy.findingForOpen(
             path: path,
             responsibleIdentity: attribution?.app.map(Self.credentialIdentity),
             actorIdentityValidated: actorIdentity.isValidIdentitySignature,
@@ -1678,9 +1714,66 @@ final class ESEventHandler {
                 && actorIdentity.isValidIdentitySignature,
             actorIsOwnResponsibleProcess: responsiblePID == actorPID,
             actorParentIsLaunchd: parentPID == 1,
+            actorParentIsValidatedAppleLaunchService: parentIsValidatedAppleLaunchService,
             actorIsInterpreter: Self.isInterpreter(actorPath),
             hasRecentKeychainCommand: store == .keychain && hasRecentKeychainCommand
-        ) else { return }
+        )
+
+        let pendingKeychainRead: KeychainTransferFallbackTracker.PendingRead?
+        if store == .keychain, finding?.reason != "keychain_command_correlation" {
+            pendingKeychainRead = keychainTransferFallback.recordRead(
+                sourcePath: path,
+                process: processIdentity,
+                at: Date()
+            )
+        } else {
+            pendingKeychainRead = nil
+        }
+        guard let finding else { return }
+
+        // A plain unvalidated read may be the first half of cp/ditto/manual
+        // byte copying. Briefly defer its review item so a following external
+        // create/write can replace it with one protected transfer incident.
+        if store == .keychain, finding.reason == "credential_store_access" {
+            dispatchQueue.asyncAfter(deadline: .now() + 5.1) { [weak self] in
+                guard let self,
+                      let pendingKeychainRead,
+                      self.keychainTransferFallback.hasPendingRead(
+                          process: processIdentity,
+                          matching: pendingKeychainRead
+                      )
+                else { return }
+                self.keychainTransferFallback.cancel(process: processIdentity)
+                self.reportCredentialOpenFinding(
+                    finding,
+                    path: path,
+                    actorPath: actorPath,
+                    actorPID: actorPID,
+                    parentPID: parentPID,
+                    attribution: attribution
+                )
+            }
+            return
+        }
+
+        reportCredentialOpenFinding(
+            finding,
+            path: path,
+            actorPath: actorPath,
+            actorPID: actorPID,
+            parentPID: parentPID,
+            attribution: attribution
+        )
+    }
+
+    private func reportCredentialOpenFinding(
+        _ finding: CredentialAccessPolicy.Finding,
+        path: String,
+        actorPath: String,
+        actorPID: Int32,
+        parentPID: Int32,
+        attribution: ResponsibleAppAttribution?
+    ) {
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor
         // boundary as well as in Core so a noisy reader cannot flood delivery.
@@ -1727,6 +1820,34 @@ final class ESEventHandler {
         ))
     }
 
+    private func observePotentialKeychainTransferDestination(
+        destinationPath: String,
+        actorPath: String,
+        actorPID: Int32,
+        parentPID: Int32,
+        responsiblePID: Int32?,
+        processIdentity: ProcessInstanceIdentity,
+        actorIdentity: TamperActorIdentity,
+        operation: String
+    ) {
+        guard let pending = keychainTransferFallback.consumeExternalWrite(
+            destinationPath: destinationPath,
+            process: processIdentity,
+            at: Date()
+        ) else { return }
+        reportKeychainTransfer(
+            sourcePath: pending.sourcePath,
+            destinationPath: destinationPath,
+            actorPath: actorPath,
+            actorPID: actorPID,
+            parentPID: parentPID,
+            responsiblePID: responsiblePID,
+            processIdentity: processIdentity,
+            actorIdentity: actorIdentity,
+            operation: operation
+        )
+    }
+
     private func reportKeychainTransfer(
         sourcePath: String,
         destinationPath: String,
@@ -1738,6 +1859,7 @@ final class ESEventHandler {
         actorIdentity: TamperActorIdentity,
         operation: String
     ) {
+        keychainTransferFallback.cancel(process: processIdentity)
         guard CredentialAccessPolicy.shouldReportKeychainTransfer(
             sourcePath: sourcePath,
             destinationPath: destinationPath,

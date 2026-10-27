@@ -16,11 +16,11 @@ final class IncidentSeenStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(seen.unseenCount(in: [incident]), 1)
-        XCTAssertEqual(headline(for: incident), "Attention needed · 1 item needs review")
+        XCTAssertEqual(headline(for: incident), "Remediation needed · 1 item")
 
         seen.markSeen(id: alert.id, occurrenceCount: 1)
         XCTAssertEqual(seen.unseenCount(in: [incident]), 0)
-        XCTAssertEqual(headline(for: incident), "Attention needed · 1 item needs review")
+        XCTAssertEqual(headline(for: incident), "Remediation needed · 1 item")
 
         incident.state = .reviewed
         XCTAssertEqual(headline(for: incident), "Protected")
@@ -28,7 +28,7 @@ final class IncidentSeenStoreTests: XCTestCase {
         incident.state = .new
         incident.alert = incident.alert.withOccurrenceCount(2)
         XCTAssertEqual(seen.unseenCount(in: [incident]), 1)
-        XCTAssertEqual(headline(for: incident), "Attention needed · 1 item needs review")
+        XCTAssertEqual(headline(for: incident), "Remediation needed · 1 item")
     }
 
     func test_seenOccurrencePersistsPerUser() throws {

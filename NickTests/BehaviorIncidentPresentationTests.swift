@@ -86,7 +86,7 @@ final class BehaviorIncidentPresentationTests: XCTestCase {
             SystemAuditProtectionStatusModel(status: status),
         ]
         XCTAssertTrue(models.allSatisfy {
-            $0.presentation.displayText == "Attention needed · 1 item needs review"
+            $0.presentation.displayText == "Remediation needed · 1 item"
         })
     }
 
