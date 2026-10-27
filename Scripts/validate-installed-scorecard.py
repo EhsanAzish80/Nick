@@ -89,6 +89,21 @@ EXPECTED = {
 ROOT_FIXTURES = {"launch-daemon-add", "nick-tamper"}
 
 
+def prepare_fixture_scratch(scratch: str, uid: int, gid: int) -> None:
+    """Give the invoking user exclusive access to a root-created scratch dir."""
+    if uid > 0:
+        os.chown(scratch, uid, gid)
+    os.chmod(scratch, 0o700)
+
+
+def user_fixture_command(fixture: Path, scratch: str, user: str) -> list[str]:
+    """Build the sudo invocation without relying on sudo preserving env."""
+    return [
+        "/usr/bin/sudo", "-H", "-u", user, "--", "/usr/bin/env",
+        f"NICK_FIXTURE_ROOT={scratch}", str(fixture),
+    ]
+
+
 def decode_privileged_store(raw: bytes) -> Any:
     """Decode PrivilegedIncidentStoreRecord's JSON/base64 payload wrapper."""
     record = json.loads(raw.decode("utf-8"))
@@ -202,9 +217,11 @@ def main() -> int:
             environment = os.environ.copy()
             environment["NICK_FIXTURE_ROOT"] = scratch
             uid = int(os.environ.get("SUDO_UID", "0"))
+            gid = int(os.environ.get("SUDO_GID", "0"))
+            prepare_fixture_scratch(scratch, uid, gid)
             if uid > 0 and fixture_name not in ROOT_FIXTURES:
                 user = pwd.getpwuid(uid).pw_name
-                command = ["/usr/bin/sudo", "-H", "-u", user, "--", str(fixture)]
+                command = user_fixture_command(fixture, scratch, user)
             else:
                 command = [str(fixture)]
             completed = subprocess.run(
