@@ -570,7 +570,7 @@ final class SimpleActivityFeedTests: XCTestCase {
         let signal = ThreatSignal(
             source: .process,
             severity: .info,
-            title: "mv",
+            title: "mv activity observed",
             description: "Observed activity.",
             context: ThreatSignalContext(processInfo: NickProcessInfo(
                 pid: 42,
@@ -584,7 +584,7 @@ final class SimpleActivityFeedTests: XCTestCase {
         let alert = ThreatAlert(
             score: 0.1,
             content: AlertContent(
-                title: "mv",
+                title: "mv activity observed",
                 description: "Observed activity.",
                 severity: .info,
                 recommendedAction: "No action needed."
@@ -593,7 +593,7 @@ final class SimpleActivityFeedTests: XCTestCase {
             timestamp: now
         )
         let projected = SimpleActivityFeed.alertInputs(from: [alert], actionable: [])
-        XCTAssertEqual(projected.first?.headline, "mv activity observed")
+        XCTAssertEqual(projected.first?.headline, "Detected: Security check")
         XCTAssertFalse(projected.first?.headline.contains("needs your review") ?? true)
         XCTAssertEqual(input.level, .informational)
     }

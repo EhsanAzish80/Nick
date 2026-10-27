@@ -601,6 +601,7 @@ final class IncidentStore {
             let relatedLaunchItemIndex = exactIndex == nil
                 ? incidents.firstIndex(where: {
                     Self.shouldMergeLaunchItemEvidence($0.alert, candidate)
+                        || Self.shouldAttachLaunchItemRemoval($0.alert, candidate)
                 })
                 : nil
             if let index = exactIndex ?? relatedLaunchItemIndex {
@@ -948,6 +949,20 @@ final class IncidentStore {
               let incomingPath = launchItemPath(incoming),
               normalize(existingPath) == normalize(incomingPath) else { return false }
         return abs(existing.lastSeen.timeIntervalSince(incoming.lastSeen)) <= 10
+    }
+
+    private static func shouldAttachLaunchItemRemoval(
+        _ existing: ThreatAlert,
+        _ incoming: ThreatAlert
+    ) -> Bool {
+        guard existing.contributingSignals.contains(where: {
+            $0.metadata["appleEvent"] == "background-item-added"
+        }), incoming.contributingSignals.contains(where: {
+            $0.metadata["appleEvent"] == "background-item-removed"
+        }), let existingPath = launchItemPath(existing),
+           let incomingPath = launchItemPath(incoming)
+        else { return false }
+        return normalize(existingPath) == normalize(incomingPath)
     }
 
     private enum LaunchItemEvidenceKind: Hashable { case btm, fim }

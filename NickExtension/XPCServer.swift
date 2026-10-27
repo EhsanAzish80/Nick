@@ -462,17 +462,17 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             parentPid: 0,
             filePath: nil,
             decision: .notApplicable,
-            threat: .init(
-                threatName: "Storage cleanup completed",
-                threatFamily: "storage-maintenance",
-                metadata: [
+            // Metadata-only ES events are retained in Activity/Timeline but
+            // ExtensionFinding intentionally ignores them because there is no
+            // threat name and no deny decision. Completion is not an incident.
+            threat: .init(metadata: [
                     "ruleTier": "observed",
                     "deliveryLevel": "silent",
+                    "recordType": "storage-operation-completed",
                     "itemCount": String(max(0, itemCount)),
                     "bytesMoved": String(max(0, bytesMoved)),
                     "summary": "Storage cleanup: \(max(0, itemCount)) items, \(formatter.string(fromByteCount: max(0, bytesMoved))) moved to Trash"
-                ]
-            )
+                ])
         )
         if let data = try? JSONEncoder().encode(event) { sendEventToApp(data) }
         reply(true)

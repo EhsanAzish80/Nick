@@ -93,7 +93,7 @@ final class PerformanceMonitor: MonitorProtocol {
     // MARK: Public API
 
     func runPerformanceScan(operationClient: ExtensionXPCClient? = nil) async {
-        let scopes = Self.browserCacheScopePaths
+        let scopes = Self.storageScanScopePaths
         let operationID = await operationClient?.beginStorageOperation(
             kind: .sizeScan,
             scopedPaths: scopes
@@ -151,6 +151,32 @@ final class PerformanceMonitor: MonitorProtocol {
 
     static var browserCacheScopePaths: [String] {
         (ChromeCacheRule.cachePaths + BrowserCacheRule.cachePaths).map { $0.0.path }
+    }
+
+    /// Prefix union for every Storage rule. Credential/profile roots are not
+    /// included; browser rules contribute only concrete cache subfolders.
+    static var storageScanScopePaths: [String] {
+        let home = ScanRuleHelpers.home
+        let relativeRoots = [
+            "Library/Caches", "Library/Developer", "Library/Logs",
+            "Library/Android/sdk/.temp", "Library/Messages/Attachments",
+            "Library/Application Support/MobileSync/Backup",
+            "Library/Application Support/Adobe", "Library/Application Support/Steam",
+            "Library/Containers/com.docker.docker/Data",
+            "Desktop", "Documents", "Downloads", "Pictures", "Movies",
+            "Music/Audio Music Apps/Plug-Ins", ".Trash", ".swiftpm", ".npm",
+            ".yarn/cache", ".venv", "Developer", "Projects", ".gradle/caches",
+            ".android/build-cache"
+        ].map { home.appending(path: $0).path }
+        let systemRoots = [
+            "/Library/Application Support/GarageBand",
+            "/Library/Application Support/Logic",
+            "/Library/Audio/Apple Loops",
+            "/Library/Caches/Homebrew", "/Library/Logs",
+            "/usr/local/Homebrew/Library/Homebrew/vendor/portable-ruby",
+            "/usr/local/var/homebrew", "/opt/homebrew/var/homebrew"
+        ]
+        return Array(Set(relativeRoots + systemRoots + browserCacheScopePaths)).sorted()
     }
 
     func findItemsForProcess(processPath: String) -> [JunkItem] {

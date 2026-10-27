@@ -276,6 +276,7 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_OPEN:
             let filePath = esString(msg.event.open.file.pointee.path)
+            let isRegularFile = msg.event.open.file.pointee.stat.st_mode & S_IFMT == S_IFREG
             let isReadOpen = msg.event.open.fflag & FREAD != 0
             let isWriteOpen = msg.event.open.fflag & (FWRITE | O_TRUNC | O_APPEND) != 0
             let isProtectedWrite = isWriteOpen && tamperProtection?.protects(path: filePath) == true
@@ -330,7 +331,12 @@ final class ESEventHandler {
 
             esClient?.respond(to: message, allow: !shouldBlock)
 
-            if isReadOpen, !shouldBlock, !approvedStorageMetadataRead,
+            if CredentialAccessPolicy.shouldEvaluateOpen(
+                isRead: isReadOpen,
+                isRegularFile: isRegularFile,
+                isBlocked: shouldBlock,
+                isApprovedStorageMetadataRead: approvedStorageMetadataRead
+            ),
                let credentialStore = CredentialAccessPolicy.sensitiveStore(at: filePath) {
                 dispatchQueue.async { [weak self] in
                     self?.observeCredentialStoreOpen(
@@ -1213,9 +1219,10 @@ final class ESEventHandler {
                 filePath: itemPath,
                 title: "Background item removed",
                 family: "apple-background-task-management",
-                ruleTier: "review",
+                ruleTier: "observed",
                 metadata: [
                     "appleEvent": "background-item-removed",
+                    "deliveryLevel": "inform",
                     "itemURL": itemURL,
                     "persistencePath": itemPath,
                     "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,

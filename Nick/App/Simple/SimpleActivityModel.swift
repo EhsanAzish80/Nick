@@ -184,9 +184,10 @@ enum SimpleActivityFeed {
     }
 
     private static func informationalHeadline(_ headline: String) -> String {
-        let suffix = " needs your review"
-        guard headline.lowercased().hasSuffix(suffix) else { return headline }
-        return String(headline.dropLast(suffix.count)) + " activity observed"
+        let lowercased = headline.lowercased()
+        guard lowercased.contains("needs your review")
+                || lowercased.contains("activity observed") else { return headline }
+        return "Observed security activity"
     }
 
     static func blockedInputs(

@@ -1222,6 +1222,57 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(store.visibleAlerts.first?.occurrenceCount, 2)
     }
 
+    func test_incidentStoreAttachesBackgroundItemRemovalToExistingAdd() {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"
+        let observed = Date(timeIntervalSince1970: 100)
+        let added = ThreatSignal(
+            source: .persistence,
+            severity: .high,
+            timestamp: observed,
+            title: "Background item added",
+            description: "BTM add evidence",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "appleEvent": "background-item-added",
+                    "persistencePath": path,
+                    "ruleTier": "protected"
+                ]
+            )
+        )
+        let removed = ThreatSignal(
+            source: .persistence,
+            severity: .info,
+            timestamp: observed.addingTimeInterval(30),
+            title: "Background item removed",
+            description: "BTM removal evidence",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "appleEvent": "background-item-removed",
+                    "persistencePath": path,
+                    "ruleTier": "observed"
+                ]
+            )
+        )
+
+        _ = store.ingest([makeAlert(signal: added, severity: .high, timestamp: observed)])
+        _ = store.ingest([makeAlert(
+            signal: removed,
+            severity: .info,
+            timestamp: observed.addingTimeInterval(30)
+        )])
+
+        XCTAssertEqual(store.visibleAlerts.count, 1)
+        XCTAssertEqual(store.visibleAlerts.first?.severity, .high)
+        XCTAssertEqual(store.visibleAlerts.first?.contributingSignals.count, 2)
+        XCTAssertEqual(
+            store.visibleAlerts.first?.contributingSignals.last?.metadata["appleEvent"],
+            "background-item-removed"
+        )
+    }
+
     func test_incidentLifecycleAndL0EvidenceSurviveRestart() throws {
         let suite = "IncidentRestartTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

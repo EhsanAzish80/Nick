@@ -29,14 +29,21 @@ enum ScanRuleHelpers {
 
     /// Returns all descendants of `url` matching any extension in `extensions`.
     static func files(under url: URL, withExtensions extensions: Set<String>, maxDepth: Int = 3) -> [URL] {
+        guard !isCredentialStoreDirectory(url) else { return [] }
         guard let enumerator = fm.enumerator(
             at: url,
-            includingPropertiesForKeys: [.fileSizeKey],
-            options: [.skipsHiddenFiles]
+            includingPropertiesForKeys: [.fileSizeKey, .isSymbolicLinkKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return [] }
 
         var result: [URL] = []
         for case let fileURL as URL in enumerator {
+            let values = try? fileURL.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+            if values?.isSymbolicLink == true
+                || (values?.isDirectory == true && isCredentialStoreDirectory(fileURL)) {
+                enumerator.skipDescendants()
+                continue
+            }
             if (enumerator.level) > maxDepth { enumerator.skipDescendants() ; continue }
             if extensions.contains(fileURL.pathExtension.lowercased()) {
                 result.append(fileURL)
@@ -56,6 +63,7 @@ enum ScanRuleHelpers {
 
     /// Recursive size of a URL (file or directory).
     static func size(of url: URL) -> Int64 {
+        guard !isCredentialStoreDirectory(url) else { return 0 }
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
         if isDir.boolValue {
@@ -70,6 +78,10 @@ enum ScanRuleHelpers {
                     forKeys: [.fileSizeKey, .isSymbolicLinkKey, .isRegularFileKey]
                 )
                 if values?.isSymbolicLink == true {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                if isCredentialStoreDirectory(f) {
                     enumerator.skipDescendants()
                     continue
                 }
@@ -95,5 +107,17 @@ enum ScanRuleHelpers {
     /// True when `url` exists on disk.
     static func exists(_ url: URL) -> Bool {
         fm.fileExists(atPath: url.path)
+    }
+
+    /// Storage never traverses credential containers. Dedicated browser rules
+    /// enter only concrete Cache/Code Cache/cache2 subfolders.
+    static func isCredentialStoreDirectory(_ url: URL) -> Bool {
+        let path = url.standardizedFileURL.path.lowercased()
+        let name = url.lastPathComponent.lowercased()
+        if ["cookies", "passes", "keychains"].contains(name) { return true }
+        if name == "profiles" && path.contains("/firefox/") { return true }
+        if ["chrome", "chromium", "brave-browser", "microsoft edge", "opera stable", "vivaldi"].contains(name),
+           path.contains("/library/application support/") { return true }
+        return false
     }
 }

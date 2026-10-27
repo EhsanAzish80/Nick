@@ -329,6 +329,64 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         XCTAssertTrue(result.explanation.contains(path))
     }
 
+    func test_backgroundTaskSystemInstigatorUsesMergedFIMWriterAttribution() {
+        let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"
+        let fim = ThreatSignal(
+            source: .filesystem,
+            severity: .high,
+            title: "Launch item changed",
+            description: "FIM evidence",
+            context: ThreatSignalContext(
+                processInfo: NickProcessInfo(
+                    pid: 90, path: "/usr/libexec/PlistBuddy", name: "PlistBuddy",
+                    parentPID: 80, parentName: "Terminal", signingStatus: .unknown
+                ),
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: ["fimStatus": "created", "responsibleAppName": "Terminal"]
+            )
+        )
+        let btm = ThreatSignal(
+            source: .persistence,
+            severity: .high,
+            title: "Background item added",
+            description: "BTM evidence",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "appleEvent": "background-item-added", "persistencePath": path,
+                    "launchItemLabel": "com.example.sync", "instigatorName": "smd"
+                ]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.8,
+            content: .init(title: "Persistence change", description: "Test", severity: .high, recommendedAction: "Review"),
+            contributingSignals: [btm, fim]
+        )
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: alert).headline,
+            "Added a launch agent: com.example.sync (PlistBuddy, via Terminal)"
+        )
+    }
+
+    func testSimpleCatalogNeverUsesForbiddenFallbackTitles() {
+        for reason in ["unknown_rule", "endpoint_management_observed", "storage-operation-completed"] {
+            let signal = ThreatSignal(
+                source: .endpointSecurity, severity: .info,
+                title: "helper activity observed", description: "Observed",
+                context: ThreatSignalContext(metadata: ["reason": reason, "ruleTier": "observed"])
+            )
+            let alert = ThreatAlert(
+                score: 0.1,
+                content: .init(title: "helper activity observed", description: "Observed", severity: .info, recommendedAction: "No action"),
+                contributingSignals: [signal]
+            )
+            let presentation = UserFacingAlertBuilder.shared.build(from: alert)
+            XCTAssertFalse(presentation.headline.lowercased().contains("needs your review"), reason)
+            XCTAssertFalse(presentation.headline.lowercased().contains("activity observed"), reason)
+        }
+    }
+
     func test_nickTemporaryBuildYARAMatch_isSafeDeveloperActivity() {
         let path = "/private/tmp/NickPerformanceAuditTests/Build/Products/Debug/Nick.app/Contents/MacOS/Nick.debug.dylib"
         let signal = ThreatSignal(

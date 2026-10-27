@@ -22,6 +22,7 @@ actor SizeCalculator {
     /// For directories this recursively sums all contained files.
     /// Returns 0 if the URL does not exist or cannot be read.
     func size(of url: URL) -> Int64 {
+        guard !ScanRuleHelpers.isCredentialStoreDirectory(url) else { return 0 }
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
 
@@ -58,6 +59,10 @@ actor SizeCalculator {
                 forKeys: [.fileSizeKey, .isSymbolicLinkKey, .isRegularFileKey]
             )
             if values?.isSymbolicLink == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            if ScanRuleHelpers.isCredentialStoreDirectory(fileURL) {
                 enumerator.skipDescendants()
                 continue
             }

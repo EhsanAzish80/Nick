@@ -1,3 +1,3 @@
 #!/bin/sh
-echo "Manual: run the documented protected-path denial fixture; never delete an installed Nick file."
+echo "Pending: needs a signed bundle-provided protected canary path. Do not delete or rename any installed Nick file."
 exit 64

@@ -130,6 +130,35 @@ final class StorageOperationApprovalTests: XCTestCase {
         })
     }
 
+    @MainActor
+    func testFullStorageScopeCoversEveryRuleRootWithoutCredentialRoots() {
+        let paths = PerformanceMonitor.storageScanScopePaths
+        XCTAssertTrue(paths.contains("/opt/homebrew/var/homebrew"))
+        XCTAssertTrue(paths.contains("/Library/Audio/Apple Loops"))
+        XCTAssertTrue(paths.contains { $0.hasSuffix("/Downloads") })
+        XCTAssertTrue(paths.contains { $0.contains("/Library/Caches/") })
+        XCTAssertFalse(paths.contains { path in
+            let lower = path.lowercased()
+            return lower.contains("/keychains") || lower.hasSuffix("/cookies")
+                || lower.contains("/passes") || lower.contains("/profiles")
+        })
+    }
+
+    func testSizeScannerNeverDescendsIntoCredentialStoreDirectories() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "nick-storage-layout-\(UUID().uuidString)")
+        let cache = root.appending(path: "Caches/Test")
+        let credentials = root.appending(path: "Cookies")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: credentials, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 16).write(to: cache.appending(path: "cache.bin"))
+        try Data(repeating: 2, count: 64).write(to: credentials.appending(path: "Cookies"))
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        XCTAssertEqual(ScanRuleHelpers.size(of: credentials), 0)
+        XCTAssertEqual(ScanRuleHelpers.size(of: root), 16)
+    }
+
     private func request(kind: StorageOperationKind, scopes: [String]) -> StorageOperationRequest {
         StorageOperationRequest(
             operationID: UUID(), kind: kind,

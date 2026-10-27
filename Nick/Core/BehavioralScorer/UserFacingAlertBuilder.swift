@@ -174,10 +174,16 @@ final class UserFacingAlertBuilder: Sendable {
                 ?? "an unknown launch-item path"
             let label = launchItem.metadata["launchItemLabel"]
                 ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
-            let actor = userReadableProcessName(launchItem.metadata["instigatorName"])
+            let fimWriter = signals.first(where: { $0.metadata["fimStatus"] != nil })
+            let btmActor = userReadableProcessName(launchItem.metadata["instigatorName"])
                 ?? userReadableProcessName(launchItem.processInfo?.name)
+            let btmIsSystemService = ["smd", "launchd", "backgroundtaskmanagementagent"]
+                .contains(btmActor?.lowercased() ?? "")
+            let actor = (btmIsSystemService ? userReadableProcessName(fimWriter?.processInfo?.name) : nil)
+                ?? btmActor
                 ?? "Unknown actor"
-            let app = launchItem.metadata["responsibleAppName"]
+            let app = (btmIsSystemService ? fimWriter?.metadata["responsibleAppName"] : nil)
+                ?? launchItem.metadata["responsibleAppName"]
                 ?? launchItem.metadata["btmAppName"]
                 ?? "Unknown app"
             return AlertPattern(
@@ -186,6 +192,25 @@ final class UserFacingAlertBuilder: Sendable {
                 assessment: "Needs your review",
                 recommendedAction: "Review the launch agent and remove it if you did not expect this change.",
                 actions: [.showDetails, .dismiss]
+            )
+        }
+
+        if let removal = signals.first(where: {
+            $0.metadata["appleEvent"] == "background-item-removed"
+        }) {
+            let path = removal.metadata["persistencePath"]
+                ?? removal.metadata["itemURL"]
+                ?? removal.fileInfo?.path
+                ?? "an unknown background item"
+            let label = removal.metadata["launchItemLabel"]
+                ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            return AlertPattern(
+                headline: "Removed a background item: \(label)",
+                explanation: "macOS recorded removal of the background item \(label) at \(path).",
+                assessment: "Informational",
+                recommendedAction: "No action is needed if you expected this removal.",
+                severity: .safe,
+                actions: [.showDetails]
             )
         }
 
@@ -596,10 +621,17 @@ final class UserFacingAlertBuilder: Sendable {
     }
 
     private func genericHeadline(alert: ThreatAlert, processName: String?) -> String {
-        if let processName {
-            return "\(processName) needs your review"
+        if !alert.title.isEmpty,
+           !alert.title.lowercased().contains("needs your review"),
+           !alert.title.lowercased().contains("activity observed") {
+            return alert.title
         }
-        return alert.title.isEmpty ? "Security activity needs your review" : alert.title
+        let reason = alert.contributingSignals.compactMap {
+            $0.metadata["reason"] ?? $0.metadata["rule"] ?? $0.metadata["appleEvent"]
+        }.first ?? "security-check"
+        let readable = reason.replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+        return "Detected: \(readable.prefix(1).uppercased() + String(readable.dropFirst()))"
     }
 
     private func genericExplanation(alert: ThreatAlert, processName: String?) -> String {

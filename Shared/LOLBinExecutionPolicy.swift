@@ -241,6 +241,15 @@ enum CredentialAccessPolicy {
             && signingID.map(appleLaunchServiceSigningIDs.contains) == true
     }
 
+    static func shouldEvaluateOpen(
+        isRead: Bool,
+        isRegularFile: Bool,
+        isBlocked: Bool,
+        isApprovedStorageMetadataRead: Bool
+    ) -> Bool {
+        isRead && isRegularFile && !isBlocked && !isApprovedStorageMetadataRead
+    }
+
     static func findingForOpen(
         path: String,
         responsibleIdentity: ValidatedIdentity?,

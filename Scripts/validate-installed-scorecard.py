@@ -9,6 +9,7 @@ an observed prevention. Skipped and inconclusive rows remain pending.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import base64
 import json
@@ -56,6 +57,37 @@ INSTRUCTIONS = {
     "known-dangerous-destination": "Use the local/synthetic network reputation fixture; do not contact a live malicious host.",
 }
 
+# Expected persisted evidence. Alternatives are deliberate where macOS may
+# report the same declared technique through BTM or FIM. A row passes only when
+# one of these concrete reasons is newly persisted.
+EXPECTED = {
+    "T1543.001": ({"background-item-added", "file_integrity_created", "file_integrity_modified"}, {"review", "protected"}),
+    "T1543.004": ({"background-item-added", "file_integrity_created", "file_integrity_modified"}, {"review", "protected"}),
+    "T1547.015": ({"background-item-added"}, {"review"}),
+    "T1053.003": ({"file_integrity_created", "file_integrity_modified", "cron_modification"}, {"review", "protected"}),
+    "T1546.004": ({"shell_profile_modification", "file_integrity_modified"}, {"review", "protected"}),
+    "T1059.004": ({"download_pipe_interpreter", "curl_pipe_shell", "wget_pipe_shell"}, {"protected"}),
+    "T1059.002": ({"osascript_shell"}, {"review", "protected"}),
+    "T1204.002": ({"eicar_test_file", "exact_hash_match", "yara_signature_match"}, {"protected"}),
+    "T1105": ({"downloaded_executable", "quarantine_executable"}, {"review", "protected"}),
+    "T1218": ({"system_binary_proxy"}, {"review", "protected"}),
+    "T1555.001": ({"keychain_secret_read", "keychain_store_transfer", "keychain_command_correlation"}, {"review", "protected"}),
+    "T1555.003": ({"credential_store_access"}, {"review", "protected"}),
+    "T1552.004": ({"credential_store_access"}, {"review", "protected"}),
+    "T1552.001": ({"credential_store_access"}, {"review", "protected"}),
+    "T1553.001": ({"gatekeeper-user-override"}, {"review"}),
+    "T1548.006": ({"tcc-permission-modified"}, {"review"}),
+    "T1562.001": ({"endpoint_tamper_observed", "nick_tamper"}, {"protected"}),
+    "T1222.002": ({"permission_modification"}, {"review", "protected"}),
+    "T1070.004": ({"protected_file_deletion", "file_integrity_deleted"}, {"review", "protected"}),
+    "T1027": ({"base64_payload", "encoded_payload"}, {"review", "protected"}),
+    "T1486": ({"ransomware_behavior", "mass_file_rename", "encrypted_atomic_replace"}, {"protected"}),
+    "T1082": ({"system_discovery"}, {"review"}),
+    "T1057": ({"process_discovery"}, {"review"}),
+    "T1071.001": ({"known_dangerous_destination"}, {"review", "protected"}),
+}
+ROOT_FIXTURES = {"launch-daemon-add", "nick-tamper"}
+
 
 def decode_privileged_store(raw: bytes) -> Any:
     """Decode PrivilegedIncidentStoreRecord's JSON/base64 payload wrapper."""
@@ -69,9 +101,9 @@ def decode_privileged_store(raw: bytes) -> Any:
     return snapshot
 
 
-def load_incident_fingerprints() -> dict[str, str]:
+def load_incident_fingerprints() -> dict[str, dict[str, Any]]:
     data = decode_privileged_store(INCIDENTS.read_bytes())
-    found: dict[str, str] = {}
+    found: dict[str, dict[str, Any]] = {}
 
     def walk(value: Any) -> None:
         if isinstance(value, dict):
@@ -84,9 +116,16 @@ def load_incident_fingerprints() -> dict[str, str]:
                     str(signal.get("context", {}).get("metadata", {}).get("reason", ""))
                     for signal in signals if isinstance(signal, dict)
                 } - {""})
-                found[f"{identifier}:{occurrence}"] = (
-                    ", ".join(reasons) or str(value.get("title", "incident"))
-                )
+                tiers = sorted({
+                    str(signal.get("context", {}).get("metadata", {}).get("ruleTier", ""))
+                    for signal in signals if isinstance(signal, dict)
+                } - {""})
+                found[f"{identifier}:{occurrence}"] = {
+                    "reasons": reasons,
+                    "tiers": tiers,
+                    "title": str(value.get("title", "incident")),
+                    "lastSeen": value.get("lastSeen") or value.get("timestamp"),
+                }
             for child in value.values():
                 walk(child)
         elif isinstance(value, list):
@@ -123,12 +162,23 @@ def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[st
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="print every fixture and expected evidence")
+    args = parser.parse_args()
+    techniques = json.loads(MANIFEST.read_text(encoding="utf-8"))["techniques"]
+    if args.dry_run:
+        for index, technique in enumerate(techniques, 1):
+            reasons, tiers = EXPECTED[technique["id"]]
+            print(f"{index:02d}. {technique['id']} {technique['name']}")
+            print(f"    fixture: Scripts/fixtures/{technique['fixture']}.sh")
+            print(f"    expected rule: {', '.join(sorted(reasons))}; tier: {', '.join(sorted(tiers))}")
+            print(f"    {INSTRUCTIONS[technique['fixture']]}")
+        return 0
     if os.geteuid() != 0:
         raise SystemExit("Run with sudo so the installed root incident store can be read.")
     if not INCIDENTS.is_file():
         raise SystemExit(f"Installed incident store not found: {INCIDENTS}")
 
-    techniques = json.loads(MANIFEST.read_text(encoding="utf-8"))["techniques"]
     results: dict[str, dict[str, str]] = {}
     total = len(techniques)
     print(f"Nick installed {total}-technique replay. Use declared synthetic fixtures only.")
@@ -147,13 +197,14 @@ def main() -> int:
         if fixture.parent != fixtures_root or not fixture.is_file():
             print("Fixture is missing; row remains pending.")
             continue
+        started = time.time()
         with tempfile.TemporaryDirectory(prefix="nick-scorecard-") as scratch:
             environment = os.environ.copy()
             environment["NICK_FIXTURE_ROOT"] = scratch
             uid = int(os.environ.get("SUDO_UID", "0"))
-            if uid > 0:
+            if uid > 0 and fixture_name not in ROOT_FIXTURES:
                 user = pwd.getpwuid(uid).pw_name
-                command = ["/usr/bin/sudo", "-u", user, "--", str(fixture)]
+                command = ["/usr/bin/sudo", "-H", "-u", user, "--", str(fixture)]
             else:
                 command = [str(fixture)]
             completed = subprocess.run(
@@ -170,17 +221,27 @@ def main() -> int:
             time.sleep(3)
         after = load_incident_fingerprints()
         new_ids = sorted(set(after) - set(before))
-        if new_ids:
-            evidence = "; ".join(f"{identifier}: {after[identifier]}" for identifier in new_ids)
-            results[technique["id"]] = {"status": "alerted", "evidence": evidence}
-            print("Measured: alerted")
+        expected_reasons, expected_tiers = EXPECTED[technique["id"]]
+        matches = []
+        for identifier in new_ids:
+            record = after[identifier]
+            reasons = set(record["reasons"])
+            tiers = set(record["tiers"])
+            if reasons.intersection(expected_reasons) and (not tiers or tiers.intersection(expected_tiers)):
+                matches.append((identifier, record))
+        if matches:
+            latency = time.time() - started
+            identifier, record = matches[0]
+            rule = sorted(set(record["reasons"]).intersection(expected_reasons))[0]
+            tier = sorted(set(record["tiers"]).intersection(expected_tiers))[0] if record["tiers"] else "not recorded"
+            evidence = f"{identifier}; rule={rule}; tier={tier}; observed<= {latency:.2f}s"
+            results[technique["id"]] = {"status": "PASS", "evidence": evidence}
+            print(f"Measured: PASS ({rule}, {tier}, <= {latency:.2f}s)")
             continue
-        prevented = input("No new incident. Was prevention visibly confirmed? [y/N]: ").strip().lower() == "y"
-        if prevented:
-            note = input("Short evidence note: ").strip()
-            results[technique["id"]] = {"status": "prevented", "evidence": note or "operator-observed prevention"}
-        else:
-            print("No persisted evidence; row remains pending (not marked missed).")
+        if new_ids:
+            seen = sorted({reason for identifier in new_ids for reason in after[identifier]["reasons"]})
+            print(f"New evidence did not match the expected rule ({', '.join(seen) or 'no rule recorded'}); row remains pending.")
+        print("No matching persisted evidence; row remains pending (not marked missed).")
 
     update_progress(techniques, results)
     print(f"\nWrote measured rows and pending placeholders to {PROGRESS_DOC}")

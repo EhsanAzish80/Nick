@@ -6,6 +6,17 @@ final class CredentialAccessPolicyTests: XCTestCase {
         bundleID: nil, teamID: nil, signingValidated: false, isApplePlatform: false
     )
 
+    func testCredentialClassificationRequiresARegularFileOpen() {
+        XCTAssertFalse(CredentialAccessPolicy.shouldEvaluateOpen(
+            isRead: true, isRegularFile: false, isBlocked: false,
+            isApprovedStorageMetadataRead: false
+        ), "enumerating a credential directory is not credential access")
+        XCTAssertTrue(CredentialAccessPolicy.shouldEvaluateOpen(
+            isRead: true, isRegularFile: true, isBlocked: false,
+            isApprovedStorageMetadataRead: false
+        ), "opening a regular credential file remains eligible")
+    }
+
     func testUntrustedProcessReadingCredentialStoresProducesMetadataOnlyFindings() {
         let cases: [(String, CredentialAccessPolicy.Store)] = [
             ("/Users/test/Library/Application Support/Google/Chrome/Default/Cookies", .browserCookies),
