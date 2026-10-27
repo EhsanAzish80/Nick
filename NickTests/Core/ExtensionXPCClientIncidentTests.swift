@@ -145,7 +145,7 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     }
 #if DEBUG
     @MainActor
-    func test_debugAuthorizationHarnessReportsDisconnectedAsUnavailableNotPassed() {
+    func test_debugAuthorizationHarnessReportsDisconnectedAsUnavailableNotPassed() async {
         let client = ExtensionXPCClient()
         let completed = expectation(description: "debug authorization harness result")
 
@@ -156,7 +156,7 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
             completed.fulfill()
         }
 
-        wait(for: [completed], timeout: 1)
+        await fulfillment(of: [completed], timeout: 1)
     }
 
     func test_debugAuthorizationHarnessStatusDistinguishesRefusalFromAcceptance() {
@@ -249,7 +249,7 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     }
 
     @MainActor
-    func test_disconnectedManualQuarantineUsesProtectionDisconnectedWording() {
+    func test_disconnectedManualQuarantineUsesProtectionDisconnectedWording() async {
         let client = ExtensionXPCClient()
         let completed = expectation(description: "quarantine reply")
 
@@ -269,7 +269,7 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
             completed.fulfill()
         }
 
-        wait(for: [completed], timeout: 1)
+        await fulfillment(of: [completed], timeout: 1)
     }
 
     func test_unstructuredQuarantineReplyPreservesServiceMessage() {

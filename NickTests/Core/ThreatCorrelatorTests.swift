@@ -260,8 +260,11 @@ final class ThreatCorrelatorTests: XCTestCase {
         let fixtures: [(MonitorType, String)] = [
             (.process, "curl_pipe_shell"),
             (.process, "wget_pipe_shell"),
+            (.process, "download_pipe_interpreter"),
             (.process, "hidden_password_prompt"),
             (.endpointSecurity, "credential_store_access"),
+            (.endpointSecurity, "keychain_store_transfer"),
+            (.endpointSecurity, "keychain_command_correlation"),
             (.yara, "arbitrary_yara_rule"),
             (.process, "exact_hash_match")
         ]

@@ -165,14 +165,30 @@ enum CredentialAccessPolicy {
         let title: String
         let reason: String
         let store: Store
+        let tier: String
+        let severity: String
+
+        init(
+            title: String,
+            reason: String,
+            store: Store,
+            tier: String = "review",
+            severity: String = "medium"
+        ) {
+            self.title = title
+            self.reason = reason
+            self.store = store
+            self.tier = tier
+            self.severity = severity
+        }
     }
 
     /// Exact validated identities which legitimately handle credential stores.
     /// An identifier without the matching SecCode-derived signer never exempts
     /// access. Names, paths and bundle layout are deliberately not inputs.
     private static let trustedApplications: Set<String> = [
-        "APPLE_PLATFORM|com.apple.Safari",
-        "APPLE_PLATFORM|com.apple.SafariTechnologyPreview",
+        "APPLE|com.apple.Safari",
+        "APPLE|com.apple.SafariTechnologyPreview",
         "APPLE_PLATFORM|com.apple.backupd",
         "APPLE_PLATFORM|com.apple.Notes",
         "APPLE_PLATFORM|com.apple.Passbook",
@@ -184,10 +200,33 @@ enum CredentialAccessPolicy {
     static func findingForOpen(
         path: String,
         responsibleIdentity: ValidatedIdentity?,
+        actorIdentityValidated: Bool = false,
         actorIsValidatedApplePlatform: Bool = false,
-        actorIsOwnResponsibleProcess: Bool = false
+        actorIsOwnResponsibleProcess: Bool = false,
+        actorParentIsLaunchd: Bool = false,
+        actorIsInterpreter: Bool = false,
+        hasRecentKeychainCommand: Bool = false
     ) -> Finding? {
         guard let store = sensitiveStore(at: path) else { return nil }
+        if store == .keychain {
+            if hasRecentKeychainCommand {
+                return Finding(
+                    title: "Read a Keychain secret",
+                    reason: "keychain_command_correlation",
+                    store: .keychain,
+                    tier: "protected",
+                    severity: "critical"
+                )
+            }
+            // A plain read by any cryptographically validated distribution
+            // identity is routine. Destructive/copy operations are classified
+            // separately and never use this exemption.
+            return actorIdentityValidated ? nil : Finding(
+                title: "Opened the macOS Keychain",
+                reason: "credential_store_access",
+                store: .keychain
+            )
+        }
         if ownsStore(path: path, identity: responsibleIdentity) {
             return nil
         }
@@ -195,7 +234,9 @@ enum CredentialAccessPolicy {
             store: store,
             responsibleIdentity: responsibleIdentity,
             actorIsValidatedApplePlatform: actorIsValidatedApplePlatform,
-            actorIsOwnResponsibleProcess: actorIsOwnResponsibleProcess
+            actorIsOwnResponsibleProcess: actorIsOwnResponsibleProcess,
+            actorParentIsLaunchd: actorParentIsLaunchd,
+            actorIsInterpreter: actorIsInterpreter
         )
     }
 
@@ -223,20 +264,32 @@ enum CredentialAccessPolicy {
         store: Store,
         responsibleIdentity: ValidatedIdentity?,
         actorIsValidatedApplePlatform: Bool = false,
-        actorIsOwnResponsibleProcess: Bool = false
+        actorIsOwnResponsibleProcess: Bool = false,
+        actorParentIsLaunchd: Bool = false,
+        actorIsInterpreter: Bool = false
     ) -> Finding? {
-        if store == .keychain,
-           actorIsValidatedApplePlatform,
-           actorIsOwnResponsibleProcess {
+        if actorIsValidatedApplePlatform,
+           actorParentIsLaunchd,
+           !actorIsInterpreter {
             return nil
         }
         guard !isTrustedCredentialApplication(responsibleIdentity) else {
             return nil
         }
         return Finding(
-            title: "Credential store access needs review",
+            title: behaviorTitle(for: store),
             reason: "credential_store_access",
             store: store
+        )
+    }
+
+    static func findingForKeychainTransfer() -> Finding {
+        Finding(
+            title: "Copied the macOS Keychain",
+            reason: "keychain_store_transfer",
+            store: .keychain,
+            tier: "protected",
+            severity: "critical"
         )
     }
 
@@ -278,8 +331,25 @@ enum CredentialAccessPolicy {
 
     private static func isTrustedCredentialApplication(_ identity: ValidatedIdentity?) -> Bool {
         guard let identity, identity.signingValidated, let bundleID = identity.bundleID else { return false }
-        let signer = identity.isApplePlatform ? "APPLE_PLATFORM" : (identity.teamID ?? "")
+        let signer = identity.isApplePlatform ? "APPLE_PLATFORM"
+            : (identity.teamID == "APPLE" ? "APPLE" : (identity.teamID ?? ""))
         return trustedApplications.contains("\(signer)|\(bundleID)")
+    }
+
+    static func behaviorTitle(for store: Store) -> String {
+        switch store {
+        case .browserCookies: "Opened browser cookies"
+        case .browserLogins: "Opened saved browser logins"
+        case .keychain: "Read a Keychain secret"
+        case .sshPrivateKey: "Opened an SSH private key"
+        case .cryptocurrencyWallet: "Opened cryptocurrency wallet data"
+        case .browserWallet: "Opened browser wallet data"
+        case .cloudCredential: "Opened cloud credentials"
+        case .messagingSession: "Opened a messaging session"
+        case .notesData: "Opened Notes data"
+        case .walletPass: "Opened Wallet passes"
+        case .passwordPrompt: "Requested a hidden password"
+        }
     }
 
     static func sensitiveStore(at rawPath: String) -> Store? {

@@ -1223,8 +1223,10 @@ final class IncidentStore {
 
     static func isNeverDowngrade(_ alert: ThreatAlert) -> Bool {
         let protectedReasons: Set<String> = [
-            "curl_pipe_shell", "wget_pipe_shell", "hidden_password_prompt",
-            "credential_store_access", "yara_match", "exact_hash_match"
+            "curl_pipe_shell", "wget_pipe_shell", "download_pipe_interpreter",
+            "hidden_password_prompt",
+            "credential_store_access", "keychain_store_transfer",
+            "keychain_command_correlation", "yara_match", "exact_hash_match"
         ]
         return alert.contributingSignals.contains { signal in
             let reason = signal.metadata["reason"] ?? signal.metadata["rule"] ?? ""

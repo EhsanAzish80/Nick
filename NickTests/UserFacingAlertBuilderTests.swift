@@ -7,6 +7,48 @@ import XCTest
 
 final class UserFacingAlertBuilderTests: XCTestCase {
 
+    func test_credentialAccessUsesBehaviorFirstTitleWithActorAndViaChain() {
+        let process = NickProcessInfo(
+            pid: 8_101,
+            path: "/usr/bin/security",
+            name: "security",
+            parentPID: 8_100,
+            parentName: "CodexCLI",
+            signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.security"),
+            metadata: ProcessMetadata(arguments: [])
+        )
+        let signal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .critical,
+            title: "Read a Keychain secret",
+            description: "Credential access evidence",
+            context: ThreatSignalContext(
+                processInfo: process,
+                metadata: [
+                    "detectionKind": "credential-access",
+                    "credentialStore": CredentialAccessPolicy.Store.keychain.rawValue,
+                    "responsibleChain": "ChatGPT → Codex CLI → security",
+                    "ruleTier": "protected"
+                ]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: AlertContent(
+                title: "Credential access needs review",
+                description: "Credential access evidence",
+                severity: .critical,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(result.headline, "Read a Keychain secret (security, via Codex CLI)")
+        XCTAssertFalse(result.headline.contains("needs your review"))
+    }
+
     func test_behaviorIncidentOnPlatformShellHasNoFileRemediationAction() {
         let process = NickProcessInfo(
             pid: 1_842,

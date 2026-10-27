@@ -165,6 +165,38 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
+        if let credential = signals.first(where: {
+            $0.metadata["detectionKind"] == "credential-access"
+        }) {
+            let storeName = credential.metadata["credentialStore"] ?? "credential data"
+            let behavior: String
+            switch storeName {
+            case CredentialAccessPolicy.Store.keychain.rawValue: behavior = "Read a Keychain secret"
+            case CredentialAccessPolicy.Store.browserCookies.rawValue: behavior = "Opened browser cookies"
+            case CredentialAccessPolicy.Store.browserLogins.rawValue: behavior = "Opened saved browser logins"
+            case CredentialAccessPolicy.Store.walletPass.rawValue: behavior = "Opened Wallet passes"
+            case CredentialAccessPolicy.Store.cloudCredential.rawValue: behavior = "Opened cloud credentials"
+            case CredentialAccessPolicy.Store.messagingSession.rawValue: behavior = "Opened a messaging session"
+            case CredentialAccessPolicy.Store.notesData.rawValue: behavior = "Opened Notes data"
+            default: behavior = "Opened \(storeName)"
+            }
+            let actor = credential.processInfo?.name
+                ?? credential.processInfo.map { URL(fileURLWithPath: $0.path).lastPathComponent }
+                ?? "unknown process"
+            let chain = credential.metadata["responsibleChain"]?
+                .components(separatedBy: " → ") ?? []
+            let via = chain.dropFirst().dropLast().last
+            let context = via.map { "\(actor), via \($0)" } ?? actor
+            return AlertPattern(
+                headline: "\(behavior) (\(context))",
+                explanation: "Nick observed \(actor) access \(storeName.lowercased()).",
+                assessment: "Needs your review",
+                recommendedAction: "Check whether you expected this app to access the credential store.",
+                severity: credential.metadata["ruleTier"] == "protected" ? .critical : .warning,
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
         // --- Camera / microphone ---
         if hasCapture {
             let mediaType = signals.compactMap { $0.metadata["mediaType"] }.first ?? "camera or microphone"
