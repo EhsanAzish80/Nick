@@ -16,6 +16,7 @@ import json
 import os
 import pwd
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -116,44 +117,50 @@ def decode_privileged_store(raw: bytes) -> Any:
     return snapshot
 
 
-def load_incident_fingerprints() -> dict[str, dict[str, Any]]:
-    data = decode_privileged_store(INCIDENTS.read_bytes())
+def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
     found: dict[str, dict[str, Any]] = {}
-
-    def walk(value: Any) -> None:
-        if isinstance(value, dict):
-            signals = value.get("contributingSignals")
-            if isinstance(signals, list):
-                encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
-                identifier = str(value.get("id") or hashlib.sha256(encoded.encode()).hexdigest())
-                occurrence = max(1, int(value.get("occurrenceCount", 1)))
-                reasons = sorted({
-                    str(signal.get("context", {}).get("metadata", {}).get("reason", ""))
-                    for signal in signals if isinstance(signal, dict)
-                } - {""})
-                tiers = sorted({
-                    str(signal.get("context", {}).get("metadata", {}).get("ruleTier", ""))
-                    for signal in signals if isinstance(signal, dict)
-                } - {""})
-                found[f"{identifier}:{occurrence}"] = {
-                    "reasons": reasons,
-                    "tiers": tiers,
-                    "title": str(value.get("title", "incident")),
-                    "lastSeen": value.get("lastSeen") or value.get("timestamp"),
-                }
-            for child in value.values():
-                walk(child)
-        elif isinstance(value, list):
-            for child in value:
-                walk(child)
-
-    walk(data)
+    for incident in data.get("incidents", []):
+        if not isinstance(incident, dict):
+            continue
+        alert = incident.get("alert", {})
+        if not isinstance(alert, dict):
+            continue
+        signals = alert.get("contributingSignals", [])
+        if not isinstance(signals, list):
+            continue
+        encoded = json.dumps(incident, sort_keys=True, separators=(",", ":"))
+        identifier = str(incident.get("id") or alert.get("id") or hashlib.sha256(encoded.encode()).hexdigest())
+        occurrence = max(1, int(alert.get("occurrenceCount", 1)))
+        state = str(incident.get("state", "new"))
+        metadata = [signal.get("metadata", signal.get("context", {}).get("metadata", {}))
+                    for signal in signals if isinstance(signal, dict)]
+        # Persisted signals carry both a detector rule and, for some families,
+        # a more specific presentation reason. Preserve both: either may be
+        # the scorecard's expected evidence and neither should mask the other.
+        reasons = sorted({str(value) for item in metadata if isinstance(item, dict)
+                          for value in (item.get("reason"), item.get("rule"))
+                          if value})
+        tiers = sorted({str(item.get("ruleTier") or "")
+                        for item in metadata if isinstance(item, dict)} - {""})
+        signal_severities = sorted({str(item.get("signalSeverity") or "")
+                                    for item in metadata if isinstance(item, dict)} - {""})
+        found[f"{identifier}:{occurrence}:{state}"] = {
+            "reasons": reasons,
+            "tiers": tiers,
+            "signalSeverities": signal_severities,
+            "title": str(alert.get("title", "incident")),
+            "lastSeen": alert.get("lastSeen") or alert.get("timestamp"),
+        }
     return found
+
+
+def load_incident_fingerprints() -> dict[str, dict[str, Any]]:
+    return incident_fingerprints_from_snapshot(decode_privileged_store(INCIDENTS.read_bytes()))
 
 
 def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[str, str]]) -> None:
     rows = [
-        "## Installed ATT&CK replay — build 5063",
+        "## Installed ATT&CK replay — build 5065",
         "",
         f"Measured {datetime.now(timezone.utc).isoformat(timespec='seconds')}. Unmeasured rows remain pending; this table makes no rating claim.",
         "",
@@ -179,7 +186,17 @@ def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[st
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="print every fixture and expected evidence")
+    parser.add_argument(
+        "--inspect-store", action="store_true",
+        help="decode a store supplied on standard input and print recorder fingerprints"
+    )
     args = parser.parse_args()
+    if args.inspect_store:
+        print(json.dumps(
+            incident_fingerprints_from_snapshot(decode_privileged_store(sys.stdin.buffer.read())),
+            sort_keys=True
+        ))
+        return 0
     techniques = json.loads(MANIFEST.read_text(encoding="utf-8"))["techniques"]
     if args.dry_run:
         for index, technique in enumerate(techniques, 1):

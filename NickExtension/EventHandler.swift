@@ -655,7 +655,8 @@ final class ESEventHandler {
 
                 // --- File Integrity Monitoring ---
                 self.reportIntegrityViolation(
-                    at: filePath, actorPID: pid, responsiblePID: responsiblePid
+                    at: filePath, actorPID: pid, responsiblePID: responsiblePid,
+                    actorPath: processPath
                 )
 
                 // Ransomware heuristics run once at close and read at most a
@@ -876,10 +877,12 @@ final class ESEventHandler {
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
                 self.reportIntegrityViolation(
-                    at: notifySrcPath, actorPID: pid, responsiblePID: responsiblePid
+                    at: notifySrcPath, actorPID: pid, responsiblePID: responsiblePid,
+                    actorPath: processPath
                 )
                 self.reportIntegrityViolation(
-                    at: notifyDestPath, actorPID: pid, responsiblePID: responsiblePid
+                    at: notifyDestPath, actorPID: pid, responsiblePID: responsiblePid,
+                    actorPath: processPath
                 )
                 self.behaviorTracker?.recordRename(
                     pid: pid, processGroupID: processGroupID, processPath: processPath,
@@ -999,7 +1002,8 @@ final class ESEventHandler {
             fileScanner?.cache.invalidate(path: filePath)
             dispatchQueue.async { [weak self] in
                 self?.reportIntegrityViolation(
-                    at: filePath, actorPID: pid, responsiblePID: responsiblePid
+                    at: filePath, actorPID: pid, responsiblePID: responsiblePid,
+                    actorPath: processPath
                 )
             }
             // Encrypt-to-new-file ransomware deletes the originals, including
@@ -1174,6 +1178,7 @@ final class ESEventHandler {
             let item = event.item.pointee
             let itemURL = esString(item.item_url)
             let itemPath = normalizedBTMItemPath(itemURL)
+            let isLaunchDaemon = itemPath.lowercased().contains("/library/launchdaemons/")
             let appURL = esString(item.app_url)
             reportAppleSecurityEvent(
                 type: .notifyBTMLaunchItemAdd,
@@ -1184,9 +1189,12 @@ final class ESEventHandler {
                 filePath: itemPath,
                 title: "Background item added",
                 family: "apple-background-task-management",
-                ruleTier: "review",
+                ruleTier: isLaunchDaemon ? "protected" : "review",
                 metadata: [
                     "appleEvent": "background-item-added",
+                    "reason": "background-item-added",
+                    "launchItemKind": isLaunchDaemon ? "daemon" : "agent",
+                    "signalSeverity": isLaunchDaemon ? "high" : "medium",
                     "itemURL": itemURL,
                     "persistencePath": itemPath,
                     "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,
@@ -1999,7 +2007,8 @@ final class ESEventHandler {
     private func reportIntegrityViolation(
         at path: String,
         actorPID: Int32? = nil,
-        responsiblePID: Int32? = nil
+        responsiblePID: Int32? = nil,
+        actorPath: String? = nil
     ) {
         guard let violation = fileIntegrityMonitor?.check(path: path) else { return }
         let attribution = actorPID.flatMap {
@@ -2009,6 +2018,12 @@ final class ESEventHandler {
                 resolver: SecCodeResponsibleProcessIdentityResolver.shared
             ).metadata
         }
+        let writer = actorPID.flatMap { processTree?.attackChain(pid: $0).last }
+        var metadata = attribution ?? [:]
+        if let writerPath = actorPath ?? writer?.path {
+            metadata["fimWriterName"] = URL(fileURLWithPath: writerPath).lastPathComponent
+            metadata["fimWriterPath"] = writerPath
+        }
         let attributed = IntegrityViolation(
             id: violation.id,
             path: violation.path,
@@ -2016,7 +2031,7 @@ final class ESEventHandler {
             expectedHash: violation.expectedHash,
             actualHash: violation.actualHash,
             timestamp: violation.timestamp,
-            metadata: attribution
+            metadata: metadata
         )
         guard let data = try? encoder.encode(attributed) else { return }
         xpcServer?.sendIntegrityViolationToApp(data)

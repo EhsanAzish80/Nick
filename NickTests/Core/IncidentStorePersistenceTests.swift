@@ -2,6 +2,72 @@ import XCTest
 @testable import Nick
 
 final class IncidentStorePersistenceTests: XCTestCase {
+    func test_scorecardRecorderReadsProductionEncodedIncidentStore() throws {
+        let signal = ThreatSignal(
+            source: .persistence,
+            severity: .high,
+            timestamp: Date(timeIntervalSince1970: 100),
+            title: "Launch daemon added",
+            description: "Fixture",
+            context: ThreatSignalContext(metadata: [
+                "reason": "background-item-added",
+                "rule": "persist_new_launchdaemon",
+                "ruleTier": "protected",
+                "signalSeverity": "high"
+            ])
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: .init(
+                title: "Launch daemon added", description: "Fixture",
+                severity: .high, recommendedAction: "Review"
+            ),
+            contributingSignals: [signal],
+            timestamp: Date(timeIntervalSince1970: 100),
+            occurrenceCount: 3
+        )
+        let incident = SecurityIncident(
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            key: "fixture", alert: alert, evidence: [Evidence(signal: signal)], state: .reviewed
+        )
+        let snapshot = IncidentStoreSnapshot(
+            incidents: [incident], dismissalTombstones: [], expectedCooldowns: [:]
+        )
+        let record = PrivilegedIncidentStoreRecord(
+            revision: 7, payload: try JSONEncoder().encode(snapshot)
+        )
+        let encodedRecord = try JSONEncoder().encode(record)
+
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let process = Process()
+        let output = Pipe()
+        let input = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [
+            repository.appendingPathComponent("Scripts/validate-installed-scorecard.py").path,
+            "--inspect-store"
+        ]
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        input.fileHandleForWriting.write(encodedRecord)
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        XCTAssertEqual(process.terminationStatus, 0, String(decoding: data, as: UTF8.self))
+        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let fingerprint = try XCTUnwrap(decoded.values.first as? [String: Any])
+        XCTAssertEqual(
+            fingerprint["reasons"] as? [String],
+            ["background-item-added", "persist_new_launchdaemon"]
+        )
+        XCTAssertEqual(fingerprint["tiers"] as? [String], ["protected"])
+        XCTAssertEqual(fingerprint["signalSeverities"] as? [String], ["high"])
+        XCTAssertTrue(try XCTUnwrap(decoded.keys.first).hasSuffix(":3:reviewed"))
+    }
+
     @MainActor
     func test_networkIngestCursorPersistsAndRestoresWithoutReplayingHistory() throws {
         let oldID = UUID()

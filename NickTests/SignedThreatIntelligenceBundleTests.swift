@@ -13,6 +13,10 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
         XCTAssertEqual(provenance.source, "Nick test intelligence")
         XCTAssertFalse(provenance.usingLastKnownGood)
         XCTAssertEqual(store.loadBestAvailable()?.0.version, 1)
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: fixture.directory.appendingPathComponent("current.json").path
+        )
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
     func test_invalidSignatureMalformedExpiryAndRollbackLeaveCurrentUntouched() throws {

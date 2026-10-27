@@ -196,14 +196,14 @@ final class SignedThreatIntelligenceBundleStore: @unchecked Sendable {
             guard publishGate(payload) else { throw ThreatIntelligenceBundleValidationError.gateRejected }
 
             try prepareDirectory()
-            try data.write(to: stagedURL, options: [.atomic, .completeFileProtection])
+            try writePrivateFile(data, to: stagedURL)
             if fileManager.fileExists(atPath: currentURL.path) {
                 try? fileManager.removeItem(at: lastKnownGoodURL)
                 try fileManager.copyItem(at: currentURL, to: lastKnownGoodURL)
             }
             try? fileManager.removeItem(at: currentURL)
             try fileManager.moveItem(at: stagedURL, to: currentURL)
-            try Data(String(payload.version).utf8).write(to: versionURL, options: .atomic)
+            try writePrivateFile(Data(String(payload.version).utf8), to: versionURL)
             return Provenance(
                 version: payload.version,
                 source: payload.source,
@@ -251,6 +251,14 @@ final class SignedThreatIntelligenceBundleStore: @unchecked Sendable {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+    }
+
+    /// macOS does not support Foundation's iOS data-protection write option
+    /// for these files. Keep promotion atomic and constrain access with the
+    /// containing 0700 directory plus an explicit 0600 file mode.
+    private func writePrivateFile(_ data: Data, to url: URL) throws {
+        try data.write(to: url, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     private var currentURL: URL { directory.appendingPathComponent("current.json") }

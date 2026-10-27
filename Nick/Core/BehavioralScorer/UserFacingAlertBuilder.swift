@@ -96,7 +96,11 @@ final class UserFacingAlertBuilder: Sendable {
         let hasProtectedCommandEvidence = signals.contains {
             protectedCommandReasons.contains($0.metadata["reason"] ?? "")
         }
+        let hasFileIntegrityEvidence = signals.contains {
+            $0.metadata["rule"] == "file_integrity_monitor" || $0.metadata["fimStatus"] != nil
+        }
         let isDeveloperWorkflow = !hasProtectedCommandEvidence
+            && !hasFileIntegrityEvidence
             && signals.contains(where: isDeveloperWorkflowSignal)
 
         // Alerts persisted by an older development build can include Nick's own
@@ -174,12 +178,16 @@ final class UserFacingAlertBuilder: Sendable {
                 ?? "an unknown launch-item path"
             let label = launchItem.metadata["launchItemLabel"]
                 ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            let isDaemon = path.lowercased().contains("/library/launchdaemons/")
+            let itemKind = isDaemon ? "launch daemon" : "launch agent"
             let fimWriter = signals.first(where: { $0.metadata["fimStatus"] != nil })
             let btmActor = userReadableProcessName(launchItem.metadata["instigatorName"])
                 ?? userReadableProcessName(launchItem.processInfo?.name)
             let btmIsSystemService = ["smd", "launchd", "backgroundtaskmanagementagent"]
                 .contains(btmActor?.lowercased() ?? "")
-            let actor = (btmIsSystemService ? userReadableProcessName(fimWriter?.processInfo?.name) : nil)
+            let actor = (btmIsSystemService
+                ? userReadableProcessName(fimWriter?.processInfo?.name ?? fimWriter?.metadata["fimWriterName"])
+                : nil)
                 ?? btmActor
                 ?? "Unknown actor"
             let app = (btmIsSystemService ? fimWriter?.metadata["responsibleAppName"] : nil)
@@ -187,8 +195,10 @@ final class UserFacingAlertBuilder: Sendable {
                 ?? launchItem.metadata["btmAppName"]
                 ?? "Unknown app"
             return AlertPattern(
-                headline: "Added a launch agent: \(label) (\(actor), via \(app))",
-                explanation: "\(actor) added the launch agent \(label) at \(path), attributed to \(app). Launch agents can start automatically when you sign in.",
+                headline: "Added a \(itemKind): \(label) (\(actor), via \(app))",
+                explanation: isDaemon
+                    ? "\(actor) added the launch daemon \(label) at \(path), attributed to \(app). Launch daemons can start as root when your Mac boots."
+                    : "\(actor) added the launch agent \(label) at \(path), attributed to \(app). Launch agents can start automatically when you sign in.",
                 assessment: "Needs your review",
                 recommendedAction: "Review the launch agent and remove it if you did not expect this change.",
                 actions: [.showDetails, .dismiss]
@@ -495,11 +505,35 @@ final class UserFacingAlertBuilder: Sendable {
         // --- File integrity violation ---
         if hasFilesystem {
             let pendingFIM = signals.contains { $0.metadata["fimStatus"] == "pending" }
+            if let launchFile = signals.first(where: {
+                let path = $0.fileInfo?.path ?? $0.metadata["path"] ?? ""
+                return path.lowercased().contains("/launchagents/")
+                    || path.lowercased().contains("/launchdaemons/")
+            }) {
+                let path = launchFile.fileInfo?.path ?? launchFile.metadata["path"] ?? "an unknown path"
+                let isDaemon = path.lowercased().contains("/launchdaemons/")
+                let actor = userReadableProcessName(
+                    launchFile.processInfo?.name ?? launchFile.metadata["fimWriterName"]
+                ) ?? "Unknown actor"
+                let app = launchFile.metadata["responsibleAppName"] ?? "Unknown app"
+                return AlertPattern(
+                    headline: "Changed a \(isDaemon ? "launch daemon" : "launch agent") file: \(path) (\(actor), via \(app))",
+                    explanation: "\(actor) changed \(path), attributed to \(app). This file can configure software to start automatically \(isDaemon ? "as root when your Mac boots" : "when you sign in").",
+                    assessment: "Needs your review",
+                    recommendedAction: "Keep the change only if you expected this startup item.",
+                    severity: isDaemon ? .critical : .warning,
+                    actions: [.showDetails, .dismiss]
+                )
+            }
+            let fileSignal = signals.first(where: { $0.fileInfo?.path != nil })
+            let path = fileSignal?.fileInfo?.path ?? "an unknown protected path"
+            let actor = userReadableProcessName(fileSignal?.processInfo?.name) ?? "Unknown actor"
+            let app = fileSignal?.metadata["responsibleAppName"] ?? "Unknown app"
             return AlertPattern(
-                headline: pendingFIM ? "File integrity change needs review" : "System file change detected",
-                explanation: "A file that controls how your Mac operates was modified. "
-                    + "This can happen after a legitimate update, but it's also how malware hides. "
-                    + "Review the change to make sure it's expected.",
+                headline: pendingFIM
+                    ? "Changed a protected file: \(path) (\(actor), via \(app))"
+                    : "Changed a system file: \(path) (\(actor), via \(app))",
+                explanation: "\(actor) changed \(path), attributed to \(app). This file can affect how your Mac operates.",
                 assessment: "Needs your review",
                 recommendedAction: "Keep the change if it followed an app or macOS update. Otherwise, show the file and review its source.",
                 actions: [.showDetails, .dismiss]

@@ -1,6 +1,18 @@
 import XCTest
 @testable import Nick
 
+private actor NetworkSubmissionCounter {
+    private var count = 0
+
+    func increment() {
+        count += 1
+    }
+
+    func value() -> Int {
+        count
+    }
+}
+
 final class NetworkProtectionPolicyTests: XCTestCase {
 
     func test_eventHandlerLabelsEveryProtectedAuthorizationOperation() throws {
@@ -1469,11 +1481,9 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         )
         let manager = NetworkProtectionManager()
         manager.activateDurableCursor(deliveredEventIDs: [])
-        let submitted = expectation(description: "single in-flight submission")
-        var submissionCount = 0
+        let submissions = NetworkSubmissionCounter()
         manager.findingHandler = { _ in
-            submissionCount += 1
-            submitted.fulfill()
+            await submissions.increment()
             try? await Task.sleep(for: .milliseconds(100))
             return .persisted(1)
         }
@@ -1482,8 +1492,12 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         manager.ingestEvents([event])
         manager.ingestEvents([event])
         manager.ingestEvents([event])
-        await fulfillment(of: [submitted], timeout: 2)
+        for _ in 0..<200 {
+            if await submissions.value() > 0 { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         try? await Task.sleep(for: .milliseconds(150))
+        let submissionCount = await submissions.value()
         XCTAssertEqual(submissionCount, 1)
     }
 
