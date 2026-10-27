@@ -196,6 +196,45 @@ final class InteractiveShellPipelinePolicyTests: XCTestCase {
         )))
     }
 
+    func test_decoderPipeToShellProducesProtectedDecodedPayloadFinding() throws {
+        for decoder in [
+            ("/usr/bin/base64", ["base64", "-D"]),
+            ("/usr/bin/openssl", ["openssl", "base64", "-d"]),
+            ("/usr/bin/xxd", ["xxd", "-r"]),
+            ("/usr/bin/python3", ["python3", "-c", "import base64; base64.b64decode('')"]),
+        ] {
+            let policy = InteractiveShellPipelinePolicy()
+            let time = Date()
+            XCTAssertNil(policy.observe(.init(
+                pid: 38, parentPID: 5, executablePath: decoder.0,
+                arguments: decoder.1, standardOutputPipeIdentifier: 92,
+                timestamp: time
+            )))
+            let finding = try XCTUnwrap(policy.observe(.init(
+                pid: 39, parentPID: 5, executablePath: "/bin/sh",
+                arguments: ["sh"], standardInputPipeIdentifier: 92,
+                timestamp: time.addingTimeInterval(0.01)
+            )))
+            XCTAssertEqual(finding.reason, "decoded_payload_interpreter")
+        }
+    }
+
+    func test_decoderPipeToInlineDataConsumerStaysSilent() {
+        let policy = InteractiveShellPipelinePolicy()
+        let time = Date()
+        _ = policy.observe(.init(
+            pid: 38, parentPID: 5, executablePath: "/usr/bin/base64",
+            arguments: ["base64", "-D"], standardOutputPipeIdentifier: 93,
+            timestamp: time
+        ))
+        XCTAssertNil(policy.observe(.init(
+            pid: 39, parentPID: 5, executablePath: "/usr/bin/python3",
+            arguments: ["python3", "-c", "import sys; print(sys.stdin.read())"],
+            standardInputPipeIdentifier: 93,
+            timestamp: time.addingTimeInterval(0.01)
+        )))
+    }
+
     func test_forkEvidenceClosesShortLivedDescriptorRace() throws {
         let policy = InteractiveShellPipelinePolicy()
         let time = Date()

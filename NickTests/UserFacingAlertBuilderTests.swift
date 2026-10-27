@@ -138,6 +138,64 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         }
     }
 
+    func testTCCPresentationNamesAffectedAppAndFriendlyService() {
+        let signal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .high,
+            title: "Privacy permission revoked",
+            description: "TCC changed",
+            context: .init(metadata: [
+                "appleEvent": "tcc-permission-modified",
+                "affectedAppName": "Example Camera",
+                "service": "kTCCServiceCamera",
+                "changeType": "revoked",
+                "ruleTier": "review"
+            ])
+        )
+        let alert = ThreatAlert(
+            score: 0.8,
+            content: .init(
+                title: signal.title, description: signal.description,
+                severity: .high, recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: alert).headline,
+            "Camera permission revoked from Example Camera"
+        )
+    }
+
+    func testNickPermissionLossIsActionableDegradedStatus() {
+        let signal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .high,
+            title: "Privacy permission revoked",
+            description: "TCC changed during update",
+            context: .init(metadata: [
+                "appleEvent": "tcc-permission-modified",
+                "affectedAppName": "Nick",
+                "service": "kTCCServiceSystemPolicyAllFiles",
+                "changeType": "revoked",
+                "nickPermissionLost": "true",
+                "updateRelated": "true",
+                "ruleTier": "review"
+            ])
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: .init(
+                title: signal.title, description: signal.description,
+                severity: .high, recommendedAction: "Restore access"
+            ),
+            contributingSignals: [signal]
+        )
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+        XCTAssertEqual(result.headline, "Nick lost Full Disk Access")
+        XCTAssertEqual(result.assessment, "Protection degraded")
+        XCTAssertEqual(result.severity, .critical)
+    }
+
     func test_behaviorIncidentOnPlatformShellHasNoFileRemediationAction() {
         let process = NickProcessInfo(
             pid: 1_842,

@@ -1299,6 +1299,11 @@ final class ESEventHandler {
             let tccResponsiblePID = tcc.responsible_token.map {
                 audit_token_to_pid($0.pointee)
             } ?? responsiblePid
+            let affectsNick = appBundleID == "com.ehsanazish.nick"
+                || appPath.contains("/Nick.app/")
+            let instigatorName = URL(fileURLWithPath: instigatorPath).lastPathComponent
+            let updateRelated = affectsNick
+                && ["installer", "installd", "shove", "Autoupdate"].contains(instigatorName)
             reportAppleSecurityEvent(
                 type: .notifyTCCModify,
                 actorPath: instigatorPath,
@@ -1314,7 +1319,10 @@ final class ESEventHandler {
                     "service": service,
                     "appBundleID": appBundleID,
                     "appPath": appPath,
-                    "changeType": isGranted ? "granted" : "revoked"
+                    "changeType": isGranted ? "granted" : "revoked",
+                    "affectedAppName": affectsNick ? "Nick" : (appBundleID.isEmpty ? URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent : appBundleID),
+                    "nickPermissionLost": affectsNick && !isGranted ? "true" : "false",
+                    "updateRelated": updateRelated ? "true" : "false"
                 ]
             )
 
@@ -1525,6 +1533,14 @@ final class ESEventHandler {
             arguments: arguments
         )
         let pipelineEvidence = processPipeEvidenceProvider(pid)
+        let hasUntrustedQuarantineOrigin = !trustedSigner && Self.hasQuarantineOrigin(at: targetPath)
+        let quarantineExecutionSeverity = ExecutionTrustPolicy.quarantinedExecutionSeverity(
+            hasTrustedSigner: trustedSigner,
+            hasQuarantineOrigin: hasUntrustedQuarantineOrigin,
+            parentIsInterpreter: Self.isInterpreter(processPath),
+            parentHasNetworkSocket: pipelineEvidence.hasNetworkSocket
+        )
+        let quarantinedUntrustedExecution = quarantineExecutionSeverity != nil
         let pipelineObservation = InteractiveShellPipelinePolicy.Observation(
             pid: pid,
             parentPID: parentPid,
@@ -1562,8 +1578,15 @@ final class ESEventHandler {
         }
         let behaviorTitle = credentialFinding?.title
             ?? lolbinFinding?.title
-            ?? interactivePipelineFinding.map { _ in "Download-to-shell command detected" }
-        let behaviorFamily = credentialFinding == nil ? "lolbin-behavior" : "credential-access"
+            ?? interactivePipelineFinding.map {
+                $0.reason == "decoded_payload_interpreter"
+                    ? "Decoded payload sent to an interpreter"
+                    : "Download-to-shell command detected"
+            }
+            ?? (quarantinedUntrustedExecution ? "Quarantined untrusted code executed" : nil)
+        let behaviorFamily = credentialFinding != nil
+            ? "credential-access"
+            : (quarantinedUntrustedExecution ? "execution-provenance" : "lolbin-behavior")
         let responsibleChainValidated = attribution?.app.map {
             $0.signing == .signed || $0.signing == .applePlatform
         } ?? false
@@ -1613,12 +1636,13 @@ final class ESEventHandler {
                                 || interactivePipelineFinding != nil,
                             hasQuarantineOrigin: Self.hasQuarantineOrigin(at: targetPath)
                         ) == .review
+                    let reviewBehavior = localTemporaryExecution || finding.reason == "encoded_payload"
                     var metadata = [
                         "reason": finding.reason,
                         "rule": finding.reason,
-                        "ruleTier": localTemporaryExecution ? "review" : "protected",
+                        "ruleTier": reviewBehavior ? "review" : "protected",
                         "detectionKind": "lolbin-behavior",
-                        "signalSeverity": localTemporaryExecution ? "medium" : finding.severity,
+                        "signalSeverity": reviewBehavior ? "medium" : finding.severity,
                         "execTargetPath": targetPath
                     ]
                     if let matchedCommand = finding.matchedCommand {
@@ -1643,7 +1667,21 @@ final class ESEventHandler {
                         metadata.merge(attribution.metadata) { current, _ in current }
                     }
                     return metadata
-                }
+                } ?? (quarantinedUntrustedExecution ? {
+                    var metadata = [
+                        "reason": "quarantine_executable",
+                        "rule": "quarantine_executable",
+                        "ruleTier": "review",
+                        "detectionKind": "executable-provenance",
+                        "signalSeverity": quarantineExecutionSeverity ?? "medium",
+                        "execTargetPath": targetPath,
+                        "quarantineOrigin": "true"
+                    ]
+                    if let attribution {
+                        metadata.merge(attribution.metadata) { current, _ in current }
+                    }
+                    return metadata
+                }() : nil)
             )
         ))
         if interactivePipelineFinding == nil,

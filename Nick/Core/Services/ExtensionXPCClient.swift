@@ -1640,7 +1640,7 @@ struct ExtensionFinding: Sendable {
         } else {
             severity = .high
         }
-        let actorPath = isLOLBinBehavior
+        let actorPath = (isLOLBinBehavior || isCredentialAccess)
             ? (event.metadata?["execTargetPath"] ?? filePath)
             : event.processPath
         let signingStatus: SigningStatus
@@ -1783,11 +1783,13 @@ struct ExtensionFinding: Sendable {
             switch event.metadata?["reason"] {
             case "curl_pipe_shell", "wget_pipe_shell", "download_pipe_interpreter":
                 return "Nick saw a shell run a script supplied by a download command."
+            case "decoded_payload_interpreter":
+                return "Nick saw decoded content fed directly into an interpreter."
             case "osascript_shell":
                 return "Nick saw AppleScript start a shell command."
             case "quarantine_removal":
                 return "Nick saw a command remove macOS quarantine metadata."
-            case "base64_payload":
+            case "base64_payload", "encoded_payload":
                 return "Nick saw a command decode and execute an encoded payload."
             default:
                 return "Nick saw a command perform security-sensitive behavior."

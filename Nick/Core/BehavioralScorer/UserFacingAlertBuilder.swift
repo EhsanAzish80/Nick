@@ -89,9 +89,10 @@ final class UserFacingAlertBuilder: Sendable {
         let displayProcess = userReadableProcessName(processName)
         let parentName     = firstProcess?.parentName.flatMap(userReadableProcessName)
         let protectedCommandReasons: Set<String> = [
-            "curl_pipe_shell", "wget_pipe_shell", "download_pipe_interpreter", "osascript_shell",
-            "quarantine_removal", "base64_payload", "launchctl_tmp",
-            "crontab_modify", "mktemp_execute"
+            "curl_pipe_shell", "wget_pipe_shell", "download_pipe_interpreter",
+            "decoded_payload_interpreter", "osascript_shell", "quarantine_removal",
+            "base64_payload", "encoded_payload", "launchctl_tmp",
+            "cron_modification", "crontab_modify", "mktemp_execute"
         ]
         let hasProtectedCommandEvidence = signals.contains {
             protectedCommandReasons.contains($0.metadata["reason"] ?? "")
@@ -143,6 +144,60 @@ final class UserFacingAlertBuilder: Sendable {
                 recommendedAction: "Use it only to verify security software, then remove or quarantine it.",
                 severity: .warning,
                 actions: [.quarantine, .showDetails, .dismiss]
+            )
+        }
+
+        if let executable = signals.first(where: {
+            $0.metadata["reason"] == "quarantine_executable"
+        }) {
+            let actor = userReadableProcessName(executable.processInfo?.name) ?? "An untrusted executable"
+            return AlertPattern(
+                headline: "Ran quarantined, untrusted code",
+                explanation: "\(actor) was launched with macOS quarantine provenance and no validated Developer ID identity.",
+                assessment: "Needs your review",
+                recommendedAction: "Keep it only if you intentionally downloaded and ran this file.",
+                severity: executable.metadata["signalSeverity"] == "high" ? .critical : .warning,
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
+        if let cron = signals.first(where: {
+            ["cron_modification", "crontab_modify"].contains($0.metadata["reason"] ?? "")
+        }) {
+            let actor = userReadableProcessName(cron.processInfo?.name) ?? "an unknown process"
+            let app = cron.metadata["responsibleAppName"] ?? "Unknown app"
+            return AlertPattern(
+                headline: "Added a cron job (\(actor), via \(app))",
+                explanation: "\(actor) changed the user's scheduled cron jobs, attributed to \(app). Cron jobs can run commands automatically on a schedule.",
+                assessment: "Needs your review",
+                recommendedAction: "Review the crontab and remove the entry if you did not expect it.",
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
+        if let tcc = signals.first(where: {
+            $0.metadata["appleEvent"] == "tcc-permission-modified"
+        }) {
+            let app = tcc.metadata["affectedAppName"]
+                ?? tcc.metadata["appBundleID"]
+                ?? "Unknown app"
+            let service = Self.friendlyTCCService(tcc.metadata["service"])
+            let serviceAccess = service.hasSuffix("Access") ? service : "\(service) access"
+            let revoked = tcc.metadata["changeType"] == "revoked"
+            let nickLostPermission = tcc.metadata["nickPermissionLost"] == "true"
+            return AlertPattern(
+                headline: nickLostPermission
+                    ? "Nick lost \(serviceAccess)"
+                    : "\(service) permission \(revoked ? "revoked from" : "granted to") \(app)",
+                explanation: nickLostPermission
+                    ? "macOS revoked Nick's \(serviceAccess). Protection that depends on this permission may be unavailable until it is restored."
+                    : "macOS \(revoked ? "revoked" : "granted") \(service) access for \(app).",
+                assessment: nickLostPermission ? "Protection degraded" : "Privacy permission changed",
+                recommendedAction: nickLostPermission
+                    ? "Open System Settings and restore Nick's \(serviceAccess)."
+                    : "No action is needed if you expected this change.",
+                severity: nickLostPermission ? .critical : .warning,
+                actions: [.showDetails, .dismiss]
             )
         }
 
@@ -591,6 +646,20 @@ final class UserFacingAlertBuilder: Sendable {
         case CredentialAccessPolicy.Store.passwordPrompt.rawValue: "Requested a hidden password"
         default: "Opened \(storeName)"
         }
+    }
+
+    private static func friendlyTCCService(_ rawService: String?) -> String {
+        guard let rawService, !rawService.isEmpty else { return "privacy" }
+        let service = rawService.lowercased()
+        if service.contains("camera") { return "Camera" }
+        if service.contains("microphone") { return "Microphone" }
+        if service.contains("screencapture") || service.contains("screenrecording") {
+            return "Screen Recording"
+        }
+        if service.contains("accessibility") { return "Accessibility" }
+        if service.contains("systempolicyallfiles") { return "Full Disk Access" }
+        if service.contains("appleevents") { return "Automation" }
+        return rawService.replacingOccurrences(of: "kTCCService", with: "")
     }
 
     private func isSimulatorCapture(_ signal: ThreatSignal) -> Bool {

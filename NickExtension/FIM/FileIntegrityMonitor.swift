@@ -34,6 +34,7 @@ final class FileIntegrityMonitor {
     static let systemMonitoredPaths: [String] = [
         "/Library/LaunchAgents",
         "/Library/LaunchDaemons",
+        "/usr/lib/cron/tabs",
         "/usr/local/bin",
         "/private/etc/hosts",
         "/private/etc/sudoers",
@@ -57,6 +58,7 @@ final class FileIntegrityMonitor {
         Set([
             "/Library/LaunchAgents",
             "/Library/LaunchDaemons",
+            "/usr/lib/cron/tabs",
             "/usr/local/bin",
             "/private/etc/pam.d",
             "/private/etc/sudoers.d",

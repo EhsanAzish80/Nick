@@ -79,6 +79,20 @@ enum ExecutionTrustPolicy {
         return !hasTrustedSigner || isHighRiskLocation(path)
     }
 
+    /// Returns the review severity for execution provenance that macOS marked
+    /// as quarantined but that has no validated Developer ID or platform
+    /// identity. A downloader/interpreter parent raises urgency; it never
+    /// changes the finding into an automatic block.
+    static func quarantinedExecutionSeverity(
+        hasTrustedSigner: Bool,
+        hasQuarantineOrigin: Bool,
+        parentIsInterpreter: Bool,
+        parentHasNetworkSocket: Bool
+    ) -> String? {
+        guard !hasTrustedSigner, hasQuarantineOrigin else { return nil }
+        return parentIsInterpreter || parentHasNetworkSocket ? "high" : "medium"
+    }
+
     /// A dot-prefixed directory or file anywhere below the root. Hidden
     /// staging directories are a hallmark of macOS stealers and loaders.
     static func hasHiddenComponent(_ path: String) -> Bool {

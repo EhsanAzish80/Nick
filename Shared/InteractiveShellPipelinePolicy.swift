@@ -60,7 +60,7 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
         let timestamp: Date
     }
 
-    private enum Role { case downloader, shell }
+    private enum Role { case downloader, decoder, shell }
     private let lock = NSLock()
     private var recent: [Int32: Recent] = [:]
     private var forkEvidence: [Int32: ForkEvidence] = [:]
@@ -96,27 +96,28 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
             guard let sibling = recent.values.first(where: {
                 guard $0.observation.parentPID == observation.parentPID,
                       $0.observation.pid != observation.pid,
-                      $0.role != role else { return false }
-                if role == .downloader {
+                      $0.role != role,
+                      role == .shell || $0.role == .shell else { return false }
+                if role != .shell {
                     guard let output = observation.standardOutputPipeIdentifier else { return false }
                     return output == $0.observation.standardInputPipeIdentifier
                 }
                 guard let input = observation.standardInputPipeIdentifier else { return false }
                 return $0.observation.standardOutputPipeIdentifier == input
             }) else { return nil }
-            let downloader = role == .downloader ? observation : sibling.observation
+            let source = role == .shell ? sibling.observation : observation
             let shell = role == .shell ? observation : sibling.observation
-            guard let sharedPipe = downloader.standardOutputPipeIdentifier,
+            guard let sharedPipe = source.standardOutputPipeIdentifier,
                   sharedPipe == shell.standardInputPipeIdentifier else { return nil }
-            let fingerprint = "\(downloader.parentPID)|\(sharedPipe)|\(downloader.pid)|\(shell.pid)"
+            let fingerprint = "\(source.parentPID)|\(sharedPipe)|\(source.pid)|\(shell.pid)"
             guard emittedFingerprints[fingerprint] == nil else { return nil }
             emittedFingerprints[fingerprint] = observation.timestamp
             return Finding(
-                reason: "download_pipe_interpreter",
-                matchedCommand: Self.redactedCommand(downloader, shell: shell),
+                reason: Self.isDecoder(source) ? "decoded_payload_interpreter" : "download_pipe_interpreter",
+                matchedCommand: Self.redactedCommand(source, shell: shell),
                 actorPID: shell.pid,
-                confidence: downloader.hasNetworkSocket
-                    || downloader.codeIdentityValidated
+                confidence: source.hasNetworkSocket
+                    || source.codeIdentityValidated
                     ? "high" : "medium"
             )
         }
@@ -130,6 +131,7 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
             prune(now: observation.timestamp)
             let observation = mergingForkEvidence(into: observation)
             return observation.arguments.contains(where: Self.containsRemoteURL)
+                || Self.isDecoder(observation)
                 || observation.standardInputPipeIdentifier != nil
         }
     }
@@ -142,6 +144,7 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
         if observation.arguments.contains(where: containsRemoteURL) {
             return .downloader
         }
+        if isDecoder(observation) { return .decoder }
         let name = executableName(observation.executablePath)
         let interpreters: Set<String> = [
             "sh", "bash", "zsh", "dash", "ksh", "csh", "fish",
@@ -162,6 +165,24 @@ final class InteractiveShellPipelinePolicy: @unchecked Sendable {
             return .shell
         }
         return nil
+    }
+
+    private static func isDecoder(_ observation: Observation) -> Bool {
+        let name = executableName(observation.executablePath)
+        let args = observation.arguments.dropFirst().map { $0.lowercased() }
+        switch name {
+        case "base64":
+            return args.contains("-d") || args.contains("--decode")
+        case "openssl":
+            return (args.contains("base64") || args.contains("enc"))
+                && (args.contains("-d") || args.contains("-decode"))
+        case "xxd":
+            return args.contains("-r") || args.contains("-revert")
+        case "python", "python3":
+            return args.contains(where: { $0.contains("b64decode") || $0.contains("decodebytes") })
+        default:
+            return false
+        }
     }
 
     /// A pipe into an interpreter is dangerous only when stdin is executable
