@@ -117,6 +117,38 @@ final class CredentialAccessPolicyTests: XCTestCase {
         ))
     }
 
+    func testBrowserSafeStorageSecretReadsStayLoudWhileRoutineTokenReadsDigest() throws {
+        let terminal = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.apple.Terminal", teamID: "APPLE",
+            signingValidated: true, isApplePlatform: true
+        )
+        let safeStorage = try XCTUnwrap(CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/security",
+            arguments: ["security", "find-generic-password", "-wa", "Chrome Safe Storage"],
+            responsibleIdentity: terminal
+        ))
+        let loud = CredentialAccessPolicy.deliveryProfile(
+            for: safeStorage,
+            actorIdentityValidated: true,
+            responsibleChainValidated: true
+        )
+        XCTAssertEqual(safeStorage.severity, "high")
+        XCTAssertEqual(loud, .init(tier: "review", severity: "high", deliveryLevel: "interrupt"))
+
+        let token = try XCTUnwrap(CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/security",
+            arguments: ["security", "find-generic-password", "-s", "gh:github.com", "-w"],
+            responsibleIdentity: terminal
+        ))
+        let digest = CredentialAccessPolicy.deliveryProfile(
+            for: token,
+            actorIdentityValidated: true,
+            responsibleChainValidated: true
+        )
+        XCTAssertEqual(token.severity, "medium")
+        XCTAssertEqual(digest, .init(tier: "review", severity: "info", deliveryLevel: "inform"))
+    }
+
     func testPublicSSHMaterialIsNotClassifiedAsCredentialContent() {
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(path: "/Users/test/.ssh/id_ed25519.pub", responsibleIdentity: unknown))
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(path: "/Users/test/.ssh/known_hosts", responsibleIdentity: unknown))

@@ -291,6 +291,44 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         XCTAssertTrue(result.explanation.contains("does not by itself prove"))
     }
 
+    func test_backgroundTaskLaunchItemUsesInstigatorAndOwningApp() {
+        let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"
+        let signal = ThreatSignal(
+            source: .persistence,
+            severity: .high,
+            title: "Background item added",
+            description: "BTM launch item",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "appleEvent": "background-item-added",
+                    "persistencePath": path,
+                    "launchItemLabel": "com.example.sync",
+                    "instigatorName": "installer-helper",
+                    "responsibleAppName": "Example App"
+                ]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.8,
+            content: AlertContent(
+                title: "Persistence change",
+                description: "Test",
+                severity: .high,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(
+            result.headline,
+            "Added a launch agent: com.example.sync (installer-helper, via Example App)"
+        )
+        XCTAssertTrue(result.explanation.contains(path))
+    }
+
     func test_nickTemporaryBuildYARAMatch_isSafeDeveloperActivity() {
         let path = "/private/tmp/NickPerformanceAuditTests/Build/Products/Debug/Nick.app/Contents/MacOS/Nick.debug.dylib"
         let signal = ThreatSignal(

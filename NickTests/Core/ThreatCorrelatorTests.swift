@@ -1175,6 +1175,53 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(store.visibleAlerts.first?.occurrenceCount, 2)
     }
 
+    func test_incidentStoreMergesFIMAndBTMLaunchItemEvidenceAndKeepsHighestTier() {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"
+        let observed = Date(timeIntervalSince1970: 100)
+        let btmSignal = ThreatSignal(
+            source: .persistence,
+            severity: .medium,
+            timestamp: observed,
+            title: "Background item added",
+            description: "BTM evidence",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "appleEvent": "background-item-added",
+                    "persistencePath": path,
+                    "ruleTier": "review"
+                ]
+            )
+        )
+        let fimSignal = ThreatSignal(
+            source: .filesystem,
+            severity: .high,
+            timestamp: observed.addingTimeInterval(4),
+            title: "Launch agent changed",
+            description: "FIM evidence",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "fimStatus": "pending",
+                    "ruleTier": "protected"
+                ]
+            )
+        )
+
+        _ = store.ingest([makeAlert(signal: btmSignal, timestamp: observed)])
+        _ = store.ingest([makeAlert(
+            signal: fimSignal,
+            severity: .high,
+            timestamp: observed.addingTimeInterval(4)
+        )])
+
+        XCTAssertEqual(store.visibleAlerts.count, 1)
+        XCTAssertEqual(store.visibleAlerts.first?.severity, .high)
+        XCTAssertEqual(store.visibleAlerts.first?.contributingSignals.count, 2)
+        XCTAssertEqual(store.visibleAlerts.first?.occurrenceCount, 2)
+    }
+
     func test_incidentLifecycleAndL0EvidenceSurviveRestart() throws {
         let suite = "IncidentRestartTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

@@ -1133,26 +1133,37 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD:
             let event = msg.event.btm_launch_item_add.pointee
-            let actor = event.instigator
+            // BTM's event process is commonly `smd`. Attribute the change to
+            // the recorded instigator, or the owning app when no instigator is
+            // present, while the ES message still owns both process records.
+            let actor = event.instigator ?? event.app
             let actorPID = actor.map { audit_token_to_pid($0.pointee.audit_token) } ?? pid
             let actorPath = actor.map { esString($0.pointee.executable.pointee.path) } ?? processPath
             let actorParentPID = actor.map { audit_token_to_pid($0.pointee.parent_audit_token) } ?? parentPid
             let appPID = event.app.map { audit_token_to_pid($0.pointee.audit_token) }
             let item = event.item.pointee
+            let itemURL = esString(item.item_url)
+            let itemPath = normalizedBTMItemPath(itemURL)
+            let appURL = esString(item.app_url)
             reportAppleSecurityEvent(
                 type: .notifyBTMLaunchItemAdd,
                 actorPath: actorPath,
                 actorPID: actorPID,
                 parentPID: actorParentPID,
                 responsiblePID: appPID,
-                filePath: esString(event.executable_path),
+                filePath: itemPath,
                 title: "Background item added",
                 family: "apple-background-task-management",
                 ruleTier: "review",
                 metadata: [
                     "appleEvent": "background-item-added",
-                    "itemURL": esString(item.item_url),
-                    "appURL": esString(item.app_url),
+                    "itemURL": itemURL,
+                    "persistencePath": itemPath,
+                    "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,
+                    "instigatorName": URL(fileURLWithPath: actorPath).lastPathComponent,
+                    "appURL": appURL,
+                    "btmAppName": normalizedBTMAppName(appURL),
+                    "executablePath": esString(event.executable_path),
                     "managed": item.managed ? "true" : "false",
                     "legacy": item.legacy ? "true" : "false"
                 ]
@@ -1160,26 +1171,33 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_REMOVE:
             let event = msg.event.btm_launch_item_remove.pointee
-            let actor = event.instigator
+            let actor = event.instigator ?? event.app
             let actorPID = actor.map { audit_token_to_pid($0.pointee.audit_token) } ?? pid
             let actorPath = actor.map { esString($0.pointee.executable.pointee.path) } ?? processPath
             let actorParentPID = actor.map { audit_token_to_pid($0.pointee.parent_audit_token) } ?? parentPid
             let appPID = event.app.map { audit_token_to_pid($0.pointee.audit_token) }
             let item = event.item.pointee
+            let itemURL = esString(item.item_url)
+            let itemPath = normalizedBTMItemPath(itemURL)
+            let appURL = esString(item.app_url)
             reportAppleSecurityEvent(
                 type: .notifyBTMLaunchItemRemove,
                 actorPath: actorPath,
                 actorPID: actorPID,
                 parentPID: actorParentPID,
                 responsiblePID: appPID,
-                filePath: esString(item.item_url),
+                filePath: itemPath,
                 title: "Background item removed",
                 family: "apple-background-task-management",
                 ruleTier: "review",
                 metadata: [
                     "appleEvent": "background-item-removed",
-                    "itemURL": esString(item.item_url),
-                    "appURL": esString(item.app_url),
+                    "itemURL": itemURL,
+                    "persistencePath": itemPath,
+                    "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,
+                    "instigatorName": URL(fileURLWithPath: actorPath).lastPathComponent,
+                    "appURL": appURL,
+                    "btmAppName": normalizedBTMAppName(appURL),
                     "managed": item.managed ? "true" : "false",
                     "legacy": item.legacy ? "true" : "false"
                 ]
@@ -1526,17 +1544,19 @@ final class ESEventHandler {
                 teamID: teamID,
                 signingID: signingID,
                 metadata: credentialFinding.map { finding in
-                    let validatedSecretRead = finding.reason == "keychain_secret_read"
-                        && trustedSigner && responsibleChainValidated
+                    let delivery = CredentialAccessPolicy.deliveryProfile(
+                        for: finding,
+                        actorIdentityValidated: trustedSigner,
+                        responsibleChainValidated: responsibleChainValidated
+                    )
                     var metadata = [
                         "reason": finding.reason,
                         "rule": finding.reason,
-                        "ruleTier": "review",
+                        "ruleTier": delivery.tier,
                         "detectionKind": "credential-access",
-                        "signalSeverity": validatedSecretRead
-                            ? "info" : (finding.store == .passwordPrompt ? "high" : "medium"),
+                        "signalSeverity": delivery.severity,
                         "credentialStore": finding.store.rawValue,
-                        "deliveryLevel": validatedSecretRead ? "inform" : "interrupt"
+                        "deliveryLevel": delivery.deliveryLevel
                     ]
                     if let attribution {
                         metadata.merge(attribution.metadata) { current, _ in current }
@@ -2358,6 +2378,22 @@ final class ESEventHandler {
     /// Uses the token length; ES does not guarantee NUL termination.
     private func esString(_ token: es_string_token_t) -> String {
         esOptionalString(token) ?? "<unknown>"
+    }
+
+    private func normalizedBTMItemPath(_ value: String) -> String {
+        guard let url = URL(string: value), url.isFileURL else { return value }
+        return url.path
+    }
+
+    private func normalizedBTMAppName(_ value: String) -> String {
+        let path: String
+        if let url = URL(string: value), url.isFileURL {
+            path = url.path
+        } else {
+            path = value
+        }
+        let component = URL(fileURLWithPath: path).lastPathComponent
+        return component.hasSuffix(".app") ? String(component.dropLast(4)) : component
     }
 
     private func esOptionalString(_ token: es_string_token_t) -> String? {

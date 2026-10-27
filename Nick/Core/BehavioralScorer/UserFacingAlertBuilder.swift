@@ -165,6 +165,30 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
+        if let launchItem = signals.first(where: {
+            $0.metadata["appleEvent"] == "background-item-added"
+        }) {
+            let path = launchItem.metadata["persistencePath"]
+                ?? launchItem.metadata["itemURL"]
+                ?? launchItem.fileInfo?.path
+                ?? "an unknown launch-item path"
+            let label = launchItem.metadata["launchItemLabel"]
+                ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            let actor = userReadableProcessName(launchItem.metadata["instigatorName"])
+                ?? userReadableProcessName(launchItem.processInfo?.name)
+                ?? "Unknown actor"
+            let app = launchItem.metadata["responsibleAppName"]
+                ?? launchItem.metadata["btmAppName"]
+                ?? "Unknown app"
+            return AlertPattern(
+                headline: "Added a launch agent: \(label) (\(actor), via \(app))",
+                explanation: "\(actor) added the launch agent \(label) at \(path), attributed to \(app). Launch agents can start automatically when you sign in.",
+                assessment: "Needs your review",
+                recommendedAction: "Review the launch agent and remove it if you did not expect this change.",
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
         if let credential = signals.first(where: {
             $0.metadata["detectionKind"] == "credential-access"
         }) {

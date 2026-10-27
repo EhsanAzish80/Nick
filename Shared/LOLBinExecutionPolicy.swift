@@ -141,6 +141,12 @@ enum LOLBinExecutionPolicy {
 /// Security extension supplies identities that have already been validated by
 /// SecCode; this type never opens a credential file or records its contents.
 enum CredentialAccessPolicy {
+    struct DeliveryProfile: Equatable, Sendable {
+        let tier: String
+        let severity: String
+        let deliveryLevel: String
+    }
+
     struct RecentHiddenPrompt: Equatable, Sendable {
         let chainKey: String
         let armedAt: Date
@@ -391,16 +397,68 @@ enum CredentialAccessPolicy {
             )
         }
 
-        guard executable == "security",
-              !isTrustedCredentialApplication(responsibleIdentity) else { return nil }
+        guard executable == "security" else { return nil }
         let lowered = arguments.map { $0.lowercased() }
+        let safeStorage = isBrowserSafeStorageRead(arguments: arguments)
+        let requestsSecretValue = lowered.contains { argument in
+            guard argument.hasPrefix("-") else { return false }
+            return argument.dropFirst().contains("w")
+        }
+        // Safe Storage keys unlock browser credentials. They stay loud even
+        // when the initiating chain is otherwise validated or trusted.
+        if lowered.contains("find-generic-password"), requestsSecretValue, safeStorage {
+            return Finding(
+                title: "Browser Safe Storage key read needs review",
+                reason: "keychain_secret_read",
+                store: .keychain,
+                tier: "review",
+                severity: "high"
+            )
+        }
+        guard !isTrustedCredentialApplication(responsibleIdentity) else { return nil }
         if lowered.contains("dump-keychain") {
             return Finding(title: "Keychain dump command needs review", reason: "keychain_dump", store: .keychain)
         }
-        if lowered.contains("find-generic-password"), lowered.contains("-w") {
-            return Finding(title: "Keychain secret read needs review", reason: "keychain_secret_read", store: .keychain)
+        if lowered.contains("find-generic-password"), requestsSecretValue {
+            return Finding(
+                title: "Keychain secret read needs review",
+                reason: "keychain_secret_read",
+                store: .keychain,
+                tier: "review",
+                severity: "medium"
+            )
         }
         return nil
+    }
+
+    static func deliveryProfile(
+        for finding: Finding,
+        actorIdentityValidated: Bool,
+        responsibleChainValidated: Bool
+    ) -> DeliveryProfile {
+        let validatedRoutineSecretRead = finding.reason == "keychain_secret_read"
+            && finding.severity != "high"
+            && actorIdentityValidated
+            && responsibleChainValidated
+        return DeliveryProfile(
+            tier: finding.tier,
+            severity: validatedRoutineSecretRead ? "info" : finding.severity,
+            deliveryLevel: validatedRoutineSecretRead ? "inform" : "interrupt"
+        )
+    }
+
+    static func isBrowserSafeStorageRead(arguments: [String]) -> Bool {
+        let browserServices = [
+            "chrome safe storage", "brave safe storage", "edge safe storage",
+            "arc safe storage", "opera safe storage", "vivaldi safe storage",
+            "chromium safe storage"
+        ]
+        return arguments.contains { argument in
+            let normalized = argument
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            return browserServices.contains(normalized)
+        }
     }
 
     private static func isTrustedCredentialApplication(_ identity: ValidatedIdentity?) -> Bool {

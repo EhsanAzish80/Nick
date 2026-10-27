@@ -222,6 +222,33 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
         )
     }
 
+    /// Coalesces two monitors describing the same event while retaining both
+    /// evidence sets. This is used for the FIM + BTM views of one launch-item
+    /// installation; it must not discard the stronger monitor's tier metadata.
+    func mergingRelatedEvidence(_ newer: ThreatAlert) -> ThreatAlert {
+        let preferred = newer.severity >= severity ? newer : self
+        var seen = Set<UUID>()
+        let combinedSignals = (contributingSignals + newer.contributingSignals).filter {
+            seen.insert($0.id).inserted
+        }
+        return ThreatAlert(
+            id: id,
+            score: max(score, newer.score),
+            content: AlertContent(
+                title: preferred.title,
+                description: preferred.description,
+                severity: max(severity, newer.severity),
+                recommendedAction: preferred.recommendedAction,
+                explanation: preferred.explanation ?? explanation
+            ),
+            contributingSignals: combinedSignals,
+            timestamp: firstSeen,
+            firstSeen: min(firstSeen, newer.firstSeen),
+            lastSeen: max(lastSeen, newer.lastSeen),
+            occurrenceCount: occurrenceCount + max(1, newer.occurrenceCount)
+        )
+    }
+
     /// Records a lifecycle transition (for example capture active -> inactive)
     /// while retaining the incident identity and historical risk peak. Unlike a
     /// normal coalesced occurrence, the newest content is always displayed: an

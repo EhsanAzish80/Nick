@@ -17,6 +17,8 @@ Deployment/*.zip
 *.xcresult/
 sonar-coverage.xml
 coverage.lcov
+default.profraw
+yara-fp-report.json
 
 # Swift Package Manager
 .build/
