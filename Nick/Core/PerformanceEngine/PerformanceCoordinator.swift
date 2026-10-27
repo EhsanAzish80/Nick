@@ -93,18 +93,23 @@ final class PerformanceCoordinator {
     func startCleanup() {
         guard case .readyToClean = scanState else { return }
         Task {
-            let plan = planner.plan(from: foundItems, selectedIDs: selectedItemIDs)
-            guard plan.itemsToClean.isEmpty == false else { return }
-            let runningBrowsers = browserDetector.runningBrowsers()
-            scanState = .cleaning(progress: 0, freedSize: 0)
-            try? await executor.execute(plan, runningBrowsers: runningBrowsers)
-            let freed = executor.freedBytes
-            let count = plan.itemsToClean.count
-            // Remove cleaned items from foundItems
-            let cleanedIDs = Set(plan.itemsToClean.map(\.id))
-            foundItems.removeAll { cleanedIDs.contains($0.id) }
-            totalReclaimableSize = foundItems.reduce(0) { $0 + $1.size }
-            scanState = .completed(freedSize: freed, itemCount: count)
+            _ = await performCleanup()
         }
+    }
+
+    func performCleanup() async -> (count: Int, bytes: Int64) {
+        guard case .readyToClean = scanState else { return (0, 0) }
+        let plan = planner.plan(from: foundItems, selectedIDs: selectedItemIDs)
+        guard plan.itemsToClean.isEmpty == false else { return (0, 0) }
+        let runningBrowsers = browserDetector.runningBrowsers()
+        scanState = .cleaning(progress: 0, freedSize: 0)
+        try? await executor.execute(plan, runningBrowsers: runningBrowsers)
+        let freed = executor.freedBytes
+        let count = plan.itemsToClean.count
+        let cleanedIDs = Set(plan.itemsToClean.map(\.id))
+        foundItems.removeAll { cleanedIDs.contains($0.id) }
+        totalReclaimableSize = foundItems.reduce(0) { $0 + $1.size }
+        scanState = .completed(freedSize: freed, itemCount: count)
+        return (count, freed)
     }
 }

@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-struct ProcessInstanceIdentity: Equatable, Sendable {
+struct ProcessInstanceIdentity: Equatable, Hashable, Sendable {
     let pid: Int32
     let startSeconds: UInt64
     let startMicroseconds: UInt64

@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import Darwin
 import os
 import Security
 
@@ -68,6 +69,8 @@ final class ESXPCServer: NSObject {
     private var listener: NSXPCListener
     private var appConnections: [ObjectIdentifier: NSXPCConnection] = [:]
     private var authenticatedAppPIDs: Set<Int32> = []
+    private var storageEligibleAppIdentities: [Int32: Int32] = [:]
+    let storageOperationRegistry = StorageOperationRegistry()
     private let listenerIsConfigured: Bool
 
     /// Serialises the independently authenticated connection set.
@@ -288,6 +291,9 @@ extension ESXPCServer: NSXPCListenerDelegate {
             Self.logger.info("XPC connection invalidated")
             self?.connectionLock.withLock {
                 self?.appConnections.removeValue(forKey: connectionID)
+                let pid = newConnection.processIdentifier
+                self?.storageEligibleAppIdentities.removeValue(forKey: pid)
+                self?.storageOperationRegistry.cancelForDisconnectedProcess(pid: pid)
             }
         }
         newConnection.interruptionHandler = {
@@ -300,6 +306,9 @@ extension ESXPCServer: NSXPCListenerDelegate {
             appConnections[connectionID] = newConnection
             if isReleaseContainer(connection: newConnection) {
                 authenticatedAppPIDs.insert(newConnection.processIdentifier)
+            }
+            if isInstalledReleaseContainer(connection: newConnection) {
+                storageEligibleAppIdentities[newConnection.processIdentifier] = 0
             }
         }
 
@@ -377,6 +386,17 @@ extension ESXPCServer: NSXPCListenerDelegate {
         }
         return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
+
+    /// Storage approvals are intentionally narrower than ordinary app XPC:
+    /// only the shipped app at its installed location can receive one. A copied
+    /// (even still-validly-signed) Nick.app therefore cannot create a window.
+    private func isInstalledReleaseContainer(connection: NSXPCConnection) -> Bool {
+        guard isReleaseContainer(connection: connection) else { return false }
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let count = proc_pidpath(connection.processIdentifier, &buffer, UInt32(buffer.count))
+        guard count > 0 else { return false }
+        return String(cString: buffer) == "/Applications/Nick.app/Contents/MacOS/Nick"
+    }
 }
 
 // MARK: - NickExtensionXPCProtocol (inbound calls from container app)
@@ -391,6 +411,71 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     func getExtensionHealth(reply: @escaping (Data) -> Void) {
         let path = "/Library/Application Support/com.ehsanazish.nick/extension_health.json"
         reply(FileManager.default.contents(atPath: path) ?? Data())
+    }
+
+    func registerStorageOperation(_ payload: Data, reply: @escaping (Bool) -> Void) {
+        guard let request = try? JSONDecoder().decode(StorageOperationRequest.self, from: payload) else {
+            reply(false)
+            return
+        }
+        let identity: (Int32, Int32)? = connectionLock.withLock {
+            guard storageEligibleAppIdentities.count == 1,
+                  let entry = storageEligibleAppIdentities.first else { return nil }
+            return (entry.key, entry.value)
+        }
+        guard let identity else {
+            reply(false)
+            return
+        }
+        reply(storageOperationRegistry.register(
+            request,
+            authenticatedPID: identity.0,
+            // The app obtains its own kernel audit token. NSXPCConnection
+            // exposes the authenticated PID but not that token; the non-zero
+            // pidversion is then matched against every ES event before any
+            // suppression can occur.
+            authenticatedPIDVersion: request.actorPIDVersion
+        ))
+    }
+
+    func completeStorageOperation(
+        operationID: String,
+        itemCount: Int,
+        bytesMoved: Int64,
+        reply: @escaping (Bool) -> Void
+    ) {
+        guard let id = UUID(uuidString: operationID),
+              let operation = storageOperationRegistry.complete(operationID: id) else {
+            reply(false)
+            return
+        }
+        guard operation.kind == .trashCleanup else {
+            reply(true)
+            return
+        }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/Applications/Nick.app/Contents/MacOS/Nick",
+            pid: 0,
+            parentPid: 0,
+            filePath: nil,
+            decision: .notApplicable,
+            // Metadata-only ES events are retained in Activity/Timeline but
+            // ExtensionFinding intentionally ignores them because there is no
+            // threat name and no deny decision. Completion is not an incident.
+            threat: .init(metadata: [
+                    "ruleTier": "observed",
+                    "deliveryLevel": "silent",
+                    "recordType": "storage-operation-completed",
+                    "itemCount": String(max(0, itemCount)),
+                    "bytesMoved": String(max(0, bytesMoved)),
+                    "summary": "Storage cleanup: \(max(0, itemCount)) items, \(formatter.string(fromByteCount: max(0, bytesMoved))) moved to Trash"
+                ])
+        )
+        if let data = try? JSONEncoder().encode(event) { sendEventToApp(data) }
+        reply(true)
     }
 
     func recordAuthorizedProtectionStop(

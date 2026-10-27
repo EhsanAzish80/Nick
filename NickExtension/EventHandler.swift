@@ -87,6 +87,7 @@ final class ESEventHandler {
     private let credentialReportLock = NSLock()
     private var lastCredentialReport: [String: Date] = [:]
     private var recentKeychainCommands: [String: CredentialAccessPolicy.RecentHiddenPrompt] = [:]
+    private var keychainTransferFallback = KeychainTransferFallbackTracker()
     private static let credentialReportWindow: TimeInterval = 60
 
     // MARK: - Public Entry Point
@@ -275,6 +276,7 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_AUTH_OPEN:
             let filePath = esString(msg.event.open.file.pointee.path)
+            let isRegularFile = msg.event.open.file.pointee.stat.st_mode & S_IFMT == S_IFREG
             let isReadOpen = msg.event.open.fflag & FREAD != 0
             let isWriteOpen = msg.event.open.fflag & (FWRITE | O_TRUNC | O_APPEND) != 0
             let isProtectedWrite = isWriteOpen && tamperProtection?.protects(path: filePath) == true
@@ -320,10 +322,21 @@ final class ESEventHandler {
                 identity: fileIdentity
             ) ?? false
             let shouldBlock = !explicitlyAllowed && (fileScanner?.allowsEnforcement(of: cached) ?? false)
+            let approvedStorageMetadataRead = isReadOpen && !isWriteOpen && !shouldBlock
+                && xpcServer?.storageOperationRegistry.permits(
+                    pid: pid,
+                    pidVersion: processIdentity.pidVersion,
+                    event: .metadataRead(path: filePath)
+                ) == true
 
             esClient?.respond(to: message, allow: !shouldBlock)
 
-            if isReadOpen, !shouldBlock,
+            if CredentialAccessPolicy.shouldEvaluateOpen(
+                isRead: isReadOpen,
+                isRegularFile: isRegularFile,
+                isBlocked: shouldBlock,
+                isApprovedStorageMetadataRead: approvedStorageMetadataRead
+            ),
                let credentialStore = CredentialAccessPolicy.sensitiveStore(at: filePath) {
                 dispatchQueue.async { [weak self] in
                     self?.observeCredentialStoreOpen(
@@ -338,7 +351,6 @@ final class ESEventHandler {
                     )
                 }
             }
-
             // Normal file opens are extremely high-volume and add no useful
             // user-facing information. Forward only an actual blocked threat.
             if shouldBlock {
@@ -579,6 +591,16 @@ final class ESEventHandler {
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
 
+                self.verifyPotentialKeychainTransferOnClose(
+                    destinationPath: filePath,
+                    actorPath: processPath,
+                    actorPID: pid,
+                    parentPID: parentPid,
+                    responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                    processIdentity: processIdentity,
+                    actorIdentity: tamperActorIdentity
+                )
+
                 // One event per completed modification replaces the former
                 // per-write XPC stream, which could deliver thousands of main
                 // actor updates for database journals and logs.
@@ -738,6 +760,15 @@ final class ESEventHandler {
                 let directory = esString(msg.event.rename.destination.new_path.dir.pointee.path)
                 destinationPath = directory + "/" + esString(msg.event.rename.destination.new_path.filename)
             }
+            if xpcServer?.storageOperationRegistry.permits(
+                pid: pid,
+                pidVersion: processIdentity.pidVersion,
+                event: .trashRename(source: srcPath, destination: destinationPath)
+            ) == true {
+                esClient?.respond(to: message, allow: true)
+                fileScanner?.cache.invalidate(path: srcPath)
+                break
+            }
             let protectsRename = tamperProtection?.protects(path: srcPath) == true
                 || tamperProtection?.protects(path: destinationPath) == true
             let consoleUser = protectsRename
@@ -827,6 +858,15 @@ final class ESEventHandler {
                 let dir  = esString(msg.event.rename.destination.new_path.dir.pointee.path)
                 let name = esString(msg.event.rename.destination.new_path.filename)
                 notifyDestPath = dir + "/" + name
+            }
+            if xpcServer?.storageOperationRegistry.permits(
+                pid: pid,
+                pidVersion: processIdentity.pidVersion,
+                event: .trashRename(source: notifySrcPath, destination: notifyDestPath)
+            ) == true {
+                fileScanner?.cache.invalidate(path: notifySrcPath)
+                fileScanner?.cache.invalidate(path: notifyDestPath)
+                break
             }
             fileScanner?.cache.invalidate(path: notifyDestPath)
             let renameActorIsPlatform = process.is_platform_binary
@@ -1123,26 +1163,37 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_ADD:
             let event = msg.event.btm_launch_item_add.pointee
-            let actor = event.instigator
+            // BTM's event process is commonly `smd`. Attribute the change to
+            // the recorded instigator, or the owning app when no instigator is
+            // present, while the ES message still owns both process records.
+            let actor = event.instigator ?? event.app
             let actorPID = actor.map { audit_token_to_pid($0.pointee.audit_token) } ?? pid
             let actorPath = actor.map { esString($0.pointee.executable.pointee.path) } ?? processPath
             let actorParentPID = actor.map { audit_token_to_pid($0.pointee.parent_audit_token) } ?? parentPid
             let appPID = event.app.map { audit_token_to_pid($0.pointee.audit_token) }
             let item = event.item.pointee
+            let itemURL = esString(item.item_url)
+            let itemPath = normalizedBTMItemPath(itemURL)
+            let appURL = esString(item.app_url)
             reportAppleSecurityEvent(
                 type: .notifyBTMLaunchItemAdd,
                 actorPath: actorPath,
                 actorPID: actorPID,
                 parentPID: actorParentPID,
                 responsiblePID: appPID,
-                filePath: esString(event.executable_path),
+                filePath: itemPath,
                 title: "Background item added",
                 family: "apple-background-task-management",
                 ruleTier: "review",
                 metadata: [
                     "appleEvent": "background-item-added",
-                    "itemURL": esString(item.item_url),
-                    "appURL": esString(item.app_url),
+                    "itemURL": itemURL,
+                    "persistencePath": itemPath,
+                    "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,
+                    "instigatorName": URL(fileURLWithPath: actorPath).lastPathComponent,
+                    "appURL": appURL,
+                    "btmAppName": normalizedBTMAppName(appURL),
+                    "executablePath": esString(event.executable_path),
                     "managed": item.managed ? "true" : "false",
                     "legacy": item.legacy ? "true" : "false"
                 ]
@@ -1150,26 +1201,34 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_NOTIFY_BTM_LAUNCH_ITEM_REMOVE:
             let event = msg.event.btm_launch_item_remove.pointee
-            let actor = event.instigator
+            let actor = event.instigator ?? event.app
             let actorPID = actor.map { audit_token_to_pid($0.pointee.audit_token) } ?? pid
             let actorPath = actor.map { esString($0.pointee.executable.pointee.path) } ?? processPath
             let actorParentPID = actor.map { audit_token_to_pid($0.pointee.parent_audit_token) } ?? parentPid
             let appPID = event.app.map { audit_token_to_pid($0.pointee.audit_token) }
             let item = event.item.pointee
+            let itemURL = esString(item.item_url)
+            let itemPath = normalizedBTMItemPath(itemURL)
+            let appURL = esString(item.app_url)
             reportAppleSecurityEvent(
                 type: .notifyBTMLaunchItemRemove,
                 actorPath: actorPath,
                 actorPID: actorPID,
                 parentPID: actorParentPID,
                 responsiblePID: appPID,
-                filePath: esString(item.item_url),
+                filePath: itemPath,
                 title: "Background item removed",
                 family: "apple-background-task-management",
-                ruleTier: "review",
+                ruleTier: "observed",
                 metadata: [
                     "appleEvent": "background-item-removed",
-                    "itemURL": esString(item.item_url),
-                    "appURL": esString(item.app_url),
+                    "deliveryLevel": "inform",
+                    "itemURL": itemURL,
+                    "persistencePath": itemPath,
+                    "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,
+                    "instigatorName": URL(fileURLWithPath: actorPath).lastPathComponent,
+                    "appURL": appURL,
+                    "btmAppName": normalizedBTMAppName(appURL),
                     "managed": item.managed ? "true" : "false",
                     "legacy": item.legacy ? "true" : "false"
                 ]
@@ -1516,17 +1575,19 @@ final class ESEventHandler {
                 teamID: teamID,
                 signingID: signingID,
                 metadata: credentialFinding.map { finding in
-                    let validatedSecretRead = finding.reason == "keychain_secret_read"
-                        && trustedSigner && responsibleChainValidated
+                    let delivery = CredentialAccessPolicy.deliveryProfile(
+                        for: finding,
+                        actorIdentityValidated: trustedSigner,
+                        responsibleChainValidated: responsibleChainValidated
+                    )
                     var metadata = [
                         "reason": finding.reason,
                         "rule": finding.reason,
-                        "ruleTier": "review",
+                        "ruleTier": delivery.tier,
                         "detectionKind": "credential-access",
-                        "signalSeverity": validatedSecretRead
-                            ? "info" : (finding.store == .passwordPrompt ? "high" : "medium"),
+                        "signalSeverity": delivery.severity,
                         "credentialStore": finding.store.rawValue,
-                        "deliveryLevel": validatedSecretRead ? "inform" : "interrupt"
+                        "deliveryLevel": delivery.deliveryLevel
                     ]
                     if let attribution {
                         metadata.merge(attribution.metadata) { current, _ in current }
@@ -1657,6 +1718,15 @@ final class ESEventHandler {
             responsiblePID: responsiblePID,
             resolver: SecCodeResponsibleProcessIdentityResolver.shared
         )
+        let parentIdentity = parentPID > 1
+            ? SecCodeResponsibleProcessIdentityResolver.shared.identity(pid: parentPID, pathHint: nil)
+            : nil
+        let parentIsValidatedAppleLaunchService = CredentialAccessPolicy.isValidatedAppleLaunchService(
+            signingID: parentIdentity?.bundleID,
+            isValidatedAppleCode: parentIdentity.map {
+                $0.signing == .applePlatform || $0.signing == .appleSigned
+            } ?? false
+        )
         let chainKey = credentialChainKey(attribution: attribution, actorPID: actorPID)
         let hasRecentKeychainCommand = credentialReportLock.withLock { () -> Bool in
             let now = Date()
@@ -1670,7 +1740,7 @@ final class ESEventHandler {
                 at: now
             ) ?? false
         }
-        guard let finding = CredentialAccessPolicy.findingForOpen(
+        let finding = CredentialAccessPolicy.findingForOpen(
             path: path,
             responsibleIdentity: attribution?.app.map(Self.credentialIdentity),
             actorIdentityValidated: actorIdentity.isValidIdentitySignature,
@@ -1678,9 +1748,66 @@ final class ESEventHandler {
                 && actorIdentity.isValidIdentitySignature,
             actorIsOwnResponsibleProcess: responsiblePID == actorPID,
             actorParentIsLaunchd: parentPID == 1,
+            actorParentIsValidatedAppleLaunchService: parentIsValidatedAppleLaunchService,
             actorIsInterpreter: Self.isInterpreter(actorPath),
             hasRecentKeychainCommand: store == .keychain && hasRecentKeychainCommand
-        ) else { return }
+        )
+
+        let pendingKeychainRead: KeychainTransferFallbackTracker.PendingRead?
+        if store == .keychain, finding?.reason != "keychain_command_correlation" {
+            pendingKeychainRead = keychainTransferFallback.recordRead(
+                sourcePath: path,
+                process: processIdentity,
+                at: Date()
+            )
+        } else {
+            pendingKeychainRead = nil
+        }
+        guard let finding else { return }
+
+        // A plain unvalidated read may be the first half of cp/ditto/manual
+        // byte copying. Briefly defer its review item so a following external
+        // create/write can replace it with one protected transfer incident.
+        if store == .keychain, finding.reason == "credential_store_access" {
+            dispatchQueue.asyncAfter(deadline: .now() + 30.1) { [weak self] in
+                guard let self,
+                      let pendingKeychainRead,
+                      self.keychainTransferFallback.hasPendingRead(
+                          process: processIdentity,
+                          matching: pendingKeychainRead
+                      )
+                else { return }
+                self.keychainTransferFallback.cancel(process: processIdentity)
+                self.reportCredentialOpenFinding(
+                    finding,
+                    path: path,
+                    actorPath: actorPath,
+                    actorPID: actorPID,
+                    parentPID: parentPID,
+                    attribution: attribution
+                )
+            }
+            return
+        }
+
+        reportCredentialOpenFinding(
+            finding,
+            path: path,
+            actorPath: actorPath,
+            actorPID: actorPID,
+            parentPID: parentPID,
+            attribution: attribution
+        )
+    }
+
+    private func reportCredentialOpenFinding(
+        _ finding: CredentialAccessPolicy.Finding,
+        path: String,
+        actorPath: String,
+        actorPID: Int32,
+        parentPID: Int32,
+        attribution: ResponsibleAppAttribution?
+    ) {
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor
         // boundary as well as in Core so a noisy reader cannot flood delivery.
@@ -1727,6 +1854,44 @@ final class ESEventHandler {
         ))
     }
 
+    private func verifyPotentialKeychainTransferOnClose(
+        destinationPath: String,
+        actorPath: String,
+        actorPID: Int32,
+        parentPID: Int32,
+        responsiblePID: Int32?,
+        processIdentity: ProcessInstanceIdentity,
+        actorIdentity: TamperActorIdentity
+    ) {
+        guard let pending = keychainTransferFallback.pendingReadForExternalClose(
+            destinationPath: destinationPath,
+            process: processIdentity,
+            at: Date()
+        ) else { return }
+        guard let sourceSize = fileSize(at: pending.sourcePath),
+              let destinationSize = fileSize(at: destinationPath),
+              let sourcePrefix = boundedFileSample(at: pending.sourcePath, maximumBytes: 65_536),
+              let destinationPrefix = boundedFileSample(at: destinationPath, maximumBytes: 65_536),
+              KeychainTransferContentPolicy.isVerifiedTransfer(
+                  sourcePrefix: sourcePrefix,
+                  sourceSize: sourceSize,
+                  destinationPrefix: destinationPrefix,
+                  destinationSize: destinationSize
+              )
+        else { return }
+        reportKeychainTransfer(
+            sourcePath: pending.sourcePath,
+            destinationPath: destinationPath,
+            actorPath: actorPath,
+            actorPID: actorPID,
+            parentPID: parentPID,
+            responsiblePID: responsiblePID,
+            processIdentity: processIdentity,
+            actorIdentity: actorIdentity,
+            operation: "verified-close"
+        )
+    }
+
     private func reportKeychainTransfer(
         sourcePath: String,
         destinationPath: String,
@@ -1738,6 +1903,7 @@ final class ESEventHandler {
         actorIdentity: TamperActorIdentity,
         operation: String
     ) {
+        keychainTransferFallback.cancel(process: processIdentity)
         guard CredentialAccessPolicy.shouldReportKeychainTransfer(
             sourcePath: sourcePath,
             destinationPath: destinationPath,
@@ -1774,6 +1940,7 @@ final class ESEventHandler {
             "signalSeverity": finding.severity,
             "credentialStore": finding.store.rawValue,
             "credentialOperation": operation,
+            "credentialSource": sourcePath,
             "credentialDestination": destinationPath,
             "deliveryLevel": "interrupt"
         ]
@@ -2099,6 +2266,12 @@ final class ESEventHandler {
         return try? handle.read(upToCount: maximumBytes)
     }
 
+    private func fileSize(at path: String) -> UInt64? {
+        guard let number = try? FileManager.default.attributesOfItem(atPath: path)[.size]
+            as? NSNumber else { return nil }
+        return number.uint64Value
+    }
+
     private func isTrustedPlatformActor(_ path: String) -> Bool {
         path.hasPrefix("/System/Library/") ||
             path.hasPrefix("/usr/libexec/") ||
@@ -2236,6 +2409,22 @@ final class ESEventHandler {
     /// Uses the token length; ES does not guarantee NUL termination.
     private func esString(_ token: es_string_token_t) -> String {
         esOptionalString(token) ?? "<unknown>"
+    }
+
+    private func normalizedBTMItemPath(_ value: String) -> String {
+        guard let url = URL(string: value), url.isFileURL else { return value }
+        return url.path
+    }
+
+    private func normalizedBTMAppName(_ value: String) -> String {
+        let path: String
+        if let url = URL(string: value), url.isFileURL {
+            path = url.path
+        } else {
+            path = value
+        }
+        let component = URL(fileURLWithPath: path).lastPathComponent
+        return component.hasSuffix(".app") ? String(component.dropLast(4)) : component
     }
 
     private func esOptionalString(_ token: es_string_token_t) -> String? {

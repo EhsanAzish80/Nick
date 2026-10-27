@@ -3,6 +3,139 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+
+enum StorageOperationKind: String, Codable, Sendable {
+    case sizeScan
+    case trashCleanup
+}
+
+struct StorageOperationRequest: Codable, Sendable {
+    let operationID: UUID
+    let kind: StorageOperationKind
+    let actorPID: Int32
+    let actorPIDVersion: Int32
+    let scopedPaths: [String]
+    let expiresAt: Date
+}
+
+/// Root-side, short-lived approval for one user-clicked Storage operation.
+/// This is deliberately process-instance, event-kind and resolved-path bound;
+/// it is not a self-trust or signing exemption.
+final class StorageOperationRegistry: @unchecked Sendable {
+    enum Event: Sendable {
+        case metadataRead(path: String)
+        case trashRename(source: String, destination: String)
+    }
+
+    private struct ActiveOperation {
+        let request: StorageOperationRequest
+        let scopes: [String]
+    }
+
+    private let lock = NSLock()
+    private var active: ActiveOperation?
+    private var usedIDs: Set<UUID> = []
+    private let now: @Sendable () -> Date
+
+    init(now: @escaping @Sendable () -> Date = Date.init) {
+        self.now = now
+    }
+
+    func register(
+        _ request: StorageOperationRequest,
+        authenticatedPID: Int32,
+        authenticatedPIDVersion: Int32
+    ) -> Bool {
+        let current = now()
+        guard request.actorPID == authenticatedPID,
+              request.actorPIDVersion == authenticatedPIDVersion,
+              request.actorPIDVersion > 0,
+              request.expiresAt > current,
+              request.expiresAt.timeIntervalSince(current) <= 600,
+              request.scopedPaths.isEmpty == false,
+              request.scopedPaths.count <= 256
+        else { return false }
+
+        let scopes = request.scopedPaths.compactMap(Self.resolvedPath)
+        guard scopes.count == request.scopedPaths.count,
+              scopes.allSatisfy({ Self.isNeverSuppressPath($0) == false })
+        else { return false }
+
+        return lock.withLock {
+            guard active == nil, usedIDs.insert(request.operationID).inserted else { return false }
+            active = ActiveOperation(request: request, scopes: scopes)
+            return true
+        }
+    }
+
+    func complete(operationID: UUID) -> StorageOperationRequest? {
+        lock.withLock {
+            guard let request = active?.request, request.operationID == operationID else { return nil }
+            active = nil
+            return request
+        }
+    }
+
+    func cancelForDisconnectedProcess(pid: Int32) {
+        lock.withLock {
+            if active?.request.actorPID == pid { active = nil }
+        }
+    }
+
+    func permits(pid: Int32, pidVersion: Int32, event: Event) -> Bool {
+        lock.withLock {
+            guard let active else { return false }
+            guard active.request.expiresAt > now() else {
+                self.active = nil
+                return false
+            }
+            guard active.request.actorPID == pid,
+                  active.request.actorPIDVersion == pidVersion else { return false }
+
+            switch (active.request.kind, event) {
+            case (.sizeScan, .metadataRead(let path)):
+                guard let resolved = Self.resolvedPath(path),
+                      Self.isNeverSuppressPath(resolved) == false else { return false }
+                return active.scopes.contains { Self.contains(resolved, scope: $0) }
+            case (.trashCleanup, .trashRename(let source, let destination)):
+                guard let resolvedSource = Self.resolvedPath(source),
+                      let resolvedDestination = Self.resolvedPath(destination),
+                      Self.isNeverSuppressPath(resolvedSource) == false,
+                      Self.isNeverSuppressPath(resolvedDestination) == false,
+                      Self.isUserTrashPath(resolvedDestination) else { return false }
+                return active.scopes.contains { Self.contains(resolvedSource, scope: $0) }
+            default:
+                return false
+            }
+        }
+    }
+
+    private static func resolvedPath(_ path: String) -> String? {
+        guard path.isEmpty == false, path.utf8.count <= 4_096, path.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private static func contains(_ path: String, scope: String) -> Bool {
+        path == scope || path.hasPrefix(scope + "/")
+    }
+
+    private static func isUserTrashPath(_ path: String) -> Bool {
+        path.contains("/.Trash/") || path.contains("/.Trashes/")
+    }
+
+    private static func isNeverSuppressPath(_ path: String) -> Bool {
+        let lower = path.lowercased()
+        let forbidden = [
+            "/library/keychains/", "/login.keychain", "/cookies", "/login data",
+            "/logins.json", "/key4.db", "/wallet", "/.aws/", "/.config/gcloud/",
+            "/.kube/", "/.docker/config.json", "/library/launchagents",
+            "/library/launchdaemons", "/applications/nick.app",
+            "/library/systemextensions/com.ehsanazish.nick.",
+            "/library/application support/com.ehsanazish.nick/"
+        ]
+        return forbidden.contains { lower.contains($0) }
+    }
+}
 import Security
 
 enum ProtectionAuthorizationExternalFormVerifier {
@@ -333,6 +466,17 @@ enum IncidentStoreWritePolicy {
     /// Returns the root-published health snapshot. The app never reads the
     /// privileged health file directly.
     func getExtensionHealth(reply: @escaping (Data) -> Void)
+
+    /// Registers one user-clicked, process-instance-bound Storage operation.
+    func registerStorageOperation(_ payload: Data, reply: @escaping (Bool) -> Void)
+
+    /// Consumes the active operation and emits one informational timeline row.
+    func completeStorageOperation(
+        operationID: String,
+        itemCount: Int,
+        bytesMoved: Int64,
+        reply: @escaping (Bool) -> Void
+    )
 
     /// Re-scans and moves a confirmed threat into Nick's protected vault.
     /// The encoded record lets the app update Quarantine immediately.

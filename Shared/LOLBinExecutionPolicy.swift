@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import CryptoKit
 
 /// Pure, allocation-bounded command classifier shared by the Endpoint Security
 /// exec path and the app tests. It records evidence only; blocking and incident
@@ -140,6 +141,12 @@ enum LOLBinExecutionPolicy {
 /// Security extension supplies identities that have already been validated by
 /// SecCode; this type never opens a credential file or records its contents.
 enum CredentialAccessPolicy {
+    struct DeliveryProfile: Equatable, Sendable {
+        let tier: String
+        let severity: String
+        let deliveryLevel: String
+    }
+
     struct RecentHiddenPrompt: Equatable, Sendable {
         let chainKey: String
         let armedAt: Date
@@ -218,6 +225,31 @@ enum CredentialAccessPolicy {
         "2BUA8C4S2C|com.1password.1password"
     ]
 
+    /// Apple launch services which legitimately own long-lived platform
+    /// daemons. The caller must validate the code object first; an executable
+    /// name or path alone never satisfies this policy.
+    private static let appleLaunchServiceSigningIDs: Set<String> = [
+        "com.apple.xpc.launchd",
+        "com.apple.xpc.launchd_sim"
+    ]
+
+    static func isValidatedAppleLaunchService(
+        signingID: String?,
+        isValidatedAppleCode: Bool
+    ) -> Bool {
+        isValidatedAppleCode
+            && signingID.map(appleLaunchServiceSigningIDs.contains) == true
+    }
+
+    static func shouldEvaluateOpen(
+        isRead: Bool,
+        isRegularFile: Bool,
+        isBlocked: Bool,
+        isApprovedStorageMetadataRead: Bool
+    ) -> Bool {
+        isRead && isRegularFile && !isBlocked && !isApprovedStorageMetadataRead
+    }
+
     static func findingForOpen(
         path: String,
         responsibleIdentity: ValidatedIdentity?,
@@ -225,6 +257,7 @@ enum CredentialAccessPolicy {
         actorIsValidatedApplePlatform: Bool = false,
         actorIsOwnResponsibleProcess: Bool = false,
         actorParentIsLaunchd: Bool = false,
+        actorParentIsValidatedAppleLaunchService: Bool = false,
         actorIsInterpreter: Bool = false,
         hasRecentKeychainCommand: Bool = false
     ) -> Finding? {
@@ -257,6 +290,7 @@ enum CredentialAccessPolicy {
             actorIsValidatedApplePlatform: actorIsValidatedApplePlatform,
             actorIsOwnResponsibleProcess: actorIsOwnResponsibleProcess,
             actorParentIsLaunchd: actorParentIsLaunchd,
+            actorParentIsValidatedAppleLaunchService: actorParentIsValidatedAppleLaunchService,
             actorIsInterpreter: actorIsInterpreter
         )
     }
@@ -287,10 +321,11 @@ enum CredentialAccessPolicy {
         actorIsValidatedApplePlatform: Bool = false,
         actorIsOwnResponsibleProcess: Bool = false,
         actorParentIsLaunchd: Bool = false,
+        actorParentIsValidatedAppleLaunchService: Bool = false,
         actorIsInterpreter: Bool = false
     ) -> Finding? {
         if actorIsValidatedApplePlatform,
-           actorParentIsLaunchd,
+           (actorParentIsLaunchd || actorParentIsValidatedAppleLaunchService),
            !actorIsInterpreter {
             return nil
         }
@@ -371,16 +406,68 @@ enum CredentialAccessPolicy {
             )
         }
 
-        guard executable == "security",
-              !isTrustedCredentialApplication(responsibleIdentity) else { return nil }
+        guard executable == "security" else { return nil }
         let lowered = arguments.map { $0.lowercased() }
+        let safeStorage = isBrowserSafeStorageRead(arguments: arguments)
+        let requestsSecretValue = lowered.contains { argument in
+            guard argument.hasPrefix("-") else { return false }
+            return argument.dropFirst().contains("w")
+        }
+        // Safe Storage keys unlock browser credentials. They stay loud even
+        // when the initiating chain is otherwise validated or trusted.
+        if lowered.contains("find-generic-password"), requestsSecretValue, safeStorage {
+            return Finding(
+                title: "Browser Safe Storage key read needs review",
+                reason: "keychain_secret_read",
+                store: .keychain,
+                tier: "review",
+                severity: "high"
+            )
+        }
+        guard !isTrustedCredentialApplication(responsibleIdentity) else { return nil }
         if lowered.contains("dump-keychain") {
             return Finding(title: "Keychain dump command needs review", reason: "keychain_dump", store: .keychain)
         }
-        if lowered.contains("find-generic-password"), lowered.contains("-w") {
-            return Finding(title: "Keychain secret read needs review", reason: "keychain_secret_read", store: .keychain)
+        if lowered.contains("find-generic-password"), requestsSecretValue {
+            return Finding(
+                title: "Keychain secret read needs review",
+                reason: "keychain_secret_read",
+                store: .keychain,
+                tier: "review",
+                severity: "medium"
+            )
         }
         return nil
+    }
+
+    static func deliveryProfile(
+        for finding: Finding,
+        actorIdentityValidated: Bool,
+        responsibleChainValidated: Bool
+    ) -> DeliveryProfile {
+        let validatedRoutineSecretRead = finding.reason == "keychain_secret_read"
+            && finding.severity != "high"
+            && actorIdentityValidated
+            && responsibleChainValidated
+        return DeliveryProfile(
+            tier: finding.tier,
+            severity: validatedRoutineSecretRead ? "info" : finding.severity,
+            deliveryLevel: validatedRoutineSecretRead ? "inform" : "interrupt"
+        )
+    }
+
+    static func isBrowserSafeStorageRead(arguments: [String]) -> Bool {
+        let browserServices = [
+            "chrome safe storage", "brave safe storage", "edge safe storage",
+            "arc safe storage", "opera safe storage", "vivaldi safe storage",
+            "chromium safe storage"
+        ]
+        return arguments.contains { argument in
+            let normalized = argument
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            return browserServices.contains(normalized)
+        }
     }
 
     private static func isTrustedCredentialApplication(_ identity: ValidatedIdentity?) -> Bool {
@@ -406,7 +493,7 @@ enum CredentialAccessPolicy {
         }
     }
 
-    private static func isInsideKeychainsDirectory(_ rawPath: String) -> Bool {
+    static func isInsideKeychainsDirectory(_ rawPath: String) -> Bool {
         let components = URL(fileURLWithPath: rawPath)
             .standardizedFileURL.pathComponents.map { $0.lowercased() }
         guard let library = components.lastIndex(of: "library"),
@@ -463,5 +550,92 @@ enum CredentialAccessPolicy {
         }
         if lower.contains("/library/passes/") || lower.hasSuffix(".pkpass") { return .walletPass }
         return nil
+    }
+}
+
+/// Correlates the ordinary OPEN + CREATE/WRITE sequence used by tools which
+/// copy bytes in user space instead of asking the kernel for COPYFILE/CLONE.
+/// Process-instance identity prevents PID reuse from joining unrelated I/O.
+struct KeychainTransferFallbackTracker: Sendable {
+    struct PendingRead: Equatable, Sendable {
+        let sourcePath: String
+        let recordedAt: Date
+    }
+
+    private var reads: [ProcessInstanceIdentity: PendingRead] = [:]
+    let window: TimeInterval
+
+    init(window: TimeInterval = 30) {
+        self.window = window
+    }
+
+    @discardableResult
+    mutating func recordRead(
+        sourcePath: String,
+        process: ProcessInstanceIdentity,
+        at date: Date
+    ) -> PendingRead? {
+        guard CredentialAccessPolicy.sensitiveStore(at: sourcePath) == .keychain else { return nil }
+        prune(at: date)
+        let pending = PendingRead(sourcePath: sourcePath, recordedAt: date)
+        reads[process] = pending
+        return pending
+    }
+
+    mutating func pendingReadForExternalClose(
+        destinationPath: String,
+        process: ProcessInstanceIdentity,
+        at date: Date
+    ) -> PendingRead? {
+        prune(at: date)
+        guard !CredentialAccessPolicy.isInsideKeychainsDirectory(destinationPath),
+              let pending = reads[process],
+              date.timeIntervalSince(pending.recordedAt) >= 0,
+              date.timeIntervalSince(pending.recordedAt) <= window
+        else { return nil }
+        return pending
+    }
+
+    mutating func cancel(process: ProcessInstanceIdentity) {
+        reads.removeValue(forKey: process)
+    }
+
+    func hasPendingRead(
+        process: ProcessInstanceIdentity,
+        matching pending: PendingRead
+    ) -> Bool {
+        reads[process] == pending
+    }
+
+    private mutating func prune(at date: Date) {
+        reads = reads.filter {
+            date.timeIntervalSince($0.value.recordedAt) >= 0
+                && date.timeIntervalSince($0.value.recordedAt) <= window
+        }
+    }
+}
+
+/// Content proof for user-space keychain copies which appear to Endpoint
+/// Security as ordinary OPEN + CREATE/WRITE + CLOSE events. Callers obtain the
+/// bounded samples off the ES callback thread.
+enum KeychainTransferContentPolicy {
+    private static let keychainMagic = Data("kych".utf8)
+    private static let sqliteMagic = Data("SQLite format 3\0".utf8)
+
+    static func isVerifiedTransfer(
+        sourcePrefix: Data,
+        sourceSize: UInt64,
+        destinationPrefix: Data,
+        destinationSize: UInt64
+    ) -> Bool {
+        if destinationPrefix.starts(with: keychainMagic) {
+            return true
+        }
+        guard sourcePrefix.starts(with: sqliteMagic),
+              sourceSize == destinationSize,
+              !sourcePrefix.isEmpty,
+              sourcePrefix.count == destinationPrefix.count
+        else { return false }
+        return SHA256.hash(data: sourcePrefix) == SHA256.hash(data: destinationPrefix)
     }
 }

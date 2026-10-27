@@ -165,25 +165,67 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
+        if let launchItem = signals.first(where: {
+            $0.metadata["appleEvent"] == "background-item-added"
+        }) {
+            let path = launchItem.metadata["persistencePath"]
+                ?? launchItem.metadata["itemURL"]
+                ?? launchItem.fileInfo?.path
+                ?? "an unknown launch-item path"
+            let label = launchItem.metadata["launchItemLabel"]
+                ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            let fimWriter = signals.first(where: { $0.metadata["fimStatus"] != nil })
+            let btmActor = userReadableProcessName(launchItem.metadata["instigatorName"])
+                ?? userReadableProcessName(launchItem.processInfo?.name)
+            let btmIsSystemService = ["smd", "launchd", "backgroundtaskmanagementagent"]
+                .contains(btmActor?.lowercased() ?? "")
+            let actor = (btmIsSystemService ? userReadableProcessName(fimWriter?.processInfo?.name) : nil)
+                ?? btmActor
+                ?? "Unknown actor"
+            let app = (btmIsSystemService ? fimWriter?.metadata["responsibleAppName"] : nil)
+                ?? launchItem.metadata["responsibleAppName"]
+                ?? launchItem.metadata["btmAppName"]
+                ?? "Unknown app"
+            return AlertPattern(
+                headline: "Added a launch agent: \(label) (\(actor), via \(app))",
+                explanation: "\(actor) added the launch agent \(label) at \(path), attributed to \(app). Launch agents can start automatically when you sign in.",
+                assessment: "Needs your review",
+                recommendedAction: "Review the launch agent and remove it if you did not expect this change.",
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
+        if let removal = signals.first(where: {
+            $0.metadata["appleEvent"] == "background-item-removed"
+        }) {
+            let path = removal.metadata["persistencePath"]
+                ?? removal.metadata["itemURL"]
+                ?? removal.fileInfo?.path
+                ?? "an unknown background item"
+            let label = removal.metadata["launchItemLabel"]
+                ?? URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            return AlertPattern(
+                headline: "Removed a background item: \(label)",
+                explanation: "macOS recorded removal of the background item \(label) at \(path).",
+                assessment: "Informational",
+                recommendedAction: "No action is needed if you expected this removal.",
+                severity: .safe,
+                actions: [.showDetails]
+            )
+        }
+
         if let credential = signals.first(where: {
             $0.metadata["detectionKind"] == "credential-access"
         }) {
             let storeName = credential.metadata["credentialStore"] ?? "credential data"
             let reason = credential.metadata["reason"] ?? credential.metadata["rule"] ?? ""
             let behavior: String = switch reason {
-            case "credential_store_access": "Opened the Keychain"
+            case "credential_store_access": Self.credentialStoreAccessTitle(storeName)
             case "keychain_store_transfer": "Copied the Keychain"
-            case "keychain_secret_read", "keychain_command_correlation": "Read a Keychain secret"
-            default: switch storeName {
-                case CredentialAccessPolicy.Store.browserCookies.rawValue: "Opened browser cookies"
-                case CredentialAccessPolicy.Store.browserLogins.rawValue: "Opened saved browser logins"
-                case CredentialAccessPolicy.Store.walletPass.rawValue: "Opened Wallet passes"
-                case CredentialAccessPolicy.Store.cloudCredential.rawValue: "Opened cloud credentials"
-                case CredentialAccessPolicy.Store.messagingSession.rawValue: "Opened a messaging session"
-                case CredentialAccessPolicy.Store.notesData.rawValue: "Opened Notes data"
-                case CredentialAccessPolicy.Store.keychain.rawValue: "Opened the Keychain"
-                default: "Opened \(storeName)"
-                }
+            case "keychain_secret_read", "keychain_command_correlation", "keychain_dump":
+                "Read a Keychain secret"
+            case "hidden_password_prompt": "Requested a hidden password"
+            default: Self.credentialStoreAccessTitle(storeName)
             }
             let actor = credential.processInfo?.name
                 ?? credential.processInfo.map { URL(fileURLWithPath: $0.path).lastPathComponent }
@@ -198,11 +240,21 @@ final class UserFacingAlertBuilder: Sendable {
             case "keychain_command_correlation": "a recent hidden password prompt in the same responsible chain"
             case "keychain_secret_read": "a command that requested a stored Keychain secret"
             case "credential_store_access": "a credential-store access rule"
+            case "hidden_password_prompt": "a hidden password prompt"
+            case "keychain_dump": "a command that requested Keychain contents"
             default: "the \(reason.isEmpty ? "credential access" : reason) rule"
+            }
+            let explanation: String
+            if reason == "keychain_store_transfer" {
+                let source = credential.metadata["credentialSource"] ?? "an unknown Keychain path"
+                let destination = credential.metadata["credentialDestination"] ?? "an unknown destination"
+                explanation = "\(actor) copied Keychain data from \(source) → \(destination) in the responsible chain \(chainText), triggering \(trigger)."
+            } else {
+                explanation = "\(actor) performed \(behavior.lowercased()) in the responsible chain \(chainText), triggering \(trigger)."
             }
             return AlertPattern(
                 headline: "\(behavior) (\(context))",
-                explanation: "\(actor) performed \(behavior.lowercased()) in the responsible chain \(chainText), triggering \(trigger).",
+                explanation: explanation,
                 assessment: "Needs your review",
                 recommendedAction: "Check whether you expected this app to access the credential store.",
                 severity: credential.metadata["ruleTier"] == "protected" ? .critical : .warning,
@@ -490,6 +542,23 @@ final class UserFacingAlertBuilder: Sendable {
         }
     }
 
+    private static func credentialStoreAccessTitle(_ storeName: String) -> String {
+        switch storeName {
+        case CredentialAccessPolicy.Store.browserCookies.rawValue: "Opened browser cookies"
+        case CredentialAccessPolicy.Store.browserLogins.rawValue: "Opened saved browser logins"
+        case CredentialAccessPolicy.Store.keychain.rawValue: "Opened the Keychain"
+        case CredentialAccessPolicy.Store.sshPrivateKey.rawValue: "Opened an SSH private key"
+        case CredentialAccessPolicy.Store.cryptocurrencyWallet.rawValue: "Opened cryptocurrency wallet data"
+        case CredentialAccessPolicy.Store.browserWallet.rawValue: "Opened browser wallet data"
+        case CredentialAccessPolicy.Store.cloudCredential.rawValue: "Opened cloud credentials"
+        case CredentialAccessPolicy.Store.messagingSession.rawValue: "Opened a messaging session"
+        case CredentialAccessPolicy.Store.notesData.rawValue: "Opened Notes data"
+        case CredentialAccessPolicy.Store.walletPass.rawValue: "Opened Wallet passes"
+        case CredentialAccessPolicy.Store.passwordPrompt.rawValue: "Requested a hidden password"
+        default: "Opened \(storeName)"
+        }
+    }
+
     private func isSimulatorCapture(_ signal: ThreatSignal) -> Bool {
         guard signal.source == .avCapture, let path = signal.processInfo?.path else { return false }
         return path.contains("/CoreSimulator/") || path.contains(".simruntime/")
@@ -552,10 +621,17 @@ final class UserFacingAlertBuilder: Sendable {
     }
 
     private func genericHeadline(alert: ThreatAlert, processName: String?) -> String {
-        if let processName {
-            return "\(processName) needs your review"
+        if !alert.title.isEmpty,
+           !alert.title.lowercased().contains("needs your review"),
+           !alert.title.lowercased().contains("activity observed") {
+            return alert.title
         }
-        return alert.title.isEmpty ? "Security activity needs your review" : alert.title
+        let reason = alert.contributingSignals.compactMap {
+            $0.metadata["reason"] ?? $0.metadata["rule"] ?? $0.metadata["appleEvent"]
+        }.first ?? "security-check"
+        let readable = reason.replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+        return "Detected: \(readable.prefix(1).uppercased() + String(readable.dropFirst()))"
     }
 
     private func genericExplanation(alert: ThreatAlert, processName: String?) -> String {

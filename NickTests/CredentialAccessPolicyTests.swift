@@ -6,6 +6,17 @@ final class CredentialAccessPolicyTests: XCTestCase {
         bundleID: nil, teamID: nil, signingValidated: false, isApplePlatform: false
     )
 
+    func testCredentialClassificationRequiresARegularFileOpen() {
+        XCTAssertFalse(CredentialAccessPolicy.shouldEvaluateOpen(
+            isRead: true, isRegularFile: false, isBlocked: false,
+            isApprovedStorageMetadataRead: false
+        ), "enumerating a credential directory is not credential access")
+        XCTAssertTrue(CredentialAccessPolicy.shouldEvaluateOpen(
+            isRead: true, isRegularFile: true, isBlocked: false,
+            isApprovedStorageMetadataRead: false
+        ), "opening a regular credential file remains eligible")
+    }
+
     func testUntrustedProcessReadingCredentialStoresProducesMetadataOnlyFindings() {
         let cases: [(String, CredentialAccessPolicy.Store)] = [
             ("/Users/test/Library/Application Support/Google/Chrome/Default/Cookies", .browserCookies),
@@ -115,6 +126,38 @@ final class CredentialAccessPolicyTests: XCTestCase {
             arguments: ["security", "find-generic-password", "-a", "dummy"],
             responsibleIdentity: unknown
         ))
+    }
+
+    func testBrowserSafeStorageSecretReadsStayLoudWhileRoutineTokenReadsDigest() throws {
+        let terminal = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.apple.Terminal", teamID: "APPLE",
+            signingValidated: true, isApplePlatform: true
+        )
+        let safeStorage = try XCTUnwrap(CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/security",
+            arguments: ["security", "find-generic-password", "-wa", "Chrome Safe Storage"],
+            responsibleIdentity: terminal
+        ))
+        let loud = CredentialAccessPolicy.deliveryProfile(
+            for: safeStorage,
+            actorIdentityValidated: true,
+            responsibleChainValidated: true
+        )
+        XCTAssertEqual(safeStorage.severity, "high")
+        XCTAssertEqual(loud, .init(tier: "review", severity: "high", deliveryLevel: "interrupt"))
+
+        let token = try XCTUnwrap(CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/security",
+            arguments: ["security", "find-generic-password", "-s", "gh:github.com", "-w"],
+            responsibleIdentity: terminal
+        ))
+        let digest = CredentialAccessPolicy.deliveryProfile(
+            for: token,
+            actorIdentityValidated: true,
+            responsibleChainValidated: true
+        )
+        XCTAssertEqual(token.severity, "medium")
+        XCTAssertEqual(digest, .init(tier: "review", severity: "info", deliveryLevel: "inform"))
     }
 
     func testPublicSSHMaterialIsNotClassifiedAsCredentialContent() {
@@ -339,6 +382,100 @@ final class CredentialAccessPolicyTests: XCTestCase {
             actorIsOwnResponsibleProcess: true,
             actorParentIsLaunchd: true,
             actorIsInterpreter: true
+        ))
+    }
+
+    func testSimulatorLaunchServiceOwnedPlatformDaemonIsSilentForOwnCookieStore() {
+        XCTAssertTrue(CredentialAccessPolicy.isValidatedAppleLaunchService(
+            signingID: "com.apple.xpc.launchd_sim",
+            isValidatedAppleCode: true
+        ))
+        XCTAssertFalse(CredentialAccessPolicy.isValidatedAppleLaunchService(
+            signingID: "com.apple.xpc.launchd_sim",
+            isValidatedAppleCode: false
+        ), "A copied name or self-reported identifier must not create trust")
+
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/HTTPStorages/com.apple.amsaccountsd/Cookies.binarycookies",
+            responsibleIdentity: nil,
+            actorIdentityValidated: true,
+            actorIsValidatedApplePlatform: true,
+            actorIsOwnResponsibleProcess: true,
+            actorParentIsLaunchd: false,
+            actorParentIsValidatedAppleLaunchService: true,
+            actorIsInterpreter: false
+        ))
+    }
+
+    func testContentVerifiedCloseDetectsCpDittoAndPythonKeychainCopies() {
+        let process = Nick.ProcessInstanceIdentity(
+            pid: 77, startSeconds: 100, startMicroseconds: 2, pidVersion: 9
+        )
+        let source = "/tmp/home/Library/Keychains/login.keychain-db"
+        let base = Date(timeIntervalSince1970: 1_000)
+
+        for (offset, destination) in [
+            "/tmp/copied-by-cp.db",
+            "/tmp/copied-by-ditto.db",
+            "/tmp/copied-by-python.db"
+        ].enumerated() {
+            var tracker = KeychainTransferFallbackTracker()
+            tracker.recordRead(sourcePath: source, process: process, at: base)
+            let transfer = tracker.pendingReadForExternalClose(
+                destinationPath: destination,
+                process: process,
+                at: base.addingTimeInterval(Double(offset) + 1)
+            )
+            XCTAssertEqual(transfer?.sourcePath, source)
+            XCTAssertTrue(KeychainTransferContentPolicy.isVerifiedTransfer(
+                sourcePrefix: Data("kych source".utf8),
+                sourceSize: 11,
+                destinationPrefix: Data("kych copy".utf8),
+                destinationSize: 9
+            ), destination)
+        }
+    }
+
+    func testContentVerifiedCloseRejectsUnrelatedLogAfterKeychainRead() {
+        XCTAssertFalse(KeychainTransferContentPolicy.isVerifiedTransfer(
+            sourcePrefix: Data("kych source".utf8),
+            sourceSize: 11,
+            destinationPrefix: Data("ordinary release log".utf8),
+            destinationSize: 20
+        ))
+    }
+
+    func testSQLiteKeychainCopyRequiresSameSizeAndMatchingFirst64KBHash() {
+        let prefix = Data("SQLite format 3\0".utf8) + Data(repeating: 0x41, count: 256)
+        XCTAssertTrue(KeychainTransferContentPolicy.isVerifiedTransfer(
+            sourcePrefix: prefix, sourceSize: 1_024,
+            destinationPrefix: prefix, destinationSize: 1_024
+        ))
+        XCTAssertFalse(KeychainTransferContentPolicy.isVerifiedTransfer(
+            sourcePrefix: prefix, sourceSize: 1_024,
+            destinationPrefix: prefix, destinationSize: 2_048
+        ))
+        XCTAssertFalse(KeychainTransferContentPolicy.isVerifiedTransfer(
+            sourcePrefix: prefix, sourceSize: 1_024,
+            destinationPrefix: Data("ordinary release log".utf8), destinationSize: 1_024
+        ))
+    }
+
+    func testInFolderAppleDaemonMaintenanceDoesNotBecomeFallbackTransfer() {
+        var tracker = KeychainTransferFallbackTracker()
+        let process = Nick.ProcessInstanceIdentity(
+            pid: 88, startSeconds: 200, startMicroseconds: 3, pidVersion: 10
+        )
+        let base = Date(timeIntervalSince1970: 2_000)
+        tracker.recordRead(
+            sourcePath: "/Users/test/Library/Keychains/login.keychain-db",
+            process: process,
+            at: base
+        )
+        XCTAssertNil(tracker.pendingReadForExternalClose(
+            destinationPath: "/Users/test/Library/Keychains/login.keychain-db-new",
+            process: process,
+            at: base.addingTimeInterval(1)
         ))
     }
 

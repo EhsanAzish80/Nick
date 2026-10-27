@@ -58,7 +58,9 @@ final class UserFacingAlertBuilderTests: XCTestCase {
             ("credential_store_access", "Opened the Keychain"),
             ("keychain_store_transfer", "Copied the Keychain"),
             ("keychain_secret_read", "Read a Keychain secret"),
-            ("keychain_command_correlation", "Read a Keychain secret")
+            ("keychain_command_correlation", "Read a Keychain secret"),
+            ("keychain_dump", "Read a Keychain secret"),
+            ("hidden_password_prompt", "Requested a hidden password")
         ]
         for (reason, expected) in cases {
             let signal = ThreatSignal(
@@ -90,6 +92,48 @@ final class UserFacingAlertBuilderTests: XCTestCase {
             XCTAssertTrue(
                 UserFacingAlertBuilder.shared.build(from: alert).headline.hasPrefix(expected),
                 reason
+            )
+        }
+    }
+
+    func testCredentialStoreAccessTitlesAreDerivedFromStoreReasonPair() {
+        let cases: [(CredentialAccessPolicy.Store, String)] = [
+            (.browserCookies, "Opened browser cookies"),
+            (.browserLogins, "Opened saved browser logins"),
+            (.keychain, "Opened the Keychain"),
+            (.sshPrivateKey, "Opened an SSH private key"),
+            (.cryptocurrencyWallet, "Opened cryptocurrency wallet data"),
+            (.browserWallet, "Opened browser wallet data"),
+            (.cloudCredential, "Opened cloud credentials"),
+            (.messagingSession, "Opened a messaging session"),
+            (.notesData, "Opened Notes data"),
+            (.walletPass, "Opened Wallet passes"),
+            (.passwordPrompt, "Requested a hidden password")
+        ]
+        for (store, expected) in cases {
+            let signal = ThreatSignal(
+                source: .endpointSecurity,
+                severity: .medium,
+                title: "Legacy stored title",
+                description: "Legacy copy",
+                context: ThreatSignalContext(metadata: [
+                    "detectionKind": "credential-access",
+                    "reason": "credential_store_access",
+                    "credentialStore": store.rawValue,
+                    "ruleTier": "review"
+                ])
+            )
+            let alert = ThreatAlert(
+                score: 0.5,
+                content: .init(
+                    title: "Legacy stored title", description: "Legacy copy",
+                    severity: .medium, recommendedAction: "Review"
+                ),
+                contributingSignals: [signal]
+            )
+            XCTAssertTrue(
+                UserFacingAlertBuilder.shared.build(from: alert).headline.hasPrefix(expected),
+                store.rawValue
             )
         }
     }
@@ -245,6 +289,102 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         XCTAssertFalse(result.explanation.lowercased().contains("taken protective action"))
         XCTAssertFalse(result.explanation.lowercased().contains("blocked"))
         XCTAssertTrue(result.explanation.contains("does not by itself prove"))
+    }
+
+    func test_backgroundTaskLaunchItemUsesInstigatorAndOwningApp() {
+        let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"
+        let signal = ThreatSignal(
+            source: .persistence,
+            severity: .high,
+            title: "Background item added",
+            description: "BTM launch item",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "appleEvent": "background-item-added",
+                    "persistencePath": path,
+                    "launchItemLabel": "com.example.sync",
+                    "instigatorName": "installer-helper",
+                    "responsibleAppName": "Example App"
+                ]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.8,
+            content: AlertContent(
+                title: "Persistence change",
+                description: "Test",
+                severity: .high,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(
+            result.headline,
+            "Added a launch agent: com.example.sync (installer-helper, via Example App)"
+        )
+        XCTAssertTrue(result.explanation.contains(path))
+    }
+
+    func test_backgroundTaskSystemInstigatorUsesMergedFIMWriterAttribution() {
+        let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"
+        let fim = ThreatSignal(
+            source: .filesystem,
+            severity: .high,
+            title: "Launch item changed",
+            description: "FIM evidence",
+            context: ThreatSignalContext(
+                processInfo: NickProcessInfo(
+                    pid: 90, path: "/usr/libexec/PlistBuddy", name: "PlistBuddy",
+                    parentPID: 80, parentName: "Terminal", signingStatus: .unknown
+                ),
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: ["fimStatus": "created", "responsibleAppName": "Terminal"]
+            )
+        )
+        let btm = ThreatSignal(
+            source: .persistence,
+            severity: .high,
+            title: "Background item added",
+            description: "BTM evidence",
+            context: ThreatSignalContext(
+                fileInfo: FileInfo(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                metadata: [
+                    "appleEvent": "background-item-added", "persistencePath": path,
+                    "launchItemLabel": "com.example.sync", "instigatorName": "smd"
+                ]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.8,
+            content: .init(title: "Persistence change", description: "Test", severity: .high, recommendedAction: "Review"),
+            contributingSignals: [btm, fim]
+        )
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: alert).headline,
+            "Added a launch agent: com.example.sync (PlistBuddy, via Terminal)"
+        )
+    }
+
+    func testSimpleCatalogNeverUsesForbiddenFallbackTitles() {
+        for reason in ["unknown_rule", "endpoint_management_observed", "storage-operation-completed"] {
+            let signal = ThreatSignal(
+                source: .endpointSecurity, severity: .info,
+                title: "helper activity observed", description: "Observed",
+                context: ThreatSignalContext(metadata: ["reason": reason, "ruleTier": "observed"])
+            )
+            let alert = ThreatAlert(
+                score: 0.1,
+                content: .init(title: "helper activity observed", description: "Observed", severity: .info, recommendedAction: "No action"),
+                contributingSignals: [signal]
+            )
+            let presentation = UserFacingAlertBuilder.shared.build(from: alert)
+            XCTAssertFalse(presentation.headline.lowercased().contains("needs your review"), reason)
+            XCTAssertFalse(presentation.headline.lowercased().contains("activity observed"), reason)
+        }
     }
 
     func test_nickTemporaryBuildYARAMatch_isSafeDeveloperActivity() {

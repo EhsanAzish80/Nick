@@ -31,6 +31,7 @@ struct SimpleActivityItem: Identifiable, Equatable {
     let detail: String
     let date: Date
     let status: Status
+    let isHighRisk: Bool
 
     var icon: String {
         switch status {
@@ -43,7 +44,7 @@ struct SimpleActivityItem: Identifiable, Equatable {
 
     var isNeedsAction: Bool { status == .needsAction }
     var badgeText: String {
-        status == .needsAction && detail == "Nick detected activity" ? "High risk" : status.rawValue
+        status == .needsAction && isHighRisk ? "High risk" : status.rawValue
     }
     var isBlocked: Bool { status == .blocked }
     var isQuarantined: Bool { status == .quarantined }
@@ -82,6 +83,7 @@ enum SimpleActivityFeed {
         let level: Level
         let date: Date
         let displayStatus: IncidentDisplayStatus
+        let isHighRisk: Bool
 
         init(
             id: UUID,
@@ -90,7 +92,8 @@ enum SimpleActivityFeed {
             date: Date,
             needsAction: Bool,
             isBlocked: Bool = false,
-            displayStatus: IncidentDisplayStatus? = nil
+            displayStatus: IncidentDisplayStatus? = nil,
+            isHighRisk: Bool = false
         ) {
             self.id = id
             self.headline = headline
@@ -98,6 +101,7 @@ enum SimpleActivityFeed {
             self.date = date
             self.displayStatus = displayStatus
                 ?? (isBlocked ? .blocked : (needsAction ? .needsReview : .observed))
+            self.isHighRisk = isHighRisk
         }
     }
 
@@ -130,6 +134,7 @@ enum SimpleActivityFeed {
     ) -> [AlertInput] {
         let incidentsByAlertID = Dictionary(uniqueKeysWithValues: incidents.map { ($0.alert.id, $0) })
         return alerts.compactMap { alert in
+            guard isVisibleInSimpleMode(alert) else { return nil }
             let user = builder.build(from: alert)
             let incident = incidentsByAlertID[alert.id]
             let displayStatus = incident?.displayStatus ?? IncidentDisplayStatus(alert: alert)
@@ -156,15 +161,33 @@ enum SimpleActivityFeed {
                 date: alert.lastSeen,
                 needsAction: displayStatus == .needsReview && actionable.contains(alert.id),
                 isBlocked: displayStatus == .blocked,
-                displayStatus: displayStatus
+                displayStatus: displayStatus,
+                isHighRisk: user.severity == .critical && alert.hasProtectedEvidence
             )
         }
     }
 
+    /// Installer bookkeeping remains available in Advanced and Diagnostics,
+    /// but it is not user activity. Require both the maintenance rule and a
+    /// validated Apple installer identity so a process name cannot hide an
+    /// unrelated finding from Simple mode.
+    private static func isVisibleInSimpleMode(_ alert: ThreatAlert) -> Bool {
+        !alert.contributingSignals.contains { signal in
+            guard signal.metadata["reason"] == "nick_protected_path_maintenance"
+                    || signal.metadata["rule"] == "nick_protected_path_maintenance",
+                  let signing = signal.processInfo?.signingStatus,
+                  case .signed(let teamID, let signingID?) = signing,
+                  teamID == "APPLE_PLATFORM"
+            else { return false }
+            return TamperProtectionPolicy.isAppleInstallerSigningID(signingID)
+        }
+    }
+
     private static func informationalHeadline(_ headline: String) -> String {
-        let suffix = " needs your review"
-        guard headline.lowercased().hasSuffix(suffix) else { return headline }
-        return String(headline.dropLast(suffix.count)) + " activity observed"
+        let lowercased = headline.lowercased()
+        guard lowercased.contains("needs your review")
+                || lowercased.contains("activity observed") else { return headline }
+        return "Observed security activity"
     }
 
     static func blockedInputs(
@@ -210,7 +233,8 @@ enum SimpleActivityFeed {
                 detail: alert.level == .critical ? "Nick detected activity"
                     : (alert.level == .warning ? "Nick warned you" : "Nick observed activity"),
                 date: alert.date,
-                status: status
+                status: status,
+                isHighRisk: alert.isHighRisk
             ))
         }
 
@@ -223,7 +247,8 @@ enum SimpleActivityFeed {
                 title: "Moved “\(name)” to Quarantine",
                 detail: "It can’t run from there",
                 date: record.quarantinedAt,
-                status: .quarantined
+                status: .quarantined,
+                isHighRisk: false
             ))
         }
 
@@ -248,7 +273,8 @@ enum SimpleActivityFeed {
                     : (key.launch ? "Stopped “\(key.name)” from running" : "Stopped “\(key.name)” from opening"),
                 detail: key.failed ? "Nick will retry from its protected journal" : "Blocked by real-time protection\(times)",
                 date: group.map(\.date).max() ?? key.day,
-                status: key.failed ? .needsAction : .blocked
+                status: key.failed ? .needsAction : .blocked,
+                isHighRisk: false
             ))
         }
 

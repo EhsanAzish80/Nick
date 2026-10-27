@@ -31,8 +31,23 @@ enum IncidentDisplayStatus: String, Equatable, Sendable {
             self = .quarantined
         } else if alert.isBlockedTamperEvidence {
             self = .blocked
-        } else if let incident, incident.state != .new || !incident.isVisible {
-            self = .resolved
+        } else if let incident,
+                  incident.state != .new || !incident.isVisible {
+            // Automatic evidence cleanup (for example, a command ending) is
+            // not a review decision. Keep protected findings actionable until
+            // the user reviews, resolves, allows, dismisses, or quarantines.
+            let hasUserDecision = incident.state == .reviewed
+                || incident.actions.contains {
+                    $0.actor == .user && [
+                        IncidentActionKind.reviewed, .hidden, .dismissed, .resolved,
+                        .allowedOnce, .alwaysAllowed, .quarantined
+                    ].contains($0.action)
+                }
+            if alert.hasProtectedEvidence && !hasUserDecision {
+                self = .needsReview
+            } else {
+                self = .resolved
+            }
         } else if alert.severity == .info {
             self = .observed
         } else if alert.hasProtectedEvidence || alert.isActionableUserFinding {

@@ -212,7 +212,10 @@ print
 print "Sparkle enclosure attributes:"
 "${SPARKLE_BIN}/sign_update" --account "${SPARKLE_ACCOUNT}" "${OUTPUT_PATH}"
 print
+FINAL_PACKAGE_SHA=$(shasum -a 256 "${OUTPUT_PATH}" | awk '{print $1}')
+FINAL_PACKAGE_LENGTH=$(stat -f '%z' "${OUTPUT_PATH}")
 shasum -a 256 "${OUTPUT_PATH}"
+print "Final stapled package length: ${FINAL_PACKAGE_LENGTH}"
 
 # Signature, Gatekeeper, and system-extension verdicts from the restricted
 # release-agent shell are not authoritative. Keep the in-pipeline payload and
@@ -227,7 +230,7 @@ print 'D=$(mktemp -d)'
 print 'pkgutil --expand-full "$P" "$D/x"'
 print 'codesign --verify --deep --strict --verbose=2 "$D/x/Payload/Applications/Nick.app"'
 print
-print "Expected SHA-256: ${OUTPUT_PACKAGE_SHA}"
+print "Expected final stapled SHA-256: ${FINAL_PACKAGE_SHA}"
 
 if [[ "${VALIDATE_LIVE_APPCAST:-0}" == "1" ]]; then
   "${SCRIPT_DIR}/validate-live-appcast.sh" \

@@ -2,6 +2,24 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+    func testStorageOperationCompletionIsTimelineOnly() {
+        let event = ESEvent(
+            eventType: .unknown,
+            processPath: "/Applications/Nick.app/Contents/MacOS/Nick",
+            pid: 501,
+            parentPid: 1,
+            filePath: nil,
+            decision: .notApplicable,
+            threat: .init(metadata: [
+                "recordType": "storage-operation-completed",
+                "storageOperationKind": "trashCleanup",
+                "summary": "Storage cleanup: 3 items, 1.50 GB moved to Trash"
+            ])
+        )
+
+        XCTAssertNil(ExtensionFinding(event: event))
+    }
+
     @MainActor
     func testMainActorOneShotAcceptsBackgroundXPCRepliesExactlyOnce() async {
         let completed = expectation(description: "main actor completion")
@@ -37,7 +55,8 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
             "requestAllowFileOnce", "requestBlockReviewedFile", "requestRebuildFIMBaseline",
             "acknowledgeFIMViolation", "requestDeployCanaries",
             "requestRestoreQuarantinedFile", "debugValidateProtectionAuthorization",
-            "requestDeleteQuarantinedFile"
+            "requestDeleteQuarantinedFile", "registerStorageOperation",
+            "completeStorageOperation"
         ]
         let completed = methods.map { expectation(description: $0) }
         var delivered: [String] = []

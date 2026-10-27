@@ -13,6 +13,7 @@ enum StorageProductReference {
 struct PerformanceView: View {
 
     @Environment(SecurityEngine.self) private var engine
+    @Environment(ExtensionXPCClient.self) private var xpcClient
     @State private var showingCleanupProgress = false
 
     private var monitor: PerformanceMonitor? { engine.performanceMonitor }
@@ -230,7 +231,7 @@ struct PerformanceView: View {
         if isScanning {
             monitor?.coordinator.cancelScan()
         } else {
-            Task { await monitor?.runPerformanceScan() }
+            Task { await monitor?.runPerformanceScan(operationClient: xpcClient) }
         }
     }
 
@@ -249,7 +250,7 @@ struct PerformanceView: View {
                         detail: "\(safeItems.count) safe items can free \(formatted(safeBytes)).",
                         actionTitle: "Clean Safe Items"
                     ) {
-                        monitor?.startCleanup(items: safeItems)
+                        monitor?.startCleanup(items: safeItems, operationClient: xpcClient)
                         showingCleanupProgress = true
                     }
                 }

@@ -92,7 +92,15 @@ final class PerformanceMonitor: MonitorProtocol {
 
     // MARK: Public API
 
-    func runPerformanceScan() async {
+    func runPerformanceScan(operationClient: ExtensionXPCClient? = nil) async {
+        let scopes = Self.storageScanScopePaths
+        let operationID = await operationClient?.beginStorageOperation(
+            kind: .sizeScan,
+            scopedPaths: scopes
+        )
+        // An installed UI scan must never run under an unapproved
+        // self-suppression window. Tests and previews can omit the client.
+        guard operationClient == nil || operationID != nil else { return }
         coordinator.startScan()
         // Wait for scan to complete by polling state
         while coordinator.isScanning {
@@ -113,11 +121,62 @@ final class PerformanceMonitor: MonitorProtocol {
         } else {
             signals = []
         }
+        if let operationID {
+            await operationClient?.finishStorageOperation(
+                operationID: operationID, itemCount: 0, bytesMoved: 0
+            )
+        }
     }
 
-    func startCleanup(items: [JunkItem]) {
+    func startCleanup(items: [JunkItem], operationClient: ExtensionXPCClient? = nil) {
         coordinator.selectedItemIDs = Set(items.map(\.id))
-        coordinator.startCleanup()
+        Task {
+            let operationID = await operationClient?.beginStorageOperation(
+                kind: .trashCleanup,
+                scopedPaths: items.map { $0.url.path }
+            )
+            // A disconnected or rejected approval fails closed: Storage never
+            // proceeds under an unapproved self-alert suppression window.
+            guard operationClient == nil || operationID != nil else { return }
+            let result = await coordinator.performCleanup()
+            if let operationID {
+                await operationClient?.finishStorageOperation(
+                    operationID: operationID,
+                    itemCount: result.count,
+                    bytesMoved: result.bytes
+                )
+            }
+        }
+    }
+
+    static var browserCacheScopePaths: [String] {
+        (ChromeCacheRule.cachePaths + BrowserCacheRule.cachePaths).map { $0.0.path }
+    }
+
+    /// Prefix union for every Storage rule. Credential/profile roots are not
+    /// included; browser rules contribute only concrete cache subfolders.
+    static var storageScanScopePaths: [String] {
+        let home = ScanRuleHelpers.home
+        let relativeRoots = [
+            "Library/Caches", "Library/Developer", "Library/Logs",
+            "Library/Android/sdk/.temp", "Library/Messages/Attachments",
+            "Library/Application Support/MobileSync/Backup",
+            "Library/Application Support/Adobe", "Library/Application Support/Steam",
+            "Library/Containers/com.docker.docker/Data",
+            "Desktop", "Documents", "Downloads", "Pictures", "Movies",
+            "Music/Audio Music Apps/Plug-Ins", ".Trash", ".swiftpm", ".npm",
+            ".yarn/cache", ".venv", "Developer", "Projects", ".gradle/caches",
+            ".android/build-cache"
+        ].map { home.appending(path: $0).path }
+        let systemRoots = [
+            "/Library/Application Support/GarageBand",
+            "/Library/Application Support/Logic",
+            "/Library/Audio/Apple Loops",
+            "/Library/Caches/Homebrew", "/Library/Logs",
+            "/usr/local/Homebrew/Library/Homebrew/vendor/portable-ruby",
+            "/usr/local/var/homebrew", "/opt/homebrew/var/homebrew"
+        ]
+        return Array(Set(relativeRoots + systemRoots + browserCacheScopePaths)).sorted()
     }
 
     func findItemsForProcess(processPath: String) -> [JunkItem] {

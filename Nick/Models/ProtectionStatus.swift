@@ -39,6 +39,18 @@ struct ProtectionStatus: Equatable, Sendable {
         if incidentStatuses.contains(.remediationNeeded) {
             return ProtectionStatus(state: .remediationNeeded, count: max(1, count))
         }
+        let hasCriticalProtectedReview = incidents.contains {
+            $0.displayStatus == .needsReview
+                && $0.alert.severity == .critical
+                && $0.alert.hasProtectedEvidence
+        } || fallbackAlerts.contains {
+            IncidentDisplayStatus(alert: $0) == .needsReview
+                && $0.severity == .critical
+                && $0.hasProtectedEvidence
+        }
+        if hasCriticalProtectedReview {
+            return ProtectionStatus(state: .remediationNeeded, count: max(1, count))
+        }
         if incidentStatuses.contains(.blocked) || incidentStatuses.contains(.quarantined) {
             return ProtectionStatus(state: .threatBlocked, count: max(1, count))
         }

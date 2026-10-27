@@ -655,7 +655,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = statusImage(color: .systemGreen, description: "Nick is protected", showsUpdateBadge: updateBadgeVisible)
             button.toolTip = updateBadgeVisible ? "Nick: Update available" : "Nick: Protected"
         case .review:
-            button.image = statusImage(color: .systemOrange, description: "Nick needs your review", showsUpdateBadge: updateBadgeVisible)
+            button.image = statusImage(color: .systemOrange, description: "Attention needed", showsUpdateBadge: updateBadgeVisible)
             button.toolTip = updateBadgeVisible ? "Nick: Review needed · Update available" : "Nick: Review needed"
         case .urgent:
             button.image = statusImage(color: .systemRed, description: "Nick needs immediate attention", showsUpdateBadge: updateBadgeVisible)

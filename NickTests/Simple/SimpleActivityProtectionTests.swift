@@ -427,6 +427,136 @@ final class SimpleActivityFeedTests: XCTestCase {
         XCTAssertEqual(SimpleActivityFeed.count(items, .needsAction), 1)
     }
 
+    func testValidatedAppleInstallerMaintenanceStaysOutOfSimpleMode() throws {
+        for signingID in ["com.apple.installd", "com.apple.shove"] {
+            let event = ESEvent(
+                eventType: .notifyWrite,
+                processPath: "/System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/runner",
+                pid: 46,
+                parentPid: 1,
+                filePath: "/Applications/Nick.app/Contents/MacOS/Nick",
+                decision: .allow,
+                threat: .init(
+                    threatName: "Nick maintenance updated protected files",
+                    threatFamily: "nick-maintenance",
+                    isCodeSigned: true,
+                    teamID: "APPLE_PLATFORM",
+                    signingID: signingID
+                )
+            )
+            let finding = try XCTUnwrap(ExtensionFinding(event: event))
+            let alert = ThreatAlert(
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+
+            XCTAssertEqual(finding.signal.metadata["class"], "audit")
+            XCTAssertEqual(finding.signal.metadata["rule"], "nick_protected_path_maintenance")
+            XCTAssertNotNil(
+                event.threatName,
+                "The source event must remain available to Advanced timeline and Diagnostics"
+            )
+            XCTAssertTrue(
+                SimpleActivityFeed.alertInputs(from: [alert], actionable: []).isEmpty,
+                "Simple mode must omit \(signingID) maintenance history"
+            )
+        }
+    }
+
+    func testUnvalidatedMaintenanceLookalikeIsNotHiddenFromSimpleMode() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/tmp/shove",
+            pid: 47,
+            parentPid: 1,
+            filePath: "/Applications/Nick.app/Contents/MacOS/Nick",
+            decision: .allow,
+            threat: .init(
+                threatName: "Nick maintenance updated protected files",
+                threatFamily: "nick-maintenance",
+                isCodeSigned: true,
+                teamID: "UNTRUSTED",
+                signingID: "com.apple.shove"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        let alert = ThreatAlert(
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal],
+            timestamp: finding.signal.timestamp
+        )
+
+        XCTAssertEqual(SimpleActivityFeed.alertInputs(from: [alert], actionable: []).count, 1)
+    }
+
+    func testKeychainTransferUsesReasonForTitleAndProtectedTierForHighRiskBadge() throws {
+        let source = "/Users/test/Library/Keychains/login.keychain-db"
+        let destination = "/tmp/copied.db"
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI",
+            pid: 42,
+            parentPid: 41,
+            filePath: destination,
+            decision: .allow,
+            threat: .init(
+                threatName: "Keychain store copied",
+                threatFamily: "credential-access",
+                isCodeSigned: true,
+                teamID: "2DC432GLL2",
+                signingID: "com.openai.codex",
+                metadata: [
+                    "reason": "keychain_store_transfer",
+                    "rule": "keychain_store_transfer",
+                    "ruleTier": "protected",
+                    "detectionKind": "credential-access",
+                    "credentialStore": CredentialAccessPolicy.Store.keychain.rawValue,
+                    "credentialSource": source,
+                    "credentialDestination": destination,
+                    "responsibleChain": "ChatGPT Computer Use → Codex CLI"
+                ]
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.metadata["reason"], "keychain_store_transfer")
+        let alert = ThreatAlert(
+            score: finding.score,
+            content: AlertContent(
+                title: finding.signal.title,
+                description: finding.signal.description,
+                severity: finding.signal.severity,
+                recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal]
+        )
+        let copy = UserFacingAlertBuilder.shared.build(from: alert)
+        let input = try XCTUnwrap(SimpleActivityFeed.alertInputs(
+            from: [alert], actionable: [alert.id]
+        ).first)
+        let item = try XCTUnwrap(SimpleActivityFeed.items(
+            alerts: [input], quarantine: [], blocked: []
+        ).first)
+
+        XCTAssertTrue(input.headline.hasPrefix("Copied the Keychain"))
+        XCTAssertEqual(item.badgeText, "High risk")
+        XCTAssertTrue(copy.explanation.contains("\(source) → \(destination)"))
+        XCTAssertTrue(copy.explanation.contains("ChatGPT Computer Use → Codex CLI"))
+        XCTAssertFalse(copy.explanation.contains("endpoint_threat"))
+    }
+
     func test_informationalRowsNeverSayNeedsYourReview() {
         let input = SimpleActivityFeed.AlertInput(
             id: UUID(),
@@ -440,7 +570,7 @@ final class SimpleActivityFeedTests: XCTestCase {
         let signal = ThreatSignal(
             source: .process,
             severity: .info,
-            title: "mv",
+            title: "mv activity observed",
             description: "Observed activity.",
             context: ThreatSignalContext(processInfo: NickProcessInfo(
                 pid: 42,
@@ -454,7 +584,7 @@ final class SimpleActivityFeedTests: XCTestCase {
         let alert = ThreatAlert(
             score: 0.1,
             content: AlertContent(
-                title: "mv",
+                title: "mv activity observed",
                 description: "Observed activity.",
                 severity: .info,
                 recommendedAction: "No action needed."
@@ -463,7 +593,7 @@ final class SimpleActivityFeedTests: XCTestCase {
             timestamp: now
         )
         let projected = SimpleActivityFeed.alertInputs(from: [alert], actionable: [])
-        XCTAssertEqual(projected.first?.headline, "mv activity observed")
+        XCTAssertEqual(projected.first?.headline, "Detected: Security check")
         XCTAssertFalse(projected.first?.headline.contains("needs your review") ?? true)
         XCTAssertEqual(input.level, .informational)
     }

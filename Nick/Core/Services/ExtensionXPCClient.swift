@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import Darwin
 import os
 import Security
 
@@ -491,6 +492,76 @@ public final class ExtensionXPCClient: NSObject {
             lastHealthyExtensionTime = updatedAt.map { Date(timeIntervalSince1970: $0) } ?? Date()
         } else {
             recordAppObservedProtectionGap(reason: "Endpoint Security heartbeat is stale or missing")
+        }
+    }
+
+    /// Opens one narrow Storage-operation window. Callers are the explicit
+    /// Storage UI button actions only; background scans never receive one.
+    func beginStorageOperation(
+        kind: StorageOperationKind,
+        scopedPaths: [String]
+    ) async -> UUID? {
+        guard let proxy = extensionProxy(),
+              let pidVersion = Self.currentPIDVersion(), pidVersion > 0 else { return nil }
+        let operationID = UUID()
+        let request = StorageOperationRequest(
+            operationID: operationID,
+            kind: kind,
+            actorPID: getpid(),
+            actorPIDVersion: pidVersion,
+            scopedPaths: Array(Set(scopedPaths)).sorted(),
+            expiresAt: Date().addingTimeInterval(600)
+        )
+        guard let payload = try? JSONEncoder().encode(request) else { return nil }
+        let accepted: Bool = await withCheckedContinuation { continuation in
+            let reply = OneShotReply<Bool> { continuation.resume(returning: $0) }
+            let callback: @Sendable (Bool) -> Void = { reply.resolve($0) }
+            proxy.registerStorageOperation(payload, reply: callback)
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
+                reply.resolve(false)
+            }
+        }
+        return accepted ? operationID : nil
+    }
+
+    func finishStorageOperation(operationID: UUID, itemCount: Int, bytesMoved: Int64) async {
+        guard let proxy = extensionProxy() else { return }
+        await withCheckedContinuation { continuation in
+            let reply = OneShotReply<Bool> { _ in continuation.resume() }
+            let callback: @Sendable (Bool) -> Void = { reply.resolve($0) }
+            proxy.completeStorageOperation(
+                operationID: operationID.uuidString,
+                itemCount: itemCount,
+                bytesMoved: bytesMoved,
+                reply: callback
+            )
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
+                reply.resolve(false)
+            }
+        }
+    }
+
+    private nonisolated static func currentPIDVersion() -> Int32? {
+        var token = audit_token_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<audit_token_t>.size / MemoryLayout<natural_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &token) { pointer in
+            pointer.withMemoryRebound(to: natural_t.self, capacity: Int(count)) { rebound in
+                task_info(mach_task_self_, task_flavor_t(TASK_AUDIT_TOKEN), rebound, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return nil }
+        // audit_token_t is eight 32-bit words. Darwin exposes
+        // audit_token_to_pidversion as a C macro on this target, so calling it
+        // from Swift would incorrectly emit an unresolved external symbol.
+        // pidversion is the final word in the kernel-provided token.
+        return withUnsafeBytes(of: token) { rawBuffer in
+            guard rawBuffer.count >= MemoryLayout<UInt32>.size * 8 else { return nil }
+            return Int32(bitPattern: rawBuffer.load(
+                fromByteOffset: MemoryLayout<UInt32>.size * 7,
+                as: UInt32.self
+            ))
         }
     }
 
@@ -1606,6 +1677,15 @@ struct ExtensionFinding: Sendable {
             "ruleTier": ruleTier,
             "threatFamily": event.threatFamily ?? "unknown"
         ].merging(event.metadata ?? [:]) { current, _ in current }
+        // The extension's classifier owns the concrete behavior identity.
+        // Defaults above exist only for older events that did not persist one;
+        // they must never flatten a specific reason into endpoint_threat.
+        if let reason = event.metadata?["reason"], !reason.isEmpty {
+            metadata["reason"] = reason
+        }
+        if let rule = event.metadata?["rule"], !rule.isEmpty {
+            metadata["rule"] = rule
+        }
         if isLOLBinBehavior {
             // The classifier's concrete reason is the behavior identity used
             // by presentation and deduplication. The generic endpoint default

@@ -597,7 +597,14 @@ final class IncidentStore {
                 outcomes.append(.suppressedByPolicy("dismissal"))
                 continue
             }
-            if let index = incidents.firstIndex(where: { $0.key == key }) {
+            let exactIndex = incidents.firstIndex(where: { $0.key == key })
+            let relatedLaunchItemIndex = exactIndex == nil
+                ? incidents.firstIndex(where: {
+                    Self.shouldMergeLaunchItemEvidence($0.alert, candidate)
+                        || Self.shouldAttachLaunchItemRemoval($0.alert, candidate)
+                })
+                : nil
+            if let index = exactIndex ?? relatedLaunchItemIndex {
                 let prior = incidents[index]
                 let priorSignalIDs = Set(prior.alert.contributingSignals.map(\.id))
                 let candidateSignalIDs = Set(candidate.contributingSignals.map(\.id))
@@ -615,11 +622,16 @@ final class IncidentStore {
                     continue
                 }
                 let escalated = candidate.severity > prior.alert.severity
-                let incomingEvidence = candidate.contributingSignals.map(Evidence.init(signal:))
-                incidents[index].alert = isCaptureInactive
-                    ? prior.alert.mergingLifecycleTransition(candidate)
-                    : prior.alert.mergingOccurrence(candidate)
-                incidents[index].evidence = incomingEvidence
+                let mergedAlert: ThreatAlert
+                if isCaptureInactive {
+                    mergedAlert = prior.alert.mergingLifecycleTransition(candidate)
+                } else if relatedLaunchItemIndex != nil {
+                    mergedAlert = prior.alert.mergingRelatedEvidence(candidate)
+                } else {
+                    mergedAlert = prior.alert.mergingOccurrence(candidate)
+                }
+                incidents[index].alert = mergedAlert
+                incidents[index].evidence = mergedAlert.contributingSignals.map(Evidence.init(signal:))
                 recordAutomaticRemediationAction(from: candidate, at: index)
                 let learnedConfirmationCount = learningConfirmationCount(for: candidate)
                 if isCaptureInactive {
@@ -925,6 +937,66 @@ final class IncidentStore {
 
     /// Cross-source identity intentionally omits monitor source. Two monitors
     /// describing the same rule and subject update one incident.
+    private static func shouldMergeLaunchItemEvidence(
+        _ existing: ThreatAlert,
+        _ incoming: ThreatAlert
+    ) -> Bool {
+        let existingKinds = launchItemEvidenceKinds(existing)
+        let incomingKinds = launchItemEvidenceKinds(incoming)
+        guard existingKinds.isDisjoint(with: incomingKinds),
+              existingKinds.union(incomingKinds) == [.btm, .fim],
+              let existingPath = launchItemPath(existing),
+              let incomingPath = launchItemPath(incoming),
+              normalize(existingPath) == normalize(incomingPath) else { return false }
+        return abs(existing.lastSeen.timeIntervalSince(incoming.lastSeen)) <= 10
+    }
+
+    private static func shouldAttachLaunchItemRemoval(
+        _ existing: ThreatAlert,
+        _ incoming: ThreatAlert
+    ) -> Bool {
+        guard existing.contributingSignals.contains(where: {
+            $0.metadata["appleEvent"] == "background-item-added"
+        }), incoming.contributingSignals.contains(where: {
+            $0.metadata["appleEvent"] == "background-item-removed"
+        }), let existingPath = launchItemPath(existing),
+           let incomingPath = launchItemPath(incoming)
+        else { return false }
+        return normalize(existingPath) == normalize(incomingPath)
+    }
+
+    private enum LaunchItemEvidenceKind: Hashable { case btm, fim }
+
+    private static func launchItemEvidenceKinds(_ alert: ThreatAlert) -> Set<LaunchItemEvidenceKind> {
+        Set(alert.contributingSignals.compactMap { signal in
+            if signal.metadata["appleEvent"] == "background-item-added" { return .btm }
+            if signal.metadata["fimStatus"] != nil || signal.source == .filesystem { return .fim }
+            return nil
+        })
+    }
+
+    private static func launchItemPath(_ alert: ThreatAlert) -> String? {
+        for signal in alert.contributingSignals {
+            let candidate = signal.metadata["persistencePath"]
+                ?? signal.metadata["itemURL"]
+                ?? signal.fileInfo?.path
+                ?? signal.metadata["path"]
+            guard let candidate else { continue }
+            let path: String
+            if let url = URL(string: candidate), url.isFileURL {
+                path = url.path
+            } else {
+                path = candidate
+            }
+            let lowered = path.lowercased()
+            if lowered.hasSuffix(".plist"),
+               (lowered.contains("/launchagents/") || lowered.contains("/launchdaemons/")) {
+                return path
+            }
+        }
+        return nil
+    }
+
     static func incidentKey(for alert: ThreatAlert) -> String {
         let captureSignals = alert.contributingSignals.filter { $0.source == .avCapture }
         if !captureSignals.isEmpty, captureSignals.count == alert.contributingSignals.count {
