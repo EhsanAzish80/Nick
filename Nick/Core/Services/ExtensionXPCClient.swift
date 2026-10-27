@@ -1881,10 +1881,14 @@ struct ExtensionFinding: Sendable {
     }
 
     init(violation: IntegrityViolation) {
+        let supplied = violation.metadata ?? [:]
+        let reason = supplied["reason"] ?? "file_integrity_\(violation.violationType.rawValue)"
+        let tier = supplied["ruleTier"] ?? "protected"
+        let severity: SignalSeverity = supplied["signalSeverity"] == "medium" ? .medium : .high
         signal = ThreatSignal(
             id: violation.id,
             source: .filesystem,
-            severity: .high,
+            severity: severity,
             timestamp: violation.timestamp,
             title: "Protected file \(violation.violationType.rawValue)",
             description: "A monitored security-sensitive file changed outside Nick's recorded baseline.",
@@ -1897,12 +1901,12 @@ struct ExtensionFinding: Sendable {
                     sizeBytes: nil
                 ),
                 metadata: [
-                    "reason": "file_integrity_\(violation.violationType.rawValue)",
-                    "rule": "file_integrity_monitor",
-                    "ruleTier": "protected",
+                    "reason": reason,
+                    "rule": supplied["rule"] ?? "file_integrity_monitor",
+                    "ruleTier": tier,
                     "fimStatus": "pending",
                     "expectedHash": violation.expectedHash ?? "unavailable"
-                ].merging(violation.metadata ?? [:]) { current, _ in current }
+                ].merging(supplied) { _, suppliedValue in suppliedValue }
             )
         )
         score = 0.9

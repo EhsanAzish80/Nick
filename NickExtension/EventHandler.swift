@@ -1533,11 +1533,17 @@ final class ESEventHandler {
             arguments: arguments
         )
         let pipelineEvidence = processPipeEvidenceProvider(pid)
-        let hasUntrustedQuarantineOrigin = !trustedSigner && Self.hasQuarantineOrigin(at: targetPath)
+        let quarantineCandidate = Self.quarantinedExecutionCandidate(
+            executablePath: targetPath,
+            arguments: arguments,
+            executableHasTrustedSigner: trustedSigner
+        )
+        let candidateHasTrustedSigner = quarantineCandidate == targetPath ? trustedSigner : false
+        let hasUntrustedQuarantineOrigin = quarantineCandidate != nil
         let quarantineExecutionSeverity = ExecutionTrustPolicy.quarantinedExecutionSeverity(
-            hasTrustedSigner: trustedSigner,
+            hasTrustedSigner: candidateHasTrustedSigner,
             hasQuarantineOrigin: hasUntrustedQuarantineOrigin,
-            parentIsInterpreter: Self.isInterpreter(processPath),
+            parentIsInterpreter: Self.isInterpreter(processPath) || Self.isInterpreter(targetPath),
             parentHasNetworkSocket: pipelineEvidence.hasNetworkSocket
         )
         let quarantinedUntrustedExecution = quarantineExecutionSeverity != nil
@@ -1674,7 +1680,7 @@ final class ESEventHandler {
                         "ruleTier": "review",
                         "detectionKind": "executable-provenance",
                         "signalSeverity": quarantineExecutionSeverity ?? "medium",
-                        "execTargetPath": targetPath,
+                        "execTargetPath": quarantineCandidate ?? targetPath,
                         "quarantineOrigin": "true"
                     ]
                     if let attribution {
@@ -2062,6 +2068,13 @@ final class ESEventHandler {
             metadata["fimWriterName"] = URL(fileURLWithPath: writerPath).lastPathComponent
             metadata["fimWriterPath"] = writerPath
         }
+        if Self.isShellProfile(path) {
+            let suspicious = Self.shellProfileHasExecutionContent(path)
+            metadata["reason"] = "shell_profile_modification"
+            metadata["rule"] = "shell_profile_modification"
+            metadata["ruleTier"] = suspicious ? "protected" : "review"
+            metadata["signalSeverity"] = suspicious ? "high" : "medium"
+        }
         let attributed = IntegrityViolation(
             id: violation.id,
             path: violation.path,
@@ -2073,6 +2086,46 @@ final class ESEventHandler {
         )
         guard let data = try? encoder.encode(attributed) else { return }
         xpcServer?.sendIntegrityViolationToApp(data)
+    }
+
+    private static func isShellProfile(_ path: String) -> Bool {
+        let name = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        return [".zshrc", ".zprofile", ".zshenv", ".bash_profile", ".bashrc", ".profile",
+                "zshrc", "zprofile", "zshenv", "bashrc", "profile"].contains(name)
+            || name.hasPrefix("zshrc_")
+    }
+
+    private static func quarantinedExecutionCandidate(
+        executablePath: String,
+        arguments: [String],
+        executableHasTrustedSigner: Bool
+    ) -> String? {
+        if !executableHasTrustedSigner, hasQuarantineOrigin(at: executablePath) {
+            return executablePath
+        }
+        guard isInterpreter(executablePath) else { return nil }
+        for argument in arguments where !argument.hasPrefix("-") && argument != executablePath {
+            let candidate = URL(fileURLWithPath: argument).standardizedFileURL.path
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory),
+                  !isDirectory.boolValue,
+                  hasQuarantineOrigin(at: candidate),
+                  !DeveloperIDTrustValidator.shared.isValidated(path: candidate)
+            else { continue }
+            return candidate
+        }
+        return nil
+    }
+
+    private static func shellProfileHasExecutionContent(_ path: String) -> Bool {
+        guard let data = FileManager.default.contents(atPath: path),
+              let text = String(data: data.prefix(256 * 1_024), encoding: .utf8)?.lowercased()
+        else { return false }
+        let downloads = text.contains("http://") || text.contains("https://")
+        let execution = text.contains("| sh") || text.contains("| bash")
+            || text.contains("| zsh") || text.contains("eval ") || text.contains("source ")
+            || text.contains("chmod +x")
+        return downloads || execution
     }
 
     /// Emits detector-confirmed evidence and performs automatic remediation

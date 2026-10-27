@@ -161,7 +161,7 @@ def load_incident_fingerprints() -> dict[str, dict[str, Any]]:
 
 def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[str, str]]) -> None:
     rows = [
-        "## Installed ATT&CK replay — build 5066",
+        "## Installed ATT&CK replay — build 5067",
         "",
         f"Measured {datetime.now(timezone.utc).isoformat(timespec='seconds')}. Unmeasured rows remain pending; this table makes no rating claim.",
         "",
@@ -236,6 +236,7 @@ def main() -> int:
             continue
         started = time.time()
         manual_completed = False
+        fixture_returncode = 0
         with tempfile.TemporaryDirectory(prefix="nick-scorecard-") as scratch:
             environment = os.environ.copy()
             environment["NICK_FIXTURE_ROOT"] = scratch
@@ -251,6 +252,7 @@ def main() -> int:
                 command, env=environment, check=False, text=True,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60
             )
+            fixture_returncode = completed.returncode
             print(completed.stdout.rstrip())
             if completed.returncode == 64:
                 manual_action = input("Complete the printed manual steps, then press Enter; s to skip: ").strip().lower()
@@ -262,12 +264,10 @@ def main() -> int:
                     continue
                 manual_completed = True
             elif completed.returncode != 0:
-                print(f"Fixture exited {completed.returncode}; row remains pending.")
-                results[technique["id"]] = {
-                    "status": "RAN: NO EVIDENCE",
-                    "evidence": f"fixture exited {completed.returncode}",
-                }
-                continue
+                print(
+                    f"Fixture exited {completed.returncode}; checking the durable store "
+                    "because prevention may have stopped it."
+                )
             time.sleep(3)
         after = load_incident_fingerprints()
         new_ids = sorted(set(after) - set(before))
@@ -285,8 +285,9 @@ def main() -> int:
             rule = sorted(set(record["reasons"]).intersection(expected_reasons))[0]
             tier = sorted(set(record["tiers"]).intersection(expected_tiers))[0] if record["tiers"] else "not recorded"
             evidence = f"{identifier}; rule={rule}; tier={tier}; observed<= {latency:.2f}s"
-            results[technique["id"]] = {"status": "PASS", "evidence": evidence}
-            print(f"Measured: PASS ({rule}, {tier}, <= {latency:.2f}s)")
+            status = "PREVENTED" if fixture_returncode != 0 else "PASS"
+            results[technique["id"]] = {"status": status, "evidence": evidence}
+            print(f"Measured: {status} ({rule}, {tier}, <= {latency:.2f}s)")
             continue
         if new_ids:
             seen = sorted({reason for identifier in new_ids for reason in after[identifier]["reasons"]})
@@ -294,7 +295,10 @@ def main() -> int:
         status = "MANUAL DONE: NO EVIDENCE" if manual_completed else "RAN: NO EVIDENCE"
         results[technique["id"]] = {
             "status": status,
-            "evidence": "no matching persisted evidence",
+            "evidence": (
+                f"fixture exited {fixture_returncode}; no matching persisted evidence"
+                if fixture_returncode != 0 else "no matching persisted evidence"
+            ),
         }
         print(f"No matching persisted evidence; recorded as {status}.")
 

@@ -201,7 +201,10 @@ final class ESXPCServer: NSObject {
 
     /// Pushes a JSON-encoded threat payload to the container app (Phase 2+).
     func sendThreatToApp(_ threatData: Data) {
-        eventStore.append(.init(kind: .threat, payload: threatData))
+        // A confirmed threat must be durable before any automatic remediation
+        // can terminate its process. Otherwise a fast SIGKILL can make the
+        // evidence disappear before the asynchronous journal write runs.
+        eventStore.appendSynchronously(.init(kind: .threat, payload: threatData))
         withAppProxy { proxy in
             proxy.reportThreat(threatData)
         }
@@ -1013,29 +1016,34 @@ private final class EndpointEventStore {
 
     func append(_ finding: PersistedExtensionFinding) {
         queue.async {
-            var events = self.load()
-            guard !events.contains(where: { $0.id == finding.id }) else { return }
-            events.append(finding)
-            if events.count > self.maximumCount {
-                events.removeFirst(events.count - self.maximumCount)
-            }
-            do {
-                try FileManager.default.createDirectory(
-                    at: self.url.deletingLastPathComponent(),
-                    withIntermediateDirectories: true,
-                    attributes: [.posixPermissions: 0o700]
-                )
-                let encoded = try JSONEncoder().encode(events)
-                try encoded.write(to: self.url, options: .atomic)
-                try FileManager.default.setAttributes(
-                    [.posixPermissions: 0o600],
-                    ofItemAtPath: self.url.path
-                )
-            } catch {
-                ESXPCServer.logger.error(
-                    "Could not persist important event: \(error.localizedDescription, privacy: .public)"
-                )
-            }
+            self.appendOnQueue(finding)
+        }
+    }
+
+    func appendSynchronously(_ finding: PersistedExtensionFinding) {
+        queue.sync { appendOnQueue(finding) }
+    }
+
+    private func appendOnQueue(_ finding: PersistedExtensionFinding) {
+        var events = load()
+        guard !events.contains(where: { $0.id == finding.id }) else { return }
+        events.append(finding)
+        if events.count > maximumCount {
+            events.removeFirst(events.count - maximumCount)
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            let encoded = try JSONEncoder().encode(events)
+            try encoded.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            ESXPCServer.logger.error(
+                "Could not persist important event: \(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 

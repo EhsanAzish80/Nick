@@ -58,14 +58,42 @@ struct ThreatIntelligenceBundlePayload: Codable, Equatable, Sendable {
 }
 
 struct SignedThreatIntelligenceBundle: Codable, Equatable, Sendable {
-    let payload: ThreatIntelligenceBundlePayload
+    /// Exact bytes covered by `signature`. New publishers must populate this
+    /// field so verification never depends on matching another language's JSON
+    /// encoder. `payload` remains optional for one-version compatibility with
+    /// bundles published before schema 1 gained byte-preserving envelopes.
+    let payloadData: Data?
+    let payload: ThreatIntelligenceBundlePayload?
     let signature: Data
 
-    func verifies(publicKey: Data) -> Bool {
-        guard let message = try? Self.canonicalEncoder.encode(payload),
-              let key = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKey)
-        else { return false }
-        return key.isValidSignature(signature, for: message)
+    init(payload: ThreatIntelligenceBundlePayload, signature: Data) {
+        self.payload = payload
+        self.payloadData = try? Self.canonicalEncoder.encode(payload)
+        self.signature = signature
+    }
+
+    init(payloadData: Data, signature: Data, legacyPayload: ThreatIntelligenceBundlePayload? = nil) {
+        self.payloadData = payloadData
+        self.payload = legacyPayload
+        self.signature = signature
+    }
+
+    func verifiedPayload(publicKey: Data) -> ThreatIntelligenceBundlePayload? {
+        guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKey) else {
+            return nil
+        }
+        if let payloadData {
+            guard key.isValidSignature(signature, for: payloadData) else { return nil }
+            return try? Self.canonicalDecoder.decode(
+                ThreatIntelligenceBundlePayload.self,
+                from: payloadData
+            )
+        }
+        guard let payload,
+              let legacyBytes = try? Self.canonicalEncoder.encode(payload),
+              key.isValidSignature(signature, for: legacyBytes)
+        else { return nil }
+        return payload
     }
 
     static let canonicalEncoder: JSONEncoder = {
@@ -73,6 +101,12 @@ struct SignedThreatIntelligenceBundle: Codable, Equatable, Sendable {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .millisecondsSince1970
         return encoder
+    }()
+
+    static let canonicalDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        return decoder
     }()
 }
 
@@ -101,8 +135,7 @@ struct ThreatIntelligenceBundleValidator: Sendable {
         now: Date,
         highestAcceptedVersion: Int?
     ) throws -> ThreatIntelligenceBundlePayload {
-        let payload = bundle.payload
-        guard bundle.verifies(publicKey: publicKey) else {
+        guard let payload = bundle.verifiedPayload(publicKey: publicKey) else {
             throw ThreatIntelligenceBundleValidationError.invalidSignature
         }
         guard payload.schemaVersion == Self.supportedSchema else {

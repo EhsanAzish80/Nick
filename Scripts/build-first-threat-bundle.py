@@ -11,7 +11,9 @@ import argparse
 import base64
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
 
@@ -20,6 +22,12 @@ ROOT = Path(__file__).resolve().parents[1]
 HASHES = ROOT / "NickExtension" / "known-threat-hashes.json"
 RULES = ROOT / "Validation" / "ThreatIntelligence" / "first-bundle-rules.json"
 PRODUCTION_PUBLIC_KEY = base64.b64decode("XIYgv92Pzh9CcUrooo2psW5wly507Oxv6oN0a2dbb/0=", validate=True)
+OPENSSL_CANDIDATES = (
+    Path("/opt/homebrew/opt/openssl@3/bin/openssl"),
+    Path("/usr/local/opt/openssl@3/bin/openssl"),
+    Path("/opt/homebrew/bin/openssl"),
+    Path("/usr/local/bin/openssl"),
+)
 
 
 def canonical_json(value: object) -> bytes:
@@ -52,15 +60,83 @@ def production_public_key_pem() -> bytes:
     return ("-----BEGIN PUBLIC KEY-----\n" + encoded + "\n-----END PUBLIC KEY-----\n").encode()
 
 
+def invoking_uid() -> int:
+    sudo_uid = os.environ.get("SUDO_UID")
+    return int(sudo_uid) if sudo_uid is not None else os.getuid()
+
+
+def validate_private_key(path: Path) -> Path:
+    absolute = path.expanduser().resolve(strict=True)
+    metadata = absolute.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or path.expanduser().is_symlink():
+        raise SystemExit("private key must be a regular file and not a symlink")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise SystemExit("private key mode must be 0600")
+    if metadata.st_uid != invoking_uid():
+        raise SystemExit("private key must be owned by the invoking user")
+    return absolute
+
+
+def resolve_output(path: Path, force: bool) -> Path:
+    expanded = path.expanduser()
+    if expanded.suffix.lower() != ".json":
+        raise SystemExit("output must end in .json")
+    parent = expanded.parent.resolve(strict=True)
+    absolute = (parent / expanded.name).resolve(strict=False)
+    if absolute.exists() and not force:
+        raise SystemExit("output exists; pass --force to replace it")
+    return absolute
+
+
+def resolve_openssl(path: Path | None) -> Path:
+    candidates = (path,) if path is not None else OPENSSL_CANDIDATES
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            absolute = candidate.expanduser().resolve(strict=True)
+            metadata = absolute.stat()
+        except (FileNotFoundError, OSError):
+            continue
+        if absolute.is_absolute() and stat.S_ISREG(metadata.st_mode) and os.access(absolute, os.X_OK):
+            version = subprocess.run(
+                [str(absolute), "version"], check=True, capture_output=True, text=True
+            ).stdout
+            if version.startswith("OpenSSL 3."):
+                return absolute
+    raise SystemExit("OpenSSL 3 is required; pass its absolute path with --openssl")
+
+
+def atomic_write(path: Path, data: bytes) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--private-key", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--version", required=True, type=int)
     parser.add_argument("--lifetime-days", type=int, default=90)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--openssl", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--verification-public-key", type=Path,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
-    if not args.private_key.is_file():
-        raise SystemExit("private key path does not exist")
+    private_key = validate_private_key(args.private_key)
+    output = resolve_output(args.output, args.force)
+    openssl = resolve_openssl(args.openssl)
     if not 1 <= args.lifetime_days <= 180:
         raise SystemExit("lifetime must be between 1 and 180 days")
 
@@ -91,24 +167,30 @@ def main() -> int:
         signature_path = temporary / "signature.bin"
         public_path = temporary / "production-public.pem"
         message_path.write_bytes(message)
-        public_path.write_bytes(production_public_key_pem())
+        if args.verification_public_key:
+            public_key = args.verification_public_key.expanduser().resolve(strict=True)
+            public_path.write_bytes(public_key.read_bytes())
+        else:
+            public_path.write_bytes(production_public_key_pem())
         subprocess.run([
-            "/usr/bin/openssl", "pkeyutl", "-sign", "-rawin",
-            "-inkey", str(args.private_key), "-in", str(message_path),
+            str(openssl), "pkeyutl", "-sign", "-rawin",
+            "-inkey", str(private_key), "-in", str(message_path),
             "-out", str(signature_path)
         ], check=True)
         subprocess.run([
-            "/usr/bin/openssl", "pkeyutl", "-verify", "-rawin", "-pubin",
+            str(openssl), "pkeyutl", "-verify", "-rawin", "-pubin",
             "-inkey", str(public_path), "-in", str(message_path),
             "-sigfile", str(signature_path)
         ], check=True)
         bundle = {
+            "payloadData": base64.b64encode(message).decode(),
+            # Keep the decoded object for one release so older tooling can
+            # inspect the envelope; clients verify and decode payloadData.
             "payload": payload,
             "signature": base64.b64encode(signature_path.read_bytes()).decode(),
         }
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_bytes(canonical_json(bundle) + b"\n")
-        print(f"Built and production-key verified bundle: {args.output}")
+        atomic_write(output, canonical_json(bundle) + b"\n")
+        print(f"Built and key-verified bundle: {output}")
     return 0
 
 
