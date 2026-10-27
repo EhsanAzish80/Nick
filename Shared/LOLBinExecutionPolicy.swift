@@ -314,6 +314,25 @@ enum CredentialAccessPolicy {
         )
     }
 
+    static func shouldReportKeychainTransfer(
+        sourcePath: String,
+        destinationPath: String,
+        actorIsValidatedApplePlatform: Bool = false,
+        actorParentIsLaunchd: Bool = false
+    ) -> Bool {
+        guard sensitiveStore(at: sourcePath) == .keychain else { return false }
+        // Atomic database maintenance commonly clones, exchanges, or renames
+        // files inside a Keychains directory. A credential transfer requires
+        // the destination to leave every system or per-user Keychains folder.
+        // The validated daemon condition is retained explicitly so this policy
+        // never turns a process name into trust evidence.
+        if isInsideKeychainsDirectory(destinationPath) {
+            if actorIsValidatedApplePlatform && actorParentIsLaunchd { return false }
+            return false
+        }
+        return true
+    }
+
     static func findingForKeychainCorrelation() -> Finding {
         Finding(
             title: "Read a Keychain secret after a hidden password prompt",
@@ -385,6 +404,14 @@ enum CredentialAccessPolicy {
         case .walletPass: "Opened Wallet passes"
         case .passwordPrompt: "Requested a hidden password"
         }
+    }
+
+    private static func isInsideKeychainsDirectory(_ rawPath: String) -> Bool {
+        let components = URL(fileURLWithPath: rawPath)
+            .standardizedFileURL.pathComponents.map { $0.lowercased() }
+        guard let library = components.lastIndex(of: "library"),
+              components.indices.contains(library + 1) else { return false }
+        return components[library + 1] == "keychains"
     }
 
     static func sensitiveStore(at rawPath: String) -> Store? {

@@ -169,16 +169,21 @@ final class UserFacingAlertBuilder: Sendable {
             $0.metadata["detectionKind"] == "credential-access"
         }) {
             let storeName = credential.metadata["credentialStore"] ?? "credential data"
-            let behavior: String
-            switch storeName {
-            case CredentialAccessPolicy.Store.keychain.rawValue: behavior = "Read a Keychain secret"
-            case CredentialAccessPolicy.Store.browserCookies.rawValue: behavior = "Opened browser cookies"
-            case CredentialAccessPolicy.Store.browserLogins.rawValue: behavior = "Opened saved browser logins"
-            case CredentialAccessPolicy.Store.walletPass.rawValue: behavior = "Opened Wallet passes"
-            case CredentialAccessPolicy.Store.cloudCredential.rawValue: behavior = "Opened cloud credentials"
-            case CredentialAccessPolicy.Store.messagingSession.rawValue: behavior = "Opened a messaging session"
-            case CredentialAccessPolicy.Store.notesData.rawValue: behavior = "Opened Notes data"
-            default: behavior = "Opened \(storeName)"
+            let reason = credential.metadata["reason"] ?? credential.metadata["rule"] ?? ""
+            let behavior: String = switch reason {
+            case "credential_store_access": "Opened the Keychain"
+            case "keychain_store_transfer": "Copied the Keychain"
+            case "keychain_secret_read", "keychain_command_correlation": "Read a Keychain secret"
+            default: switch storeName {
+                case CredentialAccessPolicy.Store.browserCookies.rawValue: "Opened browser cookies"
+                case CredentialAccessPolicy.Store.browserLogins.rawValue: "Opened saved browser logins"
+                case CredentialAccessPolicy.Store.walletPass.rawValue: "Opened Wallet passes"
+                case CredentialAccessPolicy.Store.cloudCredential.rawValue: "Opened cloud credentials"
+                case CredentialAccessPolicy.Store.messagingSession.rawValue: "Opened a messaging session"
+                case CredentialAccessPolicy.Store.notesData.rawValue: "Opened Notes data"
+                case CredentialAccessPolicy.Store.keychain.rawValue: "Opened the Keychain"
+                default: "Opened \(storeName)"
+                }
             }
             let actor = credential.processInfo?.name
                 ?? credential.processInfo.map { URL(fileURLWithPath: $0.path).lastPathComponent }
@@ -187,9 +192,17 @@ final class UserFacingAlertBuilder: Sendable {
                 .components(separatedBy: " → ") ?? []
             let via = chain.dropFirst().dropLast().last
             let context = via.map { "\(actor), via \($0)" } ?? actor
+            let chainText = chain.isEmpty ? "an unknown chain" : chain.joined(separator: " → ")
+            let trigger: String = switch reason {
+            case "keychain_store_transfer": "a Keychain transfer outside its protected folder"
+            case "keychain_command_correlation": "a recent hidden password prompt in the same responsible chain"
+            case "keychain_secret_read": "a command that requested a stored Keychain secret"
+            case "credential_store_access": "a credential-store access rule"
+            default: "the \(reason.isEmpty ? "credential access" : reason) rule"
+            }
             return AlertPattern(
                 headline: "\(behavior) (\(context))",
-                explanation: "Nick observed \(actor) access \(storeName.lowercased()).",
+                explanation: "\(actor) performed \(behavior.lowercased()) in the responsible chain \(chainText), triggering \(trigger).",
                 assessment: "Needs your review",
                 recommendedAction: "Check whether you expected this app to access the credential store.",
                 severity: credential.metadata["ruleTier"] == "protected" ? .critical : .warning,

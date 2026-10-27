@@ -174,7 +174,7 @@ struct SimpleAlertSheet: View {
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 12)
-            StatusChip(text: copy.status.rawValue, textColor: toneColors.0, fillColor: toneColors.1)
+            StatusChip(text: copy.badgeText, textColor: toneColors.0, fillColor: toneColors.1)
         }
     }
 

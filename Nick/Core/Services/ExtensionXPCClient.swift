@@ -1548,13 +1548,18 @@ struct ExtensionFinding: Sendable {
         let isAppleReviewEvent = event.metadata?["ruleTier"] == "review"
         let isRansomwareBehavior = event.metadata?["detectionKind"] == "ransomware-behavior"
         let isLOLBinBehavior = event.metadata?["detectionKind"] == "lolbin-behavior"
+        let isCredentialAccess = event.metadata?["detectionKind"] == "credential-access"
         let severity: SignalSeverity
         if event.decision == .deny {
             severity = .critical
         } else if isManagementObservation || isNickMaintenance || isDocumentedUninstall {
             severity = .info
         } else if isAppleReviewEvent {
-            severity = .medium
+            if isCredentialAccess, event.metadata?["signalSeverity"] == "info" {
+                severity = .info
+            } else {
+                severity = .medium
+            }
         } else if isLOLBinBehavior {
             switch event.metadata?["signalSeverity"] {
             case "critical": severity = .critical

@@ -244,7 +244,7 @@ struct SimpleActivityRow: View {
                     .foregroundStyle(Color.nickSecondaryText)
             }
             Spacer(minLength: 8)
-            StatusChip(text: item.status.rawValue, textColor: colors.0, fillColor: colors.1)
+            StatusChip(text: item.badgeText, textColor: colors.0, fillColor: colors.1)
             if showsChevron {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))

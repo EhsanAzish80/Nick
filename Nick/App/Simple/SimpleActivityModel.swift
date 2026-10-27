@@ -42,6 +42,9 @@ struct SimpleActivityItem: Identifiable, Equatable {
     }
 
     var isNeedsAction: Bool { status == .needsAction }
+    var badgeText: String {
+        status == .needsAction && detail == "Nick detected activity" ? "High risk" : status.rawValue
+    }
     var isBlocked: Bool { status == .blocked }
     var isQuarantined: Bool { status == .quarantined }
     var opensDetail: Bool { source != .blocked }
@@ -148,7 +151,7 @@ enum SimpleActivityFeed {
             return AlertInput(
                 id: alert.id,
                 headline: level == .informational ? informationalHeadline(user.headline)
-                    : (user.severity == .safe ? "Security finding needs review" : user.headline),
+                    : user.headline,
                 level: level,
                 date: alert.lastSeen,
                 needsAction: displayStatus == .needsReview && actionable.contains(alert.id),
@@ -194,7 +197,8 @@ enum SimpleActivityFeed {
 
         for alert in alerts {
             let status: SimpleActivityItem.Status = switch alert.displayStatus {
-            case .needsReview, .remediationNeeded: .needsAction
+            case .needsReview: .needsAction
+            case .remediationNeeded: .needsAction
             case .blocked: .blocked
             case .quarantined: .quarantined
             case .resolved, .observed: .informational

@@ -471,12 +471,16 @@ final class ESEventHandler {
         case ES_EVENT_TYPE_AUTH_CLONE:
             let cloneSource = esString(msg.event.clone.source.pointee.path)
             if CredentialAccessPolicy.sensitiveStore(at: cloneSource) == .keychain {
+                let cloneDestination = esString(msg.event.clone.target_dir.pointee.path)
+                    + "/" + esString(msg.event.clone.target_name)
                 dispatchQueue.async { [weak self] in
                     self?.reportKeychainTransfer(
-                        sourcePath: cloneSource, actorPath: processPath,
+                        sourcePath: cloneSource, destinationPath: cloneDestination,
+                        actorPath: processPath,
                         actorPID: pid, parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
                         processIdentity: processIdentity,
+                        actorIdentity: tamperActorIdentity,
                         operation: "clone"
                     )
                 }
@@ -532,10 +536,12 @@ final class ESEventHandler {
             if CredentialAccessPolicy.sensitiveStore(at: srcPath) == .keychain {
                 dispatchQueue.async { [weak self] in
                     self?.reportKeychainTransfer(
-                        sourcePath: srcPath, actorPath: processPath,
+                        sourcePath: srcPath, destinationPath: copyDestination,
+                        actorPath: processPath,
                         actorPID: pid, parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
                         processIdentity: processIdentity,
+                        actorIdentity: tamperActorIdentity,
                         operation: "copyfile"
                     )
                 }
@@ -545,14 +551,16 @@ final class ESEventHandler {
             let firstPath = esString(msg.event.exchangedata.file1.pointee.path)
             let secondPath = esString(msg.event.exchangedata.file2.pointee.path)
             esClient?.respond(to: message, allow: true)
-            for sourcePath in [firstPath, secondPath]
+            for (sourcePath, destinationPath) in [(firstPath, secondPath), (secondPath, firstPath)]
             where CredentialAccessPolicy.sensitiveStore(at: sourcePath) == .keychain {
                 dispatchQueue.async { [weak self] in
                     self?.reportKeychainTransfer(
-                        sourcePath: sourcePath, actorPath: processPath,
+                        sourcePath: sourcePath, destinationPath: destinationPath,
+                        actorPath: processPath,
                         actorPID: pid, parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
                         processIdentity: processIdentity,
+                        actorIdentity: tamperActorIdentity,
                         operation: "exchangedata"
                     )
                 }
@@ -763,10 +771,12 @@ final class ESEventHandler {
             if CredentialAccessPolicy.sensitiveStore(at: srcPath) == .keychain {
                 dispatchQueue.async { [weak self] in
                     self?.reportKeychainTransfer(
-                        sourcePath: srcPath, actorPath: processPath,
+                        sourcePath: srcPath, destinationPath: destinationPath,
+                        actorPath: processPath,
                         actorPID: pid, parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
                         processIdentity: processIdentity,
+                        actorIdentity: tamperActorIdentity,
                         operation: "rename"
                     )
                 }
@@ -1487,6 +1497,9 @@ final class ESEventHandler {
             ?? lolbinFinding?.title
             ?? interactivePipelineFinding.map { _ in "Download-to-shell command detected" }
         let behaviorFamily = credentialFinding == nil ? "lolbin-behavior" : "credential-access"
+        let responsibleChainValidated = attribution?.app.map {
+            $0.signing == .signed || $0.signing == .applePlatform
+        } ?? false
 
         pushEvent(ESEvent(
             eventType:   .authExec,
@@ -1503,13 +1516,17 @@ final class ESEventHandler {
                 teamID: teamID,
                 signingID: signingID,
                 metadata: credentialFinding.map { finding in
+                    let validatedSecretRead = finding.reason == "keychain_secret_read"
+                        && trustedSigner && responsibleChainValidated
                     var metadata = [
                         "reason": finding.reason,
                         "rule": finding.reason,
                         "ruleTier": "review",
                         "detectionKind": "credential-access",
-                        "signalSeverity": finding.store == .passwordPrompt ? "high" : "medium",
-                        "credentialStore": finding.store.rawValue
+                        "signalSeverity": validatedSecretRead
+                            ? "info" : (finding.store == .passwordPrompt ? "high" : "medium"),
+                        "credentialStore": finding.store.rawValue,
+                        "deliveryLevel": validatedSecretRead ? "inform" : "interrupt"
                     ]
                     if let attribution {
                         metadata.merge(attribution.metadata) { current, _ in current }
@@ -1712,13 +1729,22 @@ final class ESEventHandler {
 
     private func reportKeychainTransfer(
         sourcePath: String,
+        destinationPath: String,
         actorPath: String,
         actorPID: Int32,
         parentPID: Int32,
         responsiblePID: Int32?,
         processIdentity: ProcessInstanceIdentity,
+        actorIdentity: TamperActorIdentity,
         operation: String
     ) {
+        guard CredentialAccessPolicy.shouldReportKeychainTransfer(
+            sourcePath: sourcePath,
+            destinationPath: destinationPath,
+            actorIsValidatedApplePlatform: actorIdentity.isPlatformBinary
+                && actorIdentity.isValidIdentitySignature,
+            actorParentIsLaunchd: parentPID == 1
+        ) else { return }
         let attribution = processTree?.responsibleApp(
             actorPID: actorPID,
             responsiblePID: responsiblePID,
@@ -1748,6 +1774,7 @@ final class ESEventHandler {
             "signalSeverity": finding.severity,
             "credentialStore": finding.store.rawValue,
             "credentialOperation": operation,
+            "credentialDestination": destinationPath,
             "deliveryLevel": "interrupt"
         ]
         if let attribution {
