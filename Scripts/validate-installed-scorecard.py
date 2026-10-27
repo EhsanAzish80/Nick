@@ -77,7 +77,7 @@ def load_incident_fingerprints() -> dict[str, str]:
     return found
 
 
-def update_progress(path: Path, techniques: list[dict[str, Any]], results: dict[str, dict[str, str]]) -> None:
+def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[str, str]]) -> None:
     rows = [
         "## Installed ATT&CK replay — build 5062",
         "",
@@ -91,15 +91,15 @@ def update_progress(path: Path, techniques: list[dict[str, Any]], results: dict[
         evidence = result["evidence"].replace("|", "\\|").replace("\n", " ")
         rows.append(f"| {technique['id']} | {technique['name']} | {result['status']} | {evidence} |")
     block = START_MARKER + "\n" + "\n".join(rows) + "\n" + END_MARKER
-    original = path.read_text(encoding="utf-8") if path.exists() else "# Nick 5.1 progress\n"
+    original = PROGRESS_DOC.read_text(encoding="utf-8") if PROGRESS_DOC.exists() else "# Nick 5.1 progress\n"
     if START_MARKER in original and END_MARKER in original:
         prefix, tail = original.split(START_MARKER, 1)
         _, suffix = tail.split(END_MARKER, 1)
         updated = prefix.rstrip() + "\n\n" + block + suffix
     else:
         updated = original.rstrip() + "\n\n" + block + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(updated, encoding="utf-8")
+    PROGRESS_DOC.parent.mkdir(parents=True, exist_ok=True)
+    PROGRESS_DOC.write_text(updated, encoding="utf-8")
 
 
 def main() -> int:
@@ -135,7 +135,7 @@ def main() -> int:
         else:
             print("No persisted evidence; row remains pending (not marked missed).")
 
-    update_progress(PROGRESS_DOC, techniques, results)
+    update_progress(techniques, results)
     print(f"\nWrote measured rows and pending placeholders to {PROGRESS_DOC}")
     return 0
 
