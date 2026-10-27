@@ -67,6 +67,7 @@ final class ESXPCServer: NSObject {
 
     private var listener: NSXPCListener
     private var appConnections: [ObjectIdentifier: NSXPCConnection] = [:]
+    private var authenticatedAppPIDs: Set<Int32> = []
     private let listenerIsConfigured: Bool
 
     /// Serialises the independently authenticated connection set.
@@ -297,10 +298,20 @@ extension ESXPCServer: NSXPCListenerDelegate {
 
         connectionLock.withLock {
             appConnections[connectionID] = newConnection
+            if isReleaseContainer(connection: newConnection) {
+                authenticatedAppPIDs.insert(newConnection.processIdentifier)
+            }
         }
 
         Self.logger.info("Accepted XPC connection from pid \(newConnection.processIdentifier)")
         return true
+    }
+
+    /// Consumes proof that this exact process instance previously established
+    /// an authenticated container-app connection. XCTest hosts and local
+    /// binaries which merely share a name never enter this registry.
+    func consumeAuthenticatedAppExit(pid: Int32) -> Bool {
+        connectionLock.withLock { authenticatedAppPIDs.remove(pid) != nil }
     }
 
     // MARK: - Caller Validation
@@ -338,6 +349,33 @@ extension ESXPCServer: NSXPCListenerDelegate {
         }
 
         return SecStaticCodeCheckValidity(staticCode, [], reqRef) == errSecSuccess
+    }
+
+    /// Only the shipped Developer ID container can establish the lifecycle
+    /// proof used for unexpected-exit incidents. Development builds and
+    /// XCTest hosts may use XPC while testing, but never enter this registry.
+    private func isReleaseContainer(connection: NSXPCConnection) -> Bool {
+        var code: SecCode?
+        let attrs = [kSecGuestAttributePid: connection.processIdentifier] as CFDictionary
+        guard SecCodeCopyGuestWithAttributes(nil, attrs, [], &code) == errSecSuccess,
+              let code,
+              let identifier = Bundle.main.object(
+                  forInfoDictionaryKey: "NickAllowedClientIdentifier"
+              ) as? String,
+              let teamID = Bundle.main.object(
+                  forInfoDictionaryKey: "NickAllowedClientTeamID"
+              ) as? String else {
+            return false
+        }
+        let text = "identifier \"\(identifier)\" and anchor apple generic "
+            + "and certificate 1[field.1.2.840.113635.100.6.2.6] "
+            + "and certificate leaf[subject.OU] = \"\(teamID)\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess,
+              let requirement else {
+            return false
+        }
+        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
 }
 

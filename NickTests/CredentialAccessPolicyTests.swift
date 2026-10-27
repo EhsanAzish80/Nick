@@ -188,26 +188,179 @@ final class CredentialAccessPolicyTests: XCTestCase {
             bundleID: "com.apple.Terminal", teamID: nil,
             signingValidated: true, isApplePlatform: true
         )
-        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
             path: "/Users/test/Library/Keychains/login.keychain-db",
             responsibleIdentity: terminal,
+            actorIdentityValidated: true,
             actorIsValidatedApplePlatform: true,
             actorIsOwnResponsibleProcess: false
         ))
     }
 
-    func testSelfResponsibleValidatedPlatformDaemonReadingKeychainStaysSilent() {
+    func testPlainKeychainReadByAnyValidatedDistributionIdentityStaysSilent() {
+        let developerID = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.example.tool", teamID: "TEAM123456",
+            signingValidated: true, isApplePlatform: false
+        )
         XCTAssertNil(CredentialAccessPolicy.findingForOpen(
             path: "/Users/test/Library/Keychains/login.keychain-db",
-            responsibleIdentity: nil,
-            actorIsValidatedApplePlatform: true,
-            actorIsOwnResponsibleProcess: true
+            responsibleIdentity: developerID,
+            actorIdentityValidated: true
         ))
         XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
-            path: "/Users/test/.aws/credentials", responsibleIdentity: nil,
-            actorIsValidatedApplePlatform: true,
-            actorIsOwnResponsibleProcess: true
+            path: "/Users/test/Library/Keychains/login.keychain-db",
+            responsibleIdentity: unknown,
+            actorIdentityValidated: false
         ))
+    }
+
+    func testKeychainTransferAndCommandCorrelationAreProtectedCriticalFindings() {
+        let transfer = CredentialAccessPolicy.findingForKeychainTransfer()
+        XCTAssertEqual(transfer.reason, "keychain_store_transfer")
+        XCTAssertEqual(transfer.tier, "protected")
+        XCTAssertEqual(transfer.severity, "critical")
+
+        let correlated = CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/Keychains/login.keychain-db",
+            responsibleIdentity: unknown,
+            actorIdentityValidated: true,
+            hasRecentKeychainCommand: true
+        )
+        XCTAssertEqual(correlated?.reason, "keychain_command_correlation")
+        XCTAssertEqual(correlated?.tier, "protected")
+        XCTAssertEqual(correlated?.severity, "critical")
+    }
+
+    func testSecuritySecretReadDoesNotArmKeychainCorrelation() throws {
+        let finding = try XCTUnwrap(CredentialAccessPolicy.findingForExec(
+            executablePath: "/usr/bin/security",
+            arguments: ["security", "find-generic-password", "-w"],
+            responsibleIdentity: unknown
+        ))
+
+        XCTAssertEqual(finding.reason, "keychain_secret_read")
+        XCTAssertFalse(CredentialAccessPolicy.armsKeychainCorrelation(reason: finding.reason))
+        XCTAssertTrue(CredentialAccessPolicy.armsKeychainCorrelation(reason: "hidden_password_prompt"))
+    }
+
+    func testHiddenPromptFollowUpByDifferentProcessCorrelatesWithinTenMinutes() throws {
+        let start = Date(timeIntervalSince1970: 50_000)
+        let arm = CredentialAccessPolicy.RecentHiddenPrompt(
+            chainKey: "TEAM|app|chain",
+            armedAt: start,
+            processPID: 100,
+            processPIDVersion: 7
+        )
+
+        XCTAssertFalse(arm.matchesFollowUp(
+            chainKey: "TEAM|app|chain",
+            processPID: 100,
+            processPIDVersion: 7,
+            at: start.addingTimeInterval(30)
+        ), "The hidden-prompt process must not correlate with its own keychain open")
+        XCTAssertTrue(arm.matchesFollowUp(
+            chainKey: "TEAM|app|chain",
+            processPID: 101,
+            processPIDVersion: 1,
+            at: start.addingTimeInterval(9 * 60)
+        ))
+
+        let critical = CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/Keychains/login.keychain-db",
+            responsibleIdentity: unknown,
+            actorIdentityValidated: true,
+            hasRecentKeychainCommand: true
+        )
+        XCTAssertEqual(critical?.reason, "keychain_command_correlation")
+        XCTAssertEqual(critical?.tier, "protected")
+        XCTAssertEqual(critical?.severity, "critical")
+    }
+
+    func testHiddenPromptFollowUpAfterElevenMinutesDoesNotCorrelate() {
+        let start = Date(timeIntervalSince1970: 60_000)
+        let arm = CredentialAccessPolicy.RecentHiddenPrompt(
+            chainKey: "TEAM|app|chain",
+            armedAt: start,
+            processPID: 100,
+            processPIDVersion: 7
+        )
+
+        XCTAssertFalse(arm.matchesFollowUp(
+            chainKey: "TEAM|app|chain",
+            processPID: 102,
+            processPIDVersion: 1,
+            at: start.addingTimeInterval(11 * 60)
+        ))
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/Keychains/login.keychain-db",
+            responsibleIdentity: unknown,
+            actorIdentityValidated: true,
+            hasRecentKeychainCommand: false
+        ))
+    }
+
+    func testLaunchdOwnedPlatformDaemonIsSilentForOtherStoresButInterpreterIsNot() {
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/.aws/credentials",
+            responsibleIdentity: nil,
+            actorIdentityValidated: true,
+            actorIsValidatedApplePlatform: true,
+            actorIsOwnResponsibleProcess: true,
+            actorParentIsLaunchd: true,
+            actorIsInterpreter: false
+        ))
+        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/.aws/credentials",
+            responsibleIdentity: nil,
+            actorIdentityValidated: true,
+            actorIsValidatedApplePlatform: true,
+            actorIsOwnResponsibleProcess: true,
+            actorParentIsLaunchd: true,
+            actorIsInterpreter: true
+        ))
+    }
+
+    func testTodayCredentialWorkloadReplayStaysBelowNoiseBudget() {
+        let validatedTool = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.example.release-tool", teamID: "VALIDTEAM",
+            signingValidated: true, isApplePlatform: false
+        )
+        let chatGPT = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.openai.chat", teamID: "2DC432GLL2",
+            signingValidated: true, isApplePlatform: false
+        )
+        var findings: [CredentialAccessPolicy.Finding] = []
+
+        // Thousands of ordinary release-tool keychain reads and own-store
+        // reads collapse to no findings under the replacement policy.
+        for _ in 0..<1_700 {
+            if let finding = CredentialAccessPolicy.findingForOpen(
+                path: "/Users/test/Library/Keychains/login.keychain-db",
+                responsibleIdentity: validatedTool,
+                actorIdentityValidated: true
+            ) { findings.append(finding) }
+        }
+        for _ in 0..<100 {
+            if let finding = CredentialAccessPolicy.findingForOpen(
+                path: "/Users/test/Library/HTTPStorages/com.openai.chat/Cookies",
+                responsibleIdentity: chatGPT,
+                actorIdentityValidated: true
+            ) { findings.append(finding) }
+        }
+        // The representative cross-app and unvalidated reads remain visible.
+        if let finding = CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/Application Support/Google/Chrome/Default/Cookies",
+            responsibleIdentity: chatGPT,
+            actorIdentityValidated: true
+        ) { findings.append(finding) }
+        if let finding = CredentialAccessPolicy.findingForOpen(
+            path: "/Users/test/Library/Keychains/login.keychain-db",
+            responsibleIdentity: unknown,
+            actorIdentityValidated: false
+        ) { findings.append(finding) }
+
+        XCTAssertLessThan(findings.count, 20)
+        XCTAssertLessThan(findings.filter { $0.tier == "review" }.count, 3)
     }
 
     func testHiddenPromptNormalizesWhitespaceAndRecognizesJXA() {

@@ -56,6 +56,7 @@ import os
 struct ResponsibleAppIdentity: Equatable, Sendable {
     enum Signing: String, Equatable, Sendable {
         case applePlatform = "Apple platform"
+        case appleSigned = "Apple signed"
         case signed = "Signed"
         case unsigned = "Unsigned"
         case unknown = "Unknown"
@@ -155,8 +156,11 @@ final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentit
         let flags = (info[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
         let platformFlag = UInt32(0x0400_0000) // CS_PLATFORM_BINARY
         let signing: ResponsibleAppIdentity.Signing
+        let appleSigned = valid && Self.satisfiesAppleAnchor(code)
         if valid, flags & platformFlag != 0 {
             signing = .applePlatform
+        } else if appleSigned {
+            signing = .appleSigned
         } else if valid, identifier != nil {
             signing = .signed
         } else {
@@ -169,6 +173,13 @@ final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentit
             signing: signing,
             path: appURL?.path ?? path
         )
+    }
+
+    private static func satisfiesAppleAnchor(_ code: SecCode) -> Bool {
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
     }
 
     func liveProcess(pid: Int32) -> ResponsibleLiveProcess? {

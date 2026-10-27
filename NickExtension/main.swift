@@ -461,6 +461,7 @@ let phase4Events: [es_event_type_t] = [
     ES_EVENT_TYPE_AUTH_TRUNCATE,     // protect Nick bundle files from truncation
     ES_EVENT_TYPE_AUTH_LINK,         // protect Nick bundle destinations from hard links
     ES_EVENT_TYPE_AUTH_CLONE,        // protect Nick bundle destinations from clones
+    ES_EVENT_TYPE_AUTH_EXCHANGEDATA, // detect keychain content exchanges
     ES_EVENT_TYPE_AUTH_RENAME,       // protect Nick files from replacement
     ES_EVENT_TYPE_AUTH_UNLINK,       // protect Nick files from deletion
     ES_EVENT_TYPE_AUTH_SIGNAL,       // protect Nick processes from termination/suspension

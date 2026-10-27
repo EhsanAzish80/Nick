@@ -86,6 +86,7 @@ final class ESEventHandler {
     }
     private let credentialReportLock = NSLock()
     private var lastCredentialReport: [String: Date] = [:]
+    private var recentKeychainCommands: [String: CredentialAccessPolicy.RecentHiddenPrompt] = [:]
     private static let credentialReportWindow: TimeInterval = 60
 
     // MARK: - Public Entry Point
@@ -251,7 +252,8 @@ final class ESEventHandler {
                         teamID: targetTeamID,
                         signingID: targetSigningID,
                         arguments: execArguments,
-                        responsiblePID: responsiblePID > 0 ? responsiblePID : nil
+                        responsiblePID: responsiblePID > 0 ? responsiblePID : nil,
+                        processIdentity: processIdentity
                     )
                 }
             }
@@ -331,6 +333,7 @@ final class ESEventHandler {
                         actorPID: pid,
                         parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
                         actorIdentity: tamperActorIdentity
                     )
                 }
@@ -466,6 +469,18 @@ final class ESEventHandler {
             )
 
         case ES_EVENT_TYPE_AUTH_CLONE:
+            let cloneSource = esString(msg.event.clone.source.pointee.path)
+            if CredentialAccessPolicy.sensitiveStore(at: cloneSource) == .keychain {
+                dispatchQueue.async { [weak self] in
+                    self?.reportKeychainTransfer(
+                        sourcePath: cloneSource, actorPath: processPath,
+                        actorPID: pid, parentPID: parentPid,
+                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
+                        operation: "clone"
+                    )
+                }
+            }
             handleProtectedWriteAuthorization(
                 message: message,
                 targetPath: esString(msg.event.clone.target_dir.pointee.path)
@@ -514,6 +529,34 @@ final class ESEventHandler {
             let shouldBlock = fileScanner?.allowsEnforcement(of: cached) ?? false
 
             esClient?.respond(to: message, allow: !shouldBlock)
+            if CredentialAccessPolicy.sensitiveStore(at: srcPath) == .keychain {
+                dispatchQueue.async { [weak self] in
+                    self?.reportKeychainTransfer(
+                        sourcePath: srcPath, actorPath: processPath,
+                        actorPID: pid, parentPID: parentPid,
+                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
+                        operation: "copyfile"
+                    )
+                }
+            }
+
+        case ES_EVENT_TYPE_AUTH_EXCHANGEDATA:
+            let firstPath = esString(msg.event.exchangedata.file1.pointee.path)
+            let secondPath = esString(msg.event.exchangedata.file2.pointee.path)
+            esClient?.respond(to: message, allow: true)
+            for sourcePath in [firstPath, secondPath]
+            where CredentialAccessPolicy.sensitiveStore(at: sourcePath) == .keychain {
+                dispatchQueue.async { [weak self] in
+                    self?.reportKeychainTransfer(
+                        sourcePath: sourcePath, actorPath: processPath,
+                        actorPID: pid, parentPID: parentPid,
+                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
+                        operation: "exchangedata"
+                    )
+                }
+            }
 
         // MARK: NOTIFY_CLOSE (modified) — scan modified files, run FIM, trigger remediation
 
@@ -717,6 +760,17 @@ final class ESEventHandler {
                 renameBlocked = false
             }
             esClient?.respond(to: message, allow: !renameBlocked)
+            if CredentialAccessPolicy.sensitiveStore(at: srcPath) == .keychain {
+                dispatchQueue.async { [weak self] in
+                    self?.reportKeychainTransfer(
+                        sourcePath: srcPath, actorPath: processPath,
+                        actorPID: pid, parentPID: parentPid,
+                        responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
+                        processIdentity: processIdentity,
+                        operation: "rename"
+                    )
+                }
+            }
             if !renameBlocked {
                 dispatchQueue.async { [weak self] in
                     guard let self,
@@ -956,7 +1010,8 @@ final class ESEventHandler {
             processTree?.recordExit(pid: pid, exitCode: exitCode)
             if tamperActorIdentity.teamID == TamperProtectionPolicy.nickTeamID,
                tamperActorIdentity.isValidIdentitySignature,
-               tamperActorIdentity.signingID == "com.ehsanazish.nick" {
+               tamperActorIdentity.signingID == "com.ehsanazish.nick",
+               xpcServer?.consumeAuthenticatedAppExit(pid: pid) == true {
                 let exit = intentionalAppExitRegistry?.consume(pid: pid)
                     ?? (intentional: false, signal: nil)
                 if !exit.intentional {
@@ -1368,7 +1423,8 @@ final class ESEventHandler {
         teamID: String?,
         signingID: String?,
         arguments: [String],
-        responsiblePID: Int32?
+        responsiblePID: Int32?,
+        processIdentity: ProcessInstanceIdentity
     ) {
         var verdict = verdict
         // Skip the content scan only for identity-signed code outside
@@ -1415,6 +1471,18 @@ final class ESEventHandler {
             arguments: arguments,
             responsibleIdentity: attribution?.app.map(Self.credentialIdentity)
         )
+        if let credentialFinding,
+           CredentialAccessPolicy.armsKeychainCorrelation(reason: credentialFinding.reason) {
+            credentialReportLock.withLock {
+                let chainKey = self.credentialChainKey(attribution: attribution, actorPID: pid)
+                recentKeychainCommands[chainKey] = .init(
+                    chainKey: chainKey,
+                    armedAt: Date(),
+                    processPID: processIdentity.pid,
+                    processPIDVersion: processIdentity.pidVersion
+                )
+            }
+        }
         let behaviorTitle = credentialFinding?.title
             ?? lolbinFinding?.title
             ?? interactivePipelineFinding.map { _ in "Download-to-shell command detected" }
@@ -1563,6 +1631,7 @@ final class ESEventHandler {
         actorPID: Int32,
         parentPID: Int32,
         responsiblePID: Int32?,
+        processIdentity: ProcessInstanceIdentity,
         actorIdentity: TamperActorIdentity
     ) {
         EndpointSecurityClient.healthMetrics.recordCredentialOpenEvaluation()
@@ -1571,12 +1640,29 @@ final class ESEventHandler {
             responsiblePID: responsiblePID,
             resolver: SecCodeResponsibleProcessIdentityResolver.shared
         )
+        let chainKey = credentialChainKey(attribution: attribution, actorPID: actorPID)
+        let hasRecentKeychainCommand = credentialReportLock.withLock { () -> Bool in
+            let now = Date()
+            recentKeychainCommands = recentKeychainCommands.filter {
+                now.timeIntervalSince($0.value.armedAt) <= 600
+            }
+            return recentKeychainCommands[chainKey]?.matchesFollowUp(
+                chainKey: chainKey,
+                processPID: processIdentity.pid,
+                processPIDVersion: processIdentity.pidVersion,
+                at: now
+            ) ?? false
+        }
         guard let finding = CredentialAccessPolicy.findingForOpen(
             path: path,
             responsibleIdentity: attribution?.app.map(Self.credentialIdentity),
+            actorIdentityValidated: actorIdentity.isValidIdentitySignature,
             actorIsValidatedApplePlatform: actorIdentity.isPlatformBinary
                 && actorIdentity.isValidIdentitySignature,
-            actorIsOwnResponsibleProcess: responsiblePID == actorPID
+            actorIsOwnResponsibleProcess: responsiblePID == actorPID,
+            actorParentIsLaunchd: parentPID == 1,
+            actorIsInterpreter: Self.isInterpreter(actorPath),
+            hasRecentKeychainCommand: store == .keychain && hasRecentKeychainCommand
         ) else { return }
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor
@@ -1601,9 +1687,9 @@ final class ESEventHandler {
         var metadata = [
             "reason": finding.reason,
             "rule": finding.reason,
-            "ruleTier": "review",
+            "ruleTier": finding.tier,
             "detectionKind": "credential-access",
-            "signalSeverity": "medium",
+            "signalSeverity": finding.severity,
             "credentialStore": finding.store.rawValue
         ]
         if let attribution {
@@ -1624,13 +1710,92 @@ final class ESEventHandler {
         ))
     }
 
+    private func reportKeychainTransfer(
+        sourcePath: String,
+        actorPath: String,
+        actorPID: Int32,
+        parentPID: Int32,
+        responsiblePID: Int32?,
+        processIdentity: ProcessInstanceIdentity,
+        operation: String
+    ) {
+        let attribution = processTree?.responsibleApp(
+            actorPID: actorPID,
+            responsiblePID: responsiblePID,
+            resolver: SecCodeResponsibleProcessIdentityResolver.shared
+        )
+        let chainKey = credentialChainKey(attribution: attribution, actorPID: actorPID)
+        let correlated = credentialReportLock.withLock { () -> Bool in
+            let now = Date()
+            recentKeychainCommands = recentKeychainCommands.filter {
+                now.timeIntervalSince($0.value.armedAt) <= 600
+            }
+            return recentKeychainCommands[chainKey]?.matchesFollowUp(
+                chainKey: chainKey,
+                processPID: processIdentity.pid,
+                processPIDVersion: processIdentity.pidVersion,
+                at: now
+            ) ?? false
+        }
+        let finding = correlated
+            ? CredentialAccessPolicy.findingForKeychainCorrelation()
+            : CredentialAccessPolicy.findingForKeychainTransfer()
+        var metadata = [
+            "reason": finding.reason,
+            "rule": finding.reason,
+            "ruleTier": finding.tier,
+            "detectionKind": "credential-access",
+            "signalSeverity": finding.severity,
+            "credentialStore": finding.store.rawValue,
+            "credentialOperation": operation,
+            "deliveryLevel": "interrupt"
+        ]
+        if let attribution {
+            metadata.merge(attribution.metadata) { current, _ in current }
+        }
+        reportThreat(ESEvent(
+            eventType: .authOpen,
+            processPath: actorPath,
+            pid: actorPID,
+            parentPid: parentPID,
+            filePath: sourcePath,
+            decision: .allow,
+            threat: .init(
+                threatName: finding.title,
+                threatFamily: "credential-access",
+                metadata: metadata
+            )
+        ))
+    }
+
+    private func credentialChainKey(
+        attribution: ResponsibleAppAttribution?,
+        actorPID: Int32
+    ) -> String {
+        if let app = attribution?.app, let bundleID = app.bundleID {
+            // The actor is the final hop (for example osascript, security or
+            // codesign). Excluding that leaf lets a prompt and the subsequent
+            // keychain read correlate within the same responsible app chain.
+            let responsibleChain = attribution?.chain.dropLast().joined(separator: ">") ?? ""
+            return "\(app.teamID ?? "")|\(bundleID)|\(responsibleChain)"
+        }
+        return "pid:\(actorPID)"
+    }
+
+    private static func isInterpreter(_ path: String) -> Bool {
+        let name = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        return ["sh", "bash", "zsh", "ksh", "fish", "python", "python3", "node", "perl", "ruby", "osascript"].contains(name)
+    }
+
     private static func credentialIdentity(
         _ identity: ResponsibleAppIdentity
     ) -> CredentialAccessPolicy.ValidatedIdentity {
         CredentialAccessPolicy.ValidatedIdentity(
             bundleID: identity.bundleID,
-            teamID: identity.teamID,
-            signingValidated: identity.signing == .signed || identity.signing == .applePlatform,
+            teamID: identity.signing == .appleSigned ? "APPLE" : identity.teamID,
+            signingValidated: identity.signing == .signed
+                || identity.signing == .appleSigned
+                || identity.signing == .applePlatform,
             isApplePlatform: identity.signing == .applePlatform
         )
     }
