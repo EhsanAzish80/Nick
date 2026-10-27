@@ -9,7 +9,6 @@ an observed prevention. Skipped and inconclusive rows remain pending.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -20,6 +19,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "Validation/Replay/attack-techniques.json"
+PROGRESS_DOC = ROOT / "DOCS" / "5.1-progress.md"
 INCIDENTS = Path("/Library/Application Support/com.ehsanazish.nick/state/incidents.json")
 START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
@@ -103,9 +103,6 @@ def update_progress(path: Path, techniques: list[dict[str, Any]], results: dict[
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--progress-doc", type=Path, default=ROOT / "DOCS/5.1-progress.md")
-    args = parser.parse_args()
     if os.geteuid() != 0:
         raise SystemExit("Run with sudo so the installed root incident store can be read.")
     if not INCIDENTS.is_file():
@@ -138,8 +135,8 @@ def main() -> int:
         else:
             print("No persisted evidence; row remains pending (not marked missed).")
 
-    update_progress(args.progress_doc, techniques, results)
-    print(f"\nWrote measured rows and pending placeholders to {args.progress_doc}")
+    update_progress(PROGRESS_DOC, techniques, results)
+    print(f"\nWrote measured rows and pending placeholders to {PROGRESS_DOC}")
     return 0
 
 
