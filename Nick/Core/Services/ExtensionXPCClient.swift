@@ -1305,6 +1305,9 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     private func receive(_ violation: IntegrityViolation, deliverToEngine: Bool = true) {
+        Self.logger.info(
+            "FIM app incident creation path=\(violation.path, privacy: .public) id=\(violation.id.uuidString, privacy: .public) deliver=\(deliverToEngine)"
+        )
         if !integrityViolations.contains(where: { $0.id == violation.id }) {
             integrityViolations.insert(violation, at: 0)
         }

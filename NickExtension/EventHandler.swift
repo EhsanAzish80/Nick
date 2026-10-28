@@ -333,6 +333,25 @@ final class ESEventHandler {
 
             esClient?.respond(to: message, allow: !shouldBlock)
 
+            if isWriteOpen {
+                let isExactProfile = fileIntegrityMonitor?.isExactShellProfile(filePath) == true
+                Self.logger.info(
+                    "Shell profile AUTH_OPEN received path=\(filePath, privacy: .public) isExactShellProfile=\(isExactProfile)"
+                )
+                if isExactProfile {
+                    dispatchQueue.async { [weak self] in
+                        Self.logger.info(
+                            "Shell profile recordShellProfileEvent scheduled path=\(filePath, privacy: .public)"
+                        )
+                        self?.reportIntegrityViolation(
+                            at: filePath, eventDrivenShellProfile: true,
+                            actorPID: pid, responsiblePID: responsiblePid,
+                            actorPath: processPath
+                        )
+                    }
+                }
+            }
+
             if CredentialAccessPolicy.shouldEvaluateOpen(
                 isRead: isReadOpen,
                 isRegularFile: isRegularFile,
@@ -582,7 +601,14 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_NOTIFY_WRITE:
             let filePath = esString(msg.event.write.target.pointee.path)
-            guard fileIntegrityMonitor?.isExactShellProfile(filePath) == true else { break }
+            Self.logger.info(
+                "Shell profile ES NOTIFY_WRITE received path=\(filePath, privacy: .public)"
+            )
+            let isExactProfile = fileIntegrityMonitor?.isExactShellProfile(filePath) == true
+            Self.logger.info(
+                "Shell profile isExactShellProfile path=\(filePath, privacy: .public) result=\(isExactProfile)"
+            )
+            guard isExactProfile else { break }
             dispatchQueue.async { [weak self] in
                 self?.reportIntegrityViolation(
                     at: filePath, eventDrivenShellProfile: true,
@@ -888,6 +914,18 @@ final class ESEventHandler {
             let renameActorTrusted = actorHasTrustedSigner(process)
             let renameTeamID = esOptionalString(process.team_id)
             let renameSigningID = esOptionalString(process.signing_id)
+            let renameLineage: String
+            if responsiblePid > 1 {
+                renameLineage = "responsible:\(responsiblePid)"
+            } else if processGroupID > 1 {
+                renameLineage = "process-group:\(processGroupID):session:\(processIdentity.sessionID)"
+            } else {
+                renameLineage = "parent:\(parentPid):session:\(processIdentity.sessionID)"
+            }
+            let renameBurstScope = BehaviorTracker.RenameBurstScope(
+                lineage: renameLineage,
+                destinationDirectory: (notifyDestPath as NSString).deletingLastPathComponent
+            )
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
                 self.reportIntegrityViolation(
@@ -905,6 +943,7 @@ final class ESEventHandler {
                 self.behaviorTracker?.recordRename(
                     pid: pid, processGroupID: processGroupID, processPath: processPath,
                     source: notifySrcPath, destination: notifyDestPath,
+                    burstScope: renameBurstScope,
                     replacementEvidence: self.behaviorTracker?.consumeRenameIntent(
                         pid: pid, source: notifySrcPath, destination: notifyDestPath
                     )
@@ -923,6 +962,7 @@ final class ESEventHandler {
                     processPath: processPath,
                     source: notifySrcPath,
                     destination: notifyDestPath,
+                    burstScope: renameBurstScope,
                     actorIsPlatformBinary: renameActorIsPlatform,
                     actorHasTrustedSigner: renameActorTrusted,
                     ignoreBrowserDownloadDestination: validatedBrowserDownload
@@ -2158,11 +2198,22 @@ final class ESEventHandler {
         responsiblePID: Int32? = nil,
         actorPath: String? = nil
     ) {
-        guard let monitor = fileIntegrityMonitor,
-              let violation = eventDrivenShellProfile
-                ? monitor.recordShellProfileEvent(path: path)
-                : monitor.check(path: path)
-        else { return }
+        Self.logger.info(
+            "FIM reportIntegrityViolation entered path=\(path, privacy: .public) shellProfile=\(eventDrivenShellProfile)"
+        )
+        guard let monitor = fileIntegrityMonitor else {
+            Self.logger.error("FIM reportIntegrityViolation stopped: monitor unavailable")
+            return
+        }
+        let violation = eventDrivenShellProfile
+            ? monitor.recordShellProfileEvent(path: path)
+            : monitor.check(path: path)
+        guard let violation else {
+            Self.logger.info(
+                "FIM reportIntegrityViolation stopped: no violation path=\(path, privacy: .public)"
+            )
+            return
+        }
         let attribution = actorPID.flatMap {
             processTree?.responsibleApp(
                 actorPID: $0,
@@ -2193,6 +2244,9 @@ final class ESEventHandler {
             metadata: metadata
         )
         guard let data = try? encoder.encode(attributed) else { return }
+        Self.logger.info(
+            "FIM reportIntegrityViolation delivering to app path=\(path, privacy: .public) id=\(attributed.id.uuidString, privacy: .public)"
+        )
         xpcServer?.sendIntegrityViolationToApp(data)
     }
 

@@ -24,6 +24,10 @@ final class FileIntegrityPathPolicyTests: XCTestCase {
         XCTAssertTrue(monitorSource.contains("return recordPending(IntegrityViolation("))
         XCTAssertTrue(handlerSource.contains("case ES_EVENT_TYPE_NOTIFY_WRITE:"))
         XCTAssertTrue(handlerSource.contains("eventDrivenShellProfile: true"))
+        XCTAssertTrue(handlerSource.contains("Shell profile AUTH_OPEN received"))
+        XCTAssertTrue(handlerSource.contains("Shell profile ES NOTIFY_WRITE received"))
+        XCTAssertTrue(handlerSource.contains("FIM reportIntegrityViolation delivering to app"))
+        XCTAssertTrue(monitorSource.contains("recordShellProfileEvent persisted"))
     }
 
     func test_individualFilesMatchExactly() {

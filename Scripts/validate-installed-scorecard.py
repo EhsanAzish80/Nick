@@ -39,7 +39,7 @@ THREAT_JOURNALS = (
 )
 START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
-EXPECTED_BUILD = "5069"
+EXPECTED_BUILD = "5070"
 INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
 SYSTEM_EXTENSIONS = Path("/usr/bin/systemextensionsctl")
 EXPECTED_EXTENSIONS = (
@@ -94,7 +94,10 @@ EXPECTED = {
     "T1552.004": ({"credential_store_access"}, {"review", "protected"}),
     "T1552.001": ({"credential_store_access"}, {"review", "protected"}),
     "T1553.001": ({"gatekeeper-user-override"}, {"review"}),
-    "T1548.006": ({"tcc-permission-modified"}, {"review"}),
+    # The reversible fixture revokes a third-party Apple Events grant. The
+    # 5069 TCC policy intentionally records that as inform/observed; sensitive
+    # grants and Nick permission loss remain review-tier.
+    "T1548.006": ({"tcc-permission-modified"}, {"review", "observed"}),
     "T1562.001": ({"endpoint_tamper_observed", "nick_tamper"}, {"protected"}),
     "T1222.002": ({"permission_modification"}, {"review", "protected"}),
     "T1070.004": ({"protected_file_deletion", "file_integrity_deleted"}, {"review", "protected"}),

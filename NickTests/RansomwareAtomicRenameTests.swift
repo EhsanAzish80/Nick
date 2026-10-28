@@ -78,6 +78,47 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         XCTAssertLessThan(try! XCTUnwrap(firstAlertAt), 50)
     }
 
+    func test_separatePlatformMvProcessesAggregateByResponsibleLineageAndDirectory() {
+        let tracker = BehaviorTracker()
+        let detector = RansomwareDetector(behaviorTracker: tracker)
+        let now = Date()
+        let scope = BehaviorTracker.RenameBurstScope(
+            lineage: "responsible:1060",
+            destinationDirectory: "/Users/test/Documents/NickScorecard"
+        )
+        var firstAlertAt: Int?
+
+        for index in 0..<49 {
+            let pid = Int32(10_000 + index)
+            let source = "/Users/test/Documents/NickScorecard/.document-\(index).tmp"
+            let destination = "/Users/test/Documents/NickScorecard/document-\(index).txt.locked"
+            tracker.recordCreate(
+                pid: 900, processGroupID: 700, processPath: "/bin/zsh",
+                path: source, at: now
+            )
+            tracker.recordRename(
+                pid: pid, processGroupID: 700, processPath: "/bin/mv",
+                source: source, destination: destination, burstScope: scope,
+                at: now.addingTimeInterval(1)
+            )
+            if detector.evaluateRename(
+                pid: pid, processPath: "/bin/mv", source: source,
+                destination: destination, burstScope: scope,
+                actorIsPlatformBinary: true, actorHasTrustedSigner: true
+            ) != nil, firstAlertAt == nil {
+                firstAlertAt = index + 1
+            }
+            tracker.cleanupExited(pid: pid)
+        }
+
+        XCTAssertEqual(firstAlertAt, RansomwareDetector.extensionBurstThreshold)
+        XCTAssertLessThan(try! XCTUnwrap(firstAlertAt), 50)
+        XCTAssertEqual(
+            tracker.extensionChangeBurst(pid: -1, burstScope: scope, window: 10)?.fileCount,
+            49
+        )
+    }
+
     func test_writeThenSwapEncryptedCopiesOverPreexistingDocumentsProducesIncident() throws {
         let tracker = BehaviorTracker()
         let detector = RansomwareDetector(behaviorTracker: tracker)

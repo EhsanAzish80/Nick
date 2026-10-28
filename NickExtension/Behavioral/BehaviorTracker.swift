@@ -128,6 +128,15 @@ final class BehaviorTracker {
         let directoryCount: Int
     }
 
+    /// Stable scope for a rename burst. Short-lived utilities such as `mv`
+    /// receive a fresh PID for every file, so ransomware evidence must follow
+    /// the responsible lineage and destination directory instead of the leaf
+    /// process.
+    struct RenameBurstScope: Hashable {
+        let lineage: String
+        let destinationDirectory: String
+    }
+
     enum BehaviorEventType: Equatable {
         case fileOpen, fileWrite, fileRename, fileDelete, fileCreate
         case processExec, processFork
@@ -144,6 +153,7 @@ final class BehaviorTracker {
     )
 
     private var processTimelines: [Int32: ProcessTimeline] = [:]
+    private var scopedRenameEvents: [RenameBurstScope: [BehaviorEvent]] = [:]
     private var recentCreations: [String: RecentCreation] = [:]
     private var renameIntents: [String: RenameReplacementEvidence] = [:]
     private let lock = NSLock()
@@ -203,6 +213,7 @@ final class BehaviorTracker {
         processPath: String,
         source: String,
         destination: String,
+        burstScope: RenameBurstScope? = nil,
         at timestamp: Date = Date(),
         replacementEvidence: RenameReplacementEvidence? = nil
     ) {
@@ -229,7 +240,7 @@ final class BehaviorTracker {
         let destinationURL = URL(fileURLWithPath: destination)
         let appendsExtensionToNamedFile = !destinationURL.pathExtension.isEmpty
             && !destinationURL.deletingPathExtension().pathExtension.isEmpty
-        processTimelines[pid]?.events.append(BehaviorEvent(
+        let event = BehaviorEvent(
             timestamp: timestamp,
             type: .fileRename,
             detail: destination,
@@ -237,7 +248,23 @@ final class BehaviorTracker {
             countsTowardRenameBurst: !isAtomicSwap || appendsExtensionToNamedFile
                 || replacementEvidence?.indicatesEncryptedReplacement == true,
             encryptedReplacement: replacementEvidence?.indicatesEncryptedReplacement == true
-        ))
+        )
+        processTimelines[pid]?.events.append(event)
+        if let burstScope {
+            var events = scopedRenameEvents[burstScope, default: []]
+            events.append(event)
+            let cutoff = timestamp.addingTimeInterval(-thresholds.timelineWindowSeconds)
+            events.removeAll { $0.timestamp < cutoff }
+            if events.count > thresholds.maxEventsPerProcess {
+                events.removeFirst(events.count - thresholds.maxEventsPerProcess)
+            }
+            scopedRenameEvents[burstScope] = events
+            if scopedRenameEvents.count > thresholds.maxEventsPerProcess {
+                scopedRenameEvents = scopedRenameEvents.filter {
+                    $0.value.last.map { $0.timestamp >= cutoff } ?? false
+                }
+            }
+        }
         recentCreations.removeValue(forKey: source)
         processTimelines[pid]?.prune(window: thresholds.timelineWindowSeconds)
         if let count = processTimelines[pid]?.events.count,
@@ -291,14 +318,24 @@ final class BehaviorTracker {
     /// Atomic saves (`x.json.tmp → x.json`), download completion, and common
     /// data formats are excluded: they rename many files but never to a new,
     /// uncommon extension.
-    func extensionChangeBurst(pid: Int32, window: TimeInterval = 10) -> ExtensionChangeBurst? {
+    func extensionChangeBurst(
+        pid: Int32,
+        burstScope: RenameBurstScope? = nil,
+        window: TimeInterval = 10
+    ) -> ExtensionChangeBurst? {
         lock.lock()
         defer { lock.unlock() }
-        guard let timeline = processTimelines[pid] else { return nil }
+        let events: [BehaviorEvent]
+        if let burstScope {
+            events = scopedRenameEvents[burstScope] ?? []
+        } else {
+            guard let timeline = processTimelines[pid] else { return nil }
+            events = timeline.events
+        }
         let cutoff = Date().addingTimeInterval(-window)
         var files: [String: Set<String>] = [:]
         var directories: [String: Set<String>] = [:]
-        for event in timeline.events where event.type == .fileRename
+        for event in events where event.type == .fileRename
             && event.timestamp >= cutoff && event.countsTowardRenameBurst {
             guard let source = event.source,
                   let newExtension = event.encryptedReplacement

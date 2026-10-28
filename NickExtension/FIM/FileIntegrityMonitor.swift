@@ -207,15 +207,23 @@ final class FileIntegrityMonitor {
         timestamp: Date = Date()
     ) -> IntegrityViolation? {
         let expanded = EndpointSecurityPath.canonical(expand(path)) ?? expand(path)
-        guard isExactShellProfile(expanded) else { return nil }
+        let exact = isExactShellProfile(expanded)
+        Self.logger.info(
+            "recordShellProfileEvent path=\(expanded, privacy: .public) isExactShellProfile=\(exact)"
+        )
+        guard exact else { return nil }
         let expected = lock.withLock { baselines[expanded] }
-        return recordPending(IntegrityViolation(
+        let violation = recordPending(IntegrityViolation(
             path: expanded,
             violationType: violationType,
             expectedHash: expected,
             actualHash: hashFile(expanded),
             timestamp: timestamp
         ))
+        Self.logger.info(
+            "recordShellProfileEvent persisted path=\(expanded, privacy: .public) inserted=\(violation != nil)"
+        )
+        return violation
     }
 
     func isExactShellProfile(_ path: String) -> Bool {

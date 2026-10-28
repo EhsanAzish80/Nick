@@ -76,39 +76,46 @@ class FixtureInvocationTests(unittest.TestCase):
 class InstalledBuildTests(unittest.TestCase):
     EXTENSION_OUTPUT = """
 --- com.apple.system_extension.network_extension
-* * UXGW5V3BY6 com.ehsanazish.nick.NickNetFilter (5.1.0/5069) NickNetFilter [activated enabled]
+* * UXGW5V3BY6 com.ehsanazish.nick.NickNetFilter (5.1.0/5070) NickNetFilter [activated enabled]
 --- com.apple.system_extension.endpoint_security
-* * UXGW5V3BY6 com.ehsanazish.nick.NickExtension (5.1.0/5069) NickExtension [activated enabled]
+* * UXGW5V3BY6 com.ehsanazish.nick.NickExtension (5.1.0/5070) NickExtension [activated enabled]
 """
 
     def test_active_extension_builds_reads_both_active_components(self):
         self.assertEqual(MODULE.active_extension_builds(self.EXTENSION_OUTPUT), {
-            "com.ehsanazish.nick.NickExtension": "5069",
-            "com.ehsanazish.nick.NickNetFilter": "5069",
+            "com.ehsanazish.nick.NickExtension": "5070",
+            "com.ehsanazish.nick.NickNetFilter": "5070",
         })
 
     def test_installed_build_header_accepts_exact_expected_build(self):
         with tempfile.TemporaryDirectory(prefix="nick-build-header-") as directory:
             info = Path(directory) / "Info.plist"
             with info.open("wb") as stream:
-                plistlib.dump({"CFBundleVersion": "5069"}, stream)
+                plistlib.dump({"CFBundleVersion": "5070"}, stream)
             completed = subprocess.CompletedProcess([], 0, self.EXTENSION_OUTPUT, "")
             with mock.patch.object(MODULE.subprocess, "run", return_value=completed):
                 app, extensions = MODULE.installed_build_header(info, Path("/usr/bin/systemextensionsctl"))
-        self.assertEqual(app, "5069")
+        self.assertEqual(app, "5070")
         self.assertEqual(set(extensions), set(MODULE.EXPECTED_EXTENSIONS))
 
     def test_installed_build_header_refuses_any_component_mismatch(self):
-        output = self.EXTENSION_OUTPUT.replace("NickNetFilter (5.1.0/5069)",
+        output = self.EXTENSION_OUTPUT.replace("NickNetFilter (5.1.0/5070)",
                                                "NickNetFilter (5.1.0/5068)")
         with tempfile.TemporaryDirectory(prefix="nick-build-header-") as directory:
             info = Path(directory) / "Info.plist"
             with info.open("wb") as stream:
-                plistlib.dump({"CFBundleVersion": "5069"}, stream)
+                plistlib.dump({"CFBundleVersion": "5070"}, stream)
             completed = subprocess.CompletedProcess([], 0, output, "")
             with mock.patch.object(MODULE.subprocess, "run", return_value=completed), \
                  self.assertRaisesRegex(RuntimeError, "NickNetFilter=5068"):
                 MODULE.installed_build_header(info, Path("/usr/bin/systemextensionsctl"))
+
+    def test_login_item_and_tcc_rows_accept_the_persisted_policy_evidence(self):
+        self.assertEqual(MODULE.EXPECTED["T1547.015"], ({"background-item-added"}, {"review"}))
+        self.assertEqual(
+            MODULE.EXPECTED["T1548.006"],
+            ({"tcc-permission-modified"}, {"review", "observed"}),
+        )
 
 
 if __name__ == "__main__":
