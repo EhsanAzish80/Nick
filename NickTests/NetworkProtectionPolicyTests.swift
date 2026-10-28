@@ -1479,7 +1479,11 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             reason: NetworkObservationReason.knownThreat.rawValue,
             reasonTitle: NetworkObservationReason.knownThreat.userTitle
         )
-        let manager = NetworkProtectionManager()
+        // This test exercises only explicitly injected events. A production
+        // store watcher can otherwise reload another test's 500-event fixture
+        // while this handler is suspended, over-fulfilling the submission
+        // count in order-dependent full-suite runs.
+        let manager = NetworkProtectionManager(eventsURLProvider: { nil })
         manager.activateDurableCursor(deliveredEventIDs: [])
         let submissions = NetworkSubmissionCounter()
         manager.findingHandler = { _ in

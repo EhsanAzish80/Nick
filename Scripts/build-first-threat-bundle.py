@@ -21,7 +21,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 HASHES = ROOT / "NickExtension" / "known-threat-hashes.json"
 RULES = ROOT / "Validation" / "ThreatIntelligence" / "first-bundle-rules.json"
-PRODUCTION_PUBLIC_KEY = base64.b64decode("XIYgv92Pzh9CcUrooo2psW5wly507Oxv6oN0a2dbb/0=", validate=True)
+PRODUCTION_PUBLIC_KEY = base64.b64decode("vhmPD4eSgTVFeCc6tR7SZdceirBiJ0n29taAnM/s9m4=", validate=True)
 OPENSSL_CANDIDATES = (
     Path("/opt/homebrew/opt/openssl@3/bin/openssl"),
     Path("/usr/local/opt/openssl@3/bin/openssl"),
