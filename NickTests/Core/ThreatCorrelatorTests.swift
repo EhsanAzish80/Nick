@@ -1309,6 +1309,34 @@ final class ThreatCorrelatorTests: XCTestCase {
         )
     }
 
+    func test_incidentStoreSeparatesLaunchAgentAndLoginItemFromSameActor() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        func alert(kind: String, label: String, path: String) -> ThreatAlert {
+            makeAlert(signal: ThreatSignal(
+                source: .persistence, severity: .medium,
+                title: "Background item added", description: "BTM",
+                context: .init(metadata: [
+                    "appleEvent": "background-item-added",
+                    "launchItemKind": kind,
+                    "launchItemLabel": label,
+                    "persistencePath": path,
+                    "executablePath": "/Applications/TextEdit.app/Contents/MacOS/TextEdit",
+                    "ruleTier": "review"
+                ])
+            ))
+        }
+        _ = store.ingest([alert(
+            kind: "agent", label: "com.example.textedit",
+            path: "/Users/test/Library/LaunchAgents/com.example.textedit.plist"
+        )])
+        _ = store.ingest([alert(
+            kind: "login-item", label: "TextEdit",
+            path: "/Applications/TextEdit.app"
+        )])
+        XCTAssertEqual(store.incidents.count, 2)
+        XCTAssertEqual(Set(store.incidents.map(\.alert.id)).count, 2)
+    }
+
     func test_incidentStoreAttachesBackgroundItemRemovalToExistingAdd() {
         let store = IncidentStore(defaults: isolatedDefaults())
         let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"

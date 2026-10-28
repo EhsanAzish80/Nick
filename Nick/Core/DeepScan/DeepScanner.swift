@@ -92,7 +92,8 @@ final class DeepScanner {
         approvedDevelopmentRoots: Set<String> = [],
         timeBudget: TimeInterval = 20 * 60,
         candidateFiles: [String]? = nil,
-        scanFile: @escaping @Sendable (String) async throws -> [YARAMatch]
+        scanFile: @escaping @Sendable (String) async throws -> [YARAMatch],
+        onCompletion: (@Sendable () async -> Void)? = nil
     ) {
         guard !isScanning, !isPaused, scanTask == nil else { return }
         let scanID = UUID()
@@ -123,6 +124,7 @@ final class DeepScanner {
                 candidateFiles: candidateFiles,
                 scanFile: scanFile
             )
+            await onCompletion?()
         }
     }
 

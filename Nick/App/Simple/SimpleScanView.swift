@@ -286,7 +286,20 @@ struct SimpleScanView: View {
     private func runQuickCheck() {
         lastJob = .quick
         quickFinished = false
-        engine.runFullScan()
+        Task { @MainActor in
+            let operationID = await xpcClient.beginStorageOperation(
+                kind: .readOnlySecurityScan,
+                scopedPaths: DeepScanner.standardScanRoots
+            )
+            engine.runFullScan { [xpcClient] in
+                guard let operationID else { return }
+                await xpcClient.finishStorageOperation(
+                    operationID: operationID,
+                    itemCount: 0,
+                    bytesMoved: 0
+                )
+            }
+        }
     }
 
     private func toggleFullCheck() {
@@ -298,8 +311,21 @@ struct SimpleScanView: View {
         scanner.resetResults()
         trashed = []
         let ignored = ignoredPaths
-        scanner.start(onlyOnPower: false, ignoredPaths: ignored) { [engine] path in
-            try await engine.scanFile(at: URL(fileURLWithPath: path))
+        Task { @MainActor in
+            let operationID = await xpcClient.beginStorageOperation(
+                kind: .readOnlySecurityScan,
+                scopedPaths: DeepScanner.standardScanRoots
+            )
+            scanner.start(onlyOnPower: false, ignoredPaths: ignored) { [engine] path in
+                try await engine.scanFile(at: URL(fileURLWithPath: path))
+            } onCompletion: { [xpcClient] in
+                guard let operationID else { return }
+                await xpcClient.finishStorageOperation(
+                    operationID: operationID,
+                    itemCount: 0,
+                    bytesMoved: 0
+                )
+            }
         }
     }
 
@@ -327,6 +353,10 @@ struct SimpleScanView: View {
         fileError = nil
         trashed = []
         Task { @MainActor in
+            let operationID = await xpcClient.beginStorageOperation(
+                kind: .readOnlySecurityScan,
+                scopedPaths: [url.path]
+            )
             do {
                 let matches = try await engine.scanFile(at: url)
                 let result = await Task.detached(priority: .utility) {
@@ -345,6 +375,13 @@ struct SimpleScanView: View {
                 if fileTarget == url {
                     fileError = "Nick may not have permission to read it. Give Nick Full Disk Access in System Settings and try again."
                 }
+            }
+            if let operationID {
+                await xpcClient.finishStorageOperation(
+                    operationID: operationID,
+                    itemCount: 0,
+                    bytesMoved: 0
+                )
             }
         }
     }

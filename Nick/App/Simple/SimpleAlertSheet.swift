@@ -218,6 +218,14 @@ struct SimpleAlertSheet: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
+            if alert.contributingSignals.contains(where: { $0.metadata["openSettingsAction"] == "true" }) {
+                Button("Open Settings") {
+                    guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") else { return }
+                    NSWorkspace.shared.open(url)
+                }
+                .buttonStyle(.link)
+                .tint(Color.nickAccent)
+            }
             if let networkDomain {
                 Button("Allow this domain") {
                     Task { _ = await networkProtection.allowDomain(networkDomain) }

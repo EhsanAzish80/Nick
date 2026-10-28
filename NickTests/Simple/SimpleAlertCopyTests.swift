@@ -95,4 +95,42 @@ final class SimpleAlertCopyTests: XCTestCase {
         XCTAssertFalse(copy.whatNickDid.contains("file has since been removed"))
         XCTAssertTrue(copy.subline.contains("command has finished"))
     }
+
+    func testCredentialCatalogNeverClaimsRemovedFile() {
+        for reason in [
+            "credential_store_access", "keychain_secret_read", "keychain_dump",
+            "keychain_command_correlation", "hidden_password_prompt"
+        ] {
+            let signal = ThreatSignal(
+                source: .endpointSecurity, severity: .medium,
+                title: "Credential evidence", description: "Credential evidence",
+                context: .init(
+                    processInfo: .init(
+                        pid: 10, path: "/usr/bin/security", name: "security",
+                        parentPID: 9, parentName: "gh", signingStatus: .signed(teamID: "APPLE_PLATFORM")
+                    ),
+                    fileInfo: .init(
+                        path: "/Users/test/Library/Keychains/login.keychain-db",
+                        sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil
+                    ),
+                    metadata: [
+                        "reason": reason, "rule": reason, "ruleTier": "review",
+                        "detectionKind": "credential-access", "credentialStore": "keychain"
+                    ]
+                )
+            )
+            let alert = ThreatAlert(
+                score: 0.6,
+                content: .init(title: signal.title, description: signal.description, severity: .medium, recommendedAction: "Review"),
+                contributingSignals: [signal]
+            )
+            let copy = SimpleAlertCopy.make(
+                alert: alert,
+                user: UserFacingAlertBuilder.shared.build(from: alert),
+                isQuarantined: false,
+                fileStillPresent: false
+            )
+            XCTAssertFalse(copy.whatNickDid.contains("file has since been removed"), reason)
+        }
+    }
 }

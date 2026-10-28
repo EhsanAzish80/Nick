@@ -97,6 +97,27 @@ final class StorageOperationApprovalTests: XCTestCase {
         }
     }
 
+    func testReadOnlySecurityScanMayReadSelectedCredentialFileForExactNickInstance() {
+        let registry = StorageOperationRegistry(now: { Date(timeIntervalSince1970: 100) })
+        let cookies = "/Users/test/Library/Application Support/Google/Chrome/Default/Cookies"
+        XCTAssertTrue(registry.register(
+            request(kind: .readOnlySecurityScan, scopes: [cookies]),
+            authenticatedPID: pid, authenticatedPIDVersion: pidVersion
+        ))
+        XCTAssertTrue(registry.permits(
+            pid: pid, pidVersion: pidVersion,
+            event: .metadataRead(path: cookies)
+        ))
+        XCTAssertFalse(registry.permits(
+            pid: pid + 1, pidVersion: pidVersion,
+            event: .metadataRead(path: cookies)
+        ))
+        XCTAssertFalse(registry.permits(
+            pid: pid, pidVersion: pidVersion,
+            event: .metadataRead(path: "/Users/test/Library/Keychains/login.keychain-db")
+        ))
+    }
+
     func testSymlinkIntoCredentialStoreIsNeverApproved() throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "nick-storage-\(UUID().uuidString)")

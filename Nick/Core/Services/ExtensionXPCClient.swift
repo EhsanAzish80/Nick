@@ -1640,9 +1640,15 @@ struct ExtensionFinding: Sendable {
         } else {
             severity = .high
         }
-        let actorPath = (isLOLBinBehavior || isCredentialAccess)
-            ? (event.metadata?["execTargetPath"] ?? filePath)
-            : event.processPath
+        let actorPath: String
+        if isLOLBinBehavior || (isCredentialAccess && event.eventType == .authExec) {
+            actorPath = event.metadata?["execTargetPath"] ?? event.processPath
+        } else {
+            // AUTH_OPEN's file is the credential target, not the actor. Keep
+            // process and file fields separate so presentation/signing never
+            // turns "Cookies" into an unsigned process.
+            actorPath = event.processPath
+        }
         let signingStatus: SigningStatus
         if let teamID = event.teamID, !teamID.isEmpty {
             signingStatus = .signed(teamID: teamID, signingID: event.signingID)

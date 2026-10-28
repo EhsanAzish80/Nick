@@ -88,6 +88,8 @@ final class ESEventHandler {
     private var lastCredentialReport: [String: Date] = [:]
     private var recentKeychainCommands: [String: CredentialAccessPolicy.RecentHiddenPrompt] = [:]
     private var keychainTransferFallback = KeychainTransferFallbackTracker()
+    private let tccEventLock = NSLock()
+    private var recentTCCEvents: [String: Date] = [:]
     private static let credentialReportWindow: TimeInterval = 60
 
     // MARK: - Public Entry Point
@@ -1195,6 +1197,8 @@ final class ESEventHandler {
             let itemURL = esString(item.item_url)
             let itemPath = normalizedBTMItemPath(itemURL)
             let isLaunchDaemon = itemPath.lowercased().contains("/library/launchdaemons/")
+            let launchItemKind = isLaunchDaemon ? "daemon"
+                : (itemPath.lowercased().contains("/library/launchagents/") ? "agent" : "login-item")
             let appURL = esString(item.app_url)
             reportAppleSecurityEvent(
                 type: .notifyBTMLaunchItemAdd,
@@ -1209,7 +1213,7 @@ final class ESEventHandler {
                 metadata: [
                     "appleEvent": "background-item-added",
                     "reason": "background-item-added",
-                    "launchItemKind": isLaunchDaemon ? "daemon" : "agent",
+                    "launchItemKind": launchItemKind,
                     "signalSeverity": isLaunchDaemon ? "high" : "medium",
                     "itemURL": itemURL,
                     "persistencePath": itemPath,
@@ -1233,6 +1237,9 @@ final class ESEventHandler {
             let item = event.item.pointee
             let itemURL = esString(item.item_url)
             let itemPath = normalizedBTMItemPath(itemURL)
+            let lowerItemPath = itemPath.lowercased()
+            let launchItemKind = lowerItemPath.contains("/library/launchdaemons/") ? "daemon"
+                : (lowerItemPath.contains("/library/launchagents/") ? "agent" : "login-item")
             let appURL = esString(item.app_url)
             reportAppleSecurityEvent(
                 type: .notifyBTMLaunchItemRemove,
@@ -1247,6 +1254,7 @@ final class ESEventHandler {
                 metadata: [
                     "appleEvent": "background-item-removed",
                     "deliveryLevel": "inform",
+                    "launchItemKind": launchItemKind,
                     "itemURL": itemURL,
                     "persistencePath": itemPath,
                     "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,
@@ -1315,32 +1323,18 @@ final class ESEventHandler {
             let tccResponsiblePID = tcc.responsible_token.map {
                 audit_token_to_pid($0.pointee)
             } ?? responsiblePid
-            let affectsNick = appBundleID == "com.ehsanazish.nick"
-                || appPath.contains("/Nick.app/")
-            let instigatorName = URL(fileURLWithPath: instigatorPath).lastPathComponent
-            let updateRelated = affectsNick
-                && ["installer", "installd", "shove", "Autoupdate"].contains(instigatorName)
-            reportAppleSecurityEvent(
-                type: .notifyTCCModify,
-                actorPath: instigatorPath,
-                actorPID: instigatorPID,
-                parentPID: instigatorParentPID,
-                responsiblePID: tccResponsiblePID,
-                filePath: appPath.isEmpty ? nil : appPath,
-                title: "Privacy permission \(isGranted ? "granted" : "revoked")",
-                family: "apple-tcc",
-                ruleTier: "review",
-                metadata: [
-                    "appleEvent": "tcc-permission-modified",
-                    "service": service,
-                    "appBundleID": appBundleID,
-                    "appPath": appPath,
-                    "changeType": isGranted ? "granted" : "revoked",
-                    "affectedAppName": affectsNick ? "Nick" : (appBundleID.isEmpty ? URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent : appBundleID),
-                    "nickPermissionLost": affectsNick && !isGranted ? "true" : "false",
-                    "updateRelated": updateRelated ? "true" : "false"
-                ]
-            )
+            dispatchQueue.async { [weak self] in
+                self?.reportTCCChange(
+                    service: service,
+                    appBundleID: appBundleID,
+                    appPath: appPath,
+                    isGranted: isGranted,
+                    instigatorPath: instigatorPath,
+                    instigatorPID: instigatorPID,
+                    instigatorParentPID: instigatorParentPID,
+                    responsiblePID: tccResponsiblePID
+                )
+            }
 
         default:
             // For any unhandled AUTH event, allow immediately.
@@ -1348,6 +1342,93 @@ final class ESEventHandler {
                 esClient?.respond(to: message, allow: true)
             }
         }
+    }
+
+    private func reportTCCChange(
+        service: String,
+        appBundleID: String,
+        appPath: String,
+        isGranted: Bool,
+        instigatorPath: String,
+        instigatorPID: Int32,
+        instigatorParentPID: Int32,
+        responsiblePID: Int32
+    ) {
+        let action = isGranted ? "granted" : "revoked"
+        let dedupKey = "\(appBundleID)|\(appPath)|\(service)|\(action)"
+        let now = Date()
+        let duplicate = tccEventLock.withLock { () -> Bool in
+            recentTCCEvents = recentTCCEvents.filter { now.timeIntervalSince($0.value) <= 5 }
+            if let previous = recentTCCEvents[dedupKey], now.timeIntervalSince(previous) <= 5 {
+                return true
+            }
+            recentTCCEvents[dedupKey] = now
+            return false
+        }
+        guard !duplicate else { return }
+
+        let identity = SecCodeResponsibleProcessIdentityResolver.shared.identity(
+            pid: instigatorPID,
+            pathHint: instigatorPath
+        )
+        let identityMatchesClient = identity.map { candidate in
+            (appBundleID.isEmpty == false && candidate.bundleID == appBundleID)
+                || (appPath.isEmpty == false && candidate.path == appPath)
+        } ?? false
+        let validatedAppleClient = identityMatchesClient && identity.map {
+            $0.signing == .applePlatform || $0.signing == .appleSigned
+        } == true
+        let affectsNick = appBundleID == "com.ehsanazish.nick" || appPath.contains("/Nick.app/")
+        let affectedName = affectsNick ? "Nick" : (identity?.name
+            ?? (appBundleID.isEmpty ? URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent : appBundleID))
+
+        var metadata = [
+            "appleEvent": "tcc-permission-modified",
+            "service": service,
+            "appBundleID": appBundleID,
+            "appPath": appPath,
+            "changeType": action,
+            "affectedAppName": affectedName,
+            "nickPermissionLost": affectsNick && !isGranted ? "true" : "false"
+        ]
+
+        if validatedAppleClient {
+            // Apple installers and system components receive short-lived TCC
+            // changes during normal package work. Preserve them in the event
+            // timeline without creating a review item.
+            metadata["timelineOnly"] = "true"
+            pushEvent(ESEvent(
+                eventType: .notifyTCCModify,
+                processPath: instigatorPath,
+                pid: instigatorPID,
+                parentPid: instigatorParentPID,
+                filePath: appPath.isEmpty ? nil : appPath,
+                decision: .notApplicable
+            ))
+            return
+        }
+
+        let sensitiveGrantServices: Set<String> = [
+            "kTCCServiceSystemPolicyAllFiles", "kTCCServiceAccessibility",
+            "kTCCServiceScreenCapture", "kTCCServiceListenEvent",
+            "kTCCServicePostEvent"
+        ]
+        let actionable = (affectsNick && !isGranted)
+            || (isGranted && sensitiveGrantServices.contains(service))
+        metadata["deliveryLevel"] = actionable ? "interrupt" : "inform"
+        if affectsNick && !isGranted { metadata["openSettingsAction"] = "true" }
+        reportAppleSecurityEvent(
+            type: .notifyTCCModify,
+            actorPath: instigatorPath,
+            actorPID: instigatorPID,
+            parentPID: instigatorParentPID,
+            responsiblePID: responsiblePID,
+            filePath: appPath.isEmpty ? nil : appPath,
+            title: "Privacy permission \(action)",
+            family: "apple-tcc",
+            ruleTier: actionable ? "review" : "observed",
+            metadata: metadata
+        )
     }
 
     /// Converts Apple-authored Endpoint Security notifications into the same
@@ -1852,7 +1933,8 @@ final class ESEventHandler {
                     actorPath: actorPath,
                     actorPID: actorPID,
                     parentPID: parentPID,
-                    attribution: attribution
+                    attribution: attribution,
+                    actorIdentity: actorIdentity
                 )
             }
             return
@@ -1864,7 +1946,8 @@ final class ESEventHandler {
             actorPath: actorPath,
             actorPID: actorPID,
             parentPID: parentPID,
-            attribution: attribution
+            attribution: attribution,
+            actorIdentity: actorIdentity
         )
     }
 
@@ -1874,7 +1957,8 @@ final class ESEventHandler {
         actorPath: String,
         actorPID: Int32,
         parentPID: Int32,
-        attribution: ResponsibleAppAttribution?
+        attribution: ResponsibleAppAttribution?,
+        actorIdentity: TamperActorIdentity
     ) {
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor
@@ -1917,6 +2001,9 @@ final class ESEventHandler {
             threat: ESEvent.ThreatContext(
                 threatName: finding.title,
                 threatFamily: "credential-access",
+                isCodeSigned: actorIdentity.isValidIdentitySignature,
+                teamID: actorIdentity.teamID,
+                signingID: actorIdentity.signingID,
                 metadata: metadata
             )
         ))

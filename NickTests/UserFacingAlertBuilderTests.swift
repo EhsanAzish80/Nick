@@ -49,8 +49,8 @@ final class UserFacingAlertBuilderTests: XCTestCase {
         XCTAssertEqual(result.headline, "Read a Keychain secret (security, via Codex CLI)")
         XCTAssertFalse(result.headline.contains("needs your review"))
         XCTAssertTrue(result.explanation.contains("security"))
-        XCTAssertTrue(result.explanation.contains("ChatGPT → Codex CLI → security"))
-        XCTAssertTrue(result.explanation.contains("stored Keychain secret"))
+        XCTAssertTrue(result.explanation.contains("ChatGPT → Codex CLI"))
+        XCTAssertTrue(result.explanation.contains("security read a Keychain secret"))
     }
 
     func testCredentialTitlesAreDerivedFromReasonForPersistedIncidents() {

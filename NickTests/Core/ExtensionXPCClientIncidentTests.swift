@@ -162,6 +162,38 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
             "Nick saw a shell run a script supplied by a download command."
         )
     }
+
+    func testCredentialOpenKeepsActorSeparateFromTargetFileAndSigning() throws {
+        let event = ESEvent(
+            eventType: .authOpen,
+            processPath: "/Applications/Nick.app/Contents/MacOS/Nick",
+            pid: 505,
+            parentPid: 1,
+            filePath: "/Users/test/Library/Application Support/Google/Chrome/Default/Cookies",
+            decision: .allow,
+            threat: .init(
+                threatName: "Opened browser cookies",
+                threatFamily: "credential-access",
+                isCodeSigned: true,
+                teamID: "UXGW5V3BY6",
+                signingID: "com.ehsanazish.nick",
+                metadata: [
+                    "reason": "credential_store_access",
+                    "rule": "credential_store_access",
+                    "ruleTier": "review",
+                    "detectionKind": "credential-access",
+                    "credentialStore": "browser-cookies"
+                ]
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.processInfo?.name, "Nick")
+        XCTAssertEqual(
+            finding.signal.processInfo?.signingStatus,
+            .signed(teamID: "UXGW5V3BY6", signingID: "com.ehsanazish.nick")
+        )
+        XCTAssertEqual(finding.signal.fileInfo?.path, event.filePath)
+    }
 #if DEBUG
     @MainActor
     func test_debugAuthorizationHarnessReportsDisconnectedAsUnavailableNotPassed() async {

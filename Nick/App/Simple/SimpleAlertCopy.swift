@@ -71,7 +71,7 @@ struct SimpleAlertCopy: Equatable {
         let didText: String
         if isQuarantined {
             didText = "Moved it to Quarantine, where it can’t open or change anything. Nothing was deleted."
-        } else if !fileStillPresent, alert.detectedFilePath != nil {
+        } else if !fileStillPresent, alert.isFileRemovalFinding {
             didText = "Noticed it and kept watching. The file has since been removed."
         } else {
             switch user.severity {
@@ -119,5 +119,21 @@ struct SimpleAlertCopy: Equatable {
         default:                   signer = "signer unknown"
         }
         return [rule, confidence, signer].joined(separator: " · ")
+    }
+}
+
+private extension ThreatAlert {
+    /// Only concrete file detections may claim that a file was removed.
+    /// Exec/credential/behavior signals can carry a path for evidence, but
+    /// that path is not a remediable detected file.
+    var isFileRemovalFinding: Bool {
+        contributingSignals.contains { signal in
+            guard signal.fileInfo?.path.isEmpty == false else { return false }
+            if signal.source == .yara || signal.source == .filesystem { return true }
+            let kind = signal.metadata["detectionKind"] ?? ""
+            return kind == "file-content"
+                || signal.metadata["reason"] == "exact_hash_match"
+                || signal.metadata["rule"] == "exact_hash_match"
+        }
     }
 }

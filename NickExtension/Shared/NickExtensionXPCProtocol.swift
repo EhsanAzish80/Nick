@@ -7,6 +7,11 @@ import Foundation
 enum StorageOperationKind: String, Codable, Sendable {
     case sizeScan
     case trashCleanup
+    /// A user-clicked Smart Scan, Deep Scan, or Scan a File operation.
+    /// This is deliberately distinct from Storage metadata reads because a
+    /// security scan may inspect a selected credential-store file. Approval
+    /// remains bound to the authenticated Nick process instance and roots.
+    case readOnlySecurityScan
 }
 
 struct StorageOperationRequest: Codable, Sendable {
@@ -57,9 +62,11 @@ final class StorageOperationRegistry: @unchecked Sendable {
         else { return false }
 
         let scopes = request.scopedPaths.compactMap(Self.resolvedPath)
-        guard scopes.count == request.scopedPaths.count,
-              scopes.allSatisfy({ Self.isNeverSuppressPath($0) == false })
-        else { return false }
+        guard scopes.count == request.scopedPaths.count else { return false }
+        if request.kind != .readOnlySecurityScan,
+           scopes.contains(where: Self.isNeverSuppressPath) {
+            return false
+        }
 
         return lock.withLock {
             guard active == nil, usedIDs.insert(request.operationID).inserted else { return false }
@@ -96,6 +103,13 @@ final class StorageOperationRegistry: @unchecked Sendable {
             case (.sizeScan, .metadataRead(let path)):
                 guard let resolved = Self.resolvedPath(path),
                       Self.isNeverSuppressPath(resolved) == false else { return false }
+                return active.scopes.contains { Self.contains(resolved, scope: $0) }
+            case (.readOnlySecurityScan, .metadataRead(let path)):
+                // For this one exact Nick process instance, reading the
+                // explicitly selected scan roots is the operation itself.
+                // Other processes never reach this branch, so the hard
+                // never-suppress policy continues to apply to them.
+                guard let resolved = Self.resolvedPath(path) else { return false }
                 return active.scopes.contains { Self.contains(resolved, scope: $0) }
             case (.trashCleanup, .trashRename(let source, let destination)):
                 guard let resolvedSource = Self.resolvedPath(source),

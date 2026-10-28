@@ -1004,12 +1004,14 @@ final class IncidentStore {
             ["background-item-added", "background-item-removed"].contains($0.metadata["appleEvent"])
         }) {
             let label = launchSignal.metadata["launchItemLabel"]?.lowercased() ?? "unlabelled"
-            let subject = launchSignal.metadata["itemURL"]
+            let kind = launchSignal.metadata["launchItemKind"]?.lowercased() ?? "background-item"
+            let subject = launchSignal.metadata["persistencePath"]
+                ?? launchSignal.metadata["itemURL"]
                 ?? launchSignal.metadata["executablePath"]
                 ?? launchSignal.metadata["appURL"]
                 ?? launchSignal.fileInfo?.path
                 ?? label
-            return "launch-item|label:\(label)|subject:\(normalize(subject))"
+            return "launch-item|kind:\(kind)|label:\(label)|subject:\(normalize(subject))"
         }
         if let launchPath = launchItemPath(alert) {
             return "launch-item|path:\(normalize(launchPath))"
