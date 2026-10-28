@@ -88,6 +88,8 @@ final class ESEventHandler {
     private var lastCredentialReport: [String: Date] = [:]
     private var recentKeychainCommands: [String: CredentialAccessPolicy.RecentHiddenPrompt] = [:]
     private var keychainTransferFallback = KeychainTransferFallbackTracker()
+    private let tccEventLock = NSLock()
+    private var recentTCCEvents: [String: Date] = [:]
     private static let credentialReportWindow: TimeInterval = 60
 
     // MARK: - Public Entry Point
@@ -330,6 +332,23 @@ final class ESEventHandler {
                 ) == true
 
             esClient?.respond(to: message, allow: !shouldBlock)
+
+            if isWriteOpen {
+                let isExactProfile = fileIntegrityMonitor?.isExactShellProfile(filePath) == true
+                if isExactProfile {
+                    Self.logger.info("Shell profile AUTH_OPEN received path=\(filePath, privacy: .public)")
+                    dispatchQueue.async { [weak self] in
+                        Self.logger.info(
+                            "Shell profile recordShellProfileEvent scheduled path=\(filePath, privacy: .public)"
+                        )
+                        self?.reportIntegrityViolation(
+                            at: filePath, eventDrivenShellProfile: true,
+                            actorPID: pid, responsiblePID: responsiblePid,
+                            actorPath: processPath
+                        )
+                    }
+                }
+            }
 
             if CredentialAccessPolicy.shouldEvaluateOpen(
                 isRead: isReadOpen,
@@ -578,6 +597,18 @@ final class ESEventHandler {
                 }
             }
 
+        case ES_EVENT_TYPE_NOTIFY_WRITE:
+            let filePath = esString(msg.event.write.target.pointee.path)
+            let isExactProfile = fileIntegrityMonitor?.isExactShellProfile(filePath) == true
+            guard isExactProfile else { break }
+            Self.logger.info("Shell profile ES NOTIFY_WRITE received path=\(filePath, privacy: .public)")
+            dispatchQueue.async { [weak self] in
+                self?.reportIntegrityViolation(
+                    at: filePath, eventDrivenShellProfile: true,
+                    actorPID: pid, responsiblePID: responsiblePid, actorPath: processPath
+                )
+            }
+
         // MARK: NOTIFY_CLOSE (modified) — scan modified files, run FIM, trigger remediation
 
         case ES_EVENT_TYPE_NOTIFY_CLOSE:
@@ -654,10 +685,14 @@ final class ESEventHandler {
                 }
 
                 // --- File Integrity Monitoring ---
-                self.reportIntegrityViolation(
-                    at: filePath, actorPID: pid, responsiblePID: responsiblePid,
-                    actorPath: processPath
-                )
+                if self.fileIntegrityMonitor?.shouldCheck(filePath) == true {
+                    self.reportIntegrityViolation(
+                        at: filePath,
+                        eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(filePath) == true,
+                        actorPID: pid, responsiblePID: responsiblePid,
+                        actorPath: processPath
+                    )
+                }
 
                 // Ransomware heuristics run once at close and read at most a
                 // small prefix. Canary names and known extensions do not need
@@ -874,19 +909,38 @@ final class ESEventHandler {
             let renameActorTrusted = actorHasTrustedSigner(process)
             let renameTeamID = esOptionalString(process.team_id)
             let renameSigningID = esOptionalString(process.signing_id)
+            let renameLineage: String
+            if responsiblePid > 1 {
+                renameLineage = "responsible:\(responsiblePid)"
+            } else if processGroupID > 1 {
+                renameLineage = "process-group:\(processGroupID):session:\(processIdentity.sessionID)"
+            } else {
+                renameLineage = "parent:\(parentPid):session:\(processIdentity.sessionID)"
+            }
+            let renameBurstScope = BehaviorTracker.RenameBurstScope(
+                lineage: renameLineage,
+                destinationDirectory: (notifyDestPath as NSString).deletingLastPathComponent
+            )
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
-                self.reportIntegrityViolation(
-                    at: notifySrcPath, actorPID: pid, responsiblePID: responsiblePid,
-                    actorPath: processPath
+                for path in [notifySrcPath, notifyDestPath]
+                where self.fileIntegrityMonitor?.shouldCheck(path) == true {
+                    self.reportIntegrityViolation(
+                        at: path,
+                        eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(path) == true,
+                        actorPID: pid, responsiblePID: responsiblePid,
+                        actorPath: processPath
+                    )
+                }
+                let excludedAppleSync = AppleSyncRenamePolicy.shouldExclude(
+                    isPlatformBinary: renameActorIsPlatform,
+                    signingID: renameSigningID
                 )
-                self.reportIntegrityViolation(
-                    at: notifyDestPath, actorPID: pid, responsiblePID: responsiblePid,
-                    actorPath: processPath
-                )
+                guard !excludedAppleSync else { return }
                 self.behaviorTracker?.recordRename(
                     pid: pid, processGroupID: processGroupID, processPath: processPath,
                     source: notifySrcPath, destination: notifyDestPath,
+                    burstScope: renameBurstScope,
                     replacementEvidence: self.behaviorTracker?.consumeRenameIntent(
                         pid: pid, source: notifySrcPath, destination: notifyDestPath
                     )
@@ -905,6 +959,7 @@ final class ESEventHandler {
                     processPath: processPath,
                     source: notifySrcPath,
                     destination: notifyDestPath,
+                    burstScope: renameBurstScope,
                     actorIsPlatformBinary: renameActorIsPlatform,
                     actorHasTrustedSigner: renameActorTrusted,
                     ignoreBrowserDownloadDestination: validatedBrowserDownload
@@ -919,7 +974,8 @@ final class ESEventHandler {
                         responsiblePID: responsiblePid,
                         actorIsPlatformBinary: renameActorIsPlatform,
                         teamID: renameTeamID,
-                        signingID: renameSigningID
+                        signingID: renameSigningID,
+                        burstKey: "\(renameBurstScope.lineage)|\(renameBurstScope.destinationDirectory)"
                     )
                 }
 
@@ -1179,6 +1235,8 @@ final class ESEventHandler {
             let itemURL = esString(item.item_url)
             let itemPath = normalizedBTMItemPath(itemURL)
             let isLaunchDaemon = itemPath.lowercased().contains("/library/launchdaemons/")
+            let launchItemKind = isLaunchDaemon ? "daemon"
+                : (itemPath.lowercased().contains("/library/launchagents/") ? "agent" : "login-item")
             let appURL = esString(item.app_url)
             reportAppleSecurityEvent(
                 type: .notifyBTMLaunchItemAdd,
@@ -1193,7 +1251,7 @@ final class ESEventHandler {
                 metadata: [
                     "appleEvent": "background-item-added",
                     "reason": "background-item-added",
-                    "launchItemKind": isLaunchDaemon ? "daemon" : "agent",
+                    "launchItemKind": launchItemKind,
                     "signalSeverity": isLaunchDaemon ? "high" : "medium",
                     "itemURL": itemURL,
                     "persistencePath": itemPath,
@@ -1217,6 +1275,9 @@ final class ESEventHandler {
             let item = event.item.pointee
             let itemURL = esString(item.item_url)
             let itemPath = normalizedBTMItemPath(itemURL)
+            let lowerItemPath = itemPath.lowercased()
+            let launchItemKind = lowerItemPath.contains("/library/launchdaemons/") ? "daemon"
+                : (lowerItemPath.contains("/library/launchagents/") ? "agent" : "login-item")
             let appURL = esString(item.app_url)
             reportAppleSecurityEvent(
                 type: .notifyBTMLaunchItemRemove,
@@ -1231,6 +1292,7 @@ final class ESEventHandler {
                 metadata: [
                     "appleEvent": "background-item-removed",
                     "deliveryLevel": "inform",
+                    "launchItemKind": launchItemKind,
                     "itemURL": itemURL,
                     "persistencePath": itemPath,
                     "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,
@@ -1299,32 +1361,18 @@ final class ESEventHandler {
             let tccResponsiblePID = tcc.responsible_token.map {
                 audit_token_to_pid($0.pointee)
             } ?? responsiblePid
-            let affectsNick = appBundleID == "com.ehsanazish.nick"
-                || appPath.contains("/Nick.app/")
-            let instigatorName = URL(fileURLWithPath: instigatorPath).lastPathComponent
-            let updateRelated = affectsNick
-                && ["installer", "installd", "shove", "Autoupdate"].contains(instigatorName)
-            reportAppleSecurityEvent(
-                type: .notifyTCCModify,
-                actorPath: instigatorPath,
-                actorPID: instigatorPID,
-                parentPID: instigatorParentPID,
-                responsiblePID: tccResponsiblePID,
-                filePath: appPath.isEmpty ? nil : appPath,
-                title: "Privacy permission \(isGranted ? "granted" : "revoked")",
-                family: "apple-tcc",
-                ruleTier: "review",
-                metadata: [
-                    "appleEvent": "tcc-permission-modified",
-                    "service": service,
-                    "appBundleID": appBundleID,
-                    "appPath": appPath,
-                    "changeType": isGranted ? "granted" : "revoked",
-                    "affectedAppName": affectsNick ? "Nick" : (appBundleID.isEmpty ? URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent : appBundleID),
-                    "nickPermissionLost": affectsNick && !isGranted ? "true" : "false",
-                    "updateRelated": updateRelated ? "true" : "false"
-                ]
-            )
+            dispatchQueue.async { [weak self] in
+                self?.reportTCCChange(
+                    service: service,
+                    appBundleID: appBundleID,
+                    appPath: appPath,
+                    isGranted: isGranted,
+                    instigatorPath: instigatorPath,
+                    instigatorPID: instigatorPID,
+                    instigatorParentPID: instigatorParentPID,
+                    responsiblePID: tccResponsiblePID
+                )
+            }
 
         default:
             // For any unhandled AUTH event, allow immediately.
@@ -1332,6 +1380,93 @@ final class ESEventHandler {
                 esClient?.respond(to: message, allow: true)
             }
         }
+    }
+
+    private func reportTCCChange(
+        service: String,
+        appBundleID: String,
+        appPath: String,
+        isGranted: Bool,
+        instigatorPath: String,
+        instigatorPID: Int32,
+        instigatorParentPID: Int32,
+        responsiblePID: Int32
+    ) {
+        let action = isGranted ? "granted" : "revoked"
+        let dedupKey = "\(appBundleID)|\(appPath)|\(service)|\(action)"
+        let now = Date()
+        let duplicate = tccEventLock.withLock { () -> Bool in
+            recentTCCEvents = recentTCCEvents.filter { now.timeIntervalSince($0.value) <= 5 }
+            if let previous = recentTCCEvents[dedupKey], now.timeIntervalSince(previous) <= 5 {
+                return true
+            }
+            recentTCCEvents[dedupKey] = now
+            return false
+        }
+        guard !duplicate else { return }
+
+        let identity = SecCodeResponsibleProcessIdentityResolver.shared.identity(
+            pid: instigatorPID,
+            pathHint: instigatorPath
+        )
+        let identityMatchesClient = identity.map { candidate in
+            (appBundleID.isEmpty == false && candidate.bundleID == appBundleID)
+                || (appPath.isEmpty == false && candidate.path == appPath)
+        } ?? false
+        let validatedAppleClient = identityMatchesClient && identity.map {
+            $0.signing == .applePlatform || $0.signing == .appleSigned
+        } == true
+        let affectsNick = appBundleID == "com.ehsanazish.nick" || appPath.contains("/Nick.app/")
+        let affectedName = affectsNick ? "Nick" : (identity?.name
+            ?? (appBundleID.isEmpty ? URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent : appBundleID))
+
+        var metadata = [
+            "appleEvent": "tcc-permission-modified",
+            "service": service,
+            "appBundleID": appBundleID,
+            "appPath": appPath,
+            "changeType": action,
+            "affectedAppName": affectedName,
+            "nickPermissionLost": affectsNick && !isGranted ? "true" : "false"
+        ]
+
+        if validatedAppleClient {
+            // Apple installers and system components receive short-lived TCC
+            // changes during normal package work. Preserve them in the event
+            // timeline without creating a review item.
+            metadata["timelineOnly"] = "true"
+            pushEvent(ESEvent(
+                eventType: .notifyTCCModify,
+                processPath: instigatorPath,
+                pid: instigatorPID,
+                parentPid: instigatorParentPID,
+                filePath: appPath.isEmpty ? nil : appPath,
+                decision: .notApplicable
+            ))
+            return
+        }
+
+        let sensitiveGrantServices: Set<String> = [
+            "kTCCServiceSystemPolicyAllFiles", "kTCCServiceAccessibility",
+            "kTCCServiceScreenCapture", "kTCCServiceListenEvent",
+            "kTCCServicePostEvent"
+        ]
+        let actionable = (affectsNick && !isGranted)
+            || (isGranted && sensitiveGrantServices.contains(service))
+        metadata["deliveryLevel"] = actionable ? "interrupt" : "inform"
+        if affectsNick && !isGranted { metadata["openSettingsAction"] = "true" }
+        reportAppleSecurityEvent(
+            type: .notifyTCCModify,
+            actorPath: instigatorPath,
+            actorPID: instigatorPID,
+            parentPID: instigatorParentPID,
+            responsiblePID: responsiblePID,
+            filePath: appPath.isEmpty ? nil : appPath,
+            title: "Privacy permission \(action)",
+            family: "apple-tcc",
+            ruleTier: actionable ? "review" : "observed",
+            metadata: metadata
+        )
     }
 
     /// Converts Apple-authored Endpoint Security notifications into the same
@@ -1405,7 +1540,7 @@ final class ESEventHandler {
     }
 
     private let ransomwareReportLock = NSLock()
-    private var lastRansomwareReport: [Int32: (date: Date, blocked: Bool)] = [:]
+    private var lastRansomwareReport: [String: (date: Date, blocked: Bool, count: Int)] = [:]
 
     // MARK: - Exec helpers
 
@@ -1836,7 +1971,8 @@ final class ESEventHandler {
                     actorPath: actorPath,
                     actorPID: actorPID,
                     parentPID: parentPID,
-                    attribution: attribution
+                    attribution: attribution,
+                    actorIdentity: actorIdentity
                 )
             }
             return
@@ -1848,7 +1984,8 @@ final class ESEventHandler {
             actorPath: actorPath,
             actorPID: actorPID,
             parentPID: parentPID,
-            attribution: attribution
+            attribution: attribution,
+            actorIdentity: actorIdentity
         )
     }
 
@@ -1858,7 +1995,8 @@ final class ESEventHandler {
         actorPath: String,
         actorPID: Int32,
         parentPID: Int32,
-        attribution: ResponsibleAppAttribution?
+        attribution: ResponsibleAppAttribution?,
+        actorIdentity: TamperActorIdentity
     ) {
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor
@@ -1901,6 +2039,9 @@ final class ESEventHandler {
             threat: ESEvent.ThreatContext(
                 threatName: finding.title,
                 threatFamily: "credential-access",
+                isCodeSigned: actorIdentity.isValidIdentitySignature,
+                teamID: actorIdentity.teamID,
+                signingID: actorIdentity.signingID,
                 metadata: metadata
             )
         ))
@@ -2050,11 +2191,28 @@ final class ESEventHandler {
 
     private func reportIntegrityViolation(
         at path: String,
+        eventDrivenShellProfile: Bool = false,
         actorPID: Int32? = nil,
         responsiblePID: Int32? = nil,
         actorPath: String? = nil
     ) {
-        guard let violation = fileIntegrityMonitor?.check(path: path) else { return }
+        guard let monitor = fileIntegrityMonitor else {
+            Self.logger.error("FIM reportIntegrityViolation stopped: monitor unavailable")
+            return
+        }
+        guard eventDrivenShellProfile || monitor.shouldCheck(path) else { return }
+        if eventDrivenShellProfile {
+            Self.logger.info("FIM shell-profile check path=\(path, privacy: .public)")
+        }
+        let violation = eventDrivenShellProfile
+            ? monitor.recordShellProfileEvent(path: path)
+            : monitor.check(path: path)
+        guard let violation else {
+            Self.logger.info(
+                "FIM reportIntegrityViolation stopped: no violation path=\(path, privacy: .private)"
+            )
+            return
+        }
         let attribution = actorPID.flatMap {
             processTree?.responsibleApp(
                 actorPID: $0,
@@ -2085,6 +2243,9 @@ final class ESEventHandler {
             metadata: metadata
         )
         guard let data = try? encoder.encode(attributed) else { return }
+        Self.logger.info(
+            "FIM reportIntegrityViolation delivering to app path=\(path, privacy: .private) id=\(attributed.id.uuidString, privacy: .public)"
+        )
         xpcServer?.sendIntegrityViolationToApp(data)
     }
 
@@ -2184,7 +2345,8 @@ final class ESEventHandler {
         responsiblePID: Int32? = nil,
         actorIsPlatformBinary: Bool = false,
         teamID: String? = nil,
-        signingID: String? = nil
+        signingID: String? = nil,
+        burstKey: String? = nil
     ) {
         // One burst produces an event for every file it touches. Report a
         // process once per minute unless the evidence escalates to a block.
@@ -2207,12 +2369,14 @@ final class ESEventHandler {
         )
         let shouldReport = ransomwareReportLock.withLock { () -> Bool in
             let now = Date()
-            if let previous = lastRansomwareReport[pid],
+            let key = burstKey ?? "pid:\(pid)"
+            let count = alert.renameBurst?.fileCount ?? 1
+            if let previous = lastRansomwareReport[key],
                now.timeIntervalSince(previous.date) < 60,
-               previous.blocked || !shouldTerminate {
+               previous.blocked || (!shouldTerminate && count < previous.count + 10) {
                 return false
             }
-            lastRansomwareReport[pid] = (now, shouldTerminate)
+            lastRansomwareReport[key] = (now, shouldTerminate, count)
             if lastRansomwareReport.count > 256 {
                 lastRansomwareReport = lastRansomwareReport.filter { now.timeIntervalSince($0.value.date) < 60 }
             }
@@ -2224,6 +2388,10 @@ final class ESEventHandler {
             "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) terminate=\(shouldTerminate)"
         )
         var ransomwareMetadata: [String: String] = [
+            "reason": alert.renameBurst == nil ? "ransomware_behavior" : "mass_file_rename",
+            "rule": alert.renameBurst == nil ? "ransomware_behavior" : "mass_file_rename",
+            "ruleTier": "protected",
+            "signalSeverity": alert.confidence >= 0.8 ? "critical" : "high",
             "detectionKind": "ransomware-behavior",
             "actorValidation": developerIDValidated ? "developer-id" : "unvalidated",
             "response": shouldTerminate ? "terminated" : "alert-only",

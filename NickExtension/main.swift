@@ -203,6 +203,7 @@ let emailAttachmentMonitor = EmailAttachmentMonitor()
 let eventHandler = ESEventHandler()
 let xpcServer    = ESXPCServer()
 let esClient     = EndpointSecurityClient(eventHandler: eventHandler)
+let shellProfileWriteClient = EndpointSecurityClient(eventHandler: eventHandler)
 
 strictBlockingPolicy.update(settingsRecord: xpcServer.currentSecuritySettingsRecord())
 xpcServer.securitySettingsDidChange = { record in
@@ -512,6 +513,20 @@ let phase4Events: [es_event_type_t] = [
 
 guard esClient.subscribe(to: phase4Events) else {
     logger.critical("Failed to subscribe to ES events")
+    xpcServer.sendStatusChange(isActive: false)
+    exit(EXIT_FAILURE)
+}
+
+// NOTIFY_WRITE is extraordinarily high volume. A dedicated inverted client
+// receives it only for exact shell-profile files, so unrelated writes never
+// enter Nick's handler or unified log.
+guard shellProfileWriteClient.start(),
+      shellProfileWriteClient.subscribe(to: [ES_EVENT_TYPE_NOTIFY_WRITE]),
+      shellProfileWriteClient.invertTargetMuting(
+        literalPaths: fileIntegrityMonitor.exactShellProfilePaths,
+        events: [ES_EVENT_TYPE_NOTIFY_WRITE]
+      ) else {
+    logger.critical("Failed to configure exact shell-profile write monitoring")
     xpcServer.sendStatusChange(isActive: false)
     exit(EXIT_FAILURE)
 }

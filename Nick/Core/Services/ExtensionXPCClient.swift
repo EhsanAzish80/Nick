@@ -1305,6 +1305,9 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     private func receive(_ violation: IntegrityViolation, deliverToEngine: Bool = true) {
+        Self.logger.info(
+            "FIM app incident creation path=\(violation.path, privacy: .public) id=\(violation.id.uuidString, privacy: .public) deliver=\(deliverToEngine)"
+        )
         if !integrityViolations.contains(where: { $0.id == violation.id }) {
             integrityViolations.insert(violation, at: 0)
         }
@@ -1640,11 +1643,23 @@ struct ExtensionFinding: Sendable {
         } else {
             severity = .high
         }
-        let actorPath = (isLOLBinBehavior || isCredentialAccess)
-            ? (event.metadata?["execTargetPath"] ?? filePath)
-            : event.processPath
+        let actorPath: String
+        if isLOLBinBehavior || (isCredentialAccess && event.eventType == .authExec) {
+            actorPath = event.metadata?["execTargetPath"] ?? event.processPath
+        } else {
+            // AUTH_OPEN's file is the credential target, not the actor. Keep
+            // process and file fields separate so presentation/signing never
+            // turns "Cookies" into an unsigned process.
+            actorPath = event.processPath
+        }
+        let usesExecTarget = actorPath != event.processPath
         let signingStatus: SigningStatus
-        if let teamID = event.teamID, !teamID.isEmpty {
+        if usesExecTarget {
+            // ES message identity describes the pre-exec actor. Resolve the
+            // target independently so `gh -> security` is presented as
+            // `security, via gh` with security's signer.
+            signingStatus = SignatureValidator.shared.evaluate(binaryPath: actorPath)
+        } else if let teamID = event.teamID, !teamID.isEmpty {
             signingStatus = .signed(teamID: teamID, signingID: event.signingID)
         } else if !actorPath.isEmpty {
             signingStatus = SignatureValidator.shared.evaluate(binaryPath: actorPath)
@@ -1656,12 +1671,20 @@ struct ExtensionFinding: Sendable {
             path: actorPath,
             name: URL(fileURLWithPath: actorPath).lastPathComponent,
             parentPID: event.parentPid,
-            parentName: nil,
+            parentName: usesExecTarget
+                ? URL(fileURLWithPath: event.processPath).lastPathComponent
+                : nil,
             signingStatus: signingStatus
         )
         let isAuditEvent = isManagementObservation || isNickMaintenance || isDocumentedUninstall
         let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : ((isRansomwareBehavior || isLOLBinBehavior) ? "behavior" : "signature"))
         let ruleTier = event.metadata?["ruleTier"] ?? (isAuditEvent ? "review" : "protected")
+        let stableRuleID = event.metadata?["rule"]
+            ?? event.metadata?["reason"]
+            ?? event.threatFamily?.lowercased()
+                .replacingOccurrences(of: "[^a-z0-9]+", with: "_", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+            ?? "endpoint_known_threat"
         var metadata = [
             "reason": isTamper
                 ? (event.metadata?["reason"] ?? "endpoint_tamper_observed")
@@ -1672,7 +1695,7 @@ struct ExtensionFinding: Sendable {
                     ? "nick_protected_path_maintenance"
                     : (isManagementObservation
                         ? "endpoint_management_observed"
-                        : (event.threatName ?? "endpoint_known_threat")))),
+                        : stableRuleID))),
             "class": ruleClass,
             "ruleTier": ruleTier,
             "threatFamily": event.threatFamily ?? "unknown"

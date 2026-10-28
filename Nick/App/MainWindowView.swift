@@ -1572,11 +1572,22 @@ struct ScannerDetailView: View {
                             scanner.cancel()
                         } else {
                             Task { @MainActor in
+                                let operationID = await xpcClient.beginStorageOperation(
+                                    kind: .readOnlySecurityScan,
+                                    scopedPaths: DeepScanner.standardScanRoots
+                                )
                                 scanner.start(
                                     onlyOnPower: onlyOnPower,
                                     ignoredPaths: ignoredPaths
                                 ) { [engine] path in
                                     try await engine.scanFile(at: URL(fileURLWithPath: path))
+                                } onCompletion: { [xpcClient] in
+                                    guard let operationID else { return }
+                                    await xpcClient.finishStorageOperation(
+                                        operationID: operationID,
+                                        itemCount: 0,
+                                        bytesMoved: 0
+                                    )
                                 }
                             }
                         }
@@ -1821,6 +1832,10 @@ struct ScannerDetailView: View {
         showFileScanSheet = true
         let start = Date()
         Task { @MainActor in
+            let operationID = await xpcClient.beginStorageOperation(
+                kind: .readOnlySecurityScan,
+                scopedPaths: [url.path]
+            )
             do {
                 async let resultsTask = engine.scanFile(at: url)
                 async let summaryTask = FileScanSummary.analyze(url: url)
@@ -1829,6 +1844,13 @@ struct ScannerDetailView: View {
                 fileScanSummary = summary
             } catch {
                 fileScanError = error.localizedDescription
+            }
+            if let operationID {
+                await xpcClient.finishStorageOperation(
+                    operationID: operationID,
+                    itemCount: 0,
+                    bytesMoved: 0
+                )
             }
             fileScanDuration  = Date().timeIntervalSince(start)
             isFileScanRunning = false

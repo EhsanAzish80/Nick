@@ -1,7 +1,9 @@
 import importlib.util
 import os
 from pathlib import Path
+import plistlib
 import subprocess
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -19,6 +21,30 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
     def test_plain_snapshot_is_rejected(self):
         with self.assertRaises(ValueError):
             MODULE.decode_privileged_store(b'{"incidents":[]}')
+
+    def test_nonzero_exit_is_not_prevention_without_durable_record(self):
+        self.assertEqual(MODULE.measured_status(None), "PASS")
+        self.assertEqual(
+            MODULE.measured_status({"kind": "quarantine", "target": "/tmp/eicar"}),
+            "PREVENTED",
+        )
+
+    def test_quarantine_database_is_authoritative_prevention_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="nick-quarantine-test-") as directory:
+            database_path = Path(directory) / "quarantine.db"
+            with sqlite3.connect(database_path) as database:
+                database.execute(
+                    "CREATE TABLE quarantine (id TEXT, original_path TEXT, "
+                    "quarantined_path TEXT, threat_name TEXT, quarantined_at TEXT)"
+                )
+                database.execute(
+                    "INSERT INTO quarantine VALUES (?, ?, ?, ?, ?)",
+                    ("record-1", "/tmp/eicar.com", "/quarantine/eicar.com", "EICAR", "now"),
+                )
+            with mock.patch.object(MODULE, "QUARANTINE_DB", database_path), \
+                 mock.patch.object(MODULE, "THREAT_JOURNALS", ()):
+                records = MODULE.prevention_fingerprints()
+            self.assertEqual(records["quarantine:record-1"]["target"], "/tmp/eicar.com")
 
 
 class FixtureInvocationTests(unittest.TestCase):
@@ -45,6 +71,51 @@ class FixtureInvocationTests(unittest.TestCase):
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             )
             self.assertEqual(completed.returncode, 0, completed.stdout)
+
+
+class InstalledBuildTests(unittest.TestCase):
+    EXTENSION_OUTPUT = """
+--- com.apple.system_extension.network_extension
+* * UXGW5V3BY6 com.ehsanazish.nick.NickNetFilter (5.1.0/5072) NickNetFilter [activated enabled]
+--- com.apple.system_extension.endpoint_security
+* * UXGW5V3BY6 com.ehsanazish.nick.NickExtension (5.1.0/5072) NickExtension [activated enabled]
+"""
+
+    def test_active_extension_builds_reads_both_active_components(self):
+        self.assertEqual(MODULE.active_extension_builds(self.EXTENSION_OUTPUT), {
+            "com.ehsanazish.nick.NickExtension": "5072",
+            "com.ehsanazish.nick.NickNetFilter": "5072",
+        })
+
+    def test_installed_build_header_accepts_exact_expected_build(self):
+        with tempfile.TemporaryDirectory(prefix="nick-build-header-") as directory:
+            info = Path(directory) / "Info.plist"
+            with info.open("wb") as stream:
+                plistlib.dump({"CFBundleVersion": "5072"}, stream)
+            completed = subprocess.CompletedProcess([], 0, self.EXTENSION_OUTPUT, "")
+            with mock.patch.object(MODULE.subprocess, "run", return_value=completed):
+                app, extensions = MODULE.installed_build_header(info, Path("/usr/bin/systemextensionsctl"))
+        self.assertEqual(app, "5072")
+        self.assertEqual(set(extensions), set(MODULE.EXPECTED_EXTENSIONS))
+
+    def test_installed_build_header_refuses_any_component_mismatch(self):
+        output = self.EXTENSION_OUTPUT.replace("NickNetFilter (5.1.0/5072)",
+                                               "NickNetFilter (5.1.0/5068)")
+        with tempfile.TemporaryDirectory(prefix="nick-build-header-") as directory:
+            info = Path(directory) / "Info.plist"
+            with info.open("wb") as stream:
+                plistlib.dump({"CFBundleVersion": "5072"}, stream)
+            completed = subprocess.CompletedProcess([], 0, output, "")
+            with mock.patch.object(MODULE.subprocess, "run", return_value=completed), \
+                 self.assertRaisesRegex(RuntimeError, "NickNetFilter=5068"):
+                MODULE.installed_build_header(info, Path("/usr/bin/systemextensionsctl"))
+
+    def test_login_item_and_tcc_rows_accept_the_persisted_policy_evidence(self):
+        self.assertEqual(MODULE.EXPECTED["T1547.015"], ({"background-item-added"}, {"review"}))
+        self.assertEqual(
+            MODULE.EXPECTED["T1548.006"],
+            ({"tcc-permission-modified"}, {"review", "observed"}),
+        )
 
 
 if __name__ == "__main__":

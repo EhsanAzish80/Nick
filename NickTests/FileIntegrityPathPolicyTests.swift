@@ -7,6 +7,53 @@ import XCTest
 
 final class FileIntegrityPathPolicyTests: XCTestCase {
 
+    func test_quicklyRestoredShellProfileUsesEventEvidenceInsteadOfPeriodicHashOnly() throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let monitorSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("NickExtension/FIM/FileIntegrityMonitor.swift"),
+            encoding: .utf8
+        )
+        let handlerSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("NickExtension/EventHandler.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(monitorSource.contains("func recordShellProfileEvent("))
+        XCTAssertTrue(monitorSource.contains("return recordPending(IntegrityViolation("))
+        XCTAssertTrue(handlerSource.contains("case ES_EVENT_TYPE_NOTIFY_WRITE:"))
+        XCTAssertTrue(handlerSource.contains("eventDrivenShellProfile: true"))
+        XCTAssertTrue(handlerSource.contains("Shell profile AUTH_OPEN received"))
+        XCTAssertTrue(handlerSource.contains("Shell profile ES NOTIFY_WRITE received"))
+        XCTAssertTrue(handlerSource.contains("FIM reportIntegrityViolation delivering to app"))
+        XCTAssertTrue(monitorSource.contains("recordShellProfileEvent persisted"))
+        XCTAssertTrue(monitorSource.contains("pendingViolations: [UUID: IntegrityViolation]"))
+        XCTAssertTrue(monitorSource.contains("eventCoalescingWindow: TimeInterval = 5"))
+        XCTAssertFalse(monitorSource.contains("pendingViolations[expanded] != nil"))
+        XCTAssertFalse(handlerSource.contains(
+            "Shell profile isExactShellProfile path="
+        ))
+        XCTAssertTrue(handlerSource.contains(
+            "guard isExactProfile else { break }"
+        ))
+        XCTAssertTrue(handlerSource.contains(
+            "fileIntegrityMonitor?.shouldCheck(filePath) == true"
+        ))
+    }
+
+    func test_notifyWriteUsesDedicatedInvertedExactPathClient() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let main = try String(contentsOf: root.appendingPathComponent("NickExtension/main.swift"))
+        let client = try String(contentsOf: root.appendingPathComponent("NickExtension/EndpointSecurityClient.swift"))
+        XCTAssertTrue(main.contains("shellProfileWriteClient.invertTargetMuting"))
+        XCTAssertFalse(main.components(separatedBy: "let phase4Events")[1]
+            .components(separatedBy: "guard esClient.subscribe")[0]
+            .contains("ES_EVENT_TYPE_NOTIFY_WRITE"))
+        XCTAssertTrue(client.contains("ES_MUTE_INVERSION_TYPE_TARGET_PATH"))
+        XCTAssertTrue(client.contains("ES_MUTE_PATH_TYPE_TARGET_LITERAL"))
+    }
+
     func test_individualFilesMatchExactly() {
         let zshrc = "/Users/example/.zshrc"
         XCTAssertTrue(FileIntegrityPathPolicy.isMonitored(

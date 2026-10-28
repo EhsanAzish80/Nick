@@ -190,11 +190,11 @@ final class RansomwareDetector {
         processPath: String,
         source: String,
         destination: String,
+        burstScope: BehaviorTracker.RenameBurstScope? = nil,
         actorIsPlatformBinary: Bool,
         actorHasTrustedSigner: Bool = false,
         ignoreBrowserDownloadDestination: Bool = false
     ) -> RansomwareAlert? {
-        guard !actorIsPlatformBinary else { return nil }
         guard !ignoreBrowserDownloadDestination else { return nil }
         var indicators: [String] = []
         var confidence = 0.0
@@ -214,7 +214,12 @@ final class RansomwareDetector {
             strongEvidence = true
         }
 
-        let observedBurst = behaviorTracker.extensionChangeBurst(pid: pid)
+        let observedBurst = behaviorTracker.extensionChangeBurst(
+            pid: pid, burstScope: burstScope
+        )
+        Self.logger.info(
+            "Rename evaluation pid=\(pid) platform=\(actorIsPlatformBinary) scope=\(burstScope?.lineage ?? "pid", privacy: .public) source=\(source, privacy: .private) destination=\(destination, privacy: .private) burstCount=\(observedBurst?.fileCount ?? 0) threshold=\(Self.extensionBurstThreshold)"
+        )
         if let burst = observedBurst,
            burst.fileCount >= Self.extensionBurstThreshold {
             if burst.newExtension == "encrypted replacement" {
@@ -226,7 +231,7 @@ final class RansomwareDetector {
                     "Mass extension change to .\(burst.newExtension): \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
                 )
             }
-            confidence += burst.fileCount >= Self.extensionBurstThreshold * 3 ? 0.6 : 0.5
+            confidence += 0.8
             strongEvidence = strongEvidence || burst.directoryCount >= 2
         }
 

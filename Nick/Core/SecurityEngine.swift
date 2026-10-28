@@ -728,13 +728,14 @@ final class SecurityEngine {
     /// The scan task is owned by `SecurityEngine` — not by any SwiftUI view scope.
     /// Hiding or reopening the panel has no effect on a scan in progress.
     /// Concurrent calls while a scan is in progress are ignored.
-    func runFullScan() {
+    func runFullScan(onCompletion: (@MainActor @Sendable () async -> Void)? = nil) {
         guard !isScanning else { return }
         // Unstructured Task inherits @MainActor from the call site, so all state
         // mutations inside run on @MainActor without needing MainActor.run {}.
         // It is NOT a child of any view task and cannot be cancelled by SwiftUI.
         scanTask = Task { [weak self] in
             await self?.performFullScan()
+            await onCompletion?()
         }
     }
 

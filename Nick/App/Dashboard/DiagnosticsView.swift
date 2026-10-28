@@ -53,6 +53,7 @@ struct DiagnosticsView: View {
                     row("Fork descriptor lookup p99", healthMilliseconds("forkDescriptorP99Milliseconds"))
                     row("Last AUTH deadline miss", healthDate("lastDeadlineMissAt")?.formatted(date: .abbreviated, time: .standard) ?? "None reported")
                     let rates = xpcClient.extensionHealth?["eventsPerSecond"] as? [String: Double] ?? [:]
+                    row("Shell-profile write event rate", rates["notify_write"].map { "\(String(format: "%.1f", $0))/s" } ?? "0.0/s")
                     row("Busiest event rate", rates.max(by: { $0.value < $1.value }).map { "\($0.key): \(String(format: "%.1f", $0.value))/s" } ?? "Unavailable")
                 }
 

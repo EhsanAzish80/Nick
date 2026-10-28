@@ -1289,6 +1289,109 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(store.incidents.filter { $0.state == .new }.count, 1)
     }
 
+    func test_shellProfileAppendAndRestoreCoalesceButLaterEditIsIndependent() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let path = "/Users/test/.zshrc"
+        func alert(at date: Date, id: UUID = UUID()) -> ThreatAlert {
+            let signal = ThreatSignal(
+                id: id, source: .filesystem, severity: .medium, timestamp: date,
+                title: "Protected file modified", description: "FIM",
+                context: .init(
+                    fileInfo: .init(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                    metadata: [
+                        "reason": "shell_profile_modification",
+                        "rule": "shell_profile_modification",
+                        "ruleTier": "review",
+                        "fimWriterName": "sh",
+                        "responsibleAppName": "Terminal"
+                    ]
+                )
+            )
+            return makeAlert(signal: signal, timestamp: date)
+        }
+        let start = Date(timeIntervalSince1970: 1_000)
+        _ = store.ingest([alert(at: start)])
+        _ = store.ingest([alert(at: start.addingTimeInterval(10))])
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(store.incidents[0].alert.occurrenceCount, 2)
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: store.incidents[0].alert).headline,
+            "Changed your shell profile (.zshrc) — sh, via Terminal"
+        )
+
+        _ = store.ingest([alert(at: start.addingTimeInterval(180))])
+        XCTAssertEqual(store.incidents.count, 2)
+    }
+
+    func test_incidentKeySeparatesTwoLabelsFromSameActorAndSubject() {
+        func alert(_ label: String) -> ThreatAlert {
+            let signal = ThreatSignal(
+                source: .persistence, severity: .medium,
+                title: "Background item added", description: "BTM",
+                context: .init(metadata: [
+                    "appleEvent": "background-item-added",
+                    "launchItemLabel": label,
+                    "executablePath": "/Applications/Example.app/Contents/MacOS/Example",
+                    "ruleTier": "review",
+                ])
+            )
+            return makeAlert(signal: signal)
+        }
+        XCTAssertNotEqual(
+            IncidentStore.incidentKey(for: alert("com.example.first")),
+            IncidentStore.incidentKey(for: alert("com.example.second"))
+        )
+    }
+
+    func test_incidentStoreSeparatesLaunchAgentAndLoginItemFromSameActor() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        func alert(kind: String, label: String, path: String) -> ThreatAlert {
+            makeAlert(signal: ThreatSignal(
+                source: .persistence, severity: .medium,
+                title: "Background item added", description: "BTM",
+                context: .init(metadata: [
+                    "appleEvent": "background-item-added",
+                    "launchItemKind": kind,
+                    "launchItemLabel": label,
+                    "persistencePath": path,
+                    "executablePath": "/Applications/TextEdit.app/Contents/MacOS/TextEdit",
+                    "ruleTier": "review"
+                ])
+            ))
+        }
+        _ = store.ingest([alert(
+            kind: "agent", label: "com.example.textedit",
+            path: "/Users/test/Library/LaunchAgents/com.example.textedit.plist"
+        )])
+        _ = store.ingest([alert(
+            kind: "login-item", label: "TextEdit",
+            path: "/Applications/TextEdit.app"
+        )])
+        XCTAssertEqual(store.incidents.count, 2)
+        XCTAssertEqual(Set(store.incidents.map(\.alert.id)).count, 2)
+    }
+
+    func test_incidentStoreIgnoresEmptyLaunchItemFieldsAndUsesDistinctAppURLs() {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        func alert(app: String) -> ThreatAlert {
+            makeAlert(signal: ThreatSignal(
+                source: .persistence, severity: .medium,
+                title: "Background item added", description: "BTM",
+                context: .init(metadata: [
+                    "appleEvent": "background-item-added",
+                    "launchItemKind": "login-item",
+                    "launchItemLabel": "",
+                    "persistencePath": "",
+                    "appURL": "/Applications/\(app).app",
+                    "ruleTier": "review",
+                ])
+            ))
+        }
+        _ = store.ingest([alert(app: "TextEdit")])
+        _ = store.ingest([alert(app: "Preview")])
+        XCTAssertEqual(store.incidents.count, 2)
+    }
+
     func test_incidentStoreAttachesBackgroundItemRemovalToExistingAdd() {
         let store = IncidentStore(defaults: isolatedDefaults())
         let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"

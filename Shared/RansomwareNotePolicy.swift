@@ -89,6 +89,35 @@ enum BrowserDownloadRenamePolicy {
     }
 }
 
+/// Excludes validated Apple storage-maintenance actors whose normal work is a
+/// stream of atomic renames. Identity validation happens before this policy;
+/// a copied binary or process using one of these names does not qualify.
+enum AppleSyncRenamePolicy {
+    static func shouldExclude(isPlatformBinary: Bool, signingID: String?) -> Bool {
+        guard isPlatformBinary, let signingID else { return false }
+        return signingID == "com.apple.bird"
+            || signingID == "com.apple.cloudd"
+            || signingID == "com.apple.fileproviderd"
+            || signingID == "com.apple.mds_stores"
+            || signingID.hasPrefix("com.apple.FileProvider.")
+            || signingID.hasPrefix("com.apple.fileprovider.")
+    }
+
+    static func displayRole(signingID: String?) -> String? {
+        switch signingID {
+        case "com.apple.bird": return "iCloud Drive (bird)"
+        case "com.apple.cloudd": return "iCloud Drive (cloudd)"
+        case "com.apple.fileproviderd": return "File Provider (fileproviderd)"
+        case "com.apple.mds_stores": return "Spotlight indexing (mds_stores)"
+        default:
+            guard let signingID,
+                  signingID.hasPrefix("com.apple.FileProvider.")
+                    || signingID.hasPrefix("com.apple.fileprovider.") else { return nil }
+            return "File Provider extension"
+        }
+    }
+}
+
 enum DevelopmentBuildRansomwarePolicy {
     private static let buildArtifactExtensions: Set<String> = [
         "a", "cmake", "d", "dylib", "make", "ninja_deps", "ninja_log",
@@ -173,14 +202,22 @@ enum RansomwareRenamePolicy {
     static func introducedExtension(source: String, destination: String) -> String? {
         let sourceName = (source as NSString).lastPathComponent
         let destinationName = (destination as NSString).lastPathComponent
-        guard !sourceName.hasPrefix("."), !destinationName.hasPrefix(".") else { return nil }
+        guard !destinationName.hasPrefix(".") else { return nil }
 
         let sourceExtension = (sourceName as NSString).pathExtension.lowercased()
         let destinationExtension = (destinationName as NSString).pathExtension.lowercased()
+        let destinationStemExtension = ((destinationName as NSString)
+            .deletingPathExtension as NSString).pathExtension.lowercased()
+        // A temporary/hidden file renamed over `document.ext.locked` is the
+        // write-then-swap ransomware shape. Preserve the ordinary atomic-save
+        // exemption for `.tmp -> final.cmake`, but count an extension appended
+        // to an already named destination.
+        let appendsToExistingExtension = !destinationStemExtension.isEmpty
         guard !destinationExtension.isEmpty,
               destinationExtension != sourceExtension,
               destinationExtension.count <= 16,
-              !temporaryExtensions.contains(sourceExtension),
+              (!sourceName.hasPrefix(".") || appendsToExistingExtension),
+              (!temporaryExtensions.contains(sourceExtension) || appendsToExistingExtension),
               !sourceName.contains(".sb-"), !destinationName.contains(".sb-"),
               !routineDestinationExtensions.contains(destinationExtension)
         else { return nil }
@@ -197,7 +234,7 @@ enum RansomwareRenamePolicy {
     private static let routineDestinationExtensions: Set<String> = [
         "json", "plist", "xml", "db", "sqlite", "sqlite3", "wal", "shm", "log", "txt",
         "md", "csv", "html", "css", "js", "ts", "swift", "h", "m", "c", "cpp", "o",
-        "make",
+        "make", "map", "tmp", "temp", "cmake",
         "png", "jpg", "jpeg", "heic", "gif", "webp", "mov", "mp4", "m4a", "mp3", "wav",
         "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
         "zip", "gz", "tar", "dmg", "pkg", "app", "bak", "old", "orig", "backup",

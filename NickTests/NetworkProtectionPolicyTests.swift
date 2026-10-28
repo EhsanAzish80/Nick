@@ -801,6 +801,8 @@ final class UnifiedSourceFindingTests: XCTestCase {
                 teamID: "ABCDE12345",
                 signingID: "com.example.app",
                 metadata: [
+                    "reason": "mass_file_rename",
+                    "rule": "mass_file_rename",
                     "detectionKind": "ransomware-behavior",
                     "renameExtension": "locked",
                     "renameFileCount": "8",
@@ -811,6 +813,8 @@ final class UnifiedSourceFindingTests: XCTestCase {
         )
         let finding = try XCTUnwrap(ExtensionFinding(event: event))
         XCTAssertEqual(finding.signal.metadata["class"], "behavior")
+        XCTAssertEqual(finding.signal.metadata["rule"], "mass_file_rename")
+        XCTAssertNotEqual(finding.signal.metadata["rule"], event.threatName)
         XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
         XCTAssertEqual(finding.signal.processInfo?.signingStatus, .signed(teamID: "ABCDE12345", signingID: "com.example.app"))
         XCTAssertEqual(finding.signal.description, "8 files in 2 folders were renamed to .locked within 10 seconds by Example.")
@@ -1479,7 +1483,11 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             reason: NetworkObservationReason.knownThreat.rawValue,
             reasonTitle: NetworkObservationReason.knownThreat.userTitle
         )
-        let manager = NetworkProtectionManager()
+        // This test exercises only explicitly injected events. A production
+        // store watcher can otherwise reload another test's 500-event fixture
+        // while this handler is suspended, over-fulfilling the submission
+        // count in order-dependent full-suite runs.
+        let manager = NetworkProtectionManager(eventsURLProvider: { nil })
         manager.activateDurableCursor(deliveredEventIDs: [])
         let submissions = NetworkSubmissionCounter()
         manager.findingHandler = { _ in

@@ -208,15 +208,20 @@ final class UserFacingAlertBuilder: Sendable {
             let operation = Self.userFacingTamperOperation(recordedOperation)
             let actor = userReadableProcessName(tamper.processInfo?.name) ?? "an unknown process"
             let outcomeRecorded = tamper.metadata["tamperDisposition"] == "blocked"
+            let blockedByMacOS = tamper.metadata["tamperDisposition"] == "blocked-by-macos"
             return AlertPattern(
-                headline: outcomeRecorded
+                headline: blockedByMacOS
+                    ? "macOS blocked an attempt to \(operation) Nick"
+                    : outcomeRecorded
                     ? "Nick blocked an attempt to \(operation) its files (\(actor))"
                     : "Tamper attempt — outcome not recorded",
-                explanation: outcomeRecorded
+                explanation: blockedByMacOS
+                    ? "\(actor) attempted the \(operation) operation, and macOS refused it before Nick's protected components changed."
+                    : outcomeRecorded
                     ? "Nick refused the \(operation) operation by \(actor) before it could change the protected target."
                     : "An older Nick build recorded a protected-path tamper attempt by \(actor), but did not store whether the operation was blocked or allowed.",
-                assessment: outcomeRecorded ? "Blocked" : "Protected evidence",
-                recommendedAction: outcomeRecorded
+                assessment: (outcomeRecorded || blockedByMacOS) ? "Blocked" : "Protected evidence",
+                recommendedAction: (outcomeRecorded || blockedByMacOS)
                     ? "No file change was allowed. Review the actor and operation if you did not run them."
                     : "Review the actor and target. Nick has kept this record visible because the older event did not include its outcome.",
                 severity: .critical,
@@ -279,6 +284,26 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
+        if let profile = signals.first(where: {
+            ($0.metadata["reason"] ?? $0.metadata["rule"]) == "shell_profile_modification"
+        }) {
+            let path = profile.fileInfo?.path ?? profile.metadata["path"] ?? "a shell profile"
+            let filename = URL(fileURLWithPath: path).lastPathComponent
+            let actor = userReadableProcessName(profile.metadata["fimWriterName"])
+                ?? userReadableProcessName(profile.processInfo?.name)
+                ?? "Unknown actor"
+            let app = userReadableProcessName(profile.metadata["responsibleAppName"])
+                ?? userReadableProcessName(profile.processInfo?.parentName)
+            let context = app.map { "\(actor), via \($0)" } ?? actor
+            return AlertPattern(
+                headline: "Changed your shell profile (\(filename)) — \(context)",
+                explanation: "\(context) changed \(path). Shell profiles can run commands whenever a shell starts.",
+                assessment: "Needs your review",
+                recommendedAction: "Review the change and keep it only if you expected it.",
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
         if let credential = signals.first(where: {
             $0.metadata["detectionKind"] == "credential-access"
         }) {
@@ -315,7 +340,15 @@ final class UserFacingAlertBuilder: Sendable {
                 let destination = credential.metadata["credentialDestination"] ?? "an unknown destination"
                 explanation = "\(actor) copied Keychain data from \(source) → \(destination) in the responsible chain \(chainText), triggering \(trigger)."
             } else {
-                explanation = "\(actor) performed \(behavior.lowercased()) in the responsible chain \(chainText), triggering \(trigger)."
+                let action = Self.credentialActionPhrase(reason: reason, storeName: storeName)
+                let starter = userReadableProcessName(credential.processInfo?.parentName)
+                let appChain = chain.filter { $0.caseInsensitiveCompare(actor) != .orderedSame }
+                let appContext = appChain.isEmpty ? "an unknown app chain" : appChain.joined(separator: " → ")
+                if let starter, appContext.localizedCaseInsensitiveContains(starter) == false {
+                    explanation = "\(actor) \(action), started by \(starter) in \(appContext). Nick matched \(trigger)."
+                } else {
+                    explanation = "\(actor) \(action), started in \(appContext). Nick matched \(trigger)."
+                }
             }
             return AlertPattern(
                 headline: "\(behavior) (\(context))",
@@ -323,6 +356,31 @@ final class UserFacingAlertBuilder: Sendable {
                 assessment: "Needs your review",
                 recommendedAction: "Check whether you expected this app to access the credential store.",
                 severity: credential.metadata["ruleTier"] == "protected" ? .critical : .warning,
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
+        if let chainSignal = signals.first(where: {
+            ["browser_to_shell", "office_to_shell", "pdf_to_shell", "app_to_downloader", "deep_shell_nesting"]
+                .contains($0.metadata["reason"] ?? "")
+        }) {
+            let reason = chainSignal.metadata["reason"] ?? ""
+            let actor = userReadableProcessName(chainSignal.processInfo?.name) ?? "a process"
+            let parent = userReadableProcessName(chainSignal.processInfo?.parentName)
+                ?? userReadableProcessName(chainSignal.metadata["responsibleAppName"])
+                ?? "An app"
+            let action: String = switch reason {
+            case "app_to_downloader": "started \(actor) to download a file"
+            case "browser_to_shell": "started the shell \(actor) from a browser"
+            case "office_to_shell": "started the shell \(actor) from a document app"
+            case "pdf_to_shell": "started the shell \(actor) from a PDF app"
+            default: "started a deep shell chain ending in \(actor)"
+            }
+            return AlertPattern(
+                headline: "\(parent) \(action)",
+                explanation: "Nick observed that \(parent) \(action). Review it if you did not expect this process chain.",
+                assessment: "Needs your review",
+                recommendedAction: "Check the initiating app and command before allowing it to run again.",
                 actions: [.showDetails, .dismiss]
             )
         }
@@ -415,13 +473,14 @@ final class UserFacingAlertBuilder: Sendable {
             let isDownloadPipe = reason == "curl_pipe_shell"
                 || reason == "wget_pipe_shell"
                 || reason == "download_pipe_interpreter"
+            let commandPresentation = Self.protectedCommandPresentation(reason: reason)
             return AlertPattern(
                 headline: isDownloadPipe
                     ? "Download-to-shell command detected"
-                    : "Sensitive system-tool command detected",
+                    : commandPresentation.title,
                 explanation: isDownloadPipe
                     ? "Nick saw a shell run a command that sends downloaded content directly to a shell interpreter. Nick recorded the launch; it did not block it."
-                    : "A system tool was launched with arguments associated with a security-sensitive change. Nick recorded the launch; it did not block it.",
+                    : commandPresentation.explanation,
                 assessment: "Potentially dangerous",
                 recommendedAction: "Review the initiating app and command context. If you did not run it, stop the related process and investigate how it started.",
                 severity: signals.contains(where: { $0.severity == .critical }) ? .critical : .warning,
@@ -615,6 +674,38 @@ final class UserFacingAlertBuilder: Sendable {
             recommendedAction: cleanRecommendation(alert.recommendedAction),
             actions: [.showDetails, .dismiss]
         )
+    }
+
+    private static func credentialActionPhrase(reason: String, storeName: String) -> String {
+        switch reason {
+        case "keychain_secret_read", "keychain_command_correlation", "keychain_dump":
+            return "read a Keychain secret"
+        case "hidden_password_prompt":
+            return "requested a hidden password"
+        case "credential_store_access":
+            return "opened \(credentialStoreAccessTitle(storeName).lowercased())"
+        default:
+            return "accessed credential data"
+        }
+    }
+
+    private static func protectedCommandPresentation(reason: String) -> (title: String, explanation: String) {
+        switch reason {
+        case "quarantine_removal":
+            return ("Removed macOS quarantine metadata", "A command attempted to remove macOS download quarantine metadata. Nick recorded the command and its initiating app.")
+        case "launchctl_tmp":
+            return ("Loaded a temporary background service", "launchctl was used with an item from a temporary location, which can create persistence. Nick recorded the command and its initiating app.")
+        case "cron_modification", "crontab_modify":
+            return ("Changed scheduled cron jobs", "A command changed scheduled jobs that can run automatically. Nick recorded the command and its initiating app.")
+        case "mktemp_execute":
+            return ("Executed a newly created temporary file", "A command created and executed content from a temporary location. Nick recorded the command and its initiating app.")
+        case "decoded_payload_interpreter", "base64_payload", "encoded_payload":
+            return ("Decoded content was sent to an interpreter", "A command decoded content and sent it to an interpreter as code. Nick recorded the command and its initiating app.")
+        case "osascript_shell":
+            return ("AppleScript launched a shell command", "osascript launched a shell command. Nick recorded the command and its initiating app.")
+        default:
+            return ("Security-sensitive command detected", "A command was launched with arguments associated with a security-sensitive change. Nick recorded the command and its initiating app.")
+        }
     }
 
     static func userFacingTamperOperation(_ operation: String?) -> String {

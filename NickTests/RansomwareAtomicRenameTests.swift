@@ -50,6 +50,120 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         XCTAssertEqual(tracker.extensionChangeBurst(pid: 40, window: 10)?.fileCount, 8)
     }
 
+    func test_writeThenAppendLockedExtensionCountsBeforeFiftyFiles() {
+        let tracker = BehaviorTracker()
+        let detector = RansomwareDetector(behaviorTracker: tracker)
+        let now = Date()
+        var firstAlertAt: Int?
+        for index in 0..<49 {
+            let source = "/tmp/.document-\(index).tmp"
+            let destination = "/tmp/document-\(index).txt.locked"
+            tracker.recordCreate(
+                pid: 70, processGroupID: 70, processPath: "/tmp/actor",
+                path: source, at: now
+            )
+            tracker.recordRename(
+                pid: 70, processGroupID: 70, processPath: "/tmp/actor",
+                source: source, destination: destination,
+                at: now.addingTimeInterval(1)
+            )
+            if detector.evaluateRename(
+                pid: 70, processPath: "/tmp/actor", source: source,
+                destination: destination, actorIsPlatformBinary: false
+            ) != nil, firstAlertAt == nil {
+                firstAlertAt = index + 1
+            }
+        }
+        XCTAssertEqual(firstAlertAt, RansomwareDetector.extensionBurstThreshold)
+        XCTAssertLessThan(try! XCTUnwrap(firstAlertAt), 50)
+        XCTAssertGreaterThanOrEqual(
+            detector.evaluateRename(
+                pid: 70, processPath: "/tmp/actor",
+                source: "/tmp/.another.tmp", destination: "/tmp/another.txt.locked",
+                actorIsPlatformBinary: false
+            )?.confidence ?? 0,
+            0.8
+        )
+    }
+
+    func test_appleSyncDaemonIdentityIsExcludedButNameAloneIsNot() {
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.bird"
+        ))
+        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: false, signingID: "com.apple.bird"
+        ))
+        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.bird"),
+                       "iCloud Drive (bird)")
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.cloudd"
+        ))
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.fileproviderd"
+        ))
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.FileProvider.Example"
+        ))
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.mds_stores"
+        ))
+        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: false, signingID: "com.apple.mds_stores"
+        ))
+        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.mds_stores"),
+                       "Spotlight indexing (mds_stores)")
+    }
+
+    func test_routineMapAndTmpDestinationsDoNotCountAsRansomwareExtensions() {
+        XCTAssertNil(RansomwareRenamePolicy.introducedExtension(
+            source: "/tmp/a.old", destination: "/tmp/a.map"
+        ))
+        XCTAssertNil(RansomwareRenamePolicy.introducedExtension(
+            source: "/tmp/a.old", destination: "/tmp/a.tmp"
+        ))
+    }
+
+    func test_separatePlatformMvProcessesAggregateByResponsibleLineageAndDirectory() {
+        let tracker = BehaviorTracker()
+        let detector = RansomwareDetector(behaviorTracker: tracker)
+        let now = Date()
+        let scope = BehaviorTracker.RenameBurstScope(
+            lineage: "responsible:1060",
+            destinationDirectory: "/Users/test/Documents/NickScorecard"
+        )
+        var firstAlertAt: Int?
+
+        for index in 0..<49 {
+            let pid = Int32(10_000 + index)
+            let source = "/Users/test/Documents/NickScorecard/.document-\(index).tmp"
+            let destination = "/Users/test/Documents/NickScorecard/document-\(index).txt.locked"
+            tracker.recordCreate(
+                pid: 900, processGroupID: 700, processPath: "/bin/zsh",
+                path: source, at: now
+            )
+            tracker.recordRename(
+                pid: pid, processGroupID: 700, processPath: "/bin/mv",
+                source: source, destination: destination, burstScope: scope,
+                at: now.addingTimeInterval(1)
+            )
+            if detector.evaluateRename(
+                pid: pid, processPath: "/bin/mv", source: source,
+                destination: destination, burstScope: scope,
+                actorIsPlatformBinary: true, actorHasTrustedSigner: true
+            ) != nil, firstAlertAt == nil {
+                firstAlertAt = index + 1
+            }
+            tracker.cleanupExited(pid: pid)
+        }
+
+        XCTAssertEqual(firstAlertAt, RansomwareDetector.extensionBurstThreshold)
+        XCTAssertLessThan(try! XCTUnwrap(firstAlertAt), 50)
+        XCTAssertEqual(
+            tracker.extensionChangeBurst(pid: -1, burstScope: scope, window: 10)?.fileCount,
+            49
+        )
+    }
+
     func test_writeThenSwapEncryptedCopiesOverPreexistingDocumentsProducesIncident() throws {
         let tracker = BehaviorTracker()
         let detector = RansomwareDetector(behaviorTracker: tracker)
