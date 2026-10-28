@@ -1027,7 +1027,7 @@ final class IncidentStore {
             ["background-item-added", "background-item-removed"].contains($0.metadata["appleEvent"])
         }) {
             func firstNonEmpty(_ values: [String?]) -> String? {
-                values.compactMap { value in
+                values.compactMap { (value: String?) -> String? in
                     guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
                           !trimmed.isEmpty else { return nil }
                     return trimmed
