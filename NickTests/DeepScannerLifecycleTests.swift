@@ -8,6 +8,36 @@ private actor ScanInvocationCounter {
 
 @MainActor
 final class DeepScannerLifecycleTests: XCTestCase {
+    func test_validatedCodeSoftensOnlyBroadBehaviorWithoutRiskyOrigin() {
+        let behavior = YARAMatch(
+            ruleName: "broad_behavior",
+            tags: [],
+            filePath: "/Applications/Example.app/Contents/MacOS/Example",
+            metadata: ["class": "behavior", "severity": "high"]
+        )
+        let signature = YARAMatch(
+            ruleName: "known_family",
+            tags: [],
+            filePath: behavior.filePath,
+            metadata: ["class": "signature", "severity": "high"]
+        )
+        let validated = DeepScanner.FileTrustContext(
+            isValidatedCode: true,
+            isApplePlatform: false,
+            hasQuarantineOrigin: false,
+            isRiskyWritableLocation: false
+        )
+        XCTAssertEqual(DeepScanner.classify(match: behavior, fileTrust: validated), .likelySafe)
+        XCTAssertEqual(DeepScanner.classify(match: signature, fileTrust: validated), .threat)
+
+        let quarantined = DeepScanner.FileTrustContext(
+            isValidatedCode: true,
+            isApplePlatform: false,
+            hasQuarantineOrigin: true,
+            isRiskyWritableLocation: false
+        )
+        XCTAssertNotEqual(DeepScanner.classify(match: behavior, fileTrust: quarantined), .likelySafe)
+    }
 
     func test_validatedNickBundleIsSkippedWithoutAnyScanCandidate() throws {
         let root = try makeAppFixture(name: "Anything.app", bundleIdentifier: "com.ehsanazish.nick")

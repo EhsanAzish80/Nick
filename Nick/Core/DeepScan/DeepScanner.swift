@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import Darwin
 import IOKit.ps
 import Observation
 import os
@@ -322,10 +323,74 @@ final class DeepScanner {
         guard let matches = try? await scanFile(file), !matches.isEmpty else {
             return FileOutcome(path: file, classified: [], nickBundleSignatureFailure: false)
         }
-        let unique = uniqueMatches(matches)
+        let trust = fileTrustContext(path: file)
+        let unique = uniqueMatches(matches).filter { match in
+            // Exact hashes and concrete family signatures are evaluated on
+            // every candidate. Broad capability strings inside Apple's
+            // validated system code are neither actionable nor useful scan
+            // results, so omit only those contextual matches.
+            !(trust.isApplePlatform
+                && YARAVerdictPolicy.ruleClass(
+                    ruleName: match.ruleName,
+                    metadata: match.metadata
+                ) == .behavior)
+        }
         return FileOutcome(path: file, classified: unique.map {
-            ($0, classify(match: $0, approvedDevelopmentRoots: approvedDevelopmentRoots))
+            ($0, classify(
+                match: $0,
+                approvedDevelopmentRoots: approvedDevelopmentRoots,
+                fileTrust: trust
+            ))
         }, nickBundleSignatureFailure: false)
+    }
+
+    struct FileTrustContext: Sendable, Equatable {
+        let isValidatedCode: Bool
+        let isApplePlatform: Bool
+        let hasQuarantineOrigin: Bool
+        let isRiskyWritableLocation: Bool
+
+        static let unknown = FileTrustContext(
+            isValidatedCode: false,
+            isApplePlatform: false,
+            hasQuarantineOrigin: false,
+            isRiskyWritableLocation: false
+        )
+    }
+
+    nonisolated static func fileTrustContext(path: String) -> FileTrustContext {
+        let signing = SignatureValidator.shared.evaluate(binaryPath: path)
+        let validated: Bool
+        let apple: Bool
+        switch signing {
+        case .signed(let teamID, _):
+            validated = true
+            apple = teamID == "APPLE_PLATFORM"
+        default:
+            validated = false
+            apple = false
+        }
+        let normalized = canonicalPath(path)
+        let lowered = normalized.lowercased()
+        let insideAppBundle = lowered.contains(".app/contents/")
+        let temporary = lowered.hasPrefix("/private/tmp/")
+            || lowered.hasPrefix("/tmp/")
+            || lowered.hasPrefix("/var/tmp/")
+        let userStaging = lowered.hasPrefix(NSHomeDirectory().lowercased() + "/downloads/")
+            || lowered.hasPrefix(NSHomeDirectory().lowercased() + "/desktop/")
+        let writableOutsideBundle = !insideAppBundle
+            && FileManager.default.isWritableFile(atPath: normalized)
+        let quarantined = path.withCString { filePath in
+            "com.apple.quarantine".withCString { attribute in
+                getxattr(filePath, attribute, nil, 0, 0, 0) >= 0
+            }
+        }
+        return FileTrustContext(
+            isValidatedCode: validated,
+            isApplePlatform: apple,
+            hasQuarantineOrigin: quarantined,
+            isRiskyWritableLocation: temporary || userStaging || writableOutsideBundle
+        )
     }
 
     /// Records one file's findings and forwards actionable ones to the correlator.
@@ -656,7 +721,8 @@ final class DeepScanner {
     nonisolated static func classify(
         match: YARAMatch,
         cellarRoots: [String] = ["/opt/homebrew/Cellar", "/usr/local/Cellar"],
-        approvedDevelopmentRoots: Set<String> = []
+        approvedDevelopmentRoots: Set<String> = [],
+        fileTrust: FileTrustContext = .unknown
     ) -> ThreatVerdict {
         let path = match.filePath.lowercased()
 
@@ -675,6 +741,15 @@ final class DeepScanner {
         // A dropper controls its path, so location cannot override this evidence.
         if YARAVerdictPolicy.ruleClass(ruleName: match.ruleName, metadata: match.metadata) == .signature {
             return .threat
+        }
+
+        // A validated signature is useful negative context only for broad
+        // behavior strings. Quarantine origin and writable staging locations
+        // override that context; malware can remain signed until revocation.
+        if fileTrust.isValidatedCode,
+           !fileTrust.hasQuarantineOrigin,
+           !fileTrust.isRiskyWritableLocation {
+            return .likelySafe
         }
 
         // Build outputs can live outside the source repository, especially under

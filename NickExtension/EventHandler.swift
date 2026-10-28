@@ -335,10 +335,8 @@ final class ESEventHandler {
 
             if isWriteOpen {
                 let isExactProfile = fileIntegrityMonitor?.isExactShellProfile(filePath) == true
-                Self.logger.info(
-                    "Shell profile AUTH_OPEN received path=\(filePath, privacy: .public) isExactShellProfile=\(isExactProfile)"
-                )
                 if isExactProfile {
+                    Self.logger.info("Shell profile AUTH_OPEN received path=\(filePath, privacy: .public)")
                     dispatchQueue.async { [weak self] in
                         Self.logger.info(
                             "Shell profile recordShellProfileEvent scheduled path=\(filePath, privacy: .public)"
@@ -601,14 +599,9 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_NOTIFY_WRITE:
             let filePath = esString(msg.event.write.target.pointee.path)
-            Self.logger.info(
-                "Shell profile ES NOTIFY_WRITE received path=\(filePath, privacy: .public)"
-            )
             let isExactProfile = fileIntegrityMonitor?.isExactShellProfile(filePath) == true
-            Self.logger.info(
-                "Shell profile isExactShellProfile path=\(filePath, privacy: .public) result=\(isExactProfile)"
-            )
             guard isExactProfile else { break }
+            Self.logger.info("Shell profile ES NOTIFY_WRITE received path=\(filePath, privacy: .public)")
             dispatchQueue.async { [weak self] in
                 self?.reportIntegrityViolation(
                     at: filePath, eventDrivenShellProfile: true,
@@ -692,12 +685,14 @@ final class ESEventHandler {
                 }
 
                 // --- File Integrity Monitoring ---
-                self.reportIntegrityViolation(
-                    at: filePath,
-                    eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(filePath) == true,
-                    actorPID: pid, responsiblePID: responsiblePid,
-                    actorPath: processPath
-                )
+                if self.fileIntegrityMonitor?.shouldCheck(filePath) == true {
+                    self.reportIntegrityViolation(
+                        at: filePath,
+                        eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(filePath) == true,
+                        actorPID: pid, responsiblePID: responsiblePid,
+                        actorPath: processPath
+                    )
+                }
 
                 // Ransomware heuristics run once at close and read at most a
                 // small prefix. Canary names and known extensions do not need
@@ -928,18 +923,20 @@ final class ESEventHandler {
             )
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
-                self.reportIntegrityViolation(
-                    at: notifySrcPath,
-                    eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(notifySrcPath) == true,
-                    actorPID: pid, responsiblePID: responsiblePid,
-                    actorPath: processPath
+                for path in [notifySrcPath, notifyDestPath]
+                where self.fileIntegrityMonitor?.shouldCheck(path) == true {
+                    self.reportIntegrityViolation(
+                        at: path,
+                        eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(path) == true,
+                        actorPID: pid, responsiblePID: responsiblePid,
+                        actorPath: processPath
+                    )
+                }
+                let excludedAppleSync = AppleSyncRenamePolicy.shouldExclude(
+                    isPlatformBinary: renameActorIsPlatform,
+                    signingID: renameSigningID
                 )
-                self.reportIntegrityViolation(
-                    at: notifyDestPath,
-                    eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(notifyDestPath) == true,
-                    actorPID: pid, responsiblePID: responsiblePid,
-                    actorPath: processPath
-                )
+                guard !excludedAppleSync else { return }
                 self.behaviorTracker?.recordRename(
                     pid: pid, processGroupID: processGroupID, processPath: processPath,
                     source: notifySrcPath, destination: notifyDestPath,
@@ -977,7 +974,8 @@ final class ESEventHandler {
                         responsiblePID: responsiblePid,
                         actorIsPlatformBinary: renameActorIsPlatform,
                         teamID: renameTeamID,
-                        signingID: renameSigningID
+                        signingID: renameSigningID,
+                        burstKey: "\(renameBurstScope.lineage)|\(renameBurstScope.destinationDirectory)"
                     )
                 }
 
@@ -1542,7 +1540,7 @@ final class ESEventHandler {
     }
 
     private let ransomwareReportLock = NSLock()
-    private var lastRansomwareReport: [Int32: (date: Date, blocked: Bool)] = [:]
+    private var lastRansomwareReport: [String: (date: Date, blocked: Bool, count: Int)] = [:]
 
     // MARK: - Exec helpers
 
@@ -2198,19 +2196,20 @@ final class ESEventHandler {
         responsiblePID: Int32? = nil,
         actorPath: String? = nil
     ) {
-        Self.logger.info(
-            "FIM reportIntegrityViolation entered path=\(path, privacy: .public) shellProfile=\(eventDrivenShellProfile)"
-        )
         guard let monitor = fileIntegrityMonitor else {
             Self.logger.error("FIM reportIntegrityViolation stopped: monitor unavailable")
             return
+        }
+        guard eventDrivenShellProfile || monitor.shouldCheck(path) else { return }
+        if eventDrivenShellProfile {
+            Self.logger.info("FIM shell-profile check path=\(path, privacy: .public)")
         }
         let violation = eventDrivenShellProfile
             ? monitor.recordShellProfileEvent(path: path)
             : monitor.check(path: path)
         guard let violation else {
             Self.logger.info(
-                "FIM reportIntegrityViolation stopped: no violation path=\(path, privacy: .public)"
+                "FIM reportIntegrityViolation stopped: no violation path=\(path, privacy: .private)"
             )
             return
         }
@@ -2245,7 +2244,7 @@ final class ESEventHandler {
         )
         guard let data = try? encoder.encode(attributed) else { return }
         Self.logger.info(
-            "FIM reportIntegrityViolation delivering to app path=\(path, privacy: .public) id=\(attributed.id.uuidString, privacy: .public)"
+            "FIM reportIntegrityViolation delivering to app path=\(path, privacy: .private) id=\(attributed.id.uuidString, privacy: .public)"
         )
         xpcServer?.sendIntegrityViolationToApp(data)
     }
@@ -2346,7 +2345,8 @@ final class ESEventHandler {
         responsiblePID: Int32? = nil,
         actorIsPlatformBinary: Bool = false,
         teamID: String? = nil,
-        signingID: String? = nil
+        signingID: String? = nil,
+        burstKey: String? = nil
     ) {
         // One burst produces an event for every file it touches. Report a
         // process once per minute unless the evidence escalates to a block.
@@ -2369,12 +2369,14 @@ final class ESEventHandler {
         )
         let shouldReport = ransomwareReportLock.withLock { () -> Bool in
             let now = Date()
-            if let previous = lastRansomwareReport[pid],
+            let key = burstKey ?? "pid:\(pid)"
+            let count = alert.renameBurst?.fileCount ?? 1
+            if let previous = lastRansomwareReport[key],
                now.timeIntervalSince(previous.date) < 60,
-               previous.blocked || !shouldTerminate {
+               previous.blocked || (!shouldTerminate && count < previous.count + 10) {
                 return false
             }
-            lastRansomwareReport[pid] = (now, shouldTerminate)
+            lastRansomwareReport[key] = (now, shouldTerminate, count)
             if lastRansomwareReport.count > 256 {
                 lastRansomwareReport = lastRansomwareReport.filter { now.timeIntervalSince($0.value.date) < 60 }
             }

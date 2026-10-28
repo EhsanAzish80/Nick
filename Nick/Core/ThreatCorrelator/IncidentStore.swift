@@ -1003,14 +1003,28 @@ final class IncidentStore {
         if let launchSignal = alert.contributingSignals.first(where: {
             ["background-item-added", "background-item-removed"].contains($0.metadata["appleEvent"])
         }) {
-            let label = launchSignal.metadata["launchItemLabel"]?.lowercased() ?? "unlabelled"
+            func firstNonEmpty(_ values: [String?]) -> String? {
+                values.compactMap { value in
+                    guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !trimmed.isEmpty else { return nil }
+                    return trimmed
+                }.first
+            }
+            let label = firstNonEmpty([
+                launchSignal.metadata["launchItemLabel"],
+                launchSignal.metadata["label"],
+                launchSignal.metadata["appName"],
+                launchSignal.metadata["appURL"],
+                launchSignal.metadata["itemURL"],
+            ])?.lowercased() ?? "unlabelled"
             let kind = launchSignal.metadata["launchItemKind"]?.lowercased() ?? "background-item"
-            let subject = launchSignal.metadata["persistencePath"]
-                ?? launchSignal.metadata["itemURL"]
-                ?? launchSignal.metadata["executablePath"]
-                ?? launchSignal.metadata["appURL"]
-                ?? launchSignal.fileInfo?.path
-                ?? label
+            let subject = firstNonEmpty([
+                launchSignal.metadata["persistencePath"],
+                launchSignal.metadata["itemURL"],
+                launchSignal.metadata["executablePath"],
+                launchSignal.metadata["appURL"],
+                launchSignal.fileInfo?.path,
+            ]) ?? label
             return "launch-item|kind:\(kind)|label:\(label)|subject:\(normalize(subject))"
         }
         if let launchPath = launchItemPath(alert) {

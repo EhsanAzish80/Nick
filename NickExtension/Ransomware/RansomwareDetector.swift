@@ -231,7 +231,7 @@ final class RansomwareDetector {
                     "Mass extension change to .\(burst.newExtension): \(burst.fileCount) files in \(burst.directoryCount) folder(s)"
                 )
             }
-            confidence += burst.fileCount >= Self.extensionBurstThreshold * 3 ? 0.6 : 0.5
+            confidence += 0.8
             strongEvidence = strongEvidence || burst.directoryCount >= 2
         }
 

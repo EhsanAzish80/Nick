@@ -1337,6 +1337,27 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(Set(store.incidents.map(\.alert.id)).count, 2)
     }
 
+    func test_incidentStoreIgnoresEmptyLaunchItemFieldsAndUsesDistinctAppURLs() {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        func alert(app: String) -> ThreatAlert {
+            makeAlert(signal: ThreatSignal(
+                source: .persistence, severity: .medium,
+                title: "Background item added", description: "BTM",
+                context: .init(metadata: [
+                    "appleEvent": "background-item-added",
+                    "launchItemKind": "login-item",
+                    "launchItemLabel": "",
+                    "persistencePath": "",
+                    "appURL": "/Applications/\(app).app",
+                    "ruleTier": "review",
+                ])
+            ))
+        }
+        _ = store.ingest([alert(app: "TextEdit")])
+        _ = store.ingest([alert(app: "Preview")])
+        XCTAssertEqual(store.incidents.count, 2)
+    }
+
     func test_incidentStoreAttachesBackgroundItemRemovalToExistingAdd() {
         let store = IncidentStore(defaults: isolatedDefaults())
         let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"

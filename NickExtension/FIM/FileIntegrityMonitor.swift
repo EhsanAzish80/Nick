@@ -84,7 +84,9 @@ final class FileIntegrityMonitor {
 
     /// path → SHA-256 hex digest
     private var baselines: [String: String] = [:]
-    private var pendingViolations: [String: IntegrityViolation] = [:]
+    private var pendingViolations: [UUID: IntegrityViolation] = [:]
+    private var recentViolationFingerprints: [String: Date] = [:]
+    private static let eventCoalescingWindow: TimeInterval = 5
 
     private let baselinePath:   String
     private let pendingViolationsPath: String
@@ -166,8 +168,6 @@ final class FileIntegrityMonitor {
         let expanded = expand(path)
         guard isMonitored(expanded) else { return nil }
 
-        if lock.withLock({ pendingViolations[expanded] != nil }) { return nil }
-
         lock.lock()
         let expected = baselines[expanded]
         lock.unlock()
@@ -233,6 +233,16 @@ final class FileIntegrityMonitor {
             && Self.shellProfileNames.contains(URL(fileURLWithPath: canonical).lastPathComponent.lowercased())
     }
 
+    /// Exact target paths used by the dedicated inverted NOTIFY_WRITE client.
+    /// Directory FIM remains driven by CLOSE/RENAME and is intentionally absent.
+    var exactShellProfilePaths: [String] {
+        monitoredPaths.filter { isExactShellProfile($0) }
+    }
+
+    func shouldCheck(_ path: String) -> Bool {
+        isMonitored(expand(path))
+    }
+
     /// Full integrity scan across all monitored paths.
     ///
     /// - Returns: All violations found. Empty array means clean.
@@ -284,24 +294,21 @@ final class FileIntegrityMonitor {
     /// Accepts the current state only after the authenticated app explicitly
     /// acknowledges the exact pending violation.
     func acknowledgeViolation(id: UUID) -> Bool {
-        let pending = lock.withLock {
-            pendingViolations.first(where: { $0.value.id == id })
-        }
-        guard let (path, violation) = pending else { return false }
-        let currentHash = hashFile(path)
+        guard let violation = lock.withLock({ pendingViolations[id] }) else { return false }
+        let currentHash = hashFile(violation.path)
         guard FIMAcknowledgementPolicy.canAcknowledge(violation, currentHash: currentHash) else {
             return false
         }
         lock.withLock {
             switch violation.violationType {
             case .deleted:
-                baselines.removeValue(forKey: path)
+                baselines.removeValue(forKey: violation.path)
             case .created, .modified:
                 if let currentHash {
-                    baselines[path] = currentHash
+                    baselines[violation.path] = currentHash
                 }
             }
-            pendingViolations.removeValue(forKey: path)
+            pendingViolations.removeValue(forKey: id)
         }
         saveBaselines()
         savePendingViolations()
@@ -369,9 +376,22 @@ final class FileIntegrityMonitor {
     }
 
     private func recordPending(_ violation: IntegrityViolation) -> IntegrityViolation? {
+        let fingerprint = [
+            violation.path,
+            violation.violationType.rawValue,
+            violation.actualHash ?? "missing",
+        ].joined(separator: "|")
         let inserted = lock.withLock { () -> Bool in
-            guard pendingViolations[violation.path] == nil else { return false }
-            pendingViolations[violation.path] = violation
+            let now = violation.timestamp
+            recentViolationFingerprints = recentViolationFingerprints.filter {
+                now.timeIntervalSince($0.value) <= Self.eventCoalescingWindow
+            }
+            if let previous = recentViolationFingerprints[fingerprint],
+               now.timeIntervalSince(previous) <= Self.eventCoalescingWindow {
+                return false
+            }
+            recentViolationFingerprints[fingerprint] = now
+            pendingViolations[violation.id] = violation
             return true
         }
         if inserted { savePendingViolations() }
@@ -396,7 +416,7 @@ final class FileIntegrityMonitor {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: pendingViolationsPath)),
               let loaded = try? JSONDecoder().decode([IntegrityViolation].self, from: data) else { return }
         lock.withLock {
-            pendingViolations = Dictionary(uniqueKeysWithValues: loaded.map { ($0.path, $0) })
+            pendingViolations = Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, $0) })
         }
     }
 

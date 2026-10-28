@@ -189,6 +189,31 @@ final class EndpointSecurityClient {
         return result == ES_RETURN_SUCCESS
     }
 
+    /// Turns this client into a narrow target-path allowlist. Keep this on a
+    /// dedicated NOTIFY-only ES client: inversion affects every event handled
+    /// by the client.
+    func invertTargetMuting(literalPaths: [String], events: [es_event_type_t]) -> Bool {
+        guard let client, !literalPaths.isEmpty, !events.isEmpty else { return false }
+        guard es_unmute_all_target_paths(client) == ES_RETURN_SUCCESS else { return false }
+        for path in literalPaths {
+            let result = events.withUnsafeBufferPointer { buffer in
+                es_mute_path_events(
+                    client, path, ES_MUTE_PATH_TYPE_TARGET_LITERAL,
+                    buffer.baseAddress!, buffer.count
+                )
+            }
+            guard result == ES_RETURN_SUCCESS else {
+                Self.logger.error("Could not register inverted target path \(path, privacy: .private)")
+                return false
+            }
+        }
+        let result = es_invert_muting(client, ES_MUTE_INVERSION_TYPE_TARGET_PATH)
+        if result != ES_RETURN_SUCCESS {
+            Self.logger.error("Could not invert target-path muting: \(result.rawValue)")
+        }
+        return result == ES_RETURN_SUCCESS
+    }
+
     // MARK: - Private Helpers
 
     private func muteSelf(client: OpaquePointer) {
@@ -331,6 +356,7 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         case ES_EVENT_TYPE_AUTH_UNLINK: return "auth_unlink"
         case ES_EVENT_TYPE_AUTH_SIGNAL: return "auth_signal"
         case ES_EVENT_TYPE_NOTIFY_CLOSE: return "notify_close"
+        case ES_EVENT_TYPE_NOTIFY_WRITE: return "notify_write"
         case ES_EVENT_TYPE_NOTIFY_RENAME: return "notify_rename"
         case ES_EVENT_TYPE_NOTIFY_UNLINK: return "notify_unlink"
         case ES_EVENT_TYPE_NOTIFY_FORK: return "notify_fork"

@@ -39,7 +39,7 @@ THREAT_JOURNALS = (
 )
 START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
-EXPECTED_BUILD = "5070"
+EXPECTED_BUILD = "5071"
 INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
 SYSTEM_EXTENSIONS = Path("/usr/bin/systemextensionsctl")
 EXPECTED_EXTENSIONS = (
@@ -343,9 +343,29 @@ def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[st
     PROGRESS_DOC.write_text(updated, encoding="utf-8")
 
 
+def previous_results() -> dict[str, dict[str, str]]:
+    if not PROGRESS_DOC.exists():
+        return {}
+    results: dict[str, dict[str, str]] = {}
+    for line in PROGRESS_DOC.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^\|\s*(T\d+(?:\.\d+)?)\s*\|.*?\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|$", line)
+        if match:
+            results[match.group(1)] = {
+                "status": match.group(2).strip(),
+                "evidence": match.group(3).replace("\\|", "|").strip(),
+            }
+    return results
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="print every fixture and expected evidence")
+    parser.add_argument("--only", action="append", default=[], metavar="ID[,ID]",
+                        help="run only the selected ATT&CK row IDs")
+    parser.add_argument("--failed", action="store_true",
+                        help="run only rows not previously PASS or PREVENTED")
+    parser.add_argument("--field-evidence", action="append", default=[], metavar="ID=INCIDENT_ID",
+                        help="accept a matching persisted field incident for a manual row")
     parser.add_argument(
         "--inspect-store", action="store_true",
         help="decode a store supplied on standard input and print recorder fingerprints"
@@ -358,6 +378,20 @@ def main() -> int:
         ))
         return 0
     techniques = json.loads(MANIFEST.read_text(encoding="utf-8"))["techniques"]
+    old_results = previous_results()
+    selected = {item.strip() for group in args.only for item in group.split(",") if item.strip()}
+    if args.failed:
+        selected |= {
+            technique["id"] for technique in techniques
+            if old_results.get(technique["id"], {}).get("status") not in {"PASS", "PREVENTED", "PASS (field evidence)"}
+        }
+    if selected:
+        unknown = selected - {technique["id"] for technique in techniques}
+        if unknown:
+            raise SystemExit("Unknown technique ID(s): " + ", ".join(sorted(unknown)))
+        techniques_to_run = [technique for technique in techniques if technique["id"] in selected]
+    else:
+        techniques_to_run = techniques
     if args.dry_run:
         for index, technique in enumerate(techniques, 1):
             reasons, tiers = EXPECTED[technique["id"]]
@@ -376,17 +410,33 @@ def main() -> int:
     except RuntimeError as error:
         raise SystemExit(f"Installed build check failed: {error}") from error
 
-    results: dict[str, dict[str, str]] = {}
-    total = len(techniques)
+    results: dict[str, dict[str, str]] = dict(old_results)
+    total = len(techniques_to_run)
     print(f"Expected recorder build: {EXPECTED_BUILD}")
     print(f"Installed Nick.app build: {app_build}")
     for bundle_id in EXPECTED_EXTENSIONS:
         print(f"Active {bundle_id} build: {extension_builds[bundle_id]}")
     print(f"Nick installed {total}-technique replay. Use declared synthetic fixtures only.")
-    for index, technique in enumerate(techniques, 1):
+    field_evidence = dict(item.split("=", 1) for item in args.field_evidence if "=" in item)
+    all_incidents = load_incident_fingerprints()
+    for index, technique in enumerate(techniques_to_run, 1):
         print(f"\n[{index}/{total}] {technique['id']} — {technique['name']}")
         fixture_name = technique["fixture"]
         print(INSTRUCTIONS[fixture_name])
+        if technique["id"] in field_evidence:
+            incident_id = field_evidence[technique["id"]]
+            matches = [(key, record) for key, record in all_incidents.items()
+                       if key.startswith(incident_id + ":")]
+            expected_reasons, expected_tiers = EXPECTED[technique["id"]]
+            if not matches or not any(set(record["reasons"]).intersection(expected_reasons)
+                                      for _, record in matches):
+                raise SystemExit(f"Field incident {incident_id} does not match {technique['id']}")
+            results[technique["id"]] = {
+                "status": "PASS (field evidence)",
+                "evidence": f"persisted incident {incident_id}; verified existing field evidence",
+            }
+            print("Accepted matching persisted field evidence.")
+            continue
         before = load_incident_fingerprints()
         prevention_before = prevention_fingerprints()
         action = input("Run? [Y/n], s to leave pending, q to stop: ").strip().lower()

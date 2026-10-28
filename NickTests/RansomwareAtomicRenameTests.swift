@@ -76,6 +76,42 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         }
         XCTAssertEqual(firstAlertAt, RansomwareDetector.extensionBurstThreshold)
         XCTAssertLessThan(try! XCTUnwrap(firstAlertAt), 50)
+        XCTAssertGreaterThanOrEqual(
+            detector.evaluateRename(
+                pid: 70, processPath: "/tmp/actor",
+                source: "/tmp/.another.tmp", destination: "/tmp/another.txt.locked",
+                actorIsPlatformBinary: false
+            )?.confidence ?? 0,
+            0.8
+        )
+    }
+
+    func test_appleSyncDaemonIdentityIsExcludedButNameAloneIsNot() {
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.bird"
+        ))
+        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: false, signingID: "com.apple.bird"
+        ))
+        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.bird"),
+                       "iCloud Drive (bird)")
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.mds_stores"
+        ))
+        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: false, signingID: "com.apple.mds_stores"
+        ))
+        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.mds_stores"),
+                       "Spotlight indexing (mds_stores)")
+    }
+
+    func test_routineMapAndTmpDestinationsDoNotCountAsRansomwareExtensions() {
+        XCTAssertNil(RansomwareRenamePolicy.introducedExtension(
+            source: "/tmp/a.old", destination: "/tmp/a.map"
+        ))
+        XCTAssertNil(RansomwareRenamePolicy.introducedExtension(
+            source: "/tmp/a.old", destination: "/tmp/a.tmp"
+        ))
     }
 
     func test_separatePlatformMvProcessesAggregateByResponsibleLineageAndDirectory() {
