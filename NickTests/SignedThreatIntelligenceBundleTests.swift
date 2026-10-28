@@ -31,6 +31,47 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
         XCTAssertEqual(store.loadBestAvailable()?.0.version, 2)
     }
 
+    func test_installFailuresHaveStablePlainReasonCodes() {
+        XCTAssertEqual(
+            ThreatBundleInstallResultCode(error: ThreatIntelligenceBundleValidationError.rollback),
+            .olderThanInstalled
+        )
+        XCTAssertEqual(
+            ThreatBundleInstallResultCode(error: ThreatIntelligenceBundleValidationError.invalidSignature),
+            .invalidSignature
+        )
+        XCTAssertEqual(
+            ThreatBundleInstallResultCode(error: ThreatIntelligenceBundleValidationError.expired),
+            .expired
+        )
+        XCTAssertEqual(ThreatBundleInstallResultCode.expired.plainDescription, "Protection updates expired")
+    }
+
+    func test_refreshPolicySkipsUnchangedETagResponseAndInstallsNewPayload() {
+        XCTAssertEqual(
+            ThreatBundleRefreshPolicy.decision(statusCode: 304, byteCount: 0),
+            .notModified
+        )
+        XCTAssertEqual(
+            ThreatBundleRefreshPolicy.decision(statusCode: 200, byteCount: 1_024),
+            .install
+        )
+        XCTAssertEqual(
+            ThreatBundleRefreshPolicy.decision(
+                statusCode: 200,
+                byteCount: ThreatBundleUpdateEndpointPolicy.maximumDownloadBytes + 1
+            ),
+            .tooLarge
+        )
+    }
+
+    func test_offlineFailuresUseBoundedExponentialBackoff() {
+        XCTAssertEqual(ThreatBundleRefreshPolicy.nextDelay(consecutiveFailures: 0), 6 * 60 * 60)
+        XCTAssertEqual(ThreatBundleRefreshPolicy.nextDelay(consecutiveFailures: 1), 15 * 60)
+        XCTAssertEqual(ThreatBundleRefreshPolicy.nextDelay(consecutiveFailures: 2), 30 * 60)
+        XCTAssertEqual(ThreatBundleRefreshPolicy.nextDelay(consecutiveFailures: 20), 6 * 60 * 60)
+    }
+
     func test_publishGateRejectsCandidateWithoutReplacingCurrent() throws {
         let fixture = try Fixture()
         let store = fixture.store(enabled: true)

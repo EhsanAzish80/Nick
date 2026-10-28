@@ -78,6 +78,7 @@ struct SettingsView: View {
     @State private var showsLegacyDismissals = false
     @State private var verdictLearningStatus: String?
     @State private var strictBlockingStatus: String?
+    @State private var protectionUpdateStatus: String?
     @AppStorage("nickUpdateLastCheckTime") private var updateLastCheckTime: Double = 0
     @AppStorage("nickUpdateLastCheckResult") private var updateLastCheckResult: String = "Never checked"
     @AppStorage("nickUpdateAvailable") private var updateAvailable = false
@@ -968,6 +969,29 @@ struct SettingsView: View {
     private var dataSection: some View {
         Section("Data") {
             LabeledTile(
+                icon: "shield.lefthalf.filled.badge.checkmark", tint: .blue,
+                title: "Automatic protection updates",
+                subtitle: "Download and verify Nick's signed protection intelligence. On by default; Strict Mode remains separate and off by default."
+            ) {
+                Toggle("", isOn: Binding(
+                    get: { engine.automaticProtectionUpdatesEnabled },
+                    set: { updateAutomaticProtectionUpdates($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+            HStack {
+                Button("Check now") { Task { await xpcClient.checkThreatBundleNow() } }
+                    .controlSize(.small)
+                Spacer()
+                Text(protectionUpdateSummary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            if let protectionUpdateStatus {
+                Text(protectionUpdateStatus).font(.system(size: 11.5)).foregroundStyle(.secondary)
+            }
+            LabeledTile(
                 icon: "lock.shield.fill", tint: .red,
                 title: "Strict blocking",
                 subtitle: "Allow only high-confidence rules authorized by Nick's signed intelligence bundle to block. Off by default; exact known-malware hashes remain protected."
@@ -1123,6 +1147,28 @@ struct SettingsView: View {
             engine.setStrictModeEnabled(true)
             strictBlockingStatus = "Strict blocking is on for signed high-confidence rules."
         }
+    }
+
+    private func updateAutomaticProtectionUpdates(_ enabled: Bool) {
+        if !enabled {
+            guard let authorization = xpcClient.requestProtectionModificationAuthorization() else {
+                protectionUpdateStatus = "Approval was cancelled. Automatic protection updates remain on."
+                return
+            }
+            engine.setAutomaticProtectionUpdatesEnabled(false, authorizationExternalForm: authorization)
+        } else {
+            engine.setAutomaticProtectionUpdatesEnabled(true)
+        }
+        xpcClient.configureThreatBundleUpdates(enabled: enabled)
+        protectionUpdateStatus = enabled ? "Automatic protection updates are on." : "Automatic protection updates are off."
+    }
+
+    private var protectionUpdateSummary: String {
+        if let expiry = xpcClient.threatBundleExpiresAt, expiry <= Date() {
+            return "Protection updates expired"
+        }
+        let version = xpcClient.threatBundleInstalledVersion.map { "v\($0)" } ?? "No installed bundle"
+        return "\(version) · \(xpcClient.threatBundleLastResult)"
     }
 
     private func updateBlockingKillSwitch(_ enabled: Bool) {

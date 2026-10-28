@@ -218,6 +218,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             )
                         }
                     }
+                    self.xpcClient.configureThreatBundleUpdates(
+                        enabled: self.engine.automaticProtectionUpdatesEnabled
+                    )
                     self.startMonitoringAfterIncidentStoreBootstrap()
                 }
             }

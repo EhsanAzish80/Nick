@@ -400,7 +400,10 @@ enum SecuritySettingsWritePolicy {
         if oldStrict && !newStrict { return true }
         let oldKillSwitch = old["blockingKillSwitch"] as? Bool ?? false
         let newKillSwitch = new["blockingKillSwitch"] as? Bool ?? false
-        return !oldKillSwitch && newKillSwitch
+        if !oldKillSwitch && newKillSwitch { return true }
+        let oldUpdates = old["automaticProtectionUpdatesEnabled"] as? Bool ?? true
+        let newUpdates = new["automaticProtectionUpdatesEnabled"] as? Bool ?? true
+        return oldUpdates && !newUpdates
     }
 }
 
@@ -551,7 +554,7 @@ enum IncidentStoreWritePolicy {
     /// Verifies and atomically promotes a hosted threat-intelligence bundle.
     /// The authenticated app transports bytes only; the root extension owns
     /// signature, expiry, rollback and publish-gate decisions.
-    func installThreatIntelligenceBundle(_ data: Data, reply: @escaping (Bool) -> Void)
+    func installThreatIntelligenceBundle(_ data: Data, reply: @escaping (String) -> Void)
 
     /// Validates the canonical alert ID in the privileged incident store.
     /// Security-reducing verdicts return `authorizationRequired` before the app

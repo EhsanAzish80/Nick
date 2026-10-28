@@ -223,10 +223,10 @@ xpcServer.threatIntelligenceBundleInstaller = { data in
             strictBlockingPolicy.update(signedRules: payload.rules)
         }
         scanCache.invalidateAll()
-        return true
+        return ThreatBundleInstallResultCode.installed
     } catch {
         logger.error("Rejected threat-intelligence bundle: \(error.localizedDescription, privacy: .public)")
-        return false
+        return ThreatBundleInstallResultCode(error: error)
     }
 }
 

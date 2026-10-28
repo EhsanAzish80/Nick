@@ -64,6 +64,14 @@ struct DiagnosticsView: View {
                     )?.formatted(date: .abbreviated, time: .standard) ?? "Unavailable")
                     row("Network intelligence", networkProtection.ruleSourceSummary)
                     row("Signed intelligence bundle", threatBundleSummary)
+                    row("Protection update issued", xpcClient.threatBundleIssuedAt?.formatted(date: .abbreviated, time: .shortened) ?? "Unavailable")
+                    row("Protection update expires", protectionUpdateExpiry)
+                    row("Protection update last check", xpcClient.threatBundleLastCheck?.formatted(date: .abbreviated, time: .standard) ?? "Never")
+                    row("Protection update result", xpcClient.threatBundleLastResult)
+                    Button("Check protection updates now") {
+                        Task { await xpcClient.checkThreatBundleNow() }
+                    }
+                    .controlSize(.small)
                     row("Last update check", updateLastCheckTime > 0
                         ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(date: .abbreviated, time: .standard)
                         : "Never")
@@ -155,6 +163,13 @@ struct DiagnosticsView: View {
         }
         let fallback = provenance.usingLastKnownGood ? " · last-known-good" : ""
         return "v\(provenance.version) · \(provenance.source) · expires \(provenance.expiresAt.formatted(date: .abbreviated, time: .omitted))\(fallback)"
+    }
+
+    private var protectionUpdateExpiry: String {
+        guard let expiry = xpcClient.threatBundleExpiresAt else { return "Unavailable" }
+        if expiry <= Date() { return "Protection updates expired" }
+        let text = expiry.formatted(date: .abbreviated, time: .omitted)
+        return expiry.timeIntervalSinceNow <= 14 * 24 * 60 * 60 ? "\(text) · expires soon" : text
     }
 
     @ViewBuilder

@@ -31,7 +31,7 @@
 	<key>NickDebugUpdateFeedURL</key>
 	<string>$(NICK_DEBUG_UPDATE_FEED_URL)</string>
 	<key>NickThreatBundleUpdatesEnabled</key>
-	<false/>
+	<true/>
 	<key>NickThreatBundleURL</key>
 	<string>https://3nsofts.com/nick/threat-intelligence/current.json</string>
 	<key>SUPublicEDKey</key>

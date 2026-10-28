@@ -19,11 +19,12 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
     var approvedDevelopmentRoots: Set<String>
     var strictModeEnabled: Bool
     var blockingKillSwitch: Bool
+    var automaticProtectionUpdatesEnabled: Bool
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, trustedNames, trustedEntries, suppressionRules, ignoredPaths
         case webhookURL, notificationThresholdRaw, verdictLearningEnabled, approvedDevelopmentRoots
-        case strictModeEnabled, blockingKillSwitch
+        case strictModeEnabled, blockingKillSwitch, automaticProtectionUpdatesEnabled
     }
 
     init(
@@ -37,7 +38,8 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
         verdictLearningEnabled: Bool,
         approvedDevelopmentRoots: Set<String> = [],
         strictModeEnabled: Bool = false,
-        blockingKillSwitch: Bool = false
+        blockingKillSwitch: Bool = false,
+        automaticProtectionUpdatesEnabled: Bool = true
     ) {
         self.schemaVersion = schemaVersion
         self.trustedNames = trustedNames
@@ -50,6 +52,7 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
         self.approvedDevelopmentRoots = approvedDevelopmentRoots
         self.strictModeEnabled = strictModeEnabled
         self.blockingKillSwitch = blockingKillSwitch
+        self.automaticProtectionUpdatesEnabled = automaticProtectionUpdatesEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -70,6 +73,9 @@ private struct PrivilegedSecuritySettingsPayload: Codable {
         ) ?? []
         strictModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .strictModeEnabled) ?? false
         blockingKillSwitch = try container.decodeIfPresent(Bool.self, forKey: .blockingKillSwitch) ?? false
+        automaticProtectionUpdatesEnabled = try container.decodeIfPresent(
+            Bool.self, forKey: .automaticProtectionUpdatesEnabled
+        ) ?? true
     }
 }
 
@@ -275,6 +281,7 @@ final class SecurityEngine {
     private(set) var verdictLearningEnabled = false
     private(set) var strictModeEnabled = false
     private(set) var blockingKillSwitch = false
+    private(set) var automaticProtectionUpdatesEnabled = true
     var approvedDevelopmentRoots: Set<String> = [] { didSet { persistSecuritySettingsIfReady() } }
     private var securitySettingsPersistence: ((Data, Data?) -> Void)?
     private var nextSecuritySettingsAuthorization: Data?
@@ -315,7 +322,8 @@ final class SecurityEngine {
             verdictLearningEnabled: false,
             approvedDevelopmentRoots: [],
             strictModeEnabled: false,
-            blockingKillSwitch: false
+            blockingKillSwitch: false,
+            automaticProtectionUpdatesEnabled: true
         )
         return (try? JSONEncoder().encode(payload)) ?? Data("{}".utf8)
     }
@@ -341,6 +349,7 @@ final class SecurityEngine {
         approvedDevelopmentRoots = settings.approvedDevelopmentRoots
         strictModeEnabled = settings.strictModeEnabled
         blockingKillSwitch = settings.blockingKillSwitch
+        automaticProtectionUpdatesEnabled = settings.automaticProtectionUpdatesEnabled
         installingSecuritySettings = false
         securitySettingsPersistence = persistence
         NotificationManager.shared.notificationThreshold = notificationThreshold
@@ -374,7 +383,8 @@ final class SecurityEngine {
             verdictLearningEnabled: verdictLearningEnabled,
             approvedDevelopmentRoots: approvedDevelopmentRoots,
             strictModeEnabled: strictModeEnabled,
-            blockingKillSwitch: blockingKillSwitch
+            blockingKillSwitch: blockingKillSwitch,
+            automaticProtectionUpdatesEnabled: automaticProtectionUpdatesEnabled
         )
         guard let data = try? JSONEncoder().encode(payload) else { return }
         NotificationManager.shared.notificationThreshold = notificationThreshold
@@ -1019,6 +1029,12 @@ final class SecurityEngine {
     func setBlockingKillSwitch(_ enabled: Bool, authorizationExternalForm: Data? = nil) {
         if enabled { nextSecuritySettingsAuthorization = authorizationExternalForm }
         blockingKillSwitch = enabled
+        persistSecuritySettingsIfReady()
+    }
+
+    func setAutomaticProtectionUpdatesEnabled(_ enabled: Bool, authorizationExternalForm: Data? = nil) {
+        if !enabled { nextSecuritySettingsAuthorization = authorizationExternalForm }
+        automaticProtectionUpdatesEnabled = enabled
         persistSecuritySettingsIfReady()
     }
 

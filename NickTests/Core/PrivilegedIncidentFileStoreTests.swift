@@ -399,6 +399,27 @@ final class PrivilegedIncidentFileStoreTests: XCTestCase {
         ))
     }
 
+    func test_disablingAutomaticProtectionUpdatesRequiresAuthorization() throws {
+        func settings(updates: Bool) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1,
+                "trustedNames": [], "trustedEntries": [], "suppressionRules": [], "ignoredPaths": [],
+                "notificationThresholdRaw": 3, "verdictLearningEnabled": false,
+                "approvedDevelopmentRoots": [], "strictModeEnabled": false,
+                "blockingKillSwitch": false, "automaticProtectionUpdatesEnabled": updates
+            ])
+        }
+        let previous = try JSONEncoder().encode(PrivilegedIncidentStoreRecord(
+            revision: 1, payload: try settings(updates: true)
+        ))
+        XCTAssertTrue(SecuritySettingsWritePolicy.requiresAuthorization(
+            previousRecord: previous, proposedPayload: try settings(updates: false)
+        ))
+        XCTAssertFalse(SecuritySettingsWritePolicy.requiresAuthorization(
+            previousRecord: previous, proposedPayload: try settings(updates: true)
+        ))
+    }
+
     func test_authorizationRightPolicyRejectsWeakerDefinitions() {
         let expected: [String: Any] = [
             "class": "rule",

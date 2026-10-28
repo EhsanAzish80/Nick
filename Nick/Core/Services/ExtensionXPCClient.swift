@@ -259,7 +259,14 @@ public final class ExtensionXPCClient: NSObject {
     private var healthRefreshTask: Task<Void, Never>?
     private var lastHealthyExtensionTime: Date?
     private var lastProtectionGapObservationAt: Date?
-    private var attemptedThreatBundleRefresh = false
+    private var threatBundleRefreshTask: Task<Void, Never>?
+    private var automaticThreatBundleUpdatesEnabled = true
+    public private(set) var threatBundleLastCheck: Date?
+    public private(set) var threatBundleLastResult = "Never checked"
+    public private(set) var threatBundleNextCheck: Date?
+    public private(set) var threatBundleIssuedAt: Date?
+    public private(set) var threatBundleExpiresAt: Date?
+    public private(set) var threatBundleInstalledVersion: Int?
     /// Deterministic persistence completion seam used by unit tests. Production
     /// always uses the privileged XPC write/reply path.
     var incidentPersistenceOverride: ((UInt64) async -> (UInt64, Bool)?)?
@@ -363,7 +370,6 @@ public final class ExtensionXPCClient: NSObject {
                     self?.startHealthRefresh()
                     self?.loadPersistedEvents()
                     self?.loadPendingFIMViolations()
-                    self?.refreshThreatIntelligenceBundleIfEnabled()
                     if self?.incidentBootstrapCompleted == true {
                         self?.drainIncidentStoreWrites()
                         self?.flushSecuritySettingsIfNeeded()
@@ -410,39 +416,114 @@ public final class ExtensionXPCClient: NSObject {
         }
     }
 
-    private func refreshThreatIntelligenceBundleIfEnabled() {
-        guard !attemptedThreatBundleRefresh,
-              ThreatIntelligenceBundleTrustAnchor.updatesEnabled,
+    public func configureThreatBundleUpdates(enabled: Bool) {
+        let store = SignedThreatIntelligenceBundleStore(
+            directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
+            publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,
+            updatesEnabled: ThreatIntelligenceBundleTrustAnchor.updatesEnabled
+        )
+        if let (_, provenance) = store.loadBestAvailable() {
+            threatBundleInstalledVersion = provenance.version
+            threatBundleIssuedAt = provenance.issuedAt
+            threatBundleExpiresAt = provenance.expiresAt
+        }
+        automaticThreatBundleUpdatesEnabled = enabled
+        threatBundleRefreshTask?.cancel()
+        threatBundleRefreshTask = nil
+        guard enabled, ThreatIntelligenceBundleTrustAnchor.updatesEnabled else {
+            threatBundleNextCheck = nil
+            return
+        }
+        threatBundleRefreshTask = Task { [weak self] in
+            await self?.checkThreatBundleNow()
+            while !Task.isCancelled {
+                guard let self else { return }
+                let next = self.threatBundleNextCheck
+                    ?? Date().addingTimeInterval(ThreatBundleRefreshPolicy.normalInterval)
+                let delay = max(1, next.timeIntervalSinceNow)
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+                await self.checkThreatBundleNow()
+            }
+        }
+    }
+
+    public func checkThreatBundleNow() async {
+        guard ThreatIntelligenceBundleTrustAnchor.updatesEnabled,
               let rawURL = Bundle.main.object(forInfoDictionaryKey: "NickThreatBundleURL") as? String,
               let url = URL(string: rawURL),
               ThreatBundleUpdateEndpointPolicy.allows(url) else { return }
-        attemptedThreatBundleRefresh = true
-        Task { [weak self] in
-            do {
-                var request = URLRequest(url: url)
-                request.cachePolicy = .reloadRevalidatingCacheData
-                request.timeoutInterval = 30
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse,
-                      http.statusCode == 200,
-                      data.count <= ThreatBundleUpdateEndpointPolicy.maximumDownloadBytes,
-                      let proxy = self?.extensionProxy()
-                else { return }
-                let accepted: Bool = await withCheckedContinuation { continuation in
-                    let reply = OneShotReply<Bool> { continuation.resume(returning: $0) }
-                    let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
-                    proxy.installThreatIntelligenceBundle(data, reply: xpcReply)
-                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
-                        reply.resolve(false)
-                    }
-                }
-                if !accepted {
-                    Self.logger.error("The endpoint extension rejected the downloaded intelligence bundle")
-                }
-            } catch {
-                Self.logger.warning("Threat-intelligence refresh failed: \(error.localizedDescription)")
+        do {
+            var request = URLRequest(url: url)
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 30
+            let defaults = UserDefaults.standard
+            if let etag = defaults.string(forKey: "threatBundleETag") {
+                request.setValue(etag, forHTTPHeaderField: "If-None-Match")
             }
+            if let modified = defaults.string(forKey: "threatBundleLastModified") {
+                request.setValue(modified, forHTTPHeaderField: "If-Modified-Since")
+            }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            threatBundleLastCheck = Date()
+            switch ThreatBundleRefreshPolicy.decision(
+                statusCode: http.statusCode,
+                byteCount: data.count
+            ) {
+            case .notModified:
+                recordThreatBundleResult("Up to date", success: true)
+                return
+            case .tooLarge:
+                recordThreatBundleResult(ThreatBundleInstallResultCode.tooLarge.plainDescription, success: false)
+                return
+            case .invalidResponse:
+                throw URLError(.badServerResponse)
+            case .install:
+                break
+            }
+            guard let proxy = extensionProxy() else { throw URLError(.cannotConnectToHost) }
+            let rawResult: String = await withCheckedContinuation { continuation in
+                let reply = OneShotReply<String> { continuation.resume(returning: $0) }
+                let xpcReply: @Sendable (String) -> Void = { reply.resolve($0) }
+                proxy.installThreatIntelligenceBundle(data, reply: xpcReply)
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+                    reply.resolve(ThreatBundleInstallResultCode.unavailable.rawValue)
+                }
+            }
+            let result = ThreatBundleInstallResultCode(rawValue: rawResult) ?? .unavailable
+            guard result == .installed else {
+                recordThreatBundleResult(result.plainDescription, success: false)
+                return
+            }
+            if let etag = http.value(forHTTPHeaderField: "ETag") { defaults.set(etag, forKey: "threatBundleETag") }
+            if let modified = http.value(forHTTPHeaderField: "Last-Modified") { defaults.set(modified, forKey: "threatBundleLastModified") }
+            updateDisplayedThreatBundleMetadata(from: data)
+            recordThreatBundleResult(result.plainDescription, success: true)
+        } catch {
+            threatBundleLastCheck = Date()
+            recordThreatBundleResult("Network error: \(error.localizedDescription)", success: false)
         }
+    }
+
+    private func recordThreatBundleResult(_ result: String, success: Bool) {
+        threatBundleLastResult = result
+        let defaults = UserDefaults.standard
+        let failures = success ? 0 : defaults.integer(forKey: "threatBundleConsecutiveFailures") + 1
+        defaults.set(failures, forKey: "threatBundleConsecutiveFailures")
+        threatBundleNextCheck = Date().addingTimeInterval(
+            ThreatBundleRefreshPolicy.nextDelay(consecutiveFailures: failures)
+        )
+    }
+
+    private func updateDisplayedThreatBundleMetadata(from data: Data) {
+        guard let envelope = try? SignedThreatIntelligenceBundle.canonicalDecoder.decode(
+            SignedThreatIntelligenceBundle.self, from: data
+        ), let payload = envelope.verifiedPayload(publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey)
+        else { return }
+        threatBundleInstalledVersion = payload.version
+        threatBundleIssuedAt = payload.issuedAt
+        threatBundleExpiresAt = payload.expiresAt
     }
 
     private func startHealthRefresh() {
