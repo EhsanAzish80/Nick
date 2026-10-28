@@ -215,6 +215,9 @@ final class RansomwareDetector {
         }
 
         let observedBurst = behaviorTracker.extensionChangeBurst(pid: pid)
+        Self.logger.debug(
+            "Rename evaluation pid=\(pid) source=\(source, privacy: .private) destination=\(destination, privacy: .private) burstCount=\(observedBurst?.fileCount ?? 0) threshold=\(Self.extensionBurstThreshold)"
+        )
         if let burst = observedBurst,
            burst.fileCount >= Self.extensionBurstThreshold {
             if burst.newExtension == "encrypted replacement" {

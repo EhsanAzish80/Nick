@@ -112,7 +112,7 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
             "--verification-public-key", publicKey.path,
             "--output", output.path,
             "--version", "1",
-        ])
+        ], environment: ["NICK_BUNDLE_TEST": "1"])
 
         let der = try Data(contentsOf: publicDER)
         XCTAssertGreaterThanOrEqual(der.count, 32)
@@ -122,12 +122,11 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
         let validator = ThreatIntelligenceBundleValidator(publicKey: rawPublicKey)
         XCTAssertNoThrow(try validator.validate(bundle, now: Date(), highestAcceptedVersion: nil))
 
-        var tampered = try XCTUnwrap(bundle.payloadData)
+        var tampered = bundle.payloadData
         tampered[0] ^= 0x01
         let altered = SignedThreatIntelligenceBundle(
             payloadData: tampered,
-            signature: bundle.signature,
-            legacyPayload: bundle.payload
+            signature: bundle.signature
         )
         XCTAssertThrowsError(try validator.validate(altered, now: Date(), highestAcceptedVersion: nil)) {
             XCTAssertEqual($0 as? ThreatIntelligenceBundleValidationError, .invalidSignature)
@@ -146,10 +145,15 @@ private extension SignedThreatIntelligenceBundleTests {
         return try XCTUnwrap(candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }))
     }
 
-    func run(_ executable: String, _ arguments: [String]) throws {
+    func run(
+        _ executable: String,
+        _ arguments: [String],
+        environment: [String: String] = [:]
+    ) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
         let error = Pipe()
         process.standardError = error
         try process.run()

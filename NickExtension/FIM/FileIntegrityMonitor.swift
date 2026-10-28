@@ -197,6 +197,34 @@ final class FileIntegrityMonitor {
         return nil
     }
 
+    /// Persists event-time evidence for exact shell-profile files. Hash-only
+    /// polling can miss a short-lived edit that is restored before the async
+    /// worker reads it; an ES modified/write/rename event is itself durable
+    /// evidence that the protected profile changed.
+    func recordShellProfileEvent(
+        path: String,
+        violationType: IntegrityViolation.ViolationType = .modified,
+        timestamp: Date = Date()
+    ) -> IntegrityViolation? {
+        let expanded = EndpointSecurityPath.canonical(expand(path)) ?? expand(path)
+        guard isExactShellProfile(expanded) else { return nil }
+        let expected = lock.withLock { baselines[expanded] }
+        return recordPending(IntegrityViolation(
+            path: expanded,
+            violationType: violationType,
+            expectedHash: expected,
+            actualHash: hashFile(expanded),
+            timestamp: timestamp
+        ))
+    }
+
+    func isExactShellProfile(_ path: String) -> Bool {
+        let canonical = EndpointSecurityPath.canonical(expand(path)) ?? expand(path)
+        return monitoredPaths.contains(canonical)
+            && !monitoredDirectoryPaths.contains(canonical)
+            && Self.shellProfileNames.contains(URL(fileURLWithPath: canonical).lastPathComponent.lowercased())
+    }
+
     /// Full integrity scan across all monitored paths.
     ///
     /// - Returns: All violations found. Empty array means clean.
@@ -281,6 +309,11 @@ final class FileIntegrityMonitor {
             directoryPaths: Set(monitoredDirectoryPaths.map(expand))
         )
     }
+
+    private static let shellProfileNames: Set<String> = [
+        ".zshrc", ".zprofile", ".zshenv", ".bash_profile", ".bashrc", ".profile",
+        "zshrc", "zprofile", "zshenv", "bashrc", "profile",
+    ]
 
     private func baselineDirectory(_ dirPath: String) {
         guard let files = try? FileManager.default.contentsOfDirectory(atPath: dirPath) else { return }

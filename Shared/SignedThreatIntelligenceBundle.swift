@@ -5,7 +5,7 @@ enum ThreatIntelligenceBundleTrustAnchor {
     /// Inactive production anchor. Online bundle updates remain disabled until
     /// the separately held signing key and hosting are approved and enabled.
     static let productionPublicKey = Data(
-        base64Encoded: "XIYgv92Pzh9CcUrooo2psW5wly507Oxv6oN0a2dbb/0="
+        base64Encoded: "vhmPD4eSgTVFeCc6tR7SZdceirBiJ0n29taAnM/s9m4="
     )!
 
     static var updatesEnabled: Bool {
@@ -58,23 +58,19 @@ struct ThreatIntelligenceBundlePayload: Codable, Equatable, Sendable {
 }
 
 struct SignedThreatIntelligenceBundle: Codable, Equatable, Sendable {
-    /// Exact bytes covered by `signature`. New publishers must populate this
-    /// field so verification never depends on matching another language's JSON
-    /// encoder. `payload` remains optional for one-version compatibility with
-    /// bundles published before schema 1 gained byte-preserving envelopes.
-    let payloadData: Data?
-    let payload: ThreatIntelligenceBundlePayload?
+    /// Exact bytes covered by `signature`. Verification happens before these
+    /// bytes are decoded, so publishers in different languages cannot disagree
+    /// about canonical JSON and accidentally create an unverifiable bundle.
+    let payloadData: Data
     let signature: Data
 
     init(payload: ThreatIntelligenceBundlePayload, signature: Data) {
-        self.payload = payload
-        self.payloadData = try? Self.canonicalEncoder.encode(payload)
+        self.payloadData = (try? Self.canonicalEncoder.encode(payload)) ?? Data()
         self.signature = signature
     }
 
-    init(payloadData: Data, signature: Data, legacyPayload: ThreatIntelligenceBundlePayload? = nil) {
+    init(payloadData: Data, signature: Data) {
         self.payloadData = payloadData
-        self.payload = legacyPayload
         self.signature = signature
     }
 
@@ -82,18 +78,11 @@ struct SignedThreatIntelligenceBundle: Codable, Equatable, Sendable {
         guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: publicKey) else {
             return nil
         }
-        if let payloadData {
-            guard key.isValidSignature(signature, for: payloadData) else { return nil }
-            return try? Self.canonicalDecoder.decode(
-                ThreatIntelligenceBundlePayload.self,
-                from: payloadData
-            )
-        }
-        guard let payload,
-              let legacyBytes = try? Self.canonicalEncoder.encode(payload),
-              key.isValidSignature(signature, for: legacyBytes)
-        else { return nil }
-        return payload
+        guard key.isValidSignature(signature, for: payloadData) else { return nil }
+        return try? Self.canonicalDecoder.decode(
+            ThreatIntelligenceBundlePayload.self,
+            from: payloadData
+        )
     }
 
     static let canonicalEncoder: JSONEncoder = {

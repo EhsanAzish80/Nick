@@ -137,6 +137,8 @@ def main() -> int:
     private_key = validate_private_key(args.private_key)
     output = resolve_output(args.output, args.force)
     openssl = resolve_openssl(args.openssl)
+    if args.verification_public_key and os.environ.get("NICK_BUNDLE_TEST") != "1":
+        raise SystemExit("--verification-public-key is available only with NICK_BUNDLE_TEST=1")
     if not 1 <= args.lifetime_days <= 180:
         raise SystemExit("lifetime must be between 1 and 180 days")
 
@@ -184,9 +186,6 @@ def main() -> int:
         ], check=True)
         bundle = {
             "payloadData": base64.b64encode(message).decode(),
-            # Keep the decoded object for one release so older tooling can
-            # inspect the envelope; clients verify and decode payloadData.
-            "payload": payload,
             "signature": base64.b64encode(signature_path.read_bytes()).decode(),
         }
         atomic_write(output, canonical_json(bundle) + b"\n")

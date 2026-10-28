@@ -491,6 +491,7 @@ let phase4Events: [es_event_type_t] = [
 
     // --- NOTIFY (observational) ---
     ES_EVENT_TYPE_NOTIFY_CLOSE,      // one bounded check after a modified file closes
+    ES_EVENT_TYPE_NOTIFY_WRITE,      // retain transient writes to exact shell profiles
     ES_EVENT_TYPE_NOTIFY_RENAME,     // invalidate cache on rename
     ES_EVENT_TYPE_NOTIFY_UNLINK,     // invalidate cache on delete
     ES_EVENT_TYPE_NOTIFY_FORK,       // process lifecycle

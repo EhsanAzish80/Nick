@@ -173,14 +173,22 @@ enum RansomwareRenamePolicy {
     static func introducedExtension(source: String, destination: String) -> String? {
         let sourceName = (source as NSString).lastPathComponent
         let destinationName = (destination as NSString).lastPathComponent
-        guard !sourceName.hasPrefix("."), !destinationName.hasPrefix(".") else { return nil }
+        guard !destinationName.hasPrefix(".") else { return nil }
 
         let sourceExtension = (sourceName as NSString).pathExtension.lowercased()
         let destinationExtension = (destinationName as NSString).pathExtension.lowercased()
+        let destinationStemExtension = ((destinationName as NSString)
+            .deletingPathExtension as NSString).pathExtension.lowercased()
+        // A temporary/hidden file renamed over `document.ext.locked` is the
+        // write-then-swap ransomware shape. Preserve the ordinary atomic-save
+        // exemption for `.tmp -> final.cmake`, but count an extension appended
+        // to an already named destination.
+        let appendsToExistingExtension = !destinationStemExtension.isEmpty
         guard !destinationExtension.isEmpty,
               destinationExtension != sourceExtension,
               destinationExtension.count <= 16,
-              !temporaryExtensions.contains(sourceExtension),
+              (!sourceName.hasPrefix(".") || appendsToExistingExtension),
+              (!temporaryExtensions.contains(sourceExtension) || appendsToExistingExtension),
               !sourceName.contains(".sb-"), !destinationName.contains(".sb-"),
               !routineDestinationExtensions.contains(destinationExtension)
         else { return nil }

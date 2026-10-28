@@ -578,6 +578,16 @@ final class ESEventHandler {
                 }
             }
 
+        case ES_EVENT_TYPE_NOTIFY_WRITE:
+            let filePath = esString(msg.event.write.target.pointee.path)
+            guard fileIntegrityMonitor?.isExactShellProfile(filePath) == true else { break }
+            dispatchQueue.async { [weak self] in
+                self?.reportIntegrityViolation(
+                    at: filePath, eventDrivenShellProfile: true,
+                    actorPID: pid, responsiblePID: responsiblePid, actorPath: processPath
+                )
+            }
+
         // MARK: NOTIFY_CLOSE (modified) — scan modified files, run FIM, trigger remediation
 
         case ES_EVENT_TYPE_NOTIFY_CLOSE:
@@ -655,7 +665,9 @@ final class ESEventHandler {
 
                 // --- File Integrity Monitoring ---
                 self.reportIntegrityViolation(
-                    at: filePath, actorPID: pid, responsiblePID: responsiblePid,
+                    at: filePath,
+                    eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(filePath) == true,
+                    actorPID: pid, responsiblePID: responsiblePid,
                     actorPath: processPath
                 )
 
@@ -877,11 +889,15 @@ final class ESEventHandler {
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
                 self.reportIntegrityViolation(
-                    at: notifySrcPath, actorPID: pid, responsiblePID: responsiblePid,
+                    at: notifySrcPath,
+                    eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(notifySrcPath) == true,
+                    actorPID: pid, responsiblePID: responsiblePid,
                     actorPath: processPath
                 )
                 self.reportIntegrityViolation(
-                    at: notifyDestPath, actorPID: pid, responsiblePID: responsiblePid,
+                    at: notifyDestPath,
+                    eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(notifyDestPath) == true,
+                    actorPID: pid, responsiblePID: responsiblePid,
                     actorPath: processPath
                 )
                 self.behaviorTracker?.recordRename(
@@ -2050,11 +2066,16 @@ final class ESEventHandler {
 
     private func reportIntegrityViolation(
         at path: String,
+        eventDrivenShellProfile: Bool = false,
         actorPID: Int32? = nil,
         responsiblePID: Int32? = nil,
         actorPath: String? = nil
     ) {
-        guard let violation = fileIntegrityMonitor?.check(path: path) else { return }
+        guard let monitor = fileIntegrityMonitor,
+              let violation = eventDrivenShellProfile
+                ? monitor.recordShellProfileEvent(path: path)
+                : monitor.check(path: path)
+        else { return }
         let attribution = actorPID.flatMap {
             processTree?.responsibleApp(
                 actorPID: $0,

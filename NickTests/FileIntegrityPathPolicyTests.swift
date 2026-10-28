@@ -7,6 +7,25 @@ import XCTest
 
 final class FileIntegrityPathPolicyTests: XCTestCase {
 
+    func test_quicklyRestoredShellProfileUsesEventEvidenceInsteadOfPeriodicHashOnly() throws {
+        let projectRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let monitorSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("NickExtension/FIM/FileIntegrityMonitor.swift"),
+            encoding: .utf8
+        )
+        let handlerSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("NickExtension/EventHandler.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(monitorSource.contains("func recordShellProfileEvent("))
+        XCTAssertTrue(monitorSource.contains("return recordPending(IntegrityViolation("))
+        XCTAssertTrue(handlerSource.contains("case ES_EVENT_TYPE_NOTIFY_WRITE:"))
+        XCTAssertTrue(handlerSource.contains("eventDrivenShellProfile: true"))
+    }
+
     func test_individualFilesMatchExactly() {
         let zshrc = "/Users/example/.zshrc"
         XCTAssertTrue(FileIntegrityPathPolicy.isMonitored(

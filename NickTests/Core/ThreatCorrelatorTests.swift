@@ -1289,6 +1289,26 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(store.incidents.filter { $0.state == .new }.count, 1)
     }
 
+    func test_incidentKeySeparatesTwoLabelsFromSameActorAndSubject() {
+        func alert(_ label: String) -> ThreatAlert {
+            let signal = ThreatSignal(
+                source: .persistence, severity: .medium,
+                title: "Background item added", description: "BTM",
+                context: .init(metadata: [
+                    "appleEvent": "background-item-added",
+                    "launchItemLabel": label,
+                    "executablePath": "/Applications/Example.app/Contents/MacOS/Example",
+                    "ruleTier": "review",
+                ])
+            )
+            return makeAlert(signal: signal)
+        }
+        XCTAssertNotEqual(
+            IncidentStore.incidentKey(for: alert("com.example.first")),
+            IncidentStore.incidentKey(for: alert("com.example.second"))
+        )
+    }
+
     func test_incidentStoreAttachesBackgroundItemRemovalToExistingAdd() {
         let store = IncidentStore(defaults: isolatedDefaults())
         let path = "/Users/test/Library/LaunchAgents/com.example.sync.plist"

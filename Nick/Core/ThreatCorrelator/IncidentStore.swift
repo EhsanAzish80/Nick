@@ -1000,9 +1000,6 @@ final class IncidentStore {
     }
 
     static func incidentKey(for alert: ThreatAlert) -> String {
-        if let launchPath = launchItemPath(alert) {
-            return "launch-item|path:\(normalize(launchPath))"
-        }
         if let launchSignal = alert.contributingSignals.first(where: {
             ["background-item-added", "background-item-removed"].contains($0.metadata["appleEvent"])
         }) {
@@ -1013,6 +1010,9 @@ final class IncidentStore {
                 ?? launchSignal.fileInfo?.path
                 ?? label
             return "launch-item|label:\(label)|subject:\(normalize(subject))"
+        }
+        if let launchPath = launchItemPath(alert) {
+            return "launch-item|path:\(normalize(launchPath))"
         }
         let captureSignals = alert.contributingSignals.filter { $0.source == .avCapture }
         if !captureSignals.isEmpty, captureSignals.count == alert.contributingSignals.count {

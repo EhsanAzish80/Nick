@@ -50,6 +50,34 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         XCTAssertEqual(tracker.extensionChangeBurst(pid: 40, window: 10)?.fileCount, 8)
     }
 
+    func test_writeThenAppendLockedExtensionCountsBeforeFiftyFiles() {
+        let tracker = BehaviorTracker()
+        let detector = RansomwareDetector(behaviorTracker: tracker)
+        let now = Date()
+        var firstAlertAt: Int?
+        for index in 0..<49 {
+            let source = "/tmp/.document-\(index).tmp"
+            let destination = "/tmp/document-\(index).txt.locked"
+            tracker.recordCreate(
+                pid: 70, processGroupID: 70, processPath: "/tmp/actor",
+                path: source, at: now
+            )
+            tracker.recordRename(
+                pid: 70, processGroupID: 70, processPath: "/tmp/actor",
+                source: source, destination: destination,
+                at: now.addingTimeInterval(1)
+            )
+            if detector.evaluateRename(
+                pid: 70, processPath: "/tmp/actor", source: source,
+                destination: destination, actorIsPlatformBinary: false
+            ) != nil, firstAlertAt == nil {
+                firstAlertAt = index + 1
+            }
+        }
+        XCTAssertEqual(firstAlertAt, RansomwareDetector.extensionBurstThreshold)
+        XCTAssertLessThan(try! XCTUnwrap(firstAlertAt), 50)
+    }
+
     func test_writeThenSwapEncryptedCopiesOverPreexistingDocumentsProducesIncident() throws {
         let tracker = BehaviorTracker()
         let detector = RansomwareDetector(behaviorTracker: tracker)

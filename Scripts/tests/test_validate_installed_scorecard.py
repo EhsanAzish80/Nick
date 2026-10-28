@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -19,6 +20,30 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
     def test_plain_snapshot_is_rejected(self):
         with self.assertRaises(ValueError):
             MODULE.decode_privileged_store(b'{"incidents":[]}')
+
+    def test_nonzero_exit_is_not_prevention_without_durable_record(self):
+        self.assertEqual(MODULE.measured_status(None), "PASS")
+        self.assertEqual(
+            MODULE.measured_status({"kind": "quarantine", "target": "/tmp/eicar"}),
+            "PREVENTED",
+        )
+
+    def test_quarantine_database_is_authoritative_prevention_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="nick-quarantine-test-") as directory:
+            database_path = Path(directory) / "quarantine.db"
+            with sqlite3.connect(database_path) as database:
+                database.execute(
+                    "CREATE TABLE quarantine (id TEXT, original_path TEXT, "
+                    "quarantined_path TEXT, threat_name TEXT, quarantined_at TEXT)"
+                )
+                database.execute(
+                    "INSERT INTO quarantine VALUES (?, ?, ?, ?, ?)",
+                    ("record-1", "/tmp/eicar.com", "/quarantine/eicar.com", "EICAR", "now"),
+                )
+            with mock.patch.object(MODULE, "QUARANTINE_DB", database_path), \
+                 mock.patch.object(MODULE, "THREAT_JOURNALS", ()):
+                records = MODULE.prevention_fingerprints()
+            self.assertEqual(records["quarantine:record-1"]["target"], "/tmp/eicar.com")
 
 
 class FixtureInvocationTests(unittest.TestCase):

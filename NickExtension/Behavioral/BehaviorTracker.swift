@@ -221,12 +221,20 @@ final class BehaviorTracker {
             timestamp.timeIntervalSince($0.timestamp) <= 10
                 && ($0.pid == pid || $0.processGroupID == processGroupID)
         } ?? false
+        // A freshly written temporary renamed to `document.ext.locked` is the
+        // common write-then-swap ransomware shape. It must not inherit the
+        // ordinary atomic-save exemption merely because the temporary was
+        // created by the same process. Safe build-tool swaps such as
+        // `target.cmake.tmp` -> `target.cmake` do not append an extension.
+        let destinationURL = URL(fileURLWithPath: destination)
+        let appendsExtensionToNamedFile = !destinationURL.pathExtension.isEmpty
+            && !destinationURL.deletingPathExtension().pathExtension.isEmpty
         processTimelines[pid]?.events.append(BehaviorEvent(
             timestamp: timestamp,
             type: .fileRename,
             detail: destination,
             source: source,
-            countsTowardRenameBurst: !isAtomicSwap
+            countsTowardRenameBurst: !isAtomicSwap || appendsExtensionToNamedFile
                 || replacementEvidence?.indicatesEncryptedReplacement == true,
             encryptedReplacement: replacementEvidence?.indicatesEncryptedReplacement == true
         ))

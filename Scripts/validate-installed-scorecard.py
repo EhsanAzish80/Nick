@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import pwd
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,11 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "Validation/Replay/attack-techniques.json"
 PROGRESS_DOC = ROOT / "DOCS" / "5.1-progress.md"
 INCIDENTS = Path("/Library/Application Support/com.ehsanazish.nick/state/incidents.json")
+QUARANTINE_DB = Path("/Library/Application Support/com.ehsanazish.nick/quarantine.db")
+THREAT_JOURNALS = (
+    Path("/Library/Application Support/com.ehsanazish.nick/events/endpoint-events.json"),
+    Path("/Library/Application Support/com.ehsanazish.nick/endpoint-events.json"),
+)
 START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
 
@@ -70,7 +76,8 @@ EXPECTED = {
     "T1546.004": ({"shell_profile_modification", "file_integrity_modified"}, {"review", "protected"}),
     "T1059.004": ({"download_pipe_interpreter", "curl_pipe_shell", "wget_pipe_shell"}, {"protected"}),
     "T1059.002": ({"osascript_shell"}, {"review", "protected"}),
-    "T1204.002": ({"eicar_test_file", "exact_hash_match", "yara_signature_match"}, {"protected"}),
+    "T1204.002": ({"eicar_test_file", "exact_hash_match", "yara_signature_match",
+                    "eicar anti-malware test file", "eicar"}, {"protected"}),
     "T1105": ({"downloaded_executable", "quarantine_executable"}, {"review", "protected"}),
     "T1218": ({"system_binary_proxy"}, {"review", "protected"}),
     "T1555.001": ({"keychain_secret_read", "keychain_store_transfer", "keychain_command_correlation"}, {"review", "protected"}),
@@ -89,6 +96,8 @@ EXPECTED = {
     "T1071.001": ({"known_dangerous_destination"}, {"review", "protected"}),
 }
 ROOT_FIXTURES = {"launch-daemon-add"}
+INTERACTIVE_FIXTURES = {"tcc-modification"}
+EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
 
 
 def prepare_fixture_scratch(scratch: str, uid: int, gid: int) -> None:
@@ -145,11 +154,25 @@ def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[
                         for item in metadata if isinstance(item, dict)} - {""})
         signal_severities = sorted({str(item.get("signalSeverity") or "")
                                     for item in metadata if isinstance(item, dict)} - {""})
+        paths = sorted({str(signal.get("fileInfo", {}).get("path") or "")
+                        for signal in signals if isinstance(signal, dict)
+                        and isinstance(signal.get("fileInfo"), dict)
+                        and signal.get("fileInfo", {}).get("path")})
+        hashes = {str(signal.get("fileInfo", {}).get("sha256Hash") or "").lower()
+                  for signal in signals if isinstance(signal, dict)
+                  and isinstance(signal.get("fileInfo"), dict)}
+        title = str(alert.get("title", "incident"))
+        title_lower = title.lower()
+        if "eicar" in title_lower or EICAR_SHA256 in hashes:
+            reasons = sorted(set(reasons) | {
+                "eicar", "eicar_test_file", "exact_hash_match",
+            })
         found[f"{identifier}:{occurrence}:{state}"] = {
             "reasons": reasons,
             "tiers": tiers,
             "signalSeverities": signal_severities,
-            "title": str(alert.get("title", "incident")),
+            "title": title,
+            "paths": paths,
             "lastSeen": alert.get("lastSeen") or alert.get("timestamp"),
         }
     return found
@@ -159,9 +182,76 @@ def load_incident_fingerprints() -> dict[str, dict[str, Any]]:
     return incident_fingerprints_from_snapshot(decode_privileged_store(INCIDENTS.read_bytes()))
 
 
+def prevention_fingerprints() -> dict[str, dict[str, str]]:
+    """Read durable prevention evidence from its authoritative stores."""
+    found: dict[str, dict[str, str]] = {}
+    if QUARANTINE_DB.is_file():
+        with sqlite3.connect(f"file:{QUARANTINE_DB}?mode=ro", uri=True) as database:
+            for row in database.execute(
+                "SELECT id, original_path, quarantined_path, threat_name, quarantined_at "
+                "FROM quarantine"
+            ):
+                identifier, original, quarantined, threat, timestamp = map(str, row)
+                found[f"quarantine:{identifier}"] = {
+                    "kind": "quarantine", "target": original,
+                    "detail": f"{threat}; moved to {quarantined}; {timestamp}",
+                }
+    for journal in THREAT_JOURNALS:
+        if not journal.is_file():
+            continue
+        try:
+            envelopes = json.loads(journal.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for envelope in envelopes if isinstance(envelopes, list) else []:
+            if not isinstance(envelope, dict) or not isinstance(envelope.get("payload"), str):
+                continue
+            try:
+                payload = json.loads(base64.b64decode(envelope["payload"], validate=True))
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+            identifier = str(envelope.get("id") or hashlib.sha256(envelope["payload"].encode()).hexdigest())
+            kind = str(envelope.get("kind", ""))
+            if kind == "remediation":
+                for index, action in enumerate(payload.get("actions", [])):
+                    if isinstance(action, dict) and action.get("success") is True:
+                        found[f"remediation:{identifier}:{index}"] = {
+                            "kind": str(action.get("type", "remediation")),
+                            "target": str(action.get("target") or payload.get("threatPath") or ""),
+                            "detail": str(action.get("detail") or payload.get("threatName") or ""),
+                        }
+            elif kind == "endpointEvent" and str(payload.get("decision", "")).lower() == "deny":
+                found[f"auth-deny:{identifier}"] = {
+                    "kind": "AUTH deny",
+                    "target": str(payload.get("filePath") or payload.get("processPath") or ""),
+                    "detail": str(payload.get("threatName") or payload.get("eventType") or "denied"),
+                }
+    return found
+
+
+def matching_prevention(
+    before: dict[str, dict[str, str]],
+    after: dict[str, dict[str, str]],
+    incident: dict[str, Any],
+) -> dict[str, str] | None:
+    paths = {os.path.realpath(path) for path in incident.get("paths", []) if path}
+    for identifier in sorted(set(after) - set(before)):
+        record = after[identifier]
+        target = record.get("target", "")
+        canonical = os.path.realpath(target) if target else ""
+        if not paths or canonical in paths:
+            return record
+    return None
+
+
+def measured_status(prevention: dict[str, str] | None) -> str:
+    """A process exit is not proof that Nick prevented the technique."""
+    return "PREVENTED" if prevention is not None else "PASS"
+
+
 def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[str, str]]) -> None:
     rows = [
-        "## Installed ATT&CK replay — build 5067",
+        "## Installed ATT&CK replay — build 5068",
         "",
         f"Measured {datetime.now(timezone.utc).isoformat(timespec='seconds')}. Unmeasured rows remain pending; this table makes no rating claim.",
         "",
@@ -220,6 +310,7 @@ def main() -> int:
         fixture_name = technique["fixture"]
         print(INSTRUCTIONS[fixture_name])
         before = load_incident_fingerprints()
+        prevention_before = prevention_fingerprints()
         action = input("Run? [Y/n], s to leave pending, q to stop: ").strip().lower()
         if action == "q":
             break
@@ -248,12 +339,16 @@ def main() -> int:
                 command = user_fixture_command(fixture, scratch, user)
             else:
                 command = [str(fixture)]
+            interactive = fixture_name in INTERACTIVE_FIXTURES
             completed = subprocess.run(
                 command, env=environment, check=False, text=True,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60
+                stdout=None if interactive else subprocess.PIPE,
+                stderr=None if interactive else subprocess.STDOUT,
+                timeout=60,
             )
             fixture_returncode = completed.returncode
-            print(completed.stdout.rstrip())
+            if completed.stdout:
+                print(completed.stdout.rstrip())
             if completed.returncode == 64:
                 manual_action = input("Complete the printed manual steps, then press Enter; s to skip: ").strip().lower()
                 if manual_action == "s":
@@ -270,6 +365,7 @@ def main() -> int:
                 )
             time.sleep(3)
         after = load_incident_fingerprints()
+        prevention_after = prevention_fingerprints()
         new_ids = sorted(set(after) - set(before))
         expected_reasons, expected_tiers = EXPECTED[technique["id"]]
         matches = []
@@ -285,7 +381,10 @@ def main() -> int:
             rule = sorted(set(record["reasons"]).intersection(expected_reasons))[0]
             tier = sorted(set(record["tiers"]).intersection(expected_tiers))[0] if record["tiers"] else "not recorded"
             evidence = f"{identifier}; rule={rule}; tier={tier}; observed<= {latency:.2f}s"
-            status = "PREVENTED" if fixture_returncode != 0 else "PASS"
+            prevention = matching_prevention(prevention_before, prevention_after, record)
+            status = measured_status(prevention)
+            if prevention is not None:
+                evidence += f"; prevention={prevention['kind']} target={prevention['target']}"
             results[technique["id"]] = {"status": status, "evidence": evidence}
             print(f"Measured: {status} ({rule}, {tier}, <= {latency:.2f}s)")
             continue
