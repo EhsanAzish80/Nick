@@ -1289,6 +1289,40 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertEqual(store.incidents.filter { $0.state == .new }.count, 1)
     }
 
+    func test_shellProfileAppendAndRestoreCoalesceButLaterEditIsIndependent() throws {
+        let store = IncidentStore(defaults: isolatedDefaults())
+        let path = "/Users/test/.zshrc"
+        func alert(at date: Date, id: UUID = UUID()) -> ThreatAlert {
+            let signal = ThreatSignal(
+                id: id, source: .filesystem, severity: .medium, timestamp: date,
+                title: "Protected file modified", description: "FIM",
+                context: .init(
+                    fileInfo: .init(path: path, sha256Hash: nil, entropy: nil, signingStatus: nil, sizeBytes: nil),
+                    metadata: [
+                        "reason": "shell_profile_modification",
+                        "rule": "shell_profile_modification",
+                        "ruleTier": "review",
+                        "fimWriterName": "sh",
+                        "responsibleAppName": "Terminal"
+                    ]
+                )
+            )
+            return makeAlert(signal: signal, timestamp: date)
+        }
+        let start = Date(timeIntervalSince1970: 1_000)
+        _ = store.ingest([alert(at: start)])
+        _ = store.ingest([alert(at: start.addingTimeInterval(10))])
+        XCTAssertEqual(store.incidents.count, 1)
+        XCTAssertEqual(store.incidents[0].alert.occurrenceCount, 2)
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: store.incidents[0].alert).headline,
+            "Changed your shell profile (.zshrc) — sh, via Terminal"
+        )
+
+        _ = store.ingest([alert(at: start.addingTimeInterval(180))])
+        XCTAssertEqual(store.incidents.count, 2)
+    }
+
     func test_incidentKeySeparatesTwoLabelsFromSameActorAndSubject() {
         func alert(_ label: String) -> ThreatAlert {
             let signal = ThreatSignal(

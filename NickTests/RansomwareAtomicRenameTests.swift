@@ -96,6 +96,15 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.bird"),
                        "iCloud Drive (bird)")
         XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.cloudd"
+        ))
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.fileproviderd"
+        ))
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.FileProvider.Example"
+        ))
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
             isPlatformBinary: true, signingID: "com.apple.mds_stores"
         ))
         XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(

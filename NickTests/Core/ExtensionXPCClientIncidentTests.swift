@@ -2,6 +2,61 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+    func testEndpointFindingUsesStableFamilyIDInsteadOfDisplayTitle() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite,
+            processPath: "/usr/bin/example",
+            pid: 42,
+            parentPid: 1,
+            decision: .notApplicable,
+            threat: .init(
+                threatName: "A human-readable display title",
+                threatFamily: "example-behavior"
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.metadata["rule"], "example_behavior")
+        XCTAssertNotEqual(finding.signal.metadata["rule"], event.threatName)
+    }
+
+    func testExecCredentialFindingNamesTargetAndPreExecActor() throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/opt/homebrew/bin/gh",
+            pid: 77,
+            parentPid: 76,
+            decision: .allow,
+            threat: .init(
+                threatName: "Keychain secret read needs review",
+                threatFamily: "credential-access",
+                metadata: [
+                    "reason": "keychain_secret_read",
+                    "rule": "keychain_secret_read",
+                    "ruleTier": "review",
+                    "detectionKind": "credential-access",
+                    "credentialStore": "keychain",
+                    "execTargetPath": "/usr/bin/security",
+                    "responsibleChain": "Terminal → gh → security"
+                ]
+            )
+        )
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.processInfo?.name, "security")
+        XCTAssertEqual(finding.signal.processInfo?.parentName, "gh")
+        let alert = ThreatAlert(
+            score: finding.score,
+            content: .init(
+                title: finding.signal.title, description: finding.signal.description,
+                severity: .medium, recommendedAction: finding.recommendedAction
+            ),
+            contributingSignals: [finding.signal]
+        )
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: alert).headline,
+            "Read a Keychain secret (security, via gh)"
+        )
+    }
+
     func testStorageOperationCompletionIsTimelineOnly() {
         let event = ESEvent(
             eventType: .unknown,

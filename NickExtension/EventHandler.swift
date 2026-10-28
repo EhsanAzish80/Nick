@@ -2388,6 +2388,10 @@ final class ESEventHandler {
             "Ransomware signal pid=\(pid) confidence=\(alert.confidence, format: .fixed(precision: 2)) terminate=\(shouldTerminate)"
         )
         var ransomwareMetadata: [String: String] = [
+            "reason": alert.renameBurst == nil ? "ransomware_behavior" : "mass_file_rename",
+            "rule": alert.renameBurst == nil ? "ransomware_behavior" : "mass_file_rename",
+            "ruleTier": "protected",
+            "signalSeverity": alert.confidence >= 0.8 ? "critical" : "high",
             "detectionKind": "ransomware-behavior",
             "actorValidation": developerIDValidated ? "developer-id" : "unvalidated",
             "response": shouldTerminate ? "terminated" : "alert-only",

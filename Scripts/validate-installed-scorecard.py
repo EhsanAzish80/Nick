@@ -39,7 +39,7 @@ THREAT_JOURNALS = (
 )
 START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
-EXPECTED_BUILD = "5071"
+EXPECTED_BUILD = "5072"
 INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
 SYSTEM_EXTENSIONS = Path("/usr/bin/systemextensionsctl")
 EXPECTED_EXTENSIONS = (

@@ -7,6 +7,34 @@ import XCTest
 
 final class UserFacingAlertBuilderTests: XCTestCase {
 
+    func testProcessChainTitleNamesActorAndBehavior() {
+        let signal = ThreatSignal(
+            source: .process,
+            severity: .high,
+            title: "Suspicious process chain detected",
+            description: "Legacy generic copy",
+            context: .init(
+                processInfo: .init(
+                    pid: 31, path: "/usr/bin/curl", name: "curl",
+                    parentPID: 30, parentName: "Terminal", signingStatus: .unknown
+                ),
+                metadata: ["reason": "app_to_downloader", "rule": "suspicious_parent_chain"]
+            )
+        )
+        let alert = ThreatAlert(
+            score: 0.75,
+            content: .init(
+                title: "Suspicious process chain detected", description: "Legacy generic copy",
+                severity: .high, recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+        XCTAssertEqual(
+            UserFacingAlertBuilder.shared.build(from: alert).headline,
+            "Terminal started curl to download a file"
+        )
+    }
+
     func test_credentialAccessUsesBehaviorFirstTitleWithActorAndViaChain() {
         let process = NickProcessInfo(
             pid: 8_101,

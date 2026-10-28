@@ -604,7 +604,12 @@ final class IncidentStore {
                         || Self.shouldAttachLaunchItemRemoval($0.alert, candidate)
                 })
                 : nil
-            if let index = exactIndex ?? relatedLaunchItemIndex {
+            let relatedShellProfileIndex = exactIndex == nil && relatedLaunchItemIndex == nil
+                ? incidents.firstIndex(where: {
+                    $0.state == .new && Self.shouldMergeShellProfileEvidence($0.alert, candidate)
+                })
+                : nil
+            if let index = exactIndex ?? relatedLaunchItemIndex ?? relatedShellProfileIndex {
                 let prior = incidents[index]
                 let mergesRelatedLaunchItemEvidence = Self.shouldMergeLaunchItemEvidence(prior.alert, candidate)
                     || Self.shouldAttachLaunchItemRemoval(prior.alert, candidate)
@@ -967,6 +972,24 @@ final class IncidentStore {
         return normalize(existingPath) == normalize(incomingPath)
     }
 
+    /// An editor commonly writes and then restores/replaces the same profile.
+    /// Coalesce that short operation, but never merge into an incident the
+    /// user already reviewed or into a later, independent edit.
+    private static func shouldMergeShellProfileEvidence(
+        _ existing: ThreatAlert,
+        _ incoming: ThreatAlert
+    ) -> Bool {
+        func profilePath(_ alert: ThreatAlert) -> String? {
+            alert.contributingSignals.first(where: {
+                EvidenceRulePolicy.ruleID(for: $0) == "shell_profile_modification"
+            }).flatMap { $0.fileInfo?.path ?? $0.metadata["path"] }
+        }
+        guard let existingPath = profilePath(existing),
+              let incomingPath = profilePath(incoming),
+              normalize(existingPath) == normalize(incomingPath) else { return false }
+        return abs(existing.lastSeen.timeIntervalSince(incoming.lastSeen)) <= 120
+    }
+
     private enum LaunchItemEvidenceKind: Hashable { case btm, fim }
 
     private static func launchItemEvidenceKinds(_ alert: ThreatAlert) -> Set<LaunchItemEvidenceKind> {
@@ -1041,6 +1064,12 @@ final class IncidentStore {
         }
         let subjects = Set(alert.contributingSignals.map { signal -> String in
             let rule = EvidenceRulePolicy.ruleID(for: signal).lowercased()
+            if rule == "shell_profile_modification",
+               let path = signal.fileInfo?.path ?? signal.metadata["path"] {
+                // The explicit two-minute merge above must be able to expire;
+                // do not give every historical edit to this path one key.
+                return "\(rule)|file:\(normalize(path))|event:\(signal.id.uuidString.lowercased())"
+            }
             if signal.metadata["reason"] == "endpoint_tamper_observed",
                let operation = signal.metadata["tamperOperation"],
                let target = signal.metadata["tamperTarget"] ?? signal.fileInfo?.path,

@@ -284,6 +284,26 @@ final class UserFacingAlertBuilder: Sendable {
             )
         }
 
+        if let profile = signals.first(where: {
+            ($0.metadata["reason"] ?? $0.metadata["rule"]) == "shell_profile_modification"
+        }) {
+            let path = profile.fileInfo?.path ?? profile.metadata["path"] ?? "a shell profile"
+            let filename = URL(fileURLWithPath: path).lastPathComponent
+            let actor = userReadableProcessName(profile.metadata["fimWriterName"])
+                ?? userReadableProcessName(profile.processInfo?.name)
+                ?? "Unknown actor"
+            let app = userReadableProcessName(profile.metadata["responsibleAppName"])
+                ?? userReadableProcessName(profile.processInfo?.parentName)
+            let context = app.map { "\(actor), via \($0)" } ?? actor
+            return AlertPattern(
+                headline: "Changed your shell profile (\(filename)) — \(context)",
+                explanation: "\(context) changed \(path). Shell profiles can run commands whenever a shell starts.",
+                assessment: "Needs your review",
+                recommendedAction: "Review the change and keep it only if you expected it.",
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
         if let credential = signals.first(where: {
             $0.metadata["detectionKind"] == "credential-access"
         }) {
@@ -336,6 +356,31 @@ final class UserFacingAlertBuilder: Sendable {
                 assessment: "Needs your review",
                 recommendedAction: "Check whether you expected this app to access the credential store.",
                 severity: credential.metadata["ruleTier"] == "protected" ? .critical : .warning,
+                actions: [.showDetails, .dismiss]
+            )
+        }
+
+        if let chainSignal = signals.first(where: {
+            ["browser_to_shell", "office_to_shell", "pdf_to_shell", "app_to_downloader", "deep_shell_nesting"]
+                .contains($0.metadata["reason"] ?? "")
+        }) {
+            let reason = chainSignal.metadata["reason"] ?? ""
+            let actor = userReadableProcessName(chainSignal.processInfo?.name) ?? "a process"
+            let parent = userReadableProcessName(chainSignal.processInfo?.parentName)
+                ?? userReadableProcessName(chainSignal.metadata["responsibleAppName"])
+                ?? "An app"
+            let action: String = switch reason {
+            case "app_to_downloader": "started \(actor) to download a file"
+            case "browser_to_shell": "started the shell \(actor) from a browser"
+            case "office_to_shell": "started the shell \(actor) from a document app"
+            case "pdf_to_shell": "started the shell \(actor) from a PDF app"
+            default: "started a deep shell chain ending in \(actor)"
+            }
+            return AlertPattern(
+                headline: "\(parent) \(action)",
+                explanation: "Nick observed that \(parent) \(action). Review it if you did not expect this process chain.",
+                assessment: "Needs your review",
+                recommendedAction: "Check the initiating app and command before allowing it to run again.",
                 actions: [.showDetails, .dismiss]
             )
         }
