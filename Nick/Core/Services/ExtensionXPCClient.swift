@@ -1640,7 +1640,7 @@ struct ExtensionFinding: Sendable {
         } else {
             severity = .high
         }
-        let actorPath = isLOLBinBehavior
+        let actorPath = (isLOLBinBehavior || isCredentialAccess)
             ? (event.metadata?["execTargetPath"] ?? filePath)
             : event.processPath
         let signingStatus: SigningStatus
@@ -1783,11 +1783,13 @@ struct ExtensionFinding: Sendable {
             switch event.metadata?["reason"] {
             case "curl_pipe_shell", "wget_pipe_shell", "download_pipe_interpreter":
                 return "Nick saw a shell run a script supplied by a download command."
+            case "decoded_payload_interpreter":
+                return "Nick saw decoded content fed directly into an interpreter."
             case "osascript_shell":
                 return "Nick saw AppleScript start a shell command."
             case "quarantine_removal":
                 return "Nick saw a command remove macOS quarantine metadata."
-            case "base64_payload":
+            case "base64_payload", "encoded_payload":
                 return "Nick saw a command decode and execute an encoded payload."
             default:
                 return "Nick saw a command perform security-sensitive behavior."
@@ -1879,10 +1881,14 @@ struct ExtensionFinding: Sendable {
     }
 
     init(violation: IntegrityViolation) {
+        let supplied = violation.metadata ?? [:]
+        let reason = supplied["reason"] ?? "file_integrity_\(violation.violationType.rawValue)"
+        let tier = supplied["ruleTier"] ?? "protected"
+        let severity: SignalSeverity = supplied["signalSeverity"] == "medium" ? .medium : .high
         signal = ThreatSignal(
             id: violation.id,
             source: .filesystem,
-            severity: .high,
+            severity: severity,
             timestamp: violation.timestamp,
             title: "Protected file \(violation.violationType.rawValue)",
             description: "A monitored security-sensitive file changed outside Nick's recorded baseline.",
@@ -1895,12 +1901,12 @@ struct ExtensionFinding: Sendable {
                     sizeBytes: nil
                 ),
                 metadata: [
-                    "reason": "file_integrity_\(violation.violationType.rawValue)",
-                    "rule": "file_integrity_monitor",
-                    "ruleTier": "protected",
+                    "reason": reason,
+                    "rule": supplied["rule"] ?? "file_integrity_monitor",
+                    "ruleTier": tier,
                     "fimStatus": "pending",
                     "expectedHash": violation.expectedHash ?? "unavailable"
-                ].merging(violation.metadata ?? [:]) { current, _ in current }
+                ].merging(supplied) { _, suppliedValue in suppliedValue }
             )
         )
         score = 0.9

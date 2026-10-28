@@ -62,4 +62,37 @@ final class SimpleAlertCopyTests: XCTestCase {
             XCTAssertFalse(text.contains("/tmp"), text)
         }
     }
+
+    func test_nonFileFindingNeverClaimsRemovedFile() {
+        let signal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .critical,
+            title: "Decoded payload sent to an interpreter",
+            description: "A decoder fed a shell.",
+            context: .init(metadata: [
+                "reason": "decoded_payload_interpreter",
+                "rule": "decoded_payload_interpreter",
+                "ruleTier": "protected"
+            ])
+        )
+        let threat = ThreatAlert(
+            score: 0.9,
+            content: .init(
+                title: signal.title,
+                description: signal.description,
+                severity: .critical,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+        let copy = SimpleAlertCopy.make(
+            alert: threat,
+            user: UserFacingAlertBuilder.shared.build(from: threat),
+            isQuarantined: false,
+            fileStillPresent: false
+        )
+        XCTAssertFalse(copy.subline.contains("no longer on your Mac"))
+        XCTAssertFalse(copy.whatNickDid.contains("file has since been removed"))
+        XCTAssertTrue(copy.subline.contains("command has finished"))
+    }
 }

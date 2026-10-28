@@ -34,11 +34,17 @@ final class FileIntegrityMonitor {
     static let systemMonitoredPaths: [String] = [
         "/Library/LaunchAgents",
         "/Library/LaunchDaemons",
+        "/usr/lib/cron/tabs",
         "/usr/local/bin",
         "/private/etc/hosts",
         "/private/etc/sudoers",
         "/private/etc/pam.d",
         "/private/etc/sudoers.d",
+        "/etc/zshrc",
+        "/etc/zprofile",
+        "/etc/zshenv",
+        "/etc/bashrc",
+        "/etc/profile",
     ]
 
     static func defaultMonitoredPaths(userHomeDirectories: [URL]) -> [String] {
@@ -46,7 +52,10 @@ final class FileIntegrityMonitor {
             "Library/LaunchAgents",
             ".zshrc",
             ".zprofile",
+            ".zshenv",
             ".bash_profile",
+            ".bashrc",
+            ".profile",
         ]
         return systemMonitoredPaths + userHomeDirectories.flatMap { home in
             userRelativePaths.map { home.appendingPathComponent($0).path }
@@ -57,6 +66,7 @@ final class FileIntegrityMonitor {
         Set([
             "/Library/LaunchAgents",
             "/Library/LaunchDaemons",
+            "/usr/lib/cron/tabs",
             "/usr/local/bin",
             "/private/etc/pam.d",
             "/private/etc/sudoers.d",

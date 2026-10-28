@@ -55,7 +55,9 @@ struct SimpleAlertCopy: Equatable {
             title = user.headline
             reassurance = behavior.isBehavior
                 ? (alert.evidenceState() == .processActive ? "Still running" : "The command has finished")
-                : (fileStillPresent ? "Take a look now" : "It’s no longer on your Mac")
+                : (alert.detectedFilePath == nil
+                    ? (alert.evidenceState() == .processActive ? "Still running" : "The command has finished")
+                    : (fileStillPresent ? "Take a look now" : "It’s no longer on your Mac"))
         case (false, _, .warning):
             tone = .warning
             title = user.headline

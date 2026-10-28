@@ -1003,8 +1003,16 @@ final class IncidentStore {
         if let launchPath = launchItemPath(alert) {
             return "launch-item|path:\(normalize(launchPath))"
         }
-        if let label = alert.contributingSignals.compactMap({ $0.metadata["launchItemLabel"] }).first {
-            return "launch-item|label:\(label.lowercased())"
+        if let launchSignal = alert.contributingSignals.first(where: {
+            ["background-item-added", "background-item-removed"].contains($0.metadata["appleEvent"])
+        }) {
+            let label = launchSignal.metadata["launchItemLabel"]?.lowercased() ?? "unlabelled"
+            let subject = launchSignal.metadata["itemURL"]
+                ?? launchSignal.metadata["executablePath"]
+                ?? launchSignal.metadata["appURL"]
+                ?? launchSignal.fileInfo?.path
+                ?? label
+            return "launch-item|label:\(label)|subject:\(normalize(subject))"
         }
         let captureSignals = alert.contributingSignals.filter { $0.source == .avCapture }
         if !captureSignals.isEmpty, captureSignals.count == alert.contributingSignals.count {
@@ -1117,7 +1125,7 @@ final class IncidentStore {
 
     private func isEligibleForExpectedCooldown(_ alert: ThreatAlert) -> Bool {
         guard !isProtected(alert), alert.severity < .critical else { return false }
-        let reviewable: Set<String> = ["shell_profile_modified", "ssh_keys_modified"]
+        let reviewable: Set<String> = ["shell_profile_modification", "ssh_keys_modified"]
         return alert.contributingSignals.filter { $0.source == .persistence }.allSatisfy {
             reviewable.contains($0.metadata["reason"] ?? "")
         }

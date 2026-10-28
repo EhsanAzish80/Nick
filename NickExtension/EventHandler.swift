@@ -1299,6 +1299,11 @@ final class ESEventHandler {
             let tccResponsiblePID = tcc.responsible_token.map {
                 audit_token_to_pid($0.pointee)
             } ?? responsiblePid
+            let affectsNick = appBundleID == "com.ehsanazish.nick"
+                || appPath.contains("/Nick.app/")
+            let instigatorName = URL(fileURLWithPath: instigatorPath).lastPathComponent
+            let updateRelated = affectsNick
+                && ["installer", "installd", "shove", "Autoupdate"].contains(instigatorName)
             reportAppleSecurityEvent(
                 type: .notifyTCCModify,
                 actorPath: instigatorPath,
@@ -1314,7 +1319,10 @@ final class ESEventHandler {
                     "service": service,
                     "appBundleID": appBundleID,
                     "appPath": appPath,
-                    "changeType": isGranted ? "granted" : "revoked"
+                    "changeType": isGranted ? "granted" : "revoked",
+                    "affectedAppName": affectsNick ? "Nick" : (appBundleID.isEmpty ? URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent : appBundleID),
+                    "nickPermissionLost": affectsNick && !isGranted ? "true" : "false",
+                    "updateRelated": updateRelated ? "true" : "false"
                 ]
             )
 
@@ -1525,6 +1533,20 @@ final class ESEventHandler {
             arguments: arguments
         )
         let pipelineEvidence = processPipeEvidenceProvider(pid)
+        let quarantineCandidate = Self.quarantinedExecutionCandidate(
+            executablePath: targetPath,
+            arguments: arguments,
+            executableHasTrustedSigner: trustedSigner
+        )
+        let candidateHasTrustedSigner = quarantineCandidate == targetPath ? trustedSigner : false
+        let hasUntrustedQuarantineOrigin = quarantineCandidate != nil
+        let quarantineExecutionSeverity = ExecutionTrustPolicy.quarantinedExecutionSeverity(
+            hasTrustedSigner: candidateHasTrustedSigner,
+            hasQuarantineOrigin: hasUntrustedQuarantineOrigin,
+            parentIsInterpreter: Self.isInterpreter(processPath) || Self.isInterpreter(targetPath),
+            parentHasNetworkSocket: pipelineEvidence.hasNetworkSocket
+        )
+        let quarantinedUntrustedExecution = quarantineExecutionSeverity != nil
         let pipelineObservation = InteractiveShellPipelinePolicy.Observation(
             pid: pid,
             parentPID: parentPid,
@@ -1562,8 +1584,15 @@ final class ESEventHandler {
         }
         let behaviorTitle = credentialFinding?.title
             ?? lolbinFinding?.title
-            ?? interactivePipelineFinding.map { _ in "Download-to-shell command detected" }
-        let behaviorFamily = credentialFinding == nil ? "lolbin-behavior" : "credential-access"
+            ?? interactivePipelineFinding.map {
+                $0.reason == "decoded_payload_interpreter"
+                    ? "Decoded payload sent to an interpreter"
+                    : "Download-to-shell command detected"
+            }
+            ?? (quarantinedUntrustedExecution ? "Quarantined untrusted code executed" : nil)
+        let behaviorFamily = credentialFinding != nil
+            ? "credential-access"
+            : (quarantinedUntrustedExecution ? "execution-provenance" : "lolbin-behavior")
         let responsibleChainValidated = attribution?.app.map {
             $0.signing == .signed || $0.signing == .applePlatform
         } ?? false
@@ -1613,12 +1642,13 @@ final class ESEventHandler {
                                 || interactivePipelineFinding != nil,
                             hasQuarantineOrigin: Self.hasQuarantineOrigin(at: targetPath)
                         ) == .review
+                    let reviewBehavior = localTemporaryExecution || finding.reason == "encoded_payload"
                     var metadata = [
                         "reason": finding.reason,
                         "rule": finding.reason,
-                        "ruleTier": localTemporaryExecution ? "review" : "protected",
+                        "ruleTier": reviewBehavior ? "review" : "protected",
                         "detectionKind": "lolbin-behavior",
-                        "signalSeverity": localTemporaryExecution ? "medium" : finding.severity,
+                        "signalSeverity": reviewBehavior ? "medium" : finding.severity,
                         "execTargetPath": targetPath
                     ]
                     if let matchedCommand = finding.matchedCommand {
@@ -1643,7 +1673,21 @@ final class ESEventHandler {
                         metadata.merge(attribution.metadata) { current, _ in current }
                     }
                     return metadata
-                }
+                } ?? (quarantinedUntrustedExecution ? {
+                    var metadata = [
+                        "reason": "quarantine_executable",
+                        "rule": "quarantine_executable",
+                        "ruleTier": "review",
+                        "detectionKind": "executable-provenance",
+                        "signalSeverity": quarantineExecutionSeverity ?? "medium",
+                        "execTargetPath": quarantineCandidate ?? targetPath,
+                        "quarantineOrigin": "true"
+                    ]
+                    if let attribution {
+                        metadata.merge(attribution.metadata) { current, _ in current }
+                    }
+                    return metadata
+                }() : nil)
             )
         ))
         if interactivePipelineFinding == nil,
@@ -2024,6 +2068,13 @@ final class ESEventHandler {
             metadata["fimWriterName"] = URL(fileURLWithPath: writerPath).lastPathComponent
             metadata["fimWriterPath"] = writerPath
         }
+        if Self.isShellProfile(path) {
+            let suspicious = Self.shellProfileHasExecutionContent(path)
+            metadata["reason"] = "shell_profile_modification"
+            metadata["rule"] = "shell_profile_modification"
+            metadata["ruleTier"] = suspicious ? "protected" : "review"
+            metadata["signalSeverity"] = suspicious ? "high" : "medium"
+        }
         let attributed = IntegrityViolation(
             id: violation.id,
             path: violation.path,
@@ -2035,6 +2086,46 @@ final class ESEventHandler {
         )
         guard let data = try? encoder.encode(attributed) else { return }
         xpcServer?.sendIntegrityViolationToApp(data)
+    }
+
+    private static func isShellProfile(_ path: String) -> Bool {
+        let name = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        return [".zshrc", ".zprofile", ".zshenv", ".bash_profile", ".bashrc", ".profile",
+                "zshrc", "zprofile", "zshenv", "bashrc", "profile"].contains(name)
+            || name.hasPrefix("zshrc_")
+    }
+
+    private static func quarantinedExecutionCandidate(
+        executablePath: String,
+        arguments: [String],
+        executableHasTrustedSigner: Bool
+    ) -> String? {
+        if !executableHasTrustedSigner, hasQuarantineOrigin(at: executablePath) {
+            return executablePath
+        }
+        guard isInterpreter(executablePath) else { return nil }
+        for argument in arguments where !argument.hasPrefix("-") && argument != executablePath {
+            let candidate = URL(fileURLWithPath: argument).standardizedFileURL.path
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory),
+                  !isDirectory.boolValue,
+                  hasQuarantineOrigin(at: candidate),
+                  !DeveloperIDTrustValidator.shared.isValidated(path: candidate)
+            else { continue }
+            return candidate
+        }
+        return nil
+    }
+
+    private static func shellProfileHasExecutionContent(_ path: String) -> Bool {
+        guard let data = FileManager.default.contents(atPath: path),
+              let text = String(data: data.prefix(256 * 1_024), encoding: .utf8)?.lowercased()
+        else { return false }
+        let downloads = text.contains("http://") || text.contains("https://")
+        let execution = text.contains("| sh") || text.contains("| bash")
+            || text.contains("| zsh") || text.contains("eval ") || text.contains("source ")
+            || text.contains("chmod +x")
+        return downloads || execution
     }
 
     /// Emits detector-confirmed evidence and performs automatic remediation

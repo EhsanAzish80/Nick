@@ -85,9 +85,81 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
             URL(string: "https://3nsofts.com/nick/threat-intelligence/other.json")!
         ))
     }
+
+    func test_pythonPublisherBytesVerifyInSwiftAndTamperingIsRejected() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nick-python-bundle-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let privateKey = directory.appendingPathComponent("test-private.pem")
+        let publicKey = directory.appendingPathComponent("test-public.pem")
+        let publicDER = directory.appendingPathComponent("test-public.der")
+        let output = directory.appendingPathComponent("bundle.json")
+        let openssl = try openssl3Path()
+        try run(openssl, ["genpkey", "-algorithm", "ED25519", "-out", privateKey.path])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: privateKey.path)
+        try run(openssl, ["pkey", "-in", privateKey.path, "-pubout", "-out", publicKey.path])
+        try run(openssl, [
+            "pkey", "-in", privateKey.path, "-pubout", "-outform", "DER", "-out", publicDER.path,
+        ])
+        try run("/usr/bin/python3", [
+            root.appendingPathComponent("Scripts/build-first-threat-bundle.py").path,
+            "--private-key", privateKey.path,
+            "--openssl", openssl,
+            "--verification-public-key", publicKey.path,
+            "--output", output.path,
+            "--version", "1",
+        ])
+
+        let der = try Data(contentsOf: publicDER)
+        XCTAssertGreaterThanOrEqual(der.count, 32)
+        let rawPublicKey = Data(der.suffix(32))
+        let bundleData = try Data(contentsOf: output)
+        let bundle = try JSONDecoder().decode(SignedThreatIntelligenceBundle.self, from: bundleData)
+        let validator = ThreatIntelligenceBundleValidator(publicKey: rawPublicKey)
+        XCTAssertNoThrow(try validator.validate(bundle, now: Date(), highestAcceptedVersion: nil))
+
+        var tampered = try XCTUnwrap(bundle.payloadData)
+        tampered[0] ^= 0x01
+        let altered = SignedThreatIntelligenceBundle(
+            payloadData: tampered,
+            signature: bundle.signature,
+            legacyPayload: bundle.payload
+        )
+        XCTAssertThrowsError(try validator.validate(altered, now: Date(), highestAcceptedVersion: nil)) {
+            XCTAssertEqual($0 as? ThreatIntelligenceBundleValidationError, .invalidSignature)
+        }
+    }
 }
 
 private extension SignedThreatIntelligenceBundleTests {
+    func openssl3Path() throws -> String {
+        let candidates = [
+            "/opt/homebrew/opt/openssl@3/bin/openssl",
+            "/usr/local/opt/openssl@3/bin/openssl",
+            "/opt/homebrew/bin/openssl",
+            "/usr/local/bin/openssl",
+        ]
+        return try XCTUnwrap(candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }))
+    }
+
+    func run(_ executable: String, _ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        let error = Pipe()
+        process.standardError = error
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            let message = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            XCTFail("\(executable) failed: \(message)")
+        }
+    }
+
     final class Fixture {
         let privateKey = Curve25519.Signing.PrivateKey()
         let directory: URL

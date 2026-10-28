@@ -4,7 +4,8 @@
 Run this script with sudo after installing the candidate. It snapshots Nick's
 root incident store before and after each declared fixture. Rows are written as
 measured only when a new persisted incident is observed or the operator records
-an observed prevention. Skipped and inconclusive rows remain pending.
+an observed prevention. Skipped and completed-without-evidence outcomes are
+recorded distinctly; neither is presented as a pass.
 """
 
 from __future__ import annotations
@@ -81,13 +82,13 @@ EXPECTED = {
     "T1562.001": ({"endpoint_tamper_observed", "nick_tamper"}, {"protected"}),
     "T1222.002": ({"permission_modification"}, {"review", "protected"}),
     "T1070.004": ({"protected_file_deletion", "file_integrity_deleted"}, {"review", "protected"}),
-    "T1027": ({"base64_payload", "encoded_payload"}, {"review", "protected"}),
+    "T1027": ({"base64_payload", "encoded_payload", "decoded_payload_interpreter"}, {"review", "protected"}),
     "T1486": ({"ransomware_behavior", "mass_file_rename", "encrypted_atomic_replace"}, {"protected"}),
     "T1082": ({"system_discovery"}, {"review"}),
     "T1057": ({"process_discovery"}, {"review"}),
     "T1071.001": ({"known_dangerous_destination"}, {"review", "protected"}),
 }
-ROOT_FIXTURES = {"launch-daemon-add", "nick-tamper"}
+ROOT_FIXTURES = {"launch-daemon-add"}
 
 
 def prepare_fixture_scratch(scratch: str, uid: int, gid: int) -> None:
@@ -160,7 +161,7 @@ def load_incident_fingerprints() -> dict[str, dict[str, Any]]:
 
 def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[str, str]]) -> None:
     rows = [
-        "## Installed ATT&CK replay — build 5065",
+        "## Installed ATT&CK replay — build 5067",
         "",
         f"Measured {datetime.now(timezone.utc).isoformat(timespec='seconds')}. Unmeasured rows remain pending; this table makes no rating claim.",
         "",
@@ -223,6 +224,10 @@ def main() -> int:
         if action == "q":
             break
         if action in {"n", "s"}:
+            results[technique["id"]] = {
+                "status": "SKIPPED",
+                "evidence": "operator skipped the declared fixture",
+            }
             continue
         fixture = (ROOT / "Scripts" / "fixtures" / f"{fixture_name}.sh").resolve()
         fixtures_root = (ROOT / "Scripts" / "fixtures").resolve()
@@ -230,6 +235,8 @@ def main() -> int:
             print("Fixture is missing; row remains pending.")
             continue
         started = time.time()
+        manual_completed = False
+        fixture_returncode = 0
         with tempfile.TemporaryDirectory(prefix="nick-scorecard-") as scratch:
             environment = os.environ.copy()
             environment["NICK_FIXTURE_ROOT"] = scratch
@@ -245,13 +252,22 @@ def main() -> int:
                 command, env=environment, check=False, text=True,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60
             )
+            fixture_returncode = completed.returncode
             print(completed.stdout.rstrip())
             if completed.returncode == 64:
-                print("Manual GUI approval required; row remains pending.")
-                continue
-            if completed.returncode != 0:
-                print(f"Fixture exited {completed.returncode}; row remains pending.")
-                continue
+                manual_action = input("Complete the printed manual steps, then press Enter; s to skip: ").strip().lower()
+                if manual_action == "s":
+                    results[technique["id"]] = {
+                        "status": "SKIPPED",
+                        "evidence": "operator skipped the manual fixture",
+                    }
+                    continue
+                manual_completed = True
+            elif completed.returncode != 0:
+                print(
+                    f"Fixture exited {completed.returncode}; checking the durable store "
+                    "because prevention may have stopped it."
+                )
             time.sleep(3)
         after = load_incident_fingerprints()
         new_ids = sorted(set(after) - set(before))
@@ -269,13 +285,22 @@ def main() -> int:
             rule = sorted(set(record["reasons"]).intersection(expected_reasons))[0]
             tier = sorted(set(record["tiers"]).intersection(expected_tiers))[0] if record["tiers"] else "not recorded"
             evidence = f"{identifier}; rule={rule}; tier={tier}; observed<= {latency:.2f}s"
-            results[technique["id"]] = {"status": "PASS", "evidence": evidence}
-            print(f"Measured: PASS ({rule}, {tier}, <= {latency:.2f}s)")
+            status = "PREVENTED" if fixture_returncode != 0 else "PASS"
+            results[technique["id"]] = {"status": status, "evidence": evidence}
+            print(f"Measured: {status} ({rule}, {tier}, <= {latency:.2f}s)")
             continue
         if new_ids:
             seen = sorted({reason for identifier in new_ids for reason in after[identifier]["reasons"]})
             print(f"New evidence did not match the expected rule ({', '.join(seen) or 'no rule recorded'}); row remains pending.")
-        print("No matching persisted evidence; row remains pending (not marked missed).")
+        status = "MANUAL DONE: NO EVIDENCE" if manual_completed else "RAN: NO EVIDENCE"
+        results[technique["id"]] = {
+            "status": status,
+            "evidence": (
+                f"fixture exited {fixture_returncode}; no matching persisted evidence"
+                if fixture_returncode != 0 else "no matching persisted evidence"
+            ),
+        }
+        print(f"No matching persisted evidence; recorded as {status}.")
 
     update_progress(techniques, results)
     print(f"\nWrote measured rows and pending placeholders to {PROGRESS_DOC}")

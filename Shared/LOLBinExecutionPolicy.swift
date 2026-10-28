@@ -45,19 +45,43 @@ enum LOLBinExecutionPolicy {
            ["exec(", "eval(", "system(", "popen(", "`"].contains(where: lowered.contains) {
             return Finding(title: "Encoded payload execution", reason: "base64_payload", severity: "high", matchedCommand: nil)
         }
+        if isStandaloneDecoder(name: name, arguments: arguments) {
+            return Finding(
+                title: "Decoded an encoded payload",
+                reason: "encoded_payload",
+                severity: "medium",
+                matchedCommand: redact(arguments.joined(separator: " "))
+            )
+        }
         if name == "launchctl",
            ["load", "bootstrap", "submit"].contains(where: arguments.map { $0.lowercased() }.contains),
            lowered.range(of: #"/(private/)?(tmp|var/folders)/"#, options: .regularExpression) != nil {
             return Finding(title: "Temporary-directory launch agent load", reason: "launchctl_tmp", severity: "critical", matchedCommand: nil)
         }
-        if name == "crontab", arguments.contains("-e") || arguments.contains("-r") || arguments == ["-"] {
-            return Finding(title: "crontab modification", reason: "crontab_modify", severity: "medium", matchedCommand: nil)
+        if name == "crontab" {
+            let operands = Array(arguments.drop(while: { URL(fileURLWithPath: $0).lastPathComponent.lowercased() == "crontab" }))
+            if operands.contains("-e") || operands.contains("-r") || operands == ["-"]
+                || operands.contains(where: { !$0.hasPrefix("-") }) {
+                return Finding(title: "Added a cron job", reason: "cron_modification", severity: "medium", matchedCommand: nil)
+            }
         }
         if ["sh", "bash", "zsh"].contains(name), lowered.contains("mktemp"),
            lowered.contains("&&") || lowered.contains(";") || lowered.contains("$(") {
             return Finding(title: "Shell creating and executing a temporary file", reason: "mktemp_execute", severity: "medium", matchedCommand: nil)
         }
         return nil
+    }
+
+    private static func isStandaloneDecoder(name: String, arguments: [String]) -> Bool {
+        let args = arguments.dropFirst().map { $0.lowercased() }
+        switch name {
+        case "base64": return args.contains("-d") || args.contains("--decode")
+        case "openssl":
+            return (args.contains("base64") || args.contains("enc"))
+                && (args.contains("-d") || args.contains("-decode"))
+        case "xxd": return args.contains("-r") || args.contains("-revert")
+        default: return false
+        }
     }
 
     /// A temporary-file execution is routine only when both the actor and its

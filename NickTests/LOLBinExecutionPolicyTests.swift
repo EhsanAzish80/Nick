@@ -110,4 +110,57 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
             "quarantine_removal"
         )
     }
+
+    func test_crontabPersistenceRecognizesRealArgvForms() throws {
+        for arguments in [["crontab", "-"], ["crontab", "-e"], ["crontab", "/tmp/jobs"]] {
+            let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
+                executablePath: "/usr/bin/crontab",
+                arguments: arguments
+            ))
+            XCTAssertEqual(finding.reason, "cron_modification")
+            XCTAssertEqual(finding.title, "Added a cron job")
+        }
+    }
+
+    func test_standaloneDecoderIsReviewEvidence() throws {
+        for invocation in [
+            ("/usr/bin/base64", ["base64", "-D", "/tmp/payload"]),
+            ("/usr/bin/openssl", ["openssl", "enc", "-d", "-in", "/tmp/payload"]),
+            ("/usr/bin/xxd", ["xxd", "-r", "/tmp/payload"]),
+        ] {
+            let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
+                executablePath: invocation.0,
+                arguments: invocation.1
+            ))
+            XCTAssertEqual(finding.reason, "encoded_payload")
+            XCTAssertEqual(finding.severity, "medium")
+        }
+    }
+
+    func test_quarantinedUntrustedExecutionIsReviewEvidenceWithContextualSeverity() {
+        XCTAssertEqual(ExecutionTrustPolicy.quarantinedExecutionSeverity(
+            hasTrustedSigner: false,
+            hasQuarantineOrigin: true,
+            parentIsInterpreter: false,
+            parentHasNetworkSocket: false
+        ), "medium")
+        XCTAssertEqual(ExecutionTrustPolicy.quarantinedExecutionSeverity(
+            hasTrustedSigner: false,
+            hasQuarantineOrigin: true,
+            parentIsInterpreter: true,
+            parentHasNetworkSocket: false
+        ), "high")
+        XCTAssertNil(ExecutionTrustPolicy.quarantinedExecutionSeverity(
+            hasTrustedSigner: true,
+            hasQuarantineOrigin: true,
+            parentIsInterpreter: true,
+            parentHasNetworkSocket: true
+        ))
+        XCTAssertNil(ExecutionTrustPolicy.quarantinedExecutionSeverity(
+            hasTrustedSigner: false,
+            hasQuarantineOrigin: false,
+            parentIsInterpreter: true,
+            parentHasNetworkSocket: true
+        ))
+    }
 }
