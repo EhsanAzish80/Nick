@@ -15,7 +15,9 @@ import hashlib
 import base64
 import json
 import os
+import plistlib
 import pwd
+import re
 import sqlite3
 import subprocess
 import sys
@@ -37,6 +39,13 @@ THREAT_JOURNALS = (
 )
 START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
+EXPECTED_BUILD = "5069"
+INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
+SYSTEM_EXTENSIONS = Path("/usr/bin/systemextensionsctl")
+EXPECTED_EXTENSIONS = (
+    "com.ehsanazish.nick.NickExtension",
+    "com.ehsanazish.nick.NickNetFilter",
+)
 
 INSTRUCTIONS = {
     "launch-agent-add": "Add the declared synthetic launch-agent fixture, then wait for Nick to persist it.",
@@ -249,9 +258,66 @@ def measured_status(prevention: dict[str, str] | None) -> str:
     return "PREVENTED" if prevention is not None else "PASS"
 
 
+def installed_app_build(info_plist: Path = INSTALLED_APP_INFO) -> str:
+    """Read the installed app build without trusting the checkout version."""
+    try:
+        with info_plist.open("rb") as stream:
+            value = plistlib.load(stream).get("CFBundleVersion")
+    except (OSError, plistlib.InvalidFileException) as error:
+        raise RuntimeError(f"could not read installed Nick build from {info_plist}: {error}") from error
+    if not isinstance(value, (str, int)) or not str(value).isdigit():
+        raise RuntimeError(f"installed Nick CFBundleVersion is missing or invalid in {info_plist}")
+    return str(value)
+
+
+def active_extension_builds(output: str) -> dict[str, str]:
+    """Extract only activated+enabled Nick system-extension builds."""
+    builds: dict[str, str] = {}
+    for line in output.splitlines():
+        if "[activated enabled]" not in line:
+            continue
+        for bundle_id in EXPECTED_EXTENSIONS:
+            if bundle_id not in line:
+                continue
+            match = re.search(r"\([^/()]+/(\d+)\)", line)
+            if match:
+                builds[bundle_id] = match.group(1)
+    return builds
+
+
+def installed_build_header(
+    info_plist: Path = INSTALLED_APP_INFO,
+    systemextensionsctl: Path = SYSTEM_EXTENSIONS,
+) -> tuple[str, dict[str, str]]:
+    """Read and validate the installed app and both active extension builds."""
+    app_build = installed_app_build(info_plist)
+    completed = subprocess.run(
+        [str(systemextensionsctl), "list"], check=False, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"systemextensionsctl list failed ({completed.returncode}): {completed.stdout.strip()}"
+        )
+    extension_builds = active_extension_builds(completed.stdout)
+    missing = [bundle_id for bundle_id in EXPECTED_EXTENSIONS if bundle_id not in extension_builds]
+    if missing:
+        raise RuntimeError("active Nick system extension not found: " + ", ".join(missing))
+
+    actual = {"Nick.app": app_build, **extension_builds}
+    mismatches = [f"{component}={build}" for component, build in actual.items()
+                  if build != EXPECTED_BUILD]
+    if mismatches:
+        raise RuntimeError(
+            f"recorder expects build {EXPECTED_BUILD}, but installed components differ: "
+            + ", ".join(mismatches)
+        )
+    return app_build, extension_builds
+
+
 def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[str, str]]) -> None:
     rows = [
-        "## Installed ATT&CK replay — build 5068",
+        f"## Installed ATT&CK replay — build {EXPECTED_BUILD}",
         "",
         f"Measured {datetime.now(timezone.utc).isoformat(timespec='seconds')}. Unmeasured rows remain pending; this table makes no rating claim.",
         "",
@@ -302,8 +368,17 @@ def main() -> int:
     if not INCIDENTS.is_file():
         raise SystemExit(f"Installed incident store not found: {INCIDENTS}")
 
+    try:
+        app_build, extension_builds = installed_build_header()
+    except RuntimeError as error:
+        raise SystemExit(f"Installed build check failed: {error}") from error
+
     results: dict[str, dict[str, str]] = {}
     total = len(techniques)
+    print(f"Expected recorder build: {EXPECTED_BUILD}")
+    print(f"Installed Nick.app build: {app_build}")
+    for bundle_id in EXPECTED_EXTENSIONS:
+        print(f"Active {bundle_id} build: {extension_builds[bundle_id]}")
     print(f"Nick installed {total}-technique replay. Use declared synthetic fixtures only.")
     for index, technique in enumerate(techniques, 1):
         print(f"\n[{index}/{total}] {technique['id']} — {technique['name']}")
