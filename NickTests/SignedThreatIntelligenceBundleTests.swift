@@ -131,6 +131,56 @@ final class SignedThreatIntelligenceBundleTests: XCTestCase {
         ))
     }
 
+    func test_legacyPayloadDecodesWithoutDomainIndicators() throws {
+        let payloadData = Data(#"{"schemaVersion":1,"version":1,"issuedAt":1793232000000,"expiresAt":1801008000000,"source":"fixture","hashes":[],"domains":[],"ipAddresses":[],"rules":[]}"#.utf8)
+        let payload = try SignedThreatIntelligenceBundle.canonicalDecoder.decode(
+            ThreatIntelligenceBundlePayload.self,
+            from: payloadData
+        )
+
+        XCTAssertTrue(payload.domainIndicators.isEmpty)
+    }
+
+    func test_canaryPrefixIsClassifiedOnlyFromSignedPayloadIdentifier() throws {
+        let privateKey = Curve25519.Signing.PrivateKey()
+        let payload = ThreatIntelligenceBundlePayload(
+            schemaVersion: 1,
+            version: 2,
+            issuedAt: Date(timeIntervalSince1970: 1_000),
+            expiresAt: Date(timeIntervalSince1970: 2_000),
+            source: "fixture",
+            hashes: [.init(
+                sha256: String(repeating: "a", count: 64),
+                name: "Nick test indicator",
+                family: "test",
+                severity: "info",
+                identifier: "NICK_CANARY_FILE"
+            )],
+            domains: [],
+            domainIndicators: [.init(
+                domain: "nick-canary.3nsofts.com",
+                identifier: "NICK_CANARY_WEB"
+            )],
+            ipAddresses: [],
+            rules: []
+        )
+        let bytes = try SignedThreatIntelligenceBundle.canonicalEncoder.encode(payload)
+        let bundle = SignedThreatIntelligenceBundle(
+            payloadData: bytes,
+            signature: try privateKey.signature(for: bytes)
+        )
+        let verified = try XCTUnwrap(bundle.verifiedPayload(
+            publicKey: privateKey.publicKey.rawRepresentation
+        ))
+
+        XCTAssertTrue(ThreatIntelligenceCanary.isTestIdentifier(verified.hashes.first?.identifier))
+        XCTAssertTrue(ThreatIntelligenceCanary.isTestIdentifier(
+            verified.domainIndicators.first?.identifier
+        ))
+        XCTAssertFalse(ThreatIntelligenceCanary.isTestIdentifier("nick_canary_web"))
+        XCTAssertFalse(ThreatIntelligenceCanary.isTestIdentifier(nil))
+    }
+
     func test_pythonPublisherBytesVerifyInSwiftAndTamperingIsRejected() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

@@ -39,7 +39,7 @@ THREAT_JOURNALS = (
 )
 START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
-EXPECTED_BUILD = "5072"
+EXPECTED_BUILD = "5076"
 INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
 SYSTEM_EXTENSIONS = Path("/usr/bin/systemextensionsctl")
 EXPECTED_EXTENSIONS = (
@@ -71,7 +71,7 @@ INSTRUCTIONS = {
     "write-then-swap": "Run the declared random-byte write-then-swap scratch fixture.",
     "system-discovery": "Run the declared system-discovery fixture.",
     "process-discovery": "Run the declared process-discovery fixture.",
-    "known-dangerous-destination": "Use the local/synthetic network reputation fixture; do not contact a live malicious host.",
+    "known-dangerous-destination": "Connect only to Nick's harmless signed web canary; no live malicious host is contacted.",
 }
 
 # Expected persisted evidence. Alternatives are deliberate where macOS may
@@ -105,7 +105,10 @@ EXPECTED = {
     "T1486": ({"ransomware_behavior", "mass_file_rename", "encrypted_atomic_replace"}, {"protected"}),
     "T1082": ({"system_discovery"}, {"review"}),
     "T1057": ({"process_discovery"}, {"review"}),
-    "T1071.001": ({"known_dangerous_destination"}, {"review", "protected"}),
+    # This harmless HTTPS endpoint is classified only by NICK_CANARY_WEB from
+    # a verified signed payload. Its inform tier proves reputation delivery
+    # without inflating threat totals or contacting a malicious host.
+    "T1071.001": ({"NICK_CANARY_WEB", "nick_test_indicator"}, {"inform"}),
 }
 ROOT_FIXTURES = {"launch-daemon-add"}
 INTERACTIVE_FIXTURES = {"tcc-modification"}

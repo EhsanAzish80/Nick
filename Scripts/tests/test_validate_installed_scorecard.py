@@ -48,6 +48,17 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
 
 
 class FixtureInvocationTests(unittest.TestCase):
+    def test_web_protocol_row_uses_only_the_signed_harmless_canary(self):
+        reasons, tiers = MODULE.EXPECTED["T1071.001"]
+        self.assertIn("NICK_CANARY_WEB", reasons)
+        self.assertEqual(tiers, {"inform"})
+
+        fixture = (
+            ROOT / "Scripts" / "fixtures" / "known-dangerous-destination.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("canary-web.sh", fixture)
+        self.assertNotIn("evil", fixture.lower())
+
     def test_sudo_uid_fixture_receives_owned_scratch_and_explicit_root(self):
         fixture = ROOT / "Scripts" / "fixtures" / "permission-modification.sh"
         with tempfile.TemporaryDirectory(prefix="nick-scorecard-test-") as scratch:
@@ -74,37 +85,37 @@ class FixtureInvocationTests(unittest.TestCase):
 
 
 class InstalledBuildTests(unittest.TestCase):
-    EXTENSION_OUTPUT = """
+    EXTENSION_OUTPUT = f"""
 --- com.apple.system_extension.network_extension
-* * UXGW5V3BY6 com.ehsanazish.nick.NickNetFilter (5.1.0/5072) NickNetFilter [activated enabled]
+* * UXGW5V3BY6 com.ehsanazish.nick.NickNetFilter (5.1.0/{MODULE.EXPECTED_BUILD}) NickNetFilter [activated enabled]
 --- com.apple.system_extension.endpoint_security
-* * UXGW5V3BY6 com.ehsanazish.nick.NickExtension (5.1.0/5072) NickExtension [activated enabled]
+* * UXGW5V3BY6 com.ehsanazish.nick.NickExtension (5.1.0/{MODULE.EXPECTED_BUILD}) NickExtension [activated enabled]
 """
 
     def test_active_extension_builds_reads_both_active_components(self):
         self.assertEqual(MODULE.active_extension_builds(self.EXTENSION_OUTPUT), {
-            "com.ehsanazish.nick.NickExtension": "5072",
-            "com.ehsanazish.nick.NickNetFilter": "5072",
+            "com.ehsanazish.nick.NickExtension": MODULE.EXPECTED_BUILD,
+            "com.ehsanazish.nick.NickNetFilter": MODULE.EXPECTED_BUILD,
         })
 
     def test_installed_build_header_accepts_exact_expected_build(self):
         with tempfile.TemporaryDirectory(prefix="nick-build-header-") as directory:
             info = Path(directory) / "Info.plist"
             with info.open("wb") as stream:
-                plistlib.dump({"CFBundleVersion": "5072"}, stream)
+                plistlib.dump({"CFBundleVersion": MODULE.EXPECTED_BUILD}, stream)
             completed = subprocess.CompletedProcess([], 0, self.EXTENSION_OUTPUT, "")
             with mock.patch.object(MODULE.subprocess, "run", return_value=completed):
                 app, extensions = MODULE.installed_build_header(info, Path("/usr/bin/systemextensionsctl"))
-        self.assertEqual(app, "5072")
+        self.assertEqual(app, MODULE.EXPECTED_BUILD)
         self.assertEqual(set(extensions), set(MODULE.EXPECTED_EXTENSIONS))
 
     def test_installed_build_header_refuses_any_component_mismatch(self):
-        output = self.EXTENSION_OUTPUT.replace("NickNetFilter (5.1.0/5072)",
+        output = self.EXTENSION_OUTPUT.replace(f"NickNetFilter (5.1.0/{MODULE.EXPECTED_BUILD})",
                                                "NickNetFilter (5.1.0/5068)")
         with tempfile.TemporaryDirectory(prefix="nick-build-header-") as directory:
             info = Path(directory) / "Info.plist"
             with info.open("wb") as stream:
-                plistlib.dump({"CFBundleVersion": "5072"}, stream)
+                plistlib.dump({"CFBundleVersion": MODULE.EXPECTED_BUILD}, stream)
             completed = subprocess.CompletedProcess([], 0, output, "")
             with mock.patch.object(MODULE.subprocess, "run", return_value=completed), \
                  self.assertRaisesRegex(RuntimeError, "NickNetFilter=5068"):

@@ -36,6 +36,9 @@ final class FileScanner {
         let mayBlock: Bool
         let threatName: String?
         let threatFamily: String?
+        /// True only when a verified bundle entry carried NICK_CANARY_*.
+        let isTestIndicator: Bool
+        let indicatorIdentifier: String?
     }
 
     // MARK: - Configuration
@@ -106,7 +109,9 @@ final class FileScanner {
                 isThreat: entry.isThreat,
                 mayBlock: entry.mayBlock,
                 threatName: entry.threatName,
-                threatFamily: entry.threatFamily
+                threatFamily: entry.threatFamily,
+                isTestIndicator: entry.isTestIndicator,
+                indicatorIdentifier: entry.indicatorIdentifier
             )
         }
 
@@ -120,7 +125,8 @@ final class FileScanner {
                 ?? computeSHA256Streaming(path: filePath) else {
             Self.logger.debug("Cannot hash \(filePath, privacy: .private) — skipping scan")
             return ScanResult(filePath: filePath, identity: identity, hash: "", isThreat: false,
-                              mayBlock: false, threatName: nil, threatFamily: nil)
+                              mayBlock: false, threatName: nil, threatFamily: nil,
+                              isTestIndicator: false, indicatorIdentifier: nil)
         }
 
         // 3. Signature DB lookup (hash-based — catches known exact samples)
@@ -165,6 +171,7 @@ final class FileScanner {
                 "YARA:\(match.ruleName)" + (match.metadata["author"].map { " (by \($0))" } ?? "")
             }
         let threatFamily = hashMatch?.family ?? actionableYARAMatches.first?.tags.first
+        let isTestIndicator = hashMatch?.isTestIndicator == true
 
         if let hashMatch {
             Self.logger.notice("Hash threat: \(filePath, privacy: .private) → \(hashMatch.name) [\(hashMatch.family)]")
@@ -182,7 +189,9 @@ final class FileScanner {
             isThreat: isThreat,
             mayBlock: mayBlock,
             threatName: threatName,
-            threatFamily: threatFamily
+            threatFamily: threatFamily,
+            isTestIndicator: isTestIndicator,
+            indicatorIdentifier: hashMatch?.indicatorIdentifier
         )
 
         return ScanResult(
@@ -192,7 +201,9 @@ final class FileScanner {
             isThreat: isThreat,
             mayBlock: mayBlock,
             threatName: threatName,
-            threatFamily: threatFamily
+            threatFamily: threatFamily,
+            isTestIndicator: isTestIndicator,
+            indicatorIdentifier: hashMatch?.indicatorIdentifier
         )
     }
 
@@ -218,7 +229,9 @@ final class FileScanner {
             isThreat: true,
             mayBlock: true,
             threatName: match.name,
-            threatFamily: match.family
+            threatFamily: match.family,
+            isTestIndicator: match.isTestIndicator,
+            indicatorIdentifier: match.indicatorIdentifier
         )
         return match
     }
@@ -244,7 +257,9 @@ final class FileScanner {
                 isThreat: true,
                 mayBlock: cached.mayBlock,
                 threatName: cached.threatName,
-                threatFamily: cached.threatFamily
+                threatFamily: cached.threatFamily,
+                isTestIndicator: cached.isTestIndicator,
+                indicatorIdentifier: cached.indicatorIdentifier
             )
         }
 
@@ -257,7 +272,9 @@ final class FileScanner {
             isThreat: match != nil,
             mayBlock: match != nil,
             threatName: match?.name,
-            threatFamily: match?.family
+            threatFamily: match?.family,
+            isTestIndicator: match?.isTestIndicator == true,
+            indicatorIdentifier: match?.indicatorIdentifier
         )
         guard let match else { return nil }
         cache.store(
@@ -267,7 +284,9 @@ final class FileScanner {
             isThreat: true,
             mayBlock: true,
             threatName: match.name,
-            threatFamily: match.family
+            threatFamily: match.family,
+            isTestIndicator: match.isTestIndicator,
+            indicatorIdentifier: match.indicatorIdentifier
         )
         return ScanResult(
             filePath: path,
@@ -276,7 +295,9 @@ final class FileScanner {
             isThreat: true,
             mayBlock: true,
             threatName: match.name,
-            threatFamily: match.family
+            threatFamily: match.family,
+            isTestIndicator: match.isTestIndicator,
+            indicatorIdentifier: match.indicatorIdentifier
         )
     }
 
@@ -293,7 +314,17 @@ final class FileScanner {
     }
 
     func allowsEnforcement(of entry: ScanCache.Entry?) -> Bool {
-        (entry?.mayBlock ?? false) && strictBlockingPolicy.allowsAnyBlocking
+        guard let entry, entry.mayBlock, strictBlockingPolicy.allowsAnyBlocking else {
+            return false
+        }
+        return !entry.isTestIndicator
+            || strictBlockingPolicy.currentConfiguration.strictModeEnabled
+    }
+
+    func allowsAutomaticRemediation(of result: ScanResult) -> Bool {
+        guard result.mayBlock, strictBlockingPolicy.allowsAnyBlocking else { return false }
+        return !result.isTestIndicator
+            || strictBlockingPolicy.currentConfiguration.strictModeEnabled
     }
 
     var allowsAnyBlocking: Bool { strictBlockingPolicy.allowsAnyBlocking }

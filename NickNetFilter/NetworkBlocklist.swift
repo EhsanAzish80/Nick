@@ -19,6 +19,14 @@ import os
 /// any subdomain — e.g. blocking `evil.com` also blocks `cdn.evil.com`.
 final class NetworkBlocklist: @unchecked Sendable {
 
+    struct Match: Equatable, Sendable {
+        let identifier: String?
+
+        var isTestIndicator: Bool {
+            ThreatIntelligenceCanary.isTestIdentifier(identifier)
+        }
+    }
+
     struct Provenance: Sendable {
         let version: Int
         let issuedAt: Date
@@ -36,6 +44,8 @@ final class NetworkBlocklist: @unchecked Sendable {
 
     private var blockedDomains: Set<String> = []
     private var blockedIPs:     Set<String> = []
+    /// Identifier metadata exists only for entries read from a verified bundle.
+    private var signedDomainIdentifiers: [String: String] = [:]
     private var loadedProvenance: Provenance?
     private var lastReloadCheck = Date.distantPast
     private var loadedBundleModificationDate: Date?
@@ -51,19 +61,27 @@ final class NetworkBlocklist: @unchecked Sendable {
 
     /// Returns `true` if `host` is (or is a subdomain of) a blocked entry.
     func isBlocked(host: String) -> Bool {
+        match(host: host) != nil
+    }
+
+    /// Returns signed indicator metadata without trusting the requested host
+    /// or any event metadata to classify an entry as a canary.
+    func match(host: String) -> Match? {
         reloadIfBundleChanged()
         let lower = host.lowercased()
 
         return lock.withLock {
-            if blockedIPs.contains(lower) { return true }
+            if blockedIPs.contains(lower) { return Match(identifier: nil) }
             // Domain check: walk up the label hierarchy
             var labels = lower.components(separatedBy: ".")
             while labels.count >= 2 {
                 let candidate = labels.joined(separator: ".")
-                if blockedDomains.contains(candidate) { return true }
+                if blockedDomains.contains(candidate) {
+                    return Match(identifier: signedDomainIdentifiers[candidate])
+                }
                 labels.removeFirst()
             }
-            return false
+            return nil
         }
     }
 
@@ -73,6 +91,7 @@ final class NetworkBlocklist: @unchecked Sendable {
         lock.withLock {
             blockedDomains = []
             blockedIPs = []
+            signedDomainIdentifiers = [:]
             loadedProvenance = nil
         }
         loadSignedRules()
@@ -108,9 +127,20 @@ final class NetworkBlocklist: @unchecked Sendable {
         )
         if let (payload, provenance) = bundleStore.loadBestAvailable() {
             lock.withLock {
-                blockedDomains = Set(payload.domains.compactMap(
+                let legacyDomains = payload.domains.compactMap(
                     NetworkProtectionConfiguration.normalizedDomain
-                ))
+                )
+                let indicatorDomains = payload.domainIndicators.compactMap {
+                    NetworkProtectionConfiguration.normalizedDomain($0.domain)
+                }
+                blockedDomains = Set(legacyDomains).union(indicatorDomains)
+                signedDomainIdentifiers = Dictionary(
+                    uniqueKeysWithValues: payload.domainIndicators.compactMap { entry in
+                        NetworkProtectionConfiguration.normalizedDomain(entry.domain).map {
+                            ($0, entry.identifier)
+                        }
+                    }
+                )
                 blockedIPs = Set(payload.ipAddresses.map { $0.lowercased() })
                 loadedProvenance = Provenance(
                     version: provenance.version,

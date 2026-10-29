@@ -71,6 +71,26 @@ struct ThreatIntelligenceBundlePayload: Codable, Equatable, Sendable {
         let name: String
         let family: String
         let severity: String
+        let identifier: String?
+
+        init(
+            sha256: String,
+            name: String,
+            family: String,
+            severity: String,
+            identifier: String? = nil
+        ) {
+            self.sha256 = sha256
+            self.name = name
+            self.family = family
+            self.severity = severity
+            self.identifier = identifier
+        }
+    }
+
+    struct DomainIndicator: Codable, Equatable, Hashable, Sendable {
+        let domain: String
+        let identifier: String
     }
 
     struct Rule: Codable, Equatable, Hashable, Sendable {
@@ -87,8 +107,80 @@ struct ThreatIntelligenceBundlePayload: Codable, Equatable, Sendable {
     let source: String
     let hashes: [HashEntry]
     let domains: [String]
+    let domainIndicators: [DomainIndicator]
     let ipAddresses: [String]
     let rules: [Rule]
+
+    init(
+        schemaVersion: Int,
+        version: Int,
+        issuedAt: Date,
+        expiresAt: Date,
+        source: String,
+        hashes: [HashEntry],
+        domains: [String],
+        domainIndicators: [DomainIndicator] = [],
+        ipAddresses: [String],
+        rules: [Rule]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.version = version
+        self.issuedAt = issuedAt
+        self.expiresAt = expiresAt
+        self.source = source
+        self.hashes = hashes
+        self.domains = domains
+        self.domainIndicators = domainIndicators
+        self.ipAddresses = ipAddresses
+        self.rules = rules
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, version, issuedAt, expiresAt, source, hashes, domains
+        case domainIndicators, ipAddresses, rules
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        version = try values.decode(Int.self, forKey: .version)
+        issuedAt = try values.decode(Date.self, forKey: .issuedAt)
+        expiresAt = try values.decode(Date.self, forKey: .expiresAt)
+        source = try values.decode(String.self, forKey: .source)
+        hashes = try values.decode([HashEntry].self, forKey: .hashes)
+        domains = try values.decode([String].self, forKey: .domains)
+        domainIndicators = try values.decodeIfPresent(
+            [DomainIndicator].self,
+            forKey: .domainIndicators
+        ) ?? []
+        ipAddresses = try values.decode([String].self, forKey: .ipAddresses)
+        rules = try values.decode([Rule].self, forKey: .rules)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(schemaVersion, forKey: .schemaVersion)
+        try values.encode(version, forKey: .version)
+        try values.encode(issuedAt, forKey: .issuedAt)
+        try values.encode(expiresAt, forKey: .expiresAt)
+        try values.encode(source, forKey: .source)
+        try values.encode(hashes, forKey: .hashes)
+        try values.encode(domains, forKey: .domains)
+        if !domainIndicators.isEmpty {
+            try values.encode(domainIndicators, forKey: .domainIndicators)
+        }
+        try values.encode(ipAddresses, forKey: .ipAddresses)
+        try values.encode(rules, forKey: .rules)
+    }
+}
+
+enum ThreatIntelligenceCanary {
+    static let identifierPrefix = "NICK_CANARY_"
+
+    /// Call this only with identifiers carried by a verified signed payload.
+    static func isTestIdentifier(_ identifier: String?) -> Bool {
+        identifier?.hasPrefix(identifierPrefix) == true
+    }
 }
 
 struct SignedThreatIntelligenceBundle: Codable, Equatable, Sendable {
@@ -236,8 +328,17 @@ struct ThreatIntelligenceBundleValidator: Sendable {
         else { return false }
 
         let domains = payload.domains.map { $0.lowercased() }
+            + payload.domainIndicators.map { $0.domain.lowercased() }
         guard Set(domains).count == domains.count,
               domains.allSatisfy({ !$0.isEmpty && !$0.contains("/") && !$0.contains(" ") })
+        else { return false }
+
+        let indicatorIDs = payload.hashes.compactMap(\.identifier)
+            + payload.domainIndicators.map(\.identifier)
+        guard Set(indicatorIDs).count == indicatorIDs.count,
+              indicatorIDs.allSatisfy({
+                  !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              })
         else { return false }
 
         let ruleIDs = payload.rules.map(\.identifier)

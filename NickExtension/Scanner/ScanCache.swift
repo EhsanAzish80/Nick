@@ -32,6 +32,9 @@ final class ScanCache {
         let mayBlock: Bool
         let threatName: String?
         let threatFamily: String?
+        /// Set only from an identifier carried by a verified signed bundle.
+        let isTestIndicator: Bool
+        let indicatorIdentifier: String?
         let expiry: Date
     }
 
@@ -162,6 +165,8 @@ final class ScanCache {
                 mayBlock: true,
                 threatName: entry.threatName,
                 threatFamily: entry.threatFamily,
+                isTestIndicator: entry.isTestIndicator,
+                indicatorIdentifier: entry.indicatorIdentifier,
                 expiry: entry.expiry
             )
             oneTimeAllowances.removeValue(forKey: path)
@@ -178,6 +183,8 @@ final class ScanCache {
         mayBlock: Bool = false,
         threatName: String? = nil,
         threatFamily: String? = nil,
+        isTestIndicator: Bool = false,
+        indicatorIdentifier: String? = nil,
         ttl: TimeInterval = defaultTTL
     ) {
         var entry = Entry(
@@ -187,6 +194,8 @@ final class ScanCache {
             mayBlock: mayBlock,
             threatName: threatName,
             threatFamily: threatFamily,
+            isTestIndicator: isTestIndicator,
+            indicatorIdentifier: indicatorIdentifier,
             expiry: Date().addingTimeInterval(ttl)
         )
 
