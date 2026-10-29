@@ -48,6 +48,17 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
 
 
 class FixtureInvocationTests(unittest.TestCase):
+    def test_web_protocol_row_uses_only_the_signed_harmless_canary(self):
+        reasons, tiers = MODULE.EXPECTED["T1071.001"]
+        self.assertIn("NICK_CANARY_WEB", reasons)
+        self.assertEqual(tiers, {"inform"})
+
+        fixture = (
+            ROOT / "Scripts" / "fixtures" / "known-dangerous-destination.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("canary-web.sh", fixture)
+        self.assertNotIn("evil", fixture.lower())
+
     def test_sudo_uid_fixture_receives_owned_scratch_and_explicit_root(self):
         fixture = ROOT / "Scripts" / "fixtures" / "permission-modification.sh"
         with tempfile.TemporaryDirectory(prefix="nick-scorecard-test-") as scratch:
