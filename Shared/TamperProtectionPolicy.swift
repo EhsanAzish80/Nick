@@ -44,6 +44,12 @@ struct ProtectionContinuityIncident: Equatable, Sendable {
     let appObservations: [AppObservedProtectionGap]
 }
 
+struct ProtectionCompletedUpdate: Codable, Equatable, Sendable {
+    let extensionBuild: String
+    let bootSessionUUID: String
+    let completedAt: Date
+}
+
 enum ProtectionContinuityPolicy {
     struct Decision: Equatable, Sendable {
         let kind: ProtectionContinuityIncident.Kind
@@ -56,11 +62,24 @@ enum ProtectionContinuityPolicy {
         bootTime: Date,
         currentExtensionBuild: String? = nil,
         previousObservedExtensionBuild: String? = nil,
+        recentUpdate: ProtectionCompletedUpdate? = nil,
+        now: Date = Date(),
         extensionRestarted: Bool = true
     ) -> Decision? {
         // Sleep and wake do not restart the extension. Treating a long wall-clock
         // interval alone as a gap would turn every normal sleep into an alert.
         guard extensionRestarted else { return nil }
+        // A system-extension replacement can start the destination provider
+        // more than once while sysextd completes the handoff. Once a build
+        // transition has been recorded, a short same-build restart is part of
+        // that sanctioned replacement rather than a second protection gap.
+        if let recentUpdate,
+           recentUpdate.bootSessionUUID == currentBootSessionUUID,
+           recentUpdate.extensionBuild == currentExtensionBuild,
+           now.timeIntervalSince(recentUpdate.completedAt) >= 0,
+           now.timeIntervalSince(recentUpdate.completedAt) <= 300 {
+            return nil
+        }
         if previous.bootSessionUUID == currentBootSessionUUID,
            let previousBuild = previous.extensionBuild ?? previousObservedExtensionBuild,
            let currentExtensionBuild,

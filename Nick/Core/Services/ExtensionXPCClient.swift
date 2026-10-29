@@ -259,6 +259,7 @@ public final class ExtensionXPCClient: NSObject {
     private var healthRefreshTask: Task<Void, Never>?
     private var lastHealthyExtensionTime: Date?
     private var lastProtectionGapObservationAt: Date?
+    private let healthMonitoringStartedAt = Date()
     private var threatBundleRefreshTask: Task<Void, Never>?
     public private(set) var threatBundleLastCheck: Date?
     public private(set) var threatBundleLastResult = "Never checked"
@@ -661,6 +662,12 @@ public final class ExtensionXPCClient: NSObject {
 
     private func recordAppObservedProtectionGap(reason: String) {
         let now = Date()
+        // A newly launched app races the system extension's normal startup or
+        // version replacement. Keep status red while it is unavailable, but
+        // do not persist or notify about a gap until the extension has either
+        // been healthy in this app session or the startup grace has elapsed.
+        if lastHealthyExtensionTime == nil,
+           now.timeIntervalSince(healthMonitoringStartedAt) < 20 { return }
         if let lastProtectionGapObservationAt,
            now.timeIntervalSince(lastProtectionGapObservationAt) < 300 { return }
         lastProtectionGapObservationAt = now
@@ -1708,6 +1715,7 @@ struct ExtensionFinding: Sendable {
         let isNickMaintenance = event.threatFamily == "nick-maintenance"
         let isDocumentedUninstall = event.threatFamily == "nick-documented-uninstall"
         let isManagementObservation = event.threatFamily == "endpoint-management"
+        let isProtectionContinuity = event.threatFamily == "protection-continuity"
         let isAppleReviewEvent = event.metadata?["ruleTier"] == "review"
         let isRansomwareBehavior = event.metadata?["detectionKind"] == "ransomware-behavior"
         let isLOLBinBehavior = event.metadata?["detectionKind"] == "lolbin-behavior"
@@ -1766,7 +1774,7 @@ struct ExtensionFinding: Sendable {
             signingStatus: signingStatus
         )
         let isAuditEvent = isManagementObservation || isNickMaintenance || isDocumentedUninstall
-        let ruleClass = isTamper ? "integrity" : (isAuditEvent ? "audit" : ((isRansomwareBehavior || isLOLBinBehavior) ? "behavior" : "signature"))
+        let ruleClass = (isTamper || isProtectionContinuity) ? "integrity" : (isAuditEvent ? "audit" : ((isRansomwareBehavior || isLOLBinBehavior) ? "behavior" : "signature"))
         let ruleTier = event.metadata?["ruleTier"] ?? (isAuditEvent ? "review" : "protected")
         let stableRuleID = event.metadata?["rule"]
             ?? event.metadata?["reason"]
@@ -1777,7 +1785,7 @@ struct ExtensionFinding: Sendable {
         var metadata = [
             "reason": isTamper
                 ? (event.metadata?["reason"] ?? "endpoint_tamper_observed")
-                : (isDocumentedUninstall ? "nick_documented_uninstall" : (isNickMaintenance ? "nick_protected_path_maintenance" : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat"))),
+                : (isProtectionContinuity ? "protection_continuity" : (isDocumentedUninstall ? "nick_documented_uninstall" : (isNickMaintenance ? "nick_protected_path_maintenance" : (isManagementObservation ? "endpoint_management_observed" : "endpoint_threat")))),
             "rule": event.metadata?["reason"] ?? (isDocumentedUninstall
                 ? "nick_documented_uninstall"
                 : (isNickMaintenance
@@ -1815,7 +1823,9 @@ struct ExtensionFinding: Sendable {
             source: .endpointSecurity,
             severity: severity,
             timestamp: event.timestamp,
-            title: event.threatName ?? "Endpoint Security blocked a file",
+            title: isProtectionContinuity
+                ? Self.continuityTitle(for: event)
+                : (event.threatName ?? "Endpoint Security blocked a file"),
             description: Self.description(
                 for: event,
                 isTamper: isTamper,
@@ -1830,7 +1840,7 @@ struct ExtensionFinding: Sendable {
                 // suspicious content at its executable path. Treating the
                 // platform-binary path as file evidence would incorrectly
                 // promote an explicitly allow-listed review rule to protected.
-                fileInfo: (isAuditEvent || isLOLBinBehavior || isRansomwareBehavior) ? nil : FileInfo(
+                fileInfo: (isAuditEvent || isProtectionContinuity || isLOLBinBehavior || isRansomwareBehavior) ? nil : FileInfo(
                     path: filePath,
                     sha256Hash: event.sha256,
                     entropy: nil,
@@ -1841,9 +1851,21 @@ struct ExtensionFinding: Sendable {
             )
         )
         score = event.decision == .deny ? 0.98 : ((isAuditEvent || isAppleReviewEvent) ? 0.35 : 0.9)
-        recommendedAction = (isAuditEvent || isAppleReviewEvent)
+        recommendedAction = isProtectionContinuity
+            ? "Protection has reconnected. Review the recorded interval if you did not expect the interruption."
+            : (isAuditEvent || isAppleReviewEvent)
             ? "No action is needed if you ran this command."
             : "Review the event and investigate it if you do not recognise the activity."
+    }
+
+    private static func continuityTitle(for event: ESEvent) -> String {
+        switch event.threatName {
+        case "Nick app observed protection unavailable": "Protection was temporarily unavailable"
+        case "Protection interrupted": "Protection interrupted"
+        case "Protection updated": "Protection updated"
+        case "Protection resumed after restart": "Protection resumed after restart"
+        default: event.threatName ?? "Protection status changed"
+        }
     }
 
     private static func description(
@@ -1854,6 +1876,20 @@ struct ExtensionFinding: Sendable {
         isDocumentedUninstall: Bool,
         isLOLBinBehavior: Bool
     ) -> String {
+        if event.threatFamily == "protection-continuity" {
+            switch event.threatName {
+            case "Nick app observed protection unavailable":
+                return "Nick could not reach its Endpoint Security extension during the recorded interval."
+            case "Protection interrupted":
+                return "Nick's Endpoint Security extension stopped unexpectedly and restarted. Events during the recorded interval may not have been observed."
+            case "Protection updated":
+                return "Nick replaced its Endpoint Security extension with a newer build."
+            case "Protection resumed after restart":
+                return "Nick's protection resumed after the Mac restarted."
+            default:
+                return "Nick recorded a change in Endpoint Security protection availability."
+            }
+        }
         switch event.metadata?["appleEvent"] {
         case "xprotect-malware-detected":
             return "Apple XProtect detected known malware at the recorded path."

@@ -320,6 +320,63 @@ final class TamperProtectionPolicyTests: XCTestCase {
         XCTAssertEqual(decision?.kind, .updated)
     }
 
+    func test_continuityPolicySuppressesImmediateSameBuildRestartAfterUpdate() {
+        let now = Date(timeIntervalSince1970: 20_000)
+        let decision = ProtectionContinuityPolicy.evaluate(
+            previous: .init(
+                sequence: 13, wallTime: now.addingTimeInterval(-5),
+                bootSessionUUID: "A", extensionBuild: "5074"
+            ),
+            currentBootSessionUUID: "A",
+            bootTime: now.addingTimeInterval(-3_600),
+            currentExtensionBuild: "5074",
+            recentUpdate: .init(
+                extensionBuild: "5074", bootSessionUUID: "A",
+                completedAt: now.addingTimeInterval(-10)
+            ),
+            now: now
+        )
+        XCTAssertNil(decision)
+    }
+
+    func test_continuityPolicyReportsSameBuildRestartAfterUpdateGrace() {
+        let now = Date(timeIntervalSince1970: 20_000)
+        let decision = ProtectionContinuityPolicy.evaluate(
+            previous: .init(
+                sequence: 14, wallTime: now.addingTimeInterval(-5),
+                bootSessionUUID: "A", extensionBuild: "5074"
+            ),
+            currentBootSessionUUID: "A",
+            bootTime: now.addingTimeInterval(-3_600),
+            currentExtensionBuild: "5074",
+            recentUpdate: .init(
+                extensionBuild: "5074", bootSessionUUID: "A",
+                completedAt: now.addingTimeInterval(-301)
+            ),
+            now: now
+        )
+        XCTAssertEqual(decision?.kind, .interrupted)
+    }
+
+    func test_continuityPolicyDoesNotSuppressDifferentBuildAfterUpdate() {
+        let now = Date(timeIntervalSince1970: 20_000)
+        let decision = ProtectionContinuityPolicy.evaluate(
+            previous: .init(
+                sequence: 15, wallTime: now.addingTimeInterval(-5),
+                bootSessionUUID: "A", extensionBuild: "5074"
+            ),
+            currentBootSessionUUID: "A",
+            bootTime: now.addingTimeInterval(-3_600),
+            currentExtensionBuild: "5075",
+            recentUpdate: .init(
+                extensionBuild: "5074", bootSessionUUID: "A",
+                completedAt: now.addingTimeInterval(-10)
+            ),
+            now: now
+        )
+        XCTAssertEqual(decision?.kind, .updated)
+    }
+
     func test_legacyHeartbeatUsesPreviousHealthBuildForUpdate() {
         let now = Date(timeIntervalSince1970: 20_000)
         let decision = ProtectionContinuityPolicy.evaluate(
