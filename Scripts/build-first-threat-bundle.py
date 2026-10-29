@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -121,6 +122,25 @@ def atomic_write(path: Path, data: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+@contextmanager
+def generated_temporary_file(directory: Path, prefix: str, data: bytes = b""):
+    """Create a private staging file whose path cannot come from CLI input."""
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=prefix,
+        dir=directory,
+        delete=False,
+    ) as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+        path = Path(stream.name).resolve(strict=True)
+    try:
+        yield path
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--private-key", required=True, type=Path)
@@ -164,32 +184,34 @@ def main() -> int:
     message = canonical_json(payload)
 
     with tempfile.TemporaryDirectory(prefix="nick-bundle-") as directory:
-        temporary = Path(directory)
-        message_path = temporary / "payload.json"
-        signature_path = temporary / "signature.bin"
-        public_path = temporary / "production-public.pem"
-        message_path.write_bytes(message)
+        staging_directory = Path(directory).resolve(strict=True)
         if args.verification_public_key:
-            public_key = args.verification_public_key.expanduser().resolve(strict=True)
-            public_path.write_bytes(public_key.read_bytes())
+            verification_key = args.verification_public_key.expanduser().resolve(strict=True)
+            verification_key_data = verification_key.read_bytes()
         else:
-            public_path.write_bytes(production_public_key_pem())
-        subprocess.run([
-            str(openssl), "pkeyutl", "-sign", "-rawin",
-            "-inkey", str(private_key), "-in", str(message_path),
-            "-out", str(signature_path)
-        ], check=True)
-        subprocess.run([
-            str(openssl), "pkeyutl", "-verify", "-rawin", "-pubin",
-            "-inkey", str(public_path), "-in", str(message_path),
-            "-sigfile", str(signature_path)
-        ], check=True)
-        bundle = {
-            "payloadData": base64.b64encode(message).decode(),
-            "signature": base64.b64encode(signature_path.read_bytes()).decode(),
-        }
-        atomic_write(output, canonical_json(bundle) + b"\n")
-        print(f"Built and key-verified bundle: {output}")
+            verification_key_data = production_public_key_pem()
+
+        with generated_temporary_file(staging_directory, "payload-", message) as message_path, \
+                generated_temporary_file(staging_directory, "signature-") as signature_path, \
+                generated_temporary_file(
+                    staging_directory, "public-key-", verification_key_data
+                ) as public_path:
+            subprocess.run([
+                str(openssl), "pkeyutl", "-sign", "-rawin",
+                "-inkey", str(private_key), "-in", str(message_path),
+                "-out", str(signature_path)
+            ], check=True)
+            subprocess.run([
+                str(openssl), "pkeyutl", "-verify", "-rawin", "-pubin",
+                "-inkey", str(public_path), "-in", str(message_path),
+                "-sigfile", str(signature_path)
+            ], check=True)
+            bundle = {
+                "payloadData": base64.b64encode(message).decode(),
+                "signature": base64.b64encode(signature_path.read_bytes()).decode(),
+            }
+            atomic_write(output, canonical_json(bundle) + b"\n")
+            print(f"Built and key-verified bundle: {output}")
     return 0
 
 

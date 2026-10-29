@@ -31,6 +31,35 @@ enum ThreatBundleUpdateEndpointPolicy {
     }
 }
 
+enum ThreatBundleRefreshDecision: Equatable, Sendable {
+    case notModified
+    case install
+    case tooLarge
+    case invalidResponse
+}
+
+enum ThreatBundleRefreshPolicy {
+    static let normalInterval: TimeInterval = 6 * 60 * 60
+    static let initialFailureBackoff: TimeInterval = 15 * 60
+
+    static func decision(statusCode: Int, byteCount: Int) -> ThreatBundleRefreshDecision {
+        if statusCode == 304 { return .notModified }
+        guard statusCode == 200 else { return .invalidResponse }
+        guard byteCount <= ThreatBundleUpdateEndpointPolicy.maximumDownloadBytes else {
+            return .tooLarge
+        }
+        return .install
+    }
+
+    static func nextDelay(consecutiveFailures: Int) -> TimeInterval {
+        guard consecutiveFailures > 0 else { return normalInterval }
+        return min(
+            normalInterval,
+            initialFailureBackoff * pow(2, Double(consecutiveFailures - 1))
+        )
+    }
+}
+
 struct ThreatIntelligenceBundlePayload: Codable, Equatable, Sendable {
     struct HashEntry: Codable, Equatable, Hashable, Sendable {
         let sha256: String
@@ -113,6 +142,48 @@ enum ThreatIntelligenceBundleValidationError: Error, Equatable {
     case gateRejected
 }
 
+enum ThreatBundleInstallResultCode: String, Codable, Sendable {
+    case installed, updatesDisabled, malformed, invalidSignature, unsupportedSchema
+    case invalidVersion, olderThanInstalled, notYetValid, expired, invalidLifetime
+    case invalidEntry, publishGateRejected, tooLarge, unavailable
+
+    init(error: Error) {
+        switch error as? ThreatIntelligenceBundleValidationError {
+        case .updatesDisabled: self = .updatesDisabled
+        case .malformed: self = .malformed
+        case .invalidSignature: self = .invalidSignature
+        case .unsupportedSchema: self = .unsupportedSchema
+        case .invalidVersion: self = .invalidVersion
+        case .rollback: self = .olderThanInstalled
+        case .notYetValid: self = .notYetValid
+        case .expired: self = .expired
+        case .invalidLifetime: self = .invalidLifetime
+        case .invalidEntry: self = .invalidEntry
+        case .gateRejected: self = .publishGateRejected
+        case nil: self = .unavailable
+        }
+    }
+
+    var plainDescription: String {
+        switch self {
+        case .installed: "Installed"
+        case .invalidSignature: "Invalid signature"
+        case .expired: "Protection updates expired"
+        case .olderThanInstalled: "Older than installed"
+        case .tooLarge: "Update is too large"
+        case .updatesDisabled: "Automatic protection updates are off"
+        case .unavailable: "Update service unavailable"
+        case .malformed: "Malformed update"
+        case .unsupportedSchema: "Unsupported update format"
+        case .invalidVersion: "Invalid update version"
+        case .notYetValid: "Update is not valid yet"
+        case .invalidLifetime: "Invalid update lifetime"
+        case .invalidEntry: "Invalid update contents"
+        case .publishGateRejected: "Update failed safety checks"
+        }
+    }
+}
+
 struct ThreatIntelligenceBundleValidator: Sendable {
     static let supportedSchema = 1
     static let maximumLifetime: TimeInterval = 180 * 24 * 60 * 60
@@ -122,7 +193,8 @@ struct ThreatIntelligenceBundleValidator: Sendable {
     func validate(
         _ bundle: SignedThreatIntelligenceBundle,
         now: Date,
-        highestAcceptedVersion: Int?
+        highestAcceptedVersion: Int?,
+        allowExpired: Bool = false
     ) throws -> ThreatIntelligenceBundlePayload {
         guard let payload = bundle.verifiedPayload(publicKey: publicKey) else {
             throw ThreatIntelligenceBundleValidationError.invalidSignature
@@ -139,7 +211,7 @@ struct ThreatIntelligenceBundleValidator: Sendable {
         guard payload.issuedAt <= now else {
             throw ThreatIntelligenceBundleValidationError.notYetValid
         }
-        guard payload.expiresAt > now else {
+        guard allowExpired || payload.expiresAt > now else {
             throw ThreatIntelligenceBundleValidationError.expired
         }
         guard payload.expiresAt.timeIntervalSince(payload.issuedAt) <= Self.maximumLifetime else {
@@ -249,7 +321,12 @@ final class SignedThreatIntelligenceBundleStore: @unchecked Sendable {
     ) -> (ThreatIntelligenceBundlePayload, Provenance)? {
         guard let data = fileManager.contents(atPath: url.path),
               let bundle = try? Self.decoder.decode(SignedThreatIntelligenceBundle.self, from: data),
-              let payload = try? validator.validate(bundle, now: now(), highestAcceptedVersion: nil)
+              let payload = try? validator.validate(
+                bundle,
+                now: now(),
+                highestAcceptedVersion: nil,
+                allowExpired: usingLastKnownGood
+              )
         else { return nil }
         return (payload, Provenance(
             version: payload.version,

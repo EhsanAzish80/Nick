@@ -49,6 +49,14 @@ class ProductionKeyParityTests(unittest.TestCase):
         self.assertEqual(len(publisher_key), 32)
         self.assertEqual(publisher_key, swift_key)
 
+    def test_signing_staging_paths_are_generated_internally(self):
+        source = PUBLISHER.read_text(encoding="utf-8")
+
+        self.assertIn("tempfile.NamedTemporaryFile", source)
+        self.assertNotIn('temporary / "payload.json"', source)
+        self.assertNotIn("message_path.write_bytes", source)
+        self.assertNotIn("public_path.write_bytes", source)
+
 
 if __name__ == "__main__":
     unittest.main()
