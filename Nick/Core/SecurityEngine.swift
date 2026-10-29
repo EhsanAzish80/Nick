@@ -122,6 +122,10 @@ private struct PendingIncidentAction {
 }
 
 extension ThreatAlert {
+    var isTestIndicator: Bool {
+        contributingSignals.contains { $0.metadata["category"] == "test" }
+    }
+
     var isTamperEvidence: Bool {
         contributingSignals.contains { $0.metadata["reason"] == "endpoint_tamper_observed" }
     }
@@ -456,8 +460,8 @@ final class SecurityEngine {
     /// Canonical status/count consumed by every top-level protection surface.
     var protectionStatus: ProtectionStatus {
         ProtectionStatus.evaluate(
-            actionableAlerts: activeActionableAlerts,
-            incidents: incidentStore.incidents,
+            actionableAlerts: activeActionableAlerts.filter { !$0.isTestIndicator },
+            incidents: incidentStore.incidents.filter { !$0.alert.isTestIndicator },
             auditIssueCount: auditResults.filter { $0.status != .pass && $0.status != .unknown }.count,
             sensorRunning: activePipelineStatus == .running
         )
@@ -814,7 +818,7 @@ final class SecurityEngine {
         scanTask = nil
         lastScanDate = Date()
         totalScanCount += 1
-        let newThreatCount = genuinelyNew.count
+        let newThreatCount = genuinelyNew.filter { !$0.isTestIndicator }.count
         if newThreatCount > 0 { totalThreatsDetected += newThreatCount }
         let ud = UserDefaults.standard
         ud.set(totalScanCount, forKey: "nickTotalScanCount")

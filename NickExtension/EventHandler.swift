@@ -2302,6 +2302,15 @@ final class ESEventHandler {
         processIdentity: ProcessInstanceIdentity?,
         terminateProcess: Bool
     ) {
+        let metadata: [String: String]? = result.isTestIndicator
+            ? [
+                "reason": "nick_test_indicator",
+                "rule": result.indicatorIdentifier ?? "NICK_CANARY_FILE",
+                "ruleTier": "inform",
+                "category": "test",
+                "indicatorID": result.indicatorIdentifier ?? "NICK_CANARY_FILE",
+            ]
+            : nil
         let threat = ESEvent(
             eventType: .notifyWrite,
             processPath: processPath,
@@ -2312,7 +2321,8 @@ final class ESEventHandler {
             threat: ESEvent.ThreatContext(
                 sha256: result.hash,
                 threatName: result.threatName,
-                threatFamily: result.threatFamily
+                threatFamily: result.threatFamily,
+                metadata: metadata
             )
         )
         reportThreat(threat)
@@ -2320,7 +2330,8 @@ final class ESEventHandler {
 
         // Heuristic/YARA matches are user-review findings. Automated
         // kill/quarantine is reserved for exact curated hash evidence.
-        guard result.mayBlock, let engine = remediationEngine else { return }
+        guard fileScanner?.allowsAutomaticRemediation(of: result) == true,
+              let engine = remediationEngine else { return }
         let report = engine.remediate(
             threatPath: filePath,
             hash: result.hash,

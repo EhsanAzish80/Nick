@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import contextmanager
+import hashlib
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -22,6 +23,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 HASHES = ROOT / "NickExtension" / "known-threat-hashes.json"
 RULES = ROOT / "Validation" / "ThreatIntelligence" / "first-bundle-rules.json"
+CANARY_MARKER = ROOT / "Scripts" / "fixtures" / "canary_marker.txt"
 PRODUCTION_PUBLIC_KEY = base64.b64decode("vhmPD4eSgTVFeCc6tR7SZdceirBiJ0n29taAnM/s9m4=", validate=True)
 OPENSSL_CANDIDATES = (
     Path("/opt/homebrew/opt/openssl@3/bin/openssl"),
@@ -49,6 +51,16 @@ def validate_payload(payload: dict) -> None:
         digest = entry["sha256"].lower()
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
             raise ValueError("malformed SHA-256 entry")
+        identifier = entry.get("identifier")
+        if identifier is not None and not identifier.strip():
+            raise ValueError("hash indicator identifier must not be empty")
+    domain_indicators = payload.get("domainIndicators", [])
+    for entry in domain_indicators:
+        if not entry.get("identifier", "").strip():
+            raise ValueError("domain indicator identifier must not be empty")
+        domain = entry.get("domain", "").strip().lower()
+        if not domain or "/" in domain or " " in domain:
+            raise ValueError("malformed domain indicator")
     rules = payload.get("rules", [])
     if not rules or any(rule["confidence"] != "high" or not rule["blockable"] for rule in rules):
         raise ValueError("first bundle rules must be explicitly high-confidence and blockable")
@@ -147,6 +159,11 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--version", required=True, type=int)
     parser.add_argument("--lifetime-days", type=int, default=90)
+    parser.add_argument(
+        "--include-canaries",
+        action="store_true",
+        help="include signed NICK_CANARY_FILE and NICK_CANARY_WEB indicators",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--openssl", type=Path, help=argparse.SUPPRESS)
     parser.add_argument(
@@ -165,21 +182,41 @@ def main() -> int:
     catalog = json.loads(HASHES.read_text(encoding="utf-8"))
     rule_config = json.loads(RULES.read_text(encoding="utf-8"))
     now = datetime.now(timezone.utc)
+    hashes = [
+        {"sha256": entry["hash"].lower(), "name": entry["name"],
+         "family": entry["family"], "severity": entry["severity"].lower()}
+        for entry in catalog["entries"]
+    ]
+    domain_indicators = []
+    if args.include_canaries:
+        marker = CANARY_MARKER.read_bytes()
+        if len(marker) != 64 or not marker.isascii():
+            raise SystemExit("canary_marker.txt must contain exactly 64 ASCII bytes")
+        hashes.append({
+            "sha256": hashlib.sha256(marker).hexdigest(),
+            "name": "Nick test indicator",
+            "family": "test",
+            "severity": "info",
+            "identifier": "NICK_CANARY_FILE",
+        })
+        domain_indicators.append({
+            "domain": "nick-canary.3nsofts.com",
+            "identifier": "NICK_CANARY_WEB",
+        })
+
     payload = {
         "schemaVersion": 1,
         "version": args.version,
         "issuedAt": int(now.timestamp() * 1000),
         "expiresAt": int((now + timedelta(days=args.lifetime_days)).timestamp() * 1000),
         "source": "3Nsofts production threat intelligence",
-        "hashes": [
-            {"sha256": entry["hash"].lower(), "name": entry["name"],
-             "family": entry["family"], "severity": entry["severity"].lower()}
-            for entry in catalog["entries"]
-        ],
+        "hashes": hashes,
         "domains": [],
         "ipAddresses": [],
         "rules": rule_config["rules"],
     }
+    if domain_indicators:
+        payload["domainIndicators"] = domain_indicators
     validate_payload(payload)
     message = canonical_json(payload)
 

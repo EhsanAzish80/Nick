@@ -27,7 +27,8 @@ nonisolated(unsafe) private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_
 ///     name      TEXT NOT NULL,      -- e.g. "Trojan.Mac.Genieo"
 ///     family    TEXT NOT NULL,      -- e.g. "Trojan"
 ///     severity  TEXT NOT NULL,      -- "low" | "medium" | "high" | "critical"
-///     added_at  TEXT NOT NULL       -- ISO-8601
+///     added_at  TEXT NOT NULL,      -- ISO-8601
+///     indicator_id TEXT             -- verified signed-bundle identifier, if any
 /// )
 /// ```
 ///
@@ -44,6 +45,12 @@ final class SignatureDatabase {
         let name: String
         let family: String
         let severity: String   // raw string — maps to ESEvent severity at the caller
+        /// Present only when this row came from a verified signed bundle.
+        let indicatorIdentifier: String?
+
+        var isTestIndicator: Bool {
+            ThreatIntelligenceCanary.isTestIdentifier(indicatorIdentifier)
+        }
     }
 
     // MARK: - Constants
@@ -107,7 +114,7 @@ final class SignatureDatabase {
 
         guard let db else { return nil }
 
-        let sql = "SELECT hash, name, family, severity FROM signatures WHERE hash = ? LIMIT 1;"
+        let sql = "SELECT hash, name, family, severity, indicator_id FROM signatures WHERE hash = ? LIMIT 1;"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
@@ -119,7 +126,8 @@ final class SignatureDatabase {
             hash:     columnText(stmt, 0),
             name:     columnText(stmt, 1),
             family:   columnText(stmt, 2),
-            severity: columnText(stmt, 3)
+            severity: columnText(stmt, 3),
+            indicatorIdentifier: columnOptionalText(stmt, 4)
         )
     }
 
@@ -133,8 +141,9 @@ final class SignatureDatabase {
         guard let db else { return }
 
         let sql = """
-            INSERT OR REPLACE INTO signatures (hash, name, family, severity, added_at)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT OR REPLACE INTO signatures
+            (hash, name, family, severity, added_at, indicator_id)
+            VALUES (?, ?, ?, ?, ?, NULL);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -155,6 +164,12 @@ final class SignatureDatabase {
 
     /// Bulk-inserts signatures from an array. Uses a single transaction for speed.
     func bulkUpsert(_ entries: [(hash: String, name: String, family: String, severity: String)]) {
+        bulkUpsertSigned(entries.map { ($0.hash, $0.name, $0.family, $0.severity, nil) })
+    }
+
+    private func bulkUpsertSigned(
+        _ entries: [(hash: String, name: String, family: String, severity: String, identifier: String?)]
+    ) {
         lock.lock()
         defer { lock.unlock() }
 
@@ -163,8 +178,9 @@ final class SignatureDatabase {
         sqlite3_exec(db, "BEGIN;", nil, nil, nil)
 
         let sql = """
-            INSERT OR REPLACE INTO signatures (hash, name, family, severity, added_at)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT OR REPLACE INTO signatures
+            (hash, name, family, severity, added_at, indicator_id)
+            VALUES (?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -180,6 +196,11 @@ final class SignatureDatabase {
             sqlite3_bind_text(stmt, 3, entry.family,   -1, sqliteTransient)
             sqlite3_bind_text(stmt, 4, entry.severity, -1, sqliteTransient)
             sqlite3_bind_text(stmt, 5, now,            -1, sqliteTransient)
+            if let identifier = entry.identifier {
+                sqlite3_bind_text(stmt, 6, identifier, -1, sqliteTransient)
+            } else {
+                sqlite3_bind_null(stmt, 6)
+            }
             sqlite3_step(stmt)
             sqlite3_reset(stmt)
         }
@@ -220,10 +241,26 @@ final class SignatureDatabase {
                 name      TEXT NOT NULL,
                 family    TEXT NOT NULL,
                 severity  TEXT NOT NULL,
-                added_at  TEXT NOT NULL
+                added_at  TEXT NOT NULL,
+                indicator_id TEXT
             );
         """
         sqlite3_exec(db, sql, nil, nil, nil)
+        if !table("signatures", containsColumn: "indicator_id") {
+            sqlite3_exec(db, "ALTER TABLE signatures ADD COLUMN indicator_id TEXT;", nil, nil, nil)
+        }
+    }
+
+    private func table(_ tableName: String, containsColumn columnName: String) -> Bool {
+        guard let db else { return false }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(tableName));", -1, &statement, nil)
+                == SQLITE_OK else { return false }
+        defer { sqlite3_finalize(statement) }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if columnText(statement, 1) == columnName { return true }
+        }
+        return false
     }
 
     private func createMetadataTableIfNeeded() {
@@ -290,10 +327,10 @@ final class SignatureDatabase {
               payload.version > metadataInteger(for: "signed_bundle_version")
         else { return }
         let entries = payload.hashes.map {
-            ($0.sha256.lowercased(), $0.name, $0.family, $0.severity)
+            ($0.sha256.lowercased(), $0.name, $0.family, $0.severity, $0.identifier)
         }
         guard !entries.isEmpty else { return }
-        bulkUpsert(entries)
+        bulkUpsertSigned(entries)
         setMetadataInteger(payload.version, for: "signed_bundle_version")
         Self.logger.info(
             "Loaded signed intelligence bundle version \(payload.version) with \(entries.count) hashes"
@@ -345,6 +382,12 @@ final class SignatureDatabase {
 
     private func columnText(_ stmt: OpaquePointer?, _ index: Int32) -> String {
         guard let stmt, let ptr = sqlite3_column_text(stmt, index) else { return "" }
+        return String(cString: ptr)
+    }
+
+    private func columnOptionalText(_ stmt: OpaquePointer?, _ index: Int32) -> String? {
+        guard let stmt, sqlite3_column_type(stmt, index) != SQLITE_NULL,
+              let ptr = sqlite3_column_text(stmt, index) else { return nil }
         return String(cString: ptr)
     }
 }

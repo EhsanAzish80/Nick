@@ -147,11 +147,12 @@ final class FilterDataProvider: NEFilterDataProvider {
         let configuration = NetworkProtectionConfiguration(
             vendorConfiguration: filterConfiguration.vendorConfiguration
         )
+        let signedMatch = blocklist.match(host: host)
         let verdict = NetworkProtectionPolicy(configuration: configuration).evaluate(
             host: host,
             appIdentifier: appID,
             isBlocklisted: { host in
-                blocklist.isBlocked(host: host) || self.scamGuardian.isExactMatch(host: host)
+                signedMatch != nil || self.scamGuardian.isExactMatch(host: host)
             },
             isScam: scamGuardian.isHeuristicMatch(host:)
         )
@@ -164,7 +165,8 @@ final class FilterDataProvider: NEFilterDataProvider {
                 reason: .knownThreat,
                 host: host,
                 appID: appID,
-                port: port
+                port: port,
+                signedMatch: signedMatch
             )
             return .allow()
         }
@@ -174,7 +176,8 @@ final class FilterDataProvider: NEFilterDataProvider {
                 reason: reason,
                 host: host,
                 appID: appID,
-                port: port
+                port: port,
+                signedMatch: reason == .knownThreat ? signedMatch : nil
             )
         }
 
@@ -210,7 +213,8 @@ final class FilterDataProvider: NEFilterDataProvider {
         reason: NetworkObservationReason,
         host: String,
         appID: String,
-        port: Int
+        port: Int,
+        signedMatch: NetworkBlocklist.Match? = nil
     ) {
         let normalizedHost = NetworkProtectionConfiguration.normalizedDomain(host) ?? host
         let throttleKey = "\(appID)|\(reason.rawValue)|\(normalizedHost)"
@@ -237,11 +241,15 @@ final class FilterDataProvider: NEFilterDataProvider {
             appIdentifier: appID == "unknown" ? nil : appID,
             decision: .observed,
             reason: reason.rawValue,
-            reasonTitle: reason.userTitle,
+            reasonTitle: signedMatch?.isTestIndicator == true
+                ? "Nick test indicator"
+                : reason.userTitle,
             port: port >= 0 ? port : nil,
             sourceVersion: reason == .knownThreat ? blocklist.provenance?.version : nil,
             sourceIssuedAt: reason == .knownThreat ? blocklist.provenance?.issuedAt : nil,
-            sourceExpiresAt: reason == .knownThreat ? blocklist.provenance?.expiresAt : nil
+            sourceExpiresAt: reason == .knownThreat ? blocklist.provenance?.expiresAt : nil,
+            isTestIndicator: signedMatch?.isTestIndicator == true,
+            indicatorIdentifier: signedMatch?.identifier
         )
         eventWriteQueue.async { [eventStore] in
             eventStore.append(event)

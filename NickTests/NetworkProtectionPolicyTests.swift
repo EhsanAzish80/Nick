@@ -391,6 +391,31 @@ final class NetworkProtectionPolicyTests: XCTestCase {
         XCTAssertTrue(context.guidance.contains("narrowest exception"))
     }
 
+    func test_signedCanaryNetworkEventUsesTestPresentationAndInformFinding() {
+        let event = NetworkBlockEvent(
+            host: "nick-canary.3nsofts.com",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: "Nick test indicator",
+            port: 443,
+            isTestIndicator: true,
+            indicatorIdentifier: "NICK_CANARY_WEB"
+        )
+
+        let context = NetworkEventContext(event: event)
+        let finding = NetworkFinding(event: event)
+
+        XCTAssertTrue(context.explanation.contains("signed Nick test destination"))
+        XCTAssertTrue(context.explanation.contains("did not block it"))
+        XCTAssertEqual(finding.signal.title, "Nick test indicator")
+        XCTAssertEqual(finding.signal.severity, .info)
+        XCTAssertEqual(finding.score, 0)
+        XCTAssertEqual(finding.signal.metadata["category"], "test")
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "inform")
+        XCTAssertEqual(finding.signal.metadata["rule"], "NICK_CANARY_WEB")
+    }
+
     func test_networkEventContext_classifiesPrivateIPv4AsLocalAddress() {
         let privateAddress = [192, 168, 50, 210]
             .map(String.init)

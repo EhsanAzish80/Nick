@@ -480,6 +480,7 @@ struct NetworkFinding: Sendable {
     let recommendedAction: String
 
     init(event: NetworkBlockEvent) {
+        let isTestIndicator = event.isTestIndicator
         let reason = NetworkObservationReason(rawValue: event.reason)
         let destinationKind = NetworkEventContext.destinationKind(for: event.host)
         let destinationClass: String = switch destinationKind {
@@ -491,8 +492,8 @@ struct NetworkFinding: Sendable {
         let score: Double
         switch reason {
         case .knownThreat:
-            severity = .high
-            score = 0.9
+            severity = isTestIndicator ? .info : .high
+            score = isTestIndicator ? 0 : 0.9
         case .scamGuardian:
             severity = .medium
             score = 0.7
@@ -501,6 +502,32 @@ struct NetworkFinding: Sendable {
             score = 0.5
         }
         self.score = score
+        let metadataReason = isTestIndicator
+            ? "nick_test_indicator"
+            : "network_extension_\(event.reason)"
+        let metadataRule = isTestIndicator
+            ? (event.indicatorIdentifier ?? "NICK_CANARY_WEB")
+            : "network_\(event.reason)"
+        let metadataTier = isTestIndicator ? "inform" : "review"
+        let metadataCategory = isTestIndicator ? "test" : "network"
+        var metadata: [String: String] = [
+            "reason": metadataReason,
+            "rule": metadataRule,
+            "ruleTier": metadataTier,
+            "category": metadataCategory,
+            "destination": event.host,
+            "destinationClass": destinationClass,
+            "appIdentifier": event.appIdentifier ?? "unknown",
+            "port": event.port.map(String.init) ?? "unknown",
+            "sourceVersion": event.sourceVersion.map(String.init) ?? "unknown",
+            "sourceIssuedAt": event.sourceIssuedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown",
+            "sourceAge": event.sourceIssuedAt.map {
+                String(max(0, Calendar.current.dateComponents([.day], from: $0, to: Date()).day ?? 0))
+            } ?? "unknown"
+        ]
+        if isTestIndicator {
+            metadata["indicatorID"] = event.indicatorIdentifier ?? "NICK_CANARY_WEB"
+        }
         signal = ThreatSignal(
             id: event.id,
             source: .network,
@@ -508,20 +535,7 @@ struct NetworkFinding: Sendable {
             timestamp: event.timestamp,
             title: event.reasonTitle,
             description: NetworkEventContext(event: event).explanation,
-            context: ThreatSignalContext(metadata: [
-                "reason": "network_extension_\(event.reason)",
-                "rule": "network_\(event.reason)",
-                "ruleTier": "review",
-                "destination": event.host,
-                "destinationClass": destinationClass,
-                "appIdentifier": event.appIdentifier ?? "unknown",
-                "port": event.port.map(String.init) ?? "unknown",
-                "sourceVersion": event.sourceVersion.map(String.init) ?? "unknown",
-                "sourceIssuedAt": event.sourceIssuedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown",
-                "sourceAge": event.sourceIssuedAt.map {
-                    String(max(0, Calendar.current.dateComponents([.day], from: $0, to: Date()).day ?? 0))
-                } ?? "unknown"
-            ])
+            context: ThreatSignalContext(metadata: metadata)
         )
         recommendedAction = reason == .scamGuardian
             ? "Review the attempted destination and quit the app if you did not expect it."

@@ -2,8 +2,13 @@
 
 import ast
 import base64
+import hashlib
+import json
+import os
 import re
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 
 
@@ -56,6 +61,75 @@ class ProductionKeyParityTests(unittest.TestCase):
         self.assertNotIn('temporary / "payload.json"', source)
         self.assertNotIn("message_path.write_bytes", source)
         self.assertNotIn("public_path.write_bytes", source)
+
+
+class CanaryBundleTests(unittest.TestCase):
+    def build_payload(self, include_canaries: bool) -> dict:
+        openssl = next(
+            (path for path in (
+                Path("/opt/homebrew/opt/openssl@3/bin/openssl"),
+                Path("/usr/local/opt/openssl@3/bin/openssl"),
+                Path("/opt/homebrew/bin/openssl"),
+                Path("/usr/local/bin/openssl"),
+            ) if path.is_file()),
+            None,
+        )
+        if openssl is None:
+            self.skipTest("OpenSSL 3 is not installed")
+        with tempfile.TemporaryDirectory(prefix="nick-canary-test-") as directory:
+            root = Path(directory)
+            private_key = root / "test-key.pem"
+            public_key = root / "test-public.pem"
+            output = root / "bundle.json"
+            subprocess.run(
+                [str(openssl), "genpkey", "-algorithm", "Ed25519", "-out", str(private_key)],
+                check=True,
+            )
+            private_key.chmod(0o600)
+            with public_key.open("wb") as stream:
+                subprocess.run(
+                    [str(openssl), "pkey", "-in", str(private_key), "-pubout"],
+                    check=True,
+                    stdout=stream,
+                )
+            command = [
+                os.fspath(PUBLISHER),
+                "--private-key", os.fspath(private_key),
+                "--output", os.fspath(output),
+                "--version", "2",
+                "--openssl", os.fspath(openssl),
+                "--verification-public-key", os.fspath(public_key),
+            ]
+            if include_canaries:
+                command.append("--include-canaries")
+            environment = os.environ.copy()
+            environment["NICK_BUNDLE_TEST"] = "1"
+            environment["PYTHONPYCACHEPREFIX"] = os.fspath(root / "pycache")
+            subprocess.run(command, check=True, env=environment, capture_output=True)
+            envelope = json.loads(output.read_text(encoding="utf-8"))
+            return json.loads(base64.b64decode(envelope["payloadData"]))
+
+    def test_default_bundle_does_not_contain_canaries(self):
+        payload = self.build_payload(include_canaries=False)
+        self.assertNotIn("domainIndicators", payload)
+        self.assertFalse(any(entry.get("identifier", "").startswith("NICK_CANARY_")
+                             for entry in payload["hashes"]))
+
+    def test_include_canaries_adds_fixed_file_and_web_indicators(self):
+        payload = self.build_payload(include_canaries=True)
+        marker = (ROOT / "Scripts" / "fixtures" / "canary_marker.txt").read_bytes()
+        self.assertEqual(len(marker), 64)
+        self.assertTrue(marker.isascii())
+        file_entry = next(entry for entry in payload["hashes"]
+                          if entry.get("identifier") == "NICK_CANARY_FILE")
+        self.assertEqual(file_entry["sha256"], hashlib.sha256(marker).hexdigest())
+        self.assertEqual(file_entry["name"], "Nick test indicator")
+        self.assertEqual(file_entry["family"], "test")
+        self.assertEqual(file_entry["severity"], "info")
+        self.assertEqual(payload["domainIndicators"], [{
+            "domain": "nick-canary.3nsofts.com",
+            "identifier": "NICK_CANARY_WEB",
+        }])
 
 
 if __name__ == "__main__":

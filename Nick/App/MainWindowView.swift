@@ -624,6 +624,7 @@ struct OverviewDetailView: View {
     private var featureTileItems: [FeatureTileItem] {
         let todayCount = xpcClient.events.filter {
             Calendar.current.isDateInToday($0.timestamp)
+                && $0.metadata?["category"] != "test"
         }.count
         let rtpSub = !endpointProtectionActive
             ? "Waiting for security extension"

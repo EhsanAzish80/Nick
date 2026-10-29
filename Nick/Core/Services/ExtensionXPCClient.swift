@@ -1717,11 +1717,14 @@ struct ExtensionFinding: Sendable {
         let isManagementObservation = event.threatFamily == "endpoint-management"
         let isProtectionContinuity = event.threatFamily == "protection-continuity"
         let isAppleReviewEvent = event.metadata?["ruleTier"] == "review"
+        let isTestIndicator = event.metadata?["category"] == "test"
         let isRansomwareBehavior = event.metadata?["detectionKind"] == "ransomware-behavior"
         let isLOLBinBehavior = event.metadata?["detectionKind"] == "lolbin-behavior"
         let isCredentialAccess = event.metadata?["detectionKind"] == "credential-access"
         let severity: SignalSeverity
-        if event.decision == .deny {
+        if isTestIndicator {
+            severity = .info
+        } else if event.decision == .deny {
             severity = .critical
         } else if isManagementObservation || isNickMaintenance || isDocumentedUninstall {
             severity = .info

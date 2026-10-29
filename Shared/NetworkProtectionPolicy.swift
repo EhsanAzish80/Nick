@@ -193,6 +193,9 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
     let sourceVersion: Int?
     let sourceIssuedAt: Date?
     let sourceExpiresAt: Date?
+    /// Set only by NickNetFilter after matching a verified signed bundle.
+    let isTestIndicator: Bool
+    let indicatorIdentifier: String?
 
     init(
         id: UUID = UUID(),
@@ -205,7 +208,9 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
         port: Int? = nil,
         sourceVersion: Int? = nil,
         sourceIssuedAt: Date? = nil,
-        sourceExpiresAt: Date? = nil
+        sourceExpiresAt: Date? = nil,
+        isTestIndicator: Bool = false,
+        indicatorIdentifier: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -218,6 +223,8 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
         self.sourceVersion = sourceVersion
         self.sourceIssuedAt = sourceIssuedAt
         self.sourceExpiresAt = sourceExpiresAt
+        self.isTestIndicator = isTestIndicator
+        self.indicatorIdentifier = indicatorIdentifier
     }
 
     init(
@@ -242,7 +249,7 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, timestamp, host, appIdentifier, decision, reason, reasonTitle, port
-        case sourceVersion, sourceIssuedAt, sourceExpiresAt
+        case sourceVersion, sourceIssuedAt, sourceExpiresAt, isTestIndicator, indicatorIdentifier
     }
 
     init(from decoder: Decoder) throws {
@@ -261,6 +268,8 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
         sourceVersion = try container.decodeIfPresent(Int.self, forKey: .sourceVersion)
         sourceIssuedAt = try container.decodeIfPresent(Date.self, forKey: .sourceIssuedAt)
         sourceExpiresAt = try container.decodeIfPresent(Date.self, forKey: .sourceExpiresAt)
+        isTestIndicator = try container.decodeIfPresent(Bool.self, forKey: .isTestIndicator) ?? false
+        indicatorIdentifier = try container.decodeIfPresent(String.self, forKey: .indicatorIdentifier)
     }
 }
 
@@ -299,6 +308,11 @@ struct NetworkEventContext: Equatable, Sendable {
         appActionLabel = "Allow This Domain"
 
         let purpose = portPurpose.map { " It used \($0)." } ?? ""
+        if event.isTestIndicator {
+            explanation = "\(appName) connected to \(event.host), a signed Nick test destination. Nick recorded the attempt; it did not block it.\(purpose)"
+            guidance = "This is a test indicator from a verified Nick intelligence bundle. No action is required."
+            return
+        }
         switch event.decision {
         case .observed:
             let classification = event.reason == NetworkObservationReason.knownThreat.rawValue
