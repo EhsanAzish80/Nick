@@ -153,16 +153,12 @@ struct DiagnosticsView: View {
     }
 
     private var threatBundleSummary: String {
-        let store = SignedThreatIntelligenceBundleStore(
-            directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
-            publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,
-            updatesEnabled: ThreatIntelligenceBundleTrustAnchor.updatesEnabled
-        )
-        guard let (_, provenance) = store.loadBestAvailable() else {
-            return ThreatIntelligenceBundleTrustAnchor.updatesEnabled ? "Unavailable" : "Disabled"
+        guard let version = xpcClient.threatBundleInstalledVersion else {
+            return ThreatIntelligenceBundleTrustAnchor.updatesEnabled ? "Not installed" : "Disabled"
         }
-        let fallback = provenance.usingLastKnownGood ? " · last-known-good" : ""
-        return "v\(provenance.version) · \(provenance.source) · expires \(provenance.expiresAt.formatted(date: .abbreviated, time: .omitted))\(fallback)"
+        let source = xpcClient.threatBundleSource.map { " · \($0)" } ?? ""
+        let fallback = xpcClient.threatBundleUsingLastKnownGood ? " · last-known-good" : ""
+        return "v\(version)\(source)\(fallback)"
     }
 
     private var protectionUpdateExpiry: String {

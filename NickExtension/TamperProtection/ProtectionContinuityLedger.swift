@@ -10,6 +10,7 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
         var cleanStop: ProtectionCleanStop?
         var reportedTransitionKeys: Set<String> = []
         var appObservations: [AppObservedProtectionGap] = []
+        var recentUpdate: ProtectionCompletedUpdate?
     }
 
     private let url: URL
@@ -102,13 +103,25 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
                 currentBootSessionUUID: bootSessionUUID,
                 bootTime: bootTime,
                 currentExtensionBuild: currentExtensionBuild,
-                previousObservedExtensionBuild: previousObservedExtensionBuild
-            ) else { return nil }
+                previousObservedExtensionBuild: previousObservedExtensionBuild,
+                recentUpdate: state.recentUpdate,
+                now: now
+            ) else {
+                _ = persistLocked()
+                return nil
+            }
             let kind = decision.kind
             let key = decision.transitionKey
             guard state.reportedTransitionKeys.insert(key).inserted else {
                 _ = persistLocked()
                 return nil
+            }
+            if kind == .updated, let currentExtensionBuild {
+                state.recentUpdate = ProtectionCompletedUpdate(
+                    extensionBuild: currentExtensionBuild,
+                    bootSessionUUID: bootSessionUUID,
+                    completedAt: now
+                )
             }
             _ = persistLocked()
 

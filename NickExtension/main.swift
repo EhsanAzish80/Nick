@@ -69,6 +69,13 @@ func writeExtensionHealth() {
         "credentialOpenFindingCount": esMetrics.credentialOpenFindings,
         "nickProtectedPathMaintenanceCount": esMetrics.nickProtectedPathMaintenance
     ]
+    if let (_, provenance) = signedIntelligenceStore.loadBestAvailable() {
+        health["threatBundleVersion"] = provenance.version
+        health["threatBundleSource"] = provenance.source
+        health["threatBundleIssuedAt"] = provenance.issuedAt.timeIntervalSince1970
+        health["threatBundleExpiresAt"] = provenance.expiresAt.timeIntervalSince1970
+        health["threatBundleUsingLastKnownGood"] = provenance.usingLastKnownGood
+    }
     if let lastDeadlineMissAt = esMetrics.lastDeadlineMissAt {
         health["lastDeadlineMissAt"] = lastDeadlineMissAt.timeIntervalSince1970
     }
@@ -223,6 +230,7 @@ xpcServer.threatIntelligenceBundleInstaller = { data in
             strictBlockingPolicy.update(signedRules: payload.rules)
         }
         scanCache.invalidateAll()
+        writeExtensionHealth()
         return ThreatBundleInstallResultCode.installed
     } catch {
         logger.error("Rejected threat-intelligence bundle: \(error.localizedDescription, privacy: .public)")
