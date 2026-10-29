@@ -3,6 +3,10 @@ import XCTest
 @testable import Nick
 
 final class SignedThreatIntelligenceBundleTests: XCTestCase {
+    func test_productionUpdateCapabilityIsSharedAcrossExecutableBundles() {
+        XCTAssertTrue(ThreatIntelligenceBundleTrustAnchor.updatesEnabled)
+    }
+
     func test_validBundlePromotesAndReportsProvenance() throws {
         let fixture = try Fixture()
         let store = fixture.store(enabled: true)

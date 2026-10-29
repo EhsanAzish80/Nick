@@ -260,13 +260,14 @@ public final class ExtensionXPCClient: NSObject {
     private var lastHealthyExtensionTime: Date?
     private var lastProtectionGapObservationAt: Date?
     private var threatBundleRefreshTask: Task<Void, Never>?
-    private var automaticThreatBundleUpdatesEnabled = true
     public private(set) var threatBundleLastCheck: Date?
     public private(set) var threatBundleLastResult = "Never checked"
     public private(set) var threatBundleNextCheck: Date?
     public private(set) var threatBundleIssuedAt: Date?
     public private(set) var threatBundleExpiresAt: Date?
     public private(set) var threatBundleInstalledVersion: Int?
+    public private(set) var threatBundleSource: String?
+    public private(set) var threatBundleUsingLastKnownGood = false
     /// Deterministic persistence completion seam used by unit tests. Production
     /// always uses the privileged XPC write/reply path.
     var incidentPersistenceOverride: ((UInt64) async -> (UInt64, Bool)?)?
@@ -417,17 +418,6 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     public func configureThreatBundleUpdates(enabled: Bool) {
-        let store = SignedThreatIntelligenceBundleStore(
-            directory: ThreatIntelligenceBundleTrustAnchor.productionDirectory,
-            publicKey: ThreatIntelligenceBundleTrustAnchor.productionPublicKey,
-            updatesEnabled: ThreatIntelligenceBundleTrustAnchor.updatesEnabled
-        )
-        if let (_, provenance) = store.loadBestAvailable() {
-            threatBundleInstalledVersion = provenance.version
-            threatBundleIssuedAt = provenance.issuedAt
-            threatBundleExpiresAt = provenance.expiresAt
-        }
-        automaticThreatBundleUpdatesEnabled = enabled
         threatBundleRefreshTask?.cancel()
         threatBundleRefreshTask = nil
         guard enabled, ThreatIntelligenceBundleTrustAnchor.updatesEnabled else {
@@ -449,10 +439,17 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     public func checkThreatBundleNow() async {
-        guard ThreatIntelligenceBundleTrustAnchor.updatesEnabled,
-              let rawURL = Bundle.main.object(forInfoDictionaryKey: "NickThreatBundleURL") as? String,
+        threatBundleLastCheck = Date()
+        guard ThreatIntelligenceBundleTrustAnchor.updatesEnabled else {
+            recordThreatBundleResult("Protection updates are unavailable in this build", success: false)
+            return
+        }
+        guard let rawURL = Bundle.main.object(forInfoDictionaryKey: "NickThreatBundleURL") as? String,
               let url = URL(string: rawURL),
-              ThreatBundleUpdateEndpointPolicy.allows(url) else { return }
+              ThreatBundleUpdateEndpointPolicy.allows(url) else {
+            recordThreatBundleResult("Protection update service is unavailable", success: false)
+            return
+        }
         do {
             var request = URLRequest(url: url)
             request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -466,7 +463,6 @@ public final class ExtensionXPCClient: NSObject {
             }
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-            threatBundleLastCheck = Date()
             switch ThreatBundleRefreshPolicy.decision(
                 statusCode: http.statusCode,
                 byteCount: data.count
@@ -501,7 +497,6 @@ public final class ExtensionXPCClient: NSObject {
             updateDisplayedThreatBundleMetadata(from: data)
             recordThreatBundleResult(result.plainDescription, success: true)
         } catch {
-            threatBundleLastCheck = Date()
             recordThreatBundleResult("Network error: \(error.localizedDescription)", success: false)
         }
     }
@@ -524,6 +519,8 @@ public final class ExtensionXPCClient: NSObject {
         threatBundleInstalledVersion = payload.version
         threatBundleIssuedAt = payload.issuedAt
         threatBundleExpiresAt = payload.expiresAt
+        threatBundleSource = payload.source
+        threatBundleUsingLastKnownGood = false
     }
 
     private func startHealthRefresh() {
@@ -566,6 +563,17 @@ public final class ExtensionXPCClient: NSObject {
         extensionHealth = data.isEmpty
             ? nil
             : (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+        if let version = extensionHealth?["threatBundleVersion"] as? NSNumber {
+            threatBundleInstalledVersion = version.intValue
+        } else {
+            threatBundleInstalledVersion = nil
+        }
+        threatBundleSource = extensionHealth?["threatBundleSource"] as? String
+        threatBundleIssuedAt = (extensionHealth?["threatBundleIssuedAt"] as? TimeInterval)
+            .map { Date(timeIntervalSince1970: $0) }
+        threatBundleExpiresAt = (extensionHealth?["threatBundleExpiresAt"] as? TimeInterval)
+            .map { Date(timeIntervalSince1970: $0) }
+        threatBundleUsingLastKnownGood = extensionHealth?["threatBundleUsingLastKnownGood"] as? Bool == true
         let updatedAt = extensionHealth?["updatedAt"] as? TimeInterval
         let healthy = extensionHealth?["active"] as? Bool == true
             && updatedAt.map { Date().timeIntervalSince1970 - $0 <= 30 } == true

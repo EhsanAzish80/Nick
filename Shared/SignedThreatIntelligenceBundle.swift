@@ -8,9 +8,14 @@ enum ThreatIntelligenceBundleTrustAnchor {
         base64Encoded: "vhmPD4eSgTVFeCc6tR7SZdceirBiJ0n29taAnM/s9m4="
     )!
 
-    static var updatesEnabled: Bool {
-        Bundle.main.object(forInfoDictionaryKey: "NickThreatBundleUpdatesEnabled") as? Bool == true
-    }
+    /// Build-time capability shared by the app and both system extensions.
+    ///
+    /// This must not depend on `Bundle.main`: each shipped executable has a
+    /// different main bundle, and a host-only Info.plist flag made downloads
+    /// succeed in the app while the Endpoint Security extension rejected the
+    /// same signed bundle as disabled. The user's persisted automatic-update
+    /// preference remains a separate, root-owned runtime setting.
+    static let updatesEnabled = true
 
     static let productionDirectory = URL(
         fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/threat-intelligence",
