@@ -15,6 +15,21 @@ enum LOLBinExecutionPolicy {
         let reason: String
         let severity: String
         let matchedCommand: String?
+        let tier: Tier
+
+        init(
+            title: String,
+            reason: String,
+            severity: String,
+            matchedCommand: String?,
+            tier: Tier = .protected
+        ) {
+            self.title = title
+            self.reason = reason
+            self.severity = severity
+            self.matchedCommand = matchedCommand
+            self.tier = tier
+        }
     }
 
     static func finding(executablePath: String, arguments: [String]) -> Finding? {
@@ -53,6 +68,42 @@ enum LOLBinExecutionPolicy {
                 matchedCommand: redact(arguments.joined(separator: " "))
             )
         }
+        if name == "env", isEnvironmentClearedShellProxy(arguments) {
+            return Finding(
+                title: "System utility started a shell with a cleared environment",
+                reason: "system_binary_proxy",
+                severity: "medium",
+                matchedCommand: redact(arguments.joined(separator: " ")),
+                tier: .review
+            )
+        }
+        if name == "chmod", isRiskyPermissionChange(arguments) {
+            return Finding(
+                title: "Made a file executable with unsafe permissions",
+                reason: "permission_modification",
+                severity: "high",
+                matchedCommand: redact(arguments.joined(separator: " ")),
+                tier: .review
+            )
+        }
+        if name == "system_profiler", isBroadSystemInventory(arguments) {
+            return Finding(
+                title: "Collected detailed Mac system information",
+                reason: "system_discovery",
+                severity: "low",
+                matchedCommand: redact(arguments.joined(separator: " ")),
+                tier: .review
+            )
+        }
+        if name == "ps", isBroadProcessInventory(arguments) {
+            return Finding(
+                title: "Listed running processes with parent and command details",
+                reason: "process_discovery",
+                severity: "low",
+                matchedCommand: redact(arguments.joined(separator: " ")),
+                tier: .review
+            )
+        }
         if name == "launchctl",
            ["load", "bootstrap", "submit"].contains(where: arguments.map { $0.lowercased() }.contains),
            lowered.range(of: #"/(private/)?(tmp|var/folders)/"#, options: .regularExpression) != nil {
@@ -82,6 +133,52 @@ enum LOLBinExecutionPolicy {
         case "xxd": return args.contains("-r") || args.contains("-revert")
         default: return false
         }
+    }
+
+    private static func isEnvironmentClearedShellProxy(_ arguments: [String]) -> Bool {
+        let args = Array(arguments.dropFirst())
+        guard args.contains("-i") || args.contains("--ignore-environment") else { return false }
+        guard let shellIndex = args.firstIndex(where: { argument in
+            ["sh", "bash", "zsh", "ksh", "dash"].contains(
+                URL(fileURLWithPath: argument).lastPathComponent.lowercased()
+            )
+        }) else { return false }
+        return args.dropFirst(shellIndex + 1).contains { argument in
+            argument == "--command" || (argument.hasPrefix("-") && argument.dropFirst().contains("c"))
+        }
+    }
+
+    private static func isRiskyPermissionChange(_ arguments: [String]) -> Bool {
+        for argument in arguments.dropFirst() where !argument.hasPrefix("-") {
+            let mode = argument.lowercased()
+            if mode.range(of: #"^(?:0?[467][0-7]{3})$"#, options: .regularExpression) != nil {
+                return true
+            }
+            if mode.contains("+s") || mode.contains("a+w") || mode.contains("o+w") {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isBroadSystemInventory(_ arguments: [String]) -> Bool {
+        let lowered = arguments.dropFirst().map { $0.lowercased() }
+        return lowered.contains("spsoftwaredatatype")
+            || lowered.contains("sphardwaredatatype")
+            || lowered.contains("-detaillevel")
+    }
+
+    private static func isBroadProcessInventory(_ arguments: [String]) -> Bool {
+        let lowered = arguments.dropFirst().map { $0.lowercased() }
+        let joined = lowered.joined(separator: " ")
+        let selectsAll = lowered.contains("-e")
+            || lowered.contains("-a")
+            || lowered.contains("-ax")
+            || lowered.contains("-axo")
+            || joined.contains("-a") && joined.contains("x")
+        let requestsLineage = joined.contains("ppid")
+        let requestsCommand = joined.contains("command") || joined.contains("comm")
+        return selectsAll && requestsLineage && requestsCommand
     }
 
     /// A temporary-file execution is routine only when both the actor and its

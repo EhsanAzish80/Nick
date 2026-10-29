@@ -1777,7 +1777,9 @@ final class ESEventHandler {
                                 || interactivePipelineFinding != nil,
                             hasQuarantineOrigin: Self.hasQuarantineOrigin(at: targetPath)
                         ) == .review
-                    let reviewBehavior = localTemporaryExecution || finding.reason == "encoded_payload"
+                    let reviewBehavior = localTemporaryExecution
+                        || finding.reason == "encoded_payload"
+                        || finding.tier == .review
                     var metadata = [
                         "reason": finding.reason,
                         "rule": finding.reason,

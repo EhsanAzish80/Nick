@@ -19,7 +19,8 @@ trap cleanup EXIT INT TERM
 
 /bin/mkdir -p "$root"
 /usr/bin/osacompile -o "$app" -e 'on run' -e 'display dialog "Nick scorecard login item fixture" buttons {"OK"}' -e 'end run'
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $identifier" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $identifier" "$app/Contents/Info.plist" \
+  || /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $identifier" "$app/Contents/Info.plist"
 /usr/bin/codesign --force --sign - "$app" >/dev/null
 
 /usr/bin/osascript - "$identifier" "$app" <<'APPLESCRIPT'

@@ -137,6 +137,38 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
         }
     }
 
+    func test_narrowScorecardBehaviorsUseStableReviewRules() throws {
+        let fixtures: [(String, [String], String)] = [
+            ("/usr/bin/env", ["env", "-i", "/bin/sh", "-c", ":"], "system_binary_proxy"),
+            ("/bin/chmod", ["chmod", "4777", "/tmp/synthetic"], "permission_modification"),
+            ("/usr/sbin/system_profiler", ["system_profiler", "SPSoftwareDataType"], "system_discovery"),
+            ("/bin/ps", ["ps", "-axo", "pid,ppid,comm"], "process_discovery"),
+        ]
+        for (path, arguments, reason) in fixtures {
+            let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
+                executablePath: path,
+                arguments: arguments
+            ))
+            XCTAssertEqual(finding.reason, reason)
+            XCTAssertEqual(finding.tier, .review)
+        }
+    }
+
+    func test_routineUtilityUseDoesNotBecomeScorecardEvidence() {
+        let routine: [(String, [String])] = [
+            ("/usr/bin/env", ["env", "/usr/bin/true"]),
+            ("/bin/chmod", ["chmod", "600", "/tmp/synthetic"]),
+            ("/usr/bin/sw_vers", ["sw_vers"]),
+            ("/bin/ps", ["ps", "-p", "1"]),
+        ]
+        for (path, arguments) in routine {
+            XCTAssertNil(LOLBinExecutionPolicy.finding(
+                executablePath: path,
+                arguments: arguments
+            ))
+        }
+    }
+
     func test_quarantinedUntrustedExecutionIsReviewEvidenceWithContextualSeverity() {
         XCTAssertEqual(ExecutionTrustPolicy.quarantinedExecutionSeverity(
             hasTrustedSigner: false,
