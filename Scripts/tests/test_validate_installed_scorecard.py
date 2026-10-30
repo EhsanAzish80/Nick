@@ -129,5 +129,34 @@ class InstalledBuildTests(unittest.TestCase):
         )
 
 
+class PreviousResultsTests(unittest.TestCase):
+    def test_previous_results_parses_status_and_escaped_evidence_pipe(self):
+        content = "\n".join([
+            "| ID | Technique | Result | Evidence |",
+            "|---|---|---|---|",
+            r"| T1071.001 | Web Protocols | PASS | rule=NICK\|CANARY; tier=inform |",
+            "| T1547 | Boot Persistence | PREVENTED | incident=ABC123 |",
+        ])
+        with tempfile.TemporaryDirectory(prefix="nick-previous-results-") as directory:
+            progress = Path(directory) / "progress.md"
+            progress.write_text(content, encoding="utf-8")
+            with mock.patch.object(MODULE, "PROGRESS_DOC", progress):
+                results = MODULE.previous_results()
+
+        self.assertEqual(results["T1071.001"], {
+            "status": "PASS",
+            "evidence": "rule=NICK|CANARY; tier=inform",
+        })
+        self.assertEqual(results["T1547"]["status"], "PREVENTED")
+
+    def test_previous_results_ignores_malformed_rows_in_linear_time(self):
+        long_malformed_row = "| T1027 | " + ("evidence " * 20_000)
+        with tempfile.TemporaryDirectory(prefix="nick-previous-results-") as directory:
+            progress = Path(directory) / "progress.md"
+            progress.write_text(long_malformed_row, encoding="utf-8")
+            with mock.patch.object(MODULE, "PROGRESS_DOC", progress):
+                self.assertEqual(MODULE.previous_results(), {})
+
+
 if __name__ == "__main__":
     unittest.main()

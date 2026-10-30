@@ -346,17 +346,50 @@ def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[st
     PROGRESS_DOC.write_text(updated, encoding="utf-8")
 
 
+def markdown_table_columns(line: str) -> list[str]:
+    """Split one Markdown table row without a backtracking expression."""
+    if len(line) < 2 or line[0] != "|" or line[-1] != "|":
+        return []
+
+    columns: list[str] = []
+    current: list[str] = []
+    index = 1
+    end = len(line) - 1
+    while index < end:
+        character = line[index]
+        if character == "\\" and index + 1 < end and line[index + 1] == "|":
+            current.append("|")
+            index += 2
+            continue
+        if character == "|":
+            columns.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+        index += 1
+    columns.append("".join(current).strip())
+    return columns
+
+
+def is_technique_id(value: str) -> bool:
+    if not value.startswith("T"):
+        return False
+    components = value[1:].split(".")
+    return 1 <= len(components) <= 2 and all(component.isdigit() and component for component in components)
+
+
 def previous_results() -> dict[str, dict[str, str]]:
     if not PROGRESS_DOC.exists():
         return {}
     results: dict[str, dict[str, str]] = {}
     for line in PROGRESS_DOC.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"^\|\s*(T\d+(?:\.\d+)?)\s*\|.*?\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|$", line)
-        if match:
-            results[match.group(1)] = {
-                "status": match.group(2).strip(),
-                "evidence": match.group(3).replace("\\|", "|").strip(),
-            }
+        columns = markdown_table_columns(line)
+        if len(columns) != 4 or not is_technique_id(columns[0]):
+            continue
+        results[columns[0]] = {
+            "status": columns[2],
+            "evidence": columns[3],
+        }
     return results
 
 
