@@ -75,8 +75,8 @@ final class IncidentStorePersistenceTests: XCTestCase {
             fingerprint["reasons"] as? [String],
             ["background-item-added", "persist_new_launchdaemon", "tcc-permission-modified"]
         )
-        XCTAssertEqual(fingerprint["tiers"] as? [String], ["protected"])
-        XCTAssertEqual(fingerprint["signalSeverities"] as? [String], ["high"])
+        XCTAssertEqual(fingerprint["tiers"] as? [String], ["protected", "review"])
+        XCTAssertEqual(fingerprint["signalSeverities"] as? [String], ["high", "medium"])
         XCTAssertTrue(try XCTUnwrap(decoded.keys.first).hasSuffix(":3:reviewed"))
     }
 
