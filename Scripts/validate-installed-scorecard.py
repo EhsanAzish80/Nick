@@ -39,7 +39,7 @@ THREAT_JOURNALS = (
 )
 START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
-EXPECTED_BUILD = "5078"
+EXPECTED_BUILD = "5079"
 INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
 SYSTEM_EXTENSIONS = Path("/usr/bin/systemextensionsctl")
 EXPECTED_EXTENSIONS = (
@@ -126,9 +126,13 @@ def prepare_fixture_scratch(scratch: str, uid: int, gid: int) -> None:
 
 def user_fixture_command(fixture: Path, scratch: str, user: str) -> list[str]:
     """Build the sudo invocation without relying on sudo preserving env."""
+    user_home = pwd.getpwnam(user).pw_dir
     return [
         "/usr/bin/sudo", "-H", "-u", user, "--", "/usr/bin/env",
-        f"NICK_FIXTURE_ROOT={scratch}", str(fixture),
+        f"NICK_FIXTURE_ROOT={scratch}",
+        f"NICK_FIXTURE_USER={user}",
+        f"NICK_FIXTURE_HOME={user_home}",
+        str(fixture),
     ]
 
 

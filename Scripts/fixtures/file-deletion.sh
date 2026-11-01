@@ -2,7 +2,7 @@
 set -eu
 
 fixture_name="com.ehsanazish.nick.fixture.deletion.plist"
-invoking_user="${SUDO_USER:-$(id -un)}"
+invoking_user="${NICK_FIXTURE_USER:-${SUDO_USER:-$(id -un)}}"
 user_home="${NICK_FIXTURE_HOME:-$(/usr/bin/env NICK_FIXTURE_USER="$invoking_user" /usr/bin/python3 -c \
     'import os, pwd; print(pwd.getpwnam(os.environ["NICK_FIXTURE_USER"]).pw_dir)' 2>/dev/null || true)}"
 

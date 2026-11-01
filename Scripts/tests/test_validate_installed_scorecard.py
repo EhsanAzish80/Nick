@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import pwd
 import subprocess
 import sqlite3
 import tempfile
@@ -159,10 +160,14 @@ class FixtureInvocationTests(unittest.TestCase):
             chown.assert_called_once_with(scratch, 501, 20)
             self.assertEqual(os.stat(scratch).st_mode & 0o777, 0o700)
 
-            command = MODULE.user_fixture_command(fixture, scratch, "fixture-user")
+            fixture_user = pwd.getpwuid(os.getuid())
+            command = MODULE.user_fixture_command(fixture, scratch, fixture_user.pw_name)
             self.assertEqual(command, [
-                "/usr/bin/sudo", "-H", "-u", "fixture-user", "--", "/usr/bin/env",
-                f"NICK_FIXTURE_ROOT={scratch}", str(fixture),
+                "/usr/bin/sudo", "-H", "-u", fixture_user.pw_name, "--", "/usr/bin/env",
+                f"NICK_FIXTURE_ROOT={scratch}",
+                f"NICK_FIXTURE_USER={fixture_user.pw_name}",
+                f"NICK_FIXTURE_HOME={fixture_user.pw_dir}",
+                str(fixture),
             ])
 
             # Exercise the actual fixture with the exact env segment passed
@@ -245,6 +250,8 @@ class InstalledBuildTests(unittest.TestCase):
             environment.update({
                 "NICK_FIXTURE_HOME": str(home),
                 "NICK_FIXTURE_ROOT": str(scratch),
+                "NICK_FIXTURE_USER": pwd.getpwuid(os.getuid()).pw_name,
+                "SUDO_USER": "root",
             })
             process = subprocess.Popen(
                 [str(fixture)], env=environment, text=True,
