@@ -1409,13 +1409,16 @@ final class ESEventHandler {
             pid: instigatorPID,
             pathHint: instigatorPath
         )
-        let identityMatchesClient = identity.map { candidate in
-            (appBundleID.isEmpty == false && candidate.bundleID == appBundleID)
-                || (appPath.isEmpty == false && candidate.path == appPath)
-        } ?? false
-        let validatedAppleClient = identityMatchesClient && identity.map {
-            $0.signing == .applePlatform || $0.signing == .appleSigned
-        } == true
+        let validatedAppleClient = TCCAffectedClientTrustPolicy.isValidatedAppleClient(
+            appBundleID: appBundleID,
+            appPath: appPath,
+            liveBundleID: identity?.bundleID,
+            livePath: identity?.path,
+            liveIsValidatedApple: identity.map {
+                $0.signing == .applePlatform || $0.signing == .appleSigned
+            } ?? false,
+            validateApplePath: Self.validatesTCCAppleCode(at:)
+        )
         let affectsNick = appBundleID == "com.ehsanazish.nick" || appPath.contains("/Nick.app/")
         let affectedName = affectsNick ? "Nick" : (identity?.name
             ?? (appBundleID.isEmpty ? URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent : appBundleID))
@@ -1467,6 +1470,29 @@ final class ESEventHandler {
             ruleTier: actionable ? "review" : "observed",
             metadata: metadata
         )
+    }
+
+    /// Validates the affected executable reported by TCC itself. No executable
+    /// name, bundle identifier prefix, or filesystem layout is proof of Apple
+    /// ownership.
+    private static func validatesTCCAppleCode(at path: String) -> Bool {
+        ESCallbackSafetyGuard.requireOffCallbackThread("SecStaticCode validation")
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(
+            URL(fileURLWithPath: path) as CFURL,
+            [],
+            &code
+        ) == errSecSuccess, let code else { return false }
+
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            "anchor apple" as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess, let requirement else { return false }
+
+        let flags = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures)
+        return SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess
     }
 
     /// Converts Apple-authored Endpoint Security notifications into the same
