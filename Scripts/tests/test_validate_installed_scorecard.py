@@ -46,6 +46,62 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
                 records = MODULE.prevention_fingerprints()
             self.assertEqual(records["quarantine:record-1"]["target"], "/tmp/eicar.com")
 
+    def test_apple_event_is_preserved_as_stable_rule_evidence(self):
+        snapshot = {
+            "incidents": [{
+                "id": "incident-tcc",
+                "state": "new",
+                "alert": {
+                    "title": "Automation permission granted",
+                    "occurrenceCount": 1,
+                    "contributingSignals": [{
+                        "metadata": {
+                            "appleEvent": "tcc-permission-modified",
+                            "ruleTier": "review",
+                        }
+                    }],
+                },
+            }]
+        }
+        decoded = MODULE.incident_fingerprints_from_snapshot(snapshot)
+        record = next(iter(decoded.values()))
+        self.assertEqual(record["reasons"], ["tcc-permission-modified"])
+        self.assertEqual(record["tiers"], ["review"])
+
+    def test_matching_incidents_accepts_a_new_grouped_occurrence_only(self):
+        before = {"incident:1:new": {"reasons": ["credential_store_access"], "tiers": ["review"]}}
+        after = {
+            **before,
+            "incident:2:new": {"reasons": ["credential_store_access"], "tiers": ["review"]},
+        }
+        matches = MODULE.matching_incidents(
+            before, after, {"credential_store_access"}, {"review"}
+        )
+        self.assertEqual([identifier for identifier, _ in matches], ["incident:2:new"])
+
+    def test_wait_polls_until_delayed_expected_evidence_arrives(self):
+        before = {"old:1:new": {"reasons": ["process_discovery"], "tiers": ["review"]}}
+        unrelated = {
+            **before,
+            "late-prior-row:1:new": {"reasons": ["credential_store_access"], "tiers": ["review"]},
+        }
+        expected = {
+            **unrelated,
+            "tcc:1:new": {"reasons": ["tcc-permission-modified"], "tiers": ["review"]},
+        }
+        with mock.patch.object(
+            MODULE, "load_incident_fingerprints", side_effect=[unrelated, expected]
+        ), mock.patch.object(MODULE.time, "sleep"):
+            after, matches = MODULE.wait_for_matching_incidents(
+                before,
+                {"tcc-permission-modified"},
+                {"review"},
+                timeout=1,
+                poll_interval=0,
+            )
+        self.assertEqual(after, expected)
+        self.assertEqual([identifier for identifier, _ in matches], ["tcc:1:new"])
+
 
 class FixtureInvocationTests(unittest.TestCase):
     def test_web_protocol_row_uses_only_the_signed_harmless_canary(self):
