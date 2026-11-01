@@ -303,10 +303,18 @@ def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[
                         for item in metadata if isinstance(item, dict)} - {""})
         signal_severities = sorted({str(item.get("signalSeverity") or "")
                                     for item in metadata if isinstance(item, dict)} - {""})
-        paths = sorted({str(signal.get("fileInfo", {}).get("path") or "")
-                        for signal in signals if isinstance(signal, dict)
-                        and isinstance(signal.get("fileInfo"), dict)
-                        and signal.get("fileInfo", {}).get("path")})
+        file_paths = {str(signal.get("fileInfo", {}).get("path") or "")
+                      for signal in signals if isinstance(signal, dict)
+                      and isinstance(signal.get("fileInfo"), dict)
+                      and signal.get("fileInfo", {}).get("path")}
+        # BTM launch-item events persist the affected item in signal metadata
+        # rather than fileInfo. Treat it as path evidence so the recorder can
+        # correlate the exact randomized fixture app without weakening the
+        # process-lineage requirement used by other techniques.
+        persistence_paths = {str(item.get("persistencePath") or "")
+                             for item in metadata if isinstance(item, dict)
+                             and item.get("persistencePath")}
+        paths = sorted(file_paths | persistence_paths)
         process_infos = [signal.get("processInfo", {}) for signal in signals
                          if isinstance(signal, dict) and isinstance(signal.get("processInfo"), dict)]
         def integer_values(*keys: str) -> list[int]:

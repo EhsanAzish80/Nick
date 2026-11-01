@@ -186,6 +186,28 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
         )
         self.assertEqual([identifier for identifier, _ in matches], ["fixture:1:new"])
 
+    def test_btm_persistence_path_is_normalized_as_path_evidence(self):
+        fixture_path = "/tmp/nick-scorecard-a95bgdfz/Nick Login Item Fixture.app"
+        snapshot = {"incidents": [{
+            "id": "btm-fixture", "state": "new",
+            "alert": {"occurrenceCount": 1, "contributingSignals": [{
+                "metadata": {
+                    "rule": "background-item-added",
+                    "ruleTier": "review",
+                    "persistencePath": fixture_path,
+                    "launchItemLabel": "Nick Login Item Fixture",
+                }
+            }]},
+        }]}
+        record = next(iter(MODULE.incident_fingerprints_from_snapshot(snapshot).values()))
+        self.assertEqual(record["paths"], [fixture_path])
+        matches = MODULE.matching_incidents(
+            {}, {"fixture:1:new": record},
+            {"background-item-added"}, {"review"},
+            expected_path=fixture_path,
+        )
+        self.assertEqual([identifier for identifier, _ in matches], ["fixture:1:new"])
+
     def test_network_canary_still_requires_fixture_process_lineage(self):
         lineage = MODULE.FixtureLineage(4200, {4200, 4201})
         after = {
