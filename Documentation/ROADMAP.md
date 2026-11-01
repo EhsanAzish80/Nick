@@ -144,6 +144,9 @@ No unsigned community rule is eligible for automatic enforcement.
 
 ## Version 5.2: expands local learning
 
+- Refine TCC severity policy for Automation and protected user-folder grants,
+  keeping meaningful permission changes actionable without reintroducing
+  installer and system-maintenance noise.
 - Expand the L1-L2 learning shipped in 5.0 to additional eligible local review
   decisions while keeping the feature off by default.
 - Learning never hides signature, hash or YARA detections, and never applies
