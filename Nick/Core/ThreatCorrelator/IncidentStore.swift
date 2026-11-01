@@ -666,7 +666,11 @@ final class IncidentStore {
                 outcomes.append(.coalesced(0))
                 if isProtected(candidate) {
                     let wasHidden = !prior.isVisible
-                    let shouldReopen = prior.state != .new || wasHidden
+                    // A user review is a durable verdict for an identical
+                    // recurrence. Keep the evidence/count, but do not turn the
+                    // same finding actionable again unless its severity rises.
+                    let reviewedAndUnchanged = prior.state == .reviewed && !escalated
+                    let shouldReopen = !reviewedAndUnchanged && (prior.state != .new || wasHidden)
                     let currentTime = now()
                     let outsideNotificationWindow = prior.lastNotifiedAt.map {
                         currentTime.timeIntervalSince($0) >= 600
@@ -680,7 +684,7 @@ final class IncidentStore {
                         incidents[index].isVisible = true
                         recordAction(.reopened, actor: .automatic, at: index)
                     }
-                    if shouldReopen || outsideNotificationWindow {
+                    if shouldReopen || (!reviewedAndUnchanged && outsideNotificationWindow) {
                         newlyActionable.append(incidents[index].alert)
                         notificationIncidentIDs.insert(incidents[index].alert.id)
                         notificationSignalIDs.formUnion(candidateSignalIDs)

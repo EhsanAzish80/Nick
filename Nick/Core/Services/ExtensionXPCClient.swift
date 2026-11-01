@@ -240,6 +240,7 @@ public final class ExtensionXPCClient: NSObject {
     private var pendingIncidentGeneration: UInt64?
     private var pendingIncidentAuthorization: Data?
     private var incidentWriteInFlight = false
+    private var incidentWriteDrainTask: Task<Void, Never>?
     private var incidentWriteGeneration: UInt64 = 0
     private var incidentWriteResults: [UInt64: Bool] = [:]
     private var incidentWriteWaiters: [(UInt64, CheckedContinuation<Bool, Never>)] = []
@@ -410,6 +411,8 @@ public final class ExtensionXPCClient: NSObject {
     }
 
     private func failIncidentWriteWaitersOnConnectionLoss() {
+        incidentWriteDrainTask?.cancel()
+        incidentWriteDrainTask = nil
         incidentWriteInFlight = false
         let waiters = incidentWriteWaiters
         incidentWriteWaiters.removeAll()
@@ -577,7 +580,7 @@ public final class ExtensionXPCClient: NSObject {
         threatBundleUsingLastKnownGood = extensionHealth?["threatBundleUsingLastKnownGood"] as? Bool == true
         let updatedAt = extensionHealth?["updatedAt"] as? TimeInterval
         let healthy = extensionHealth?["active"] as? Bool == true
-            && updatedAt.map { Date().timeIntervalSince1970 - $0 <= 30 } == true
+            && updatedAt.map { Date().timeIntervalSince1970 - $0 <= 75 } == true
         if healthy {
             lastHealthyExtensionTime = updatedAt.map { Date(timeIntervalSince1970: $0) } ?? Date()
         } else {
@@ -904,7 +907,27 @@ public final class ExtensionXPCClient: NSObject {
             finishProtectionAuthorization(pendingIncidentAuthorization)
             pendingIncidentAuthorization = authorizationExternalForm
         }
-        drainIncidentStoreWrites()
+        scheduleIncidentStoreDrain(immediate: authorizationExternalForm != nil)
+    }
+
+    /// Coalesces bursts of whole-snapshot updates. Security events still wait
+    /// for the resulting durable generation before acknowledgement; they no
+    /// longer force one 300 KB rewrite per notification or grouped occurrence.
+    private func scheduleIncidentStoreDrain(immediate: Bool = false) {
+        guard !incidentWriteInFlight else { return }
+        if immediate {
+            incidentWriteDrainTask?.cancel()
+            incidentWriteDrainTask = nil
+            drainIncidentStoreWrites()
+            return
+        }
+        guard incidentWriteDrainTask == nil else { return }
+        incidentWriteDrainTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let self, !Task.isCancelled else { return }
+            self.incidentWriteDrainTask = nil
+            self.drainIncidentStoreWrites()
+        }
     }
 
     private func drainIncidentStoreWrites() {
@@ -939,7 +962,7 @@ public final class ExtensionXPCClient: NSObject {
                 if accepted && record != nil {
                     self.incidentPersistenceConfirmationHandler?(generation)
                 }
-                self.drainIncidentStoreWrites()
+                self.scheduleIncidentStoreDrain()
             }
         }
         let xpcReply: @Sendable (Bool, Data) -> Void = { completion.resolve(($0, $1)) }

@@ -255,6 +255,8 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         var credentialOpenEvaluations: UInt64 = 0
         var credentialOpenFindings: UInt64 = 0
         var nickProtectedPathMaintenance: UInt64 = 0
+        var diskWriteCounts: [String: UInt64] = [:]
+        var diskWriteBytes: [String: UInt64] = [:]
     }
     private let lock = NSLock()
     private var state = State()
@@ -292,6 +294,17 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         lock.withLock { state.nickProtectedPathMaintenance += 1 }
     }
 
+    /// Records the bytes Nick itself asked the filesystem to persist. Keeping
+    /// this beside the other extension metrics makes write amplification
+    /// attributable in an installed soak instead of inferred from file size.
+    func recordDiskWrite(writer: String, bytes: Int) {
+        guard bytes >= 0 else { return }
+        lock.withLock {
+            state.diskWriteCounts[writer, default: 0] += 1
+            state.diskWriteBytes[writer, default: 0] += UInt64(bytes)
+        }
+    }
+
     func recordAuthResponse(messageMachTime: UInt64, nowMachTime: UInt64 = mach_absolute_time()) {
         guard nowMachTime >= messageMachTime, let timebase = Self.machTimebase else { return }
         let elapsed = nowMachTime - messageMachTime
@@ -316,7 +329,11 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         nickProtectedPathMaintenance: UInt64,
         authResponseP50Milliseconds: Double?,
         authResponseP99Milliseconds: Double?,
-        forkDescriptorP99Milliseconds: Double?
+        forkDescriptorP99Milliseconds: Double?,
+        diskWriteCounts: [String: UInt64],
+        diskWriteBytes: [String: UInt64],
+        diskWriteMeasurementSeconds: Double,
+        projectedDiskBytesPerDay: [String: Double]
     ) {
         let eventSnapshot = lock.withLock {
             let elapsed = max(Date().timeIntervalSince(state.startedAt), 1)
@@ -327,7 +344,10 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
                 state.lastDeadlineMissAt,
                 state.credentialOpenEvaluations,
                 state.credentialOpenFindings,
-                state.nickProtectedPathMaintenance
+                state.nickProtectedPathMaintenance,
+                state.diskWriteCounts,
+                state.diskWriteBytes,
+                elapsed
             )
         }
         let latencySnapshot = authLatencyWindow.snapshot()
@@ -341,7 +361,11 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
             eventSnapshot.5,
             latencySnapshot.p50Milliseconds,
             latencySnapshot.p99Milliseconds,
-            forkLatencySnapshot.p99Milliseconds
+            forkLatencySnapshot.p99Milliseconds,
+            eventSnapshot.6,
+            eventSnapshot.7,
+            eventSnapshot.8,
+            eventSnapshot.7.mapValues { Double($0) / eventSnapshot.8 * 86_400 }
         )
     }
 

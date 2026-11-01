@@ -55,6 +55,11 @@ struct DiagnosticsView: View {
                     let rates = xpcClient.extensionHealth?["eventsPerSecond"] as? [String: Double] ?? [:]
                     row("Shell-profile write event rate", rates["notify_write"].map { "\(String(format: "%.1f", $0))/s" } ?? "0.0/s")
                     row("Busiest event rate", rates.max(by: { $0.value < $1.value }).map { "\($0.key): \(String(format: "%.1f", $0.value))/s" } ?? "Unavailable")
+                    row("Disk-write measurement window", diskWriteMeasurementWindow)
+                    ForEach(diskWriterNames, id: \.self) { writer in
+                        row("Disk writer · \(diskWriterLabel(writer))", diskWriterSummary(writer))
+                    }
+                    row("Projected Nick writes/day", projectedDiskWriteSummary)
                 }
 
                 diagnosticCard("Network and updates", systemImage: "network") {
@@ -142,6 +147,60 @@ struct DiagnosticsView: View {
     private func healthDate(_ key: String) -> Date? {
         guard let value = xpcClient.extensionHealth?[key] as? TimeInterval else { return nil }
         return Date(timeIntervalSince1970: value)
+    }
+
+    private var diskWriterNames: [String] {
+        let names = Set(diskWriteCounts.keys).union(diskWriteBytes.keys)
+        return names.sorted()
+    }
+
+    private var diskWriteCounts: [String: NSNumber] {
+        numberDictionary("diskWriteCountsByWriter")
+    }
+
+    private var diskWriteBytes: [String: NSNumber] {
+        numberDictionary("diskWriteBytesByWriter")
+    }
+
+    private var diskWriteMeasurementWindow: String {
+        guard let seconds = xpcClient.extensionHealth?["diskWriteMeasurementSeconds"] as? NSNumber else {
+            return "Unavailable"
+        }
+        return Duration.seconds(seconds.doubleValue).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated))
+    }
+
+    private func numberDictionary(_ key: String) -> [String: NSNumber] {
+        guard let raw = xpcClient.extensionHealth?[key] as? [String: Any] else { return [:] }
+        return raw.reduce(into: [:]) { result, entry in
+            if let number = entry.value as? NSNumber { result[entry.key] = number }
+        }
+    }
+
+    private func diskWriterLabel(_ writer: String) -> String {
+        switch writer {
+        case "incident-store": return "incidents"
+        case "settings-store": return "settings"
+        case "endpoint-event-journal": return "event journal"
+        case "endpoint-event-compaction": return "event compaction"
+        case "extension-health": return "health"
+        default: return writer
+        }
+    }
+
+    private func diskWriterSummary(_ writer: String) -> String {
+        let count = diskWriteCounts[writer]?.uint64Value ?? 0
+        let bytes = diskWriteBytes[writer]?.int64Value ?? 0
+        return "\(count.formatted()) writes · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
+    }
+
+    private var projectedDiskWriteSummary: String {
+        guard let projected = xpcClient.extensionHealth?["projectedDiskBytesPerDay"] as? NSNumber,
+              let target = xpcClient.extensionHealth?["diskWriteDailyTargetBytes"] as? NSNumber
+        else { return "Unavailable" }
+        let projection = ByteCountFormatter.string(fromByteCount: projected.int64Value, countStyle: .file)
+        let limit = ByteCountFormatter.string(fromByteCount: target.int64Value, countStyle: .file)
+        let measuring = (xpcClient.extensionHealth?["diskWriteMeasurementSeconds"] as? NSNumber)?.doubleValue ?? 0 < 3_600
+        return "\(projection) / \(limit) target\(measuring ? " · preliminary" : "")"
     }
 
     private var catalogSummary: String {

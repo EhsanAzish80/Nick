@@ -147,7 +147,7 @@ final class SmartScanStatusTests: XCTestCase {
         XCTAssertFalse(SmartScanChecker.isEmailScannerReady(noDiskAccess, now: now))
 
         var stale = ready
-        stale["updatedAt"] = now - 31
+        stale["updatedAt"] = now - 76
         XCTAssertFalse(SmartScanChecker.isEmailScannerReady(stale, now: now))
 
         XCTAssertFalse(SmartScanChecker.isEmailScannerReady(nil, now: now))
@@ -201,7 +201,7 @@ final class SmartScanStatusTests: XCTestCase {
         )
 
         var stale = active
-        stale["updatedAt"] = now - 31
+        stale["updatedAt"] = now - 76
         XCTAssertFalse(
             SmartScanChecker.isEndpointSecurityActive(
                 stale,

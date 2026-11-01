@@ -79,9 +79,14 @@ final class ESXPCServer: NSObject {
         path: "/Library/Application Support/com.ehsanazish.nick/events/endpoint-events.json",
         legacyPath: "/Library/Application Support/com.ehsanazish.nick/endpoint-events.json"
     )
-    private let incidentStore = PrivilegedIncidentFileStore()
+    private let incidentStore = PrivilegedIncidentFileStore(writeObserver: { writer, bytes in
+        EndpointSecurityClient.healthMetrics.recordDiskWrite(writer: writer, bytes: bytes)
+    })
     private let settingsStore = PrivilegedIncidentFileStore(
-        fileURL: URL(fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/settings.json")
+        fileURL: URL(fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/settings.json"),
+        writeObserver: { writer, bytes in
+            EndpointSecurityClient.healthMetrics.recordDiskWrite(writer: writer, bytes: bytes)
+        }
     )
     weak var updateLeaseManager: NickUpdateLeaseManager?
     var securitySettingsDidChange: ((Data) -> Void)?
@@ -966,14 +971,18 @@ extension ESXPCServer: NickExtensionXPCProtocol {
 /// writes stay live-only so database journals cannot create continuous disk I/O.
 private final class EndpointEventStore {
     private let url: URL
+    private let journalURL: URL
     private let queue = DispatchQueue(
         label: "com.ehsanazish.nick.NickExtension.persisted-events",
         qos: .utility
     )
     private let maximumCount = 250
+    private let maximumJournalBytes = 1_024 * 1_024
+    private var cachedEvents: [PersistedExtensionFinding]?
 
     init(path: String, legacyPath: String) {
         url = URL(fileURLWithPath: path)
+        journalURL = URL(fileURLWithPath: path + ".journal")
         let directory = url.deletingLastPathComponent()
         let fileManager = FileManager.default
         do {
@@ -1019,30 +1028,42 @@ private final class EndpointEventStore {
 
     func append(_ finding: PersistedExtensionFinding) {
         queue.async {
-            self.appendOnQueue(finding)
+            self.appendOnQueue(finding, synchronize: false)
         }
     }
 
     func appendSynchronously(_ finding: PersistedExtensionFinding) {
-        queue.sync { appendOnQueue(finding) }
+        queue.sync { appendOnQueue(finding, synchronize: true) }
     }
 
-    private func appendOnQueue(_ finding: PersistedExtensionFinding) {
-        var events = load()
+    private func appendOnQueue(_ finding: PersistedExtensionFinding, synchronize: Bool) {
+        var events = eventsOnQueue()
         guard !events.contains(where: { $0.id == finding.id }) else { return }
         events.append(finding)
         if events.count > maximumCount {
             events.removeFirst(events.count - maximumCount)
         }
+        cachedEvents = events
         do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
+            try prepareDirectory()
+            var encoded = try JSONEncoder().encode(finding)
+            encoded.append(0x0A)
+            if !FileManager.default.fileExists(atPath: journalURL.path) {
+                FileManager.default.createFile(atPath: journalURL.path, contents: nil)
+            }
+            let handle = try FileHandle(forWritingTo: journalURL)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: encoded)
+            if synchronize { try handle.synchronize() }
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: journalURL.path)
+            EndpointSecurityClient.healthMetrics.recordDiskWrite(
+                writer: "endpoint-event-journal", bytes: encoded.count
             )
-            let encoded = try JSONEncoder().encode(events)
-            try encoded.write(to: url, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            let journalBytes = (try? journalURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            if journalBytes >= maximumJournalBytes {
+                try compactOnQueue(events)
+            }
         } catch {
             ESXPCServer.logger.error(
                 "Could not persist important event: \(error.localizedDescription, privacy: .public)"
@@ -1052,14 +1073,14 @@ private final class EndpointEventStore {
 
     func snapshot() -> Data {
         queue.sync {
-            (try? JSONEncoder().encode(load())) ?? Data("[]".utf8)
+            (try? JSONEncoder().encode(eventsOnQueue())) ?? Data("[]".utf8)
         }
     }
 
     func removeThreats(eventIDs: Set<UUID>) {
         guard !eventIDs.isEmpty else { return }
         queue.async {
-            var events = self.load()
+            var events = self.eventsOnQueue()
             events.removeAll { finding in
                 guard finding.kind == .threat,
                       let event = try? JSONDecoder().decode(ESEvent.self, from: finding.payload)
@@ -1067,12 +1088,8 @@ private final class EndpointEventStore {
                 return eventIDs.contains(event.id)
             }
             do {
-                let encoded = try JSONEncoder().encode(events)
-                try encoded.write(to: self.url, options: .atomic)
-                try FileManager.default.setAttributes(
-                    [.posixPermissions: 0o600],
-                    ofItemAtPath: self.url.path
-                )
+                self.cachedEvents = events
+                try self.compactOnQueue(events)
             } catch {
                 ESXPCServer.logger.error(
                     "Could not acknowledge persisted threats: \(error.localizedDescription, privacy: .public)"
@@ -1082,20 +1099,64 @@ private final class EndpointEventStore {
     }
 
     private func load() -> [PersistedExtensionFinding] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        if let findings = try? JSONDecoder().decode([PersistedExtensionFinding].self, from: data) {
-            return findings
+        var findings: [PersistedExtensionFinding] = []
+        if let data = try? Data(contentsOf: url) {
+            if let decoded = try? JSONDecoder().decode([PersistedExtensionFinding].self, from: data) {
+                findings = decoded
+            } else {
+                // One-time migration from the 4.6.3 ESEvent-only journal.
+                let oldEvents = (try? JSONDecoder().decode([ESEvent].self, from: data)) ?? []
+                findings = oldEvents.compactMap { event in
+                    guard let payload = try? JSONEncoder().encode(event) else { return nil }
+                    return PersistedExtensionFinding(
+                        id: event.id,
+                        kind: .endpointEvent,
+                        timestamp: event.timestamp,
+                        payload: payload
+                    )
+                }
+            }
         }
-        // One-time migration from the 4.6.3 ESEvent-only journal.
-        let oldEvents = (try? JSONDecoder().decode([ESEvent].self, from: data)) ?? []
-        return oldEvents.compactMap { event in
-            guard let payload = try? JSONEncoder().encode(event) else { return nil }
-            return PersistedExtensionFinding(
-                id: event.id,
-                kind: .endpointEvent,
-                timestamp: event.timestamp,
-                payload: payload
-            )
+        if let journal = try? String(contentsOf: journalURL, encoding: .utf8) {
+            let decoder = JSONDecoder()
+            for line in journal.split(separator: "\n") {
+                guard let data = line.data(using: .utf8),
+                      let finding = try? decoder.decode(PersistedExtensionFinding.self, from: data)
+                else { continue }
+                if let index = findings.firstIndex(where: { $0.id == finding.id }) {
+                    findings[index] = finding
+                } else {
+                    findings.append(finding)
+                }
+            }
         }
+        return Array(findings.suffix(maximumCount))
+    }
+
+    private func eventsOnQueue() -> [PersistedExtensionFinding] {
+        if let cachedEvents { return cachedEvents }
+        let loaded = load()
+        cachedEvents = loaded
+        return loaded
+    }
+
+    private func prepareDirectory() throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+    }
+
+    private func compactOnQueue(_ events: [PersistedExtensionFinding]) throws {
+        try prepareDirectory()
+        let encoded = try JSONEncoder().encode(events)
+        try encoded.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try Data().write(to: journalURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: journalURL.path)
+        EndpointSecurityClient.healthMetrics.recordDiskWrite(
+            writer: "endpoint-event-compaction", bytes: encoded.count
+        )
     }
 }

@@ -703,7 +703,7 @@ final class SmartScanChecker {
         }
 
         let age = now - updatedAt
-        return age >= 0 && age <= 30
+        return age >= 0 && age <= 75
     }
 
     var endpointExtensionNeedsUpdate: Bool {
@@ -745,7 +745,7 @@ final class SmartScanChecker {
             return false
         }
         let age = now - updatedAt
-        return age >= 0 && age <= 30
+        return age >= 0 && age <= 75
     }
 
     private var isNetworkFilterActive: Bool {
