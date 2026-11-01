@@ -7,8 +7,9 @@ import XCTest
 
 final class FileIntegrityPathPolicyTests: XCTestCase {
 
-    func test_unacknowledgedCreatedThenDeletedProducesDeletionEvidence() throws {
-        let path = "/Users/example/Library/LaunchAgents/com.example.transient.plist"
+    func testUnacknowledgedCreatedThenDeletedProducesDeletionEvidence() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("com.example.transient.plist").path
         let createdAt = Date(timeIntervalSince1970: 100)
         let removedAt = Date(timeIntervalSince1970: 110)
         let created = IntegrityViolation(
@@ -37,18 +38,22 @@ final class FileIntegrityPathPolicyTests: XCTestCase {
         )
     }
 
-    func test_neverSeenAbsentFileProducesNoDeletionEvidence() {
+    func testNeverSeenAbsentFileProducesNoDeletionEvidence() {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("never-seen.plist").path
         XCTAssertNil(FileIntegrityDeletionEvidence.violation(
-            path: "/Users/example/Library/LaunchAgents/never-seen.plist",
+            path: path,
             baselineHash: nil,
             pendingViolations: [],
             removedAt: Date()
         ))
     }
 
-    func test_baselinedFileDeletionRemainsUnchanged() throws {
+    func testBaselinedFileDeletionRemainsUnchanged() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("com.example.baselined.plist").path
         let deletion = try XCTUnwrap(FileIntegrityDeletionEvidence.violation(
-            path: "/Library/LaunchDaemons/com.example.baselined.plist",
+            path: path,
             baselineHash: "baseline-hash",
             pendingViolations: [],
             removedAt: Date(timeIntervalSince1970: 200)

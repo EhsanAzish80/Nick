@@ -30,20 +30,15 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-if [ ! -d "$launch_agents" ]; then
-    if ! mkdir -p "$launch_agents"; then
-        echo "Could not create $launch_agents as $invoking_user; skipping file-deletion fixture." >&2
-        exit 78
-    fi
+if [ ! -d "$launch_agents" ] && ! mkdir -p "$launch_agents"; then
+    echo "Could not create $launch_agents as $invoking_user; skipping file-deletion fixture." >&2
+    exit 78
 fi
 umask 077
-printf '%s\n' \
-    '<?xml version="1.0" encoding="UTF-8"?>' \
-    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
-    '<plist version="1.0"><dict>' \
-    '<key>Label</key><string>com.ehsanazish.nick.fixture.deletion</string>' \
-    '<key>ProgramArguments</key><array><string>/usr/bin/true</string></array>' \
-    '</dict></plist>' > "$plist"
+/usr/bin/plutil -create xml1 "$plist"
+/usr/libexec/PlistBuddy -c "Add :Label string com.ehsanazish.nick.fixture.deletion" "$plist"
+/usr/libexec/PlistBuddy -c "Add :ProgramArguments array" "$plist"
+/usr/libexec/PlistBuddy -c "Add :ProgramArguments:0 string /usr/bin/true" "$plist"
 
 # The root recorder observes the durable creation evidence, then creates the
 # phase marker. The fixture itself never reads Nick's root-owned stores.

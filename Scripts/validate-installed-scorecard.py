@@ -393,7 +393,7 @@ def run_file_deletion_replay(
 
     created_id, created = creation_matches[0]
     deleted_id, deleted = deletion_matches[0]
-    tier = sorted(set(deleted["tiers"]).intersection({"review", "protected"}))[0]
+    tier = min(set(deleted["tiers"]).intersection({"review", "protected"}))
     latency = time.time() - started
     return {
         "status": "DETECTED",
