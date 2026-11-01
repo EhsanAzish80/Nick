@@ -149,6 +149,62 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
         )
         self.assertEqual([identifier for identifier, _ in matches], ["canary:2:reviewed"])
 
+    def test_login_item_requires_the_fixture_unique_identifier(self):
+        after = {
+            "unrelated:1:new": {
+                "reasons": ["background-item-added"], "tiers": ["review"],
+                "paths": [], "correlationValues": ["com.example.other"],
+            },
+            "fixture:1:new": {
+                "reasons": ["background-item-added"], "tiers": ["review"],
+                "paths": [],
+                "correlationValues": ["com.3nsofts.nick.scorecard.loginitem.123"],
+            },
+        }
+        matches = MODULE.matching_incidents(
+            {}, after, {"background-item-added"}, {"review"},
+            expected_correlation_value="com.3nsofts.nick.scorecard.loginitem.123",
+        )
+        self.assertEqual([identifier for identifier, _ in matches], ["fixture:1:new"])
+
+    def test_network_canary_still_requires_fixture_process_lineage(self):
+        lineage = MODULE.FixtureLineage(4200, {4200, 4201})
+        after = {
+            "unrelated:1:new": {
+                "reasons": ["NICK_CANARY_WEB", "nick_test_indicator"],
+                "tiers": ["inform"], "paths": [], "processIDs": [9000],
+                "parentPIDs": [], "processGroupIDs": [], "sessionIDs": [],
+            },
+            "fixture:1:new": {
+                "reasons": ["NICK_CANARY_WEB", "nick_test_indicator"],
+                "tiers": ["inform"], "paths": [], "processIDs": [4201],
+                "parentPIDs": [], "processGroupIDs": [], "sessionIDs": [],
+            },
+        }
+        matches = MODULE.matching_incidents(
+            {}, after, {"NICK_CANARY_WEB", "nick_test_indicator"}, {"inform"},
+            fixture_lineage=lineage,
+        )
+        self.assertEqual([identifier for identifier, _ in matches], ["fixture:1:new"])
+
+    def test_fingerprint_preserves_async_correlation_and_network_pid(self):
+        snapshot = {"incidents": [{
+            "id": "async-evidence", "state": "new",
+            "alert": {"title": "test", "occurrenceCount": 1, "contributingSignals": [{
+                "metadata": {
+                    "rule": "NICK_CANARY_WEB", "ruleTier": "inform",
+                    "indicatorID": "NICK_CANARY_WEB", "pid": "4242",
+                    "launchItemLabel": "com.3nsofts.fixture",
+                }
+            }]},
+        }]}
+        record = next(iter(MODULE.incident_fingerprints_from_snapshot(snapshot).values()))
+        self.assertEqual(record["processIDs"], [4242])
+        self.assertEqual(
+            record["correlationValues"],
+            ["NICK_CANARY_WEB", "com.3nsofts.fixture"],
+        )
+
     def test_wait_polls_until_delayed_expected_evidence_arrives(self):
         before = {"old:1:new": {"reasons": ["process_discovery"], "tiers": ["review"]}}
         unrelated = {
@@ -219,6 +275,8 @@ class FixtureInvocationTests(unittest.TestCase):
         command = MODULE.console_user_fixture_command(fixture, "/tmp/fixture", user, 501)
         self.assertEqual(command[:3], ["/bin/launchctl", "asuser", "501"])
         self.assertEqual(command[3:8], ["/usr/bin/sudo", "-H", "-u", user, "--"])
+        fixture_text = fixture.read_text(encoding="utf-8")
+        self.assertIn("NICK_FIXTURE_LOGIN_ITEM=", fixture_text)
 
 
 class CorpusAndStrictModeTests(unittest.TestCase):

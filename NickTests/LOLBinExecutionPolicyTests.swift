@@ -122,7 +122,7 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
         }
     }
 
-    func test_standaloneDecoderIsReviewEvidence() throws {
+    func test_standaloneDecoderIsObservedEvidence() throws {
         for invocation in [
             ("/usr/bin/base64", ["base64", "-D", "/tmp/payload"]),
             ("/usr/bin/openssl", ["openssl", "enc", "-d", "-in", "/tmp/payload"]),
@@ -134,6 +134,7 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
             ))
             XCTAssertEqual(finding.reason, "encoded_payload")
             XCTAssertEqual(finding.severity, "medium")
+            XCTAssertEqual(finding.tier, .observed)
         }
     }
 

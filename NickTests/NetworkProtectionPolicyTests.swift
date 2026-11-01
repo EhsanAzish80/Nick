@@ -1234,6 +1234,33 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         XCTAssertEqual(context.destinationActionLabel, "Allow This Website")
     }
 
+    func test_networkFindingPreservesKernelProcessIdentityForLineage() throws {
+        let event = NetworkBlockEvent(
+            host: "nick-canary.3nsofts.com",
+            appIdentifier: "com.apple.curl",
+            decision: .observed,
+            reason: NetworkObservationReason.knownThreat.rawValue,
+            reasonTitle: "Nick test indicator",
+            port: 443,
+            isTestIndicator: true,
+            indicatorIdentifier: "NICK_CANARY_WEB",
+            sourcePID: 4242,
+            sourcePIDVersion: 17
+        )
+
+        let roundTrip = try JSONDecoder().decode(
+            NetworkBlockEvent.self,
+            from: JSONEncoder().encode(event)
+        )
+        let finding = NetworkFinding(event: roundTrip)
+
+        XCTAssertEqual(roundTrip.sourcePID, 4242)
+        XCTAssertEqual(roundTrip.sourcePIDVersion, 17)
+        XCTAssertEqual(finding.signal.metadata["pid"], "4242")
+        XCTAssertEqual(finding.signal.metadata["pidVersion"], "17")
+        XCTAssertEqual(finding.signal.metadata["indicatorID"], "NICK_CANARY_WEB")
+    }
+
     func test_exactKnownThreatUsesDedicatedTitleHonestWordingAndCoalescedNotification() {
         var clock = Date(timeIntervalSince1970: 50_000)
         let store = IncidentStore(persistOnInit: false, now: { clock })

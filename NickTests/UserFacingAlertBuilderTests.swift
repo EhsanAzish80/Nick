@@ -7,6 +7,36 @@ import XCTest
 
 final class UserFacingAlertBuilderTests: XCTestCase {
 
+    func testStandaloneDecoderUsesObservedNaturalPresentation() {
+        let signal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .info,
+            title: "Decoded an encoded payload",
+            description: "Decoded content only.",
+            context: .init(metadata: [
+                "reason": "encoded_payload",
+                "rule": "encoded_payload",
+                "ruleTier": "observed",
+                "deliveryLevel": "silent"
+            ])
+        )
+        let alert = ThreatAlert(
+            score: 0.1,
+            content: .init(
+                title: signal.title,
+                description: signal.description,
+                severity: .info,
+                recommendedAction: "No action needed"
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+        XCTAssertEqual(result.headline, "Decoded encoded content")
+        XCTAssertTrue(result.explanation.contains("no interpreter execution was observed"))
+        XCTAssertFalse(result.headline.contains("sent to an interpreter"))
+    }
+
     func testUnusualNetworkTitleNamesAppAndDestination() {
         let signal = ThreatSignal(
             source: .network,

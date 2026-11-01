@@ -1740,12 +1740,15 @@ struct ExtensionFinding: Sendable {
         let isManagementObservation = event.threatFamily == "endpoint-management"
         let isProtectionContinuity = event.threatFamily == "protection-continuity"
         let isAppleReviewEvent = event.metadata?["ruleTier"] == "review"
+        let isObservedEvent = event.metadata?["ruleTier"] == "observed"
         let isTestIndicator = event.metadata?["category"] == "test"
         let isRansomwareBehavior = event.metadata?["detectionKind"] == "ransomware-behavior"
         let isLOLBinBehavior = event.metadata?["detectionKind"] == "lolbin-behavior"
         let isCredentialAccess = event.metadata?["detectionKind"] == "credential-access"
         let severity: SignalSeverity
         if isTestIndicator {
+            severity = .info
+        } else if isObservedEvent {
             severity = .info
         } else if event.decision == .deny {
             severity = .critical
@@ -1876,10 +1879,12 @@ struct ExtensionFinding: Sendable {
                 metadata: metadata
             )
         )
-        score = event.decision == .deny ? 0.98 : ((isAuditEvent || isAppleReviewEvent) ? 0.35 : 0.9)
+        score = event.decision == .deny
+            ? 0.98
+            : (isObservedEvent ? 0.1 : ((isAuditEvent || isAppleReviewEvent) ? 0.35 : 0.9))
         recommendedAction = isProtectionContinuity
             ? "Protection has reconnected. Review the recorded interval if you did not expect the interruption."
-            : (isAuditEvent || isAppleReviewEvent)
+            : (isObservedEvent || isAuditEvent || isAppleReviewEvent)
             ? "No action is needed if you ran this command."
             : "Review the event and investigate it if you do not recognise the activity."
     }
@@ -1963,8 +1968,10 @@ struct ExtensionFinding: Sendable {
                 return "Nick saw AppleScript start a shell command."
             case "quarantine_removal":
                 return "Nick saw a command remove macOS quarantine metadata."
-            case "base64_payload", "encoded_payload":
+            case "base64_payload":
                 return "Nick saw a command decode and execute an encoded payload."
+            case "encoded_payload":
+                return "Nick saw a command decode encoded content. It did not observe that output being executed."
             default:
                 return "Nick saw a command perform security-sensitive behavior."
             }

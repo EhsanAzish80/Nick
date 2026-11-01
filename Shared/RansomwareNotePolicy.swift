@@ -99,6 +99,8 @@ enum AppleSyncRenamePolicy {
             || signingID == "com.apple.cloudd"
             || signingID == "com.apple.fileproviderd"
             || signingID == "com.apple.mds_stores"
+            || signingID == "com.apple.geod"
+            || signingID == "com.apple.parsec-fbf"
             || signingID.hasPrefix("com.apple.FileProvider.")
             || signingID.hasPrefix("com.apple.fileprovider.")
     }
@@ -109,6 +111,8 @@ enum AppleSyncRenamePolicy {
         case "com.apple.cloudd": return "iCloud Drive (cloudd)"
         case "com.apple.fileproviderd": return "File Provider (fileproviderd)"
         case "com.apple.mds_stores": return "Spotlight indexing (mds_stores)"
+        case "com.apple.geod": return "Apple Maps data (geod)"
+        case "com.apple.parsec-fbf": return "Apple system data (parsec-fbf)"
         default:
             guard let signingID,
                   signingID.hasPrefix("com.apple.FileProvider.")

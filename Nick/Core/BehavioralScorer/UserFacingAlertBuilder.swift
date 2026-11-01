@@ -706,8 +706,10 @@ final class UserFacingAlertBuilder: Sendable {
             return ("Changed scheduled cron jobs", "A command changed scheduled jobs that can run automatically. Nick recorded the command and its initiating app.")
         case "mktemp_execute":
             return ("Executed a newly created temporary file", "A command created and executed content from a temporary location. Nick recorded the command and its initiating app.")
-        case "decoded_payload_interpreter", "base64_payload", "encoded_payload":
+        case "decoded_payload_interpreter", "base64_payload":
             return ("Decoded content was sent to an interpreter", "A command decoded content and sent it to an interpreter as code. Nick recorded the command and its initiating app.")
+        case "encoded_payload":
+            return ("Decoded encoded content", "A command decoded encoded content. Nick recorded it for context; no interpreter execution was observed.")
         case "osascript_shell":
             return ("AppleScript launched a shell command", "osascript launched a shell command. Nick recorded the command and its initiating app.")
         default:

@@ -9,7 +9,7 @@ import CryptoKit
 /// exec path and the app tests. It records evidence only; blocking and incident
 /// policy remain outside this type.
 enum LOLBinExecutionPolicy {
-    enum Tier: String, Equatable, Sendable { case review, protected }
+    enum Tier: String, Equatable, Sendable { case observed, review, protected }
     struct Finding: Equatable, Sendable {
         let title: String
         let reason: String
@@ -65,7 +65,8 @@ enum LOLBinExecutionPolicy {
                 title: "Decoded an encoded payload",
                 reason: "encoded_payload",
                 severity: "medium",
-                matchedCommand: redact(arguments.joined(separator: " "))
+                matchedCommand: redact(arguments.joined(separator: " ")),
+                tier: .observed
             )
         }
         if name == "env", isEnvironmentClearedShellProxy(arguments) {

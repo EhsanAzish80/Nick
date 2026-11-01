@@ -42,7 +42,7 @@ START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
 FULL_START_MARKER = "<!-- installed-full-scorecard:start -->"
 FULL_END_MARKER = "<!-- installed-full-scorecard:end -->"
-EXPECTED_BUILD = "5080"
+EXPECTED_BUILD = "5081"
 SETTINGS = Path("/Library/Application Support/com.ehsanazish.nick/state/settings.json")
 SIGNATURE_DB = Path("/Library/Application Support/com.ehsanazish.nick/signatures.db")
 INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
@@ -290,6 +290,9 @@ def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[
         state = str(incident.get("state", "new"))
         metadata = [signal.get("metadata", signal.get("context", {}).get("metadata", {}))
                     for signal in signals if isinstance(signal, dict)]
+        correlation_values = sorted({str(value) for item in metadata if isinstance(item, dict)
+                                     for key in ("launchItemLabel", "persistencePath", "indicatorID")
+                                     for value in (item.get(key),) if value})
         # Persisted signals carry both a detector rule and, for some families,
         # a more specific presentation reason. Preserve both: either may be
         # the scorecard's expected evidence and neither should mask the other.
@@ -337,6 +340,7 @@ def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[
             "parentPIDs": integer_values("parentPID", "ppid"),
             "processGroupIDs": integer_values("processGroupID", "processGroup", "pgid"),
             "sessionIDs": integer_values("sessionID", "session"),
+            "correlationValues": correlation_values,
             "lastSeen": alert.get("lastSeen") or alert.get("timestamp"),
         }
     return found
@@ -425,6 +429,7 @@ def matching_incidents(
     expected_tiers: set[str],
     expected_path: str | None = None,
     fixture_lineage: FixtureLineage | None = None,
+    expected_correlation_value: str | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
     """Return only newly persisted occurrences matching this replay row."""
     matches: list[tuple[str, dict[str, Any]]] = []
@@ -435,9 +440,12 @@ def matching_incidents(
         paths = {os.path.normpath(path) for path in record.get("paths", []) if path}
         path_matches = expected_path is None or os.path.normpath(expected_path) in paths
         lineage_matches = fixture_lineage is None or fixture_lineage.includes(record)
+        correlation_matches = expected_correlation_value is None or (
+            expected_correlation_value in set(record.get("correlationValues", []))
+        )
         if reasons.intersection(expected_reasons) and (
             not tiers or tiers.intersection(expected_tiers)
-        ) and path_matches and lineage_matches:
+        ) and path_matches and lineage_matches and correlation_matches:
             matches.append((identifier, record))
     return matches
 
@@ -448,6 +456,7 @@ def wait_for_matching_incidents(
     expected_tiers: set[str],
     expected_path: str | None = None,
     fixture_lineage: FixtureLineage | None = None,
+    expected_correlation_value: str | None = None,
     timeout: float = 15.0,
     poll_interval: float = 0.5,
 ) -> tuple[dict[str, dict[str, Any]], list[tuple[str, dict[str, Any]]]]:
@@ -461,7 +470,8 @@ def wait_for_matching_incidents(
     after = load_incident_fingerprints()
     while True:
         matches = matching_incidents(
-            before, after, expected_reasons, expected_tiers, expected_path, fixture_lineage
+            before, after, expected_reasons, expected_tiers, expected_path, fixture_lineage,
+            expected_correlation_value
         )
         if matches or time.monotonic() >= deadline:
             return after, matches
@@ -791,8 +801,8 @@ def full_scorecard_rows(
         f"| ATT&CK for macOS, 24 pinned techniques | ≥ 80% alerted; all mandatory alerted; ≥ 25% preventable (strict mode) | 100% alerted; ≥ 60% preventable | {len(successes)}/24 alerted ({attack_percent:.2f}%); {len(prevented)}/24 prevented ({prevention_percent:.2f}%); {mandatory_result} | {attack_evidence}; {mandatory_evidence} |",
         "| Root: extension stopped, app alive | alert ≤ 60 s | ≤ 10 s | pending | not measured; manual steps: keep Nick open; find the endpoint PID with `pgrep -f '/Library/SystemExtensions/.*/com.ehsanazish.nick.NickExtension.systemextension/Contents/MacOS/com.ehsanazish.nick.NickExtension'`; verify `ps -p <PID> -o command=`; run `sudo kill -9 <PID>`; wait up to 60 s; record the persisted incident ID and timestamps; confirm relaunch |",
         "| Root: extension and app both gone | gap reported on next start, every run | gap includes the bounded interruption window and corroborating local evidence | pending | not measured; manual steps: record T1; verify and stop the endpoint PID as above; immediately Force Quit Nick; wait 60 s; reopen `/Applications/Nick.app`; record the persisted gap incident, T2, and bounded interval; confirm reconnection |",
-        "| False positives, ≥ 40 active workload hours, fixed manifest, counted per incident key | ≤ 1 review-tier, 0 protected | 0 | not measured | not measured for build 5080 |",
-        "| ES health | p99 < 100 ms, 0 deadline misses, 0 acks without persistence | p99 < 30 ms | not measured | not measured for build 5080 |",
+        "| False positives, ≥ 40 active workload hours, fixed manifest, counted per incident key | ≤ 1 review-tier, 0 protected | 0 | not measured | not measured for build 5081 |",
+        "| ES health | p99 < 100 ms, 0 deadline misses, 0 acks without persistence | p99 < 30 ms | not measured | not measured for build 5081 |",
     ]
 
 
@@ -994,6 +1004,7 @@ def main() -> int:
         started = time.time()
         manual_completed = False
         fixture_returncode = 0
+        fixture_correlation_value: str | None = None
         with tempfile.TemporaryDirectory(prefix="nick-scorecard-") as scratch:
             environment = os.environ.copy()
             environment["NICK_FIXTURE_ROOT"] = scratch
@@ -1031,6 +1042,13 @@ def main() -> int:
             fixture_returncode = completed.returncode
             if completed.stdout:
                 print(completed.stdout.rstrip())
+                if fixture_name == "login-item-add":
+                    marker = "NICK_FIXTURE_LOGIN_ITEM="
+                    fixture_correlation_value = next(
+                        (line[len(marker):].strip() for line in completed.stdout.splitlines()
+                         if line.startswith(marker)),
+                        None,
+                    )
             if completed.returncode == 64:
                 manual_action = input("Complete the printed manual steps, then press Enter; s to skip: ").strip().lower()
                 if manual_action == "s":
@@ -1047,9 +1065,15 @@ def main() -> int:
                 )
         expected_reasons, expected_tiers = EXPECTED[technique["id"]]
         required_lineage = fixture_lineage if technique["id"] in MAPPING_REVIEW_TECHNIQUES else None
+        if technique["id"] == LOGIN_ITEMS_TECHNIQUE and fixture_correlation_value:
+            # BTM reports the daemon that commits the login item, not the
+            # originating osascript process. Preserve strict correlation by
+            # requiring the fixture's unique, per-run bundle identifier.
+            required_lineage = None
         after, matches = wait_for_matching_incidents(
             before, expected_reasons, expected_tiers,
             fixture_lineage=required_lineage,
+            expected_correlation_value=fixture_correlation_value,
         )
         describe_new_occurrences(before, after, required_lineage)
         prevention_after = prevention_fingerprints()

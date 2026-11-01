@@ -144,6 +144,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
         let portString = port >= 0 ? "\(port)" : "?"
         let appID = signingIdentifier(for: flow.sourceAppAuditToken) ?? "unknown"
+        let sourceIdentity = Self.processIdentity(for: flow.sourceAppAuditToken)
         let configuration = NetworkProtectionConfiguration(
             vendorConfiguration: filterConfiguration.vendorConfiguration
         )
@@ -166,7 +167,8 @@ final class FilterDataProvider: NEFilterDataProvider {
                 host: host,
                 appID: appID,
                 port: port,
-                signedMatch: signedMatch
+                signedMatch: signedMatch,
+                sourceIdentity: sourceIdentity
             )
             return .allow()
         }
@@ -177,7 +179,8 @@ final class FilterDataProvider: NEFilterDataProvider {
                 host: host,
                 appID: appID,
                 port: port,
-                signedMatch: reason == .knownThreat ? signedMatch : nil
+                signedMatch: reason == .knownThreat ? signedMatch : nil,
+                sourceIdentity: sourceIdentity
             )
         }
 
@@ -189,7 +192,8 @@ final class FilterDataProvider: NEFilterDataProvider {
                 reason: .unusualPort,
                 host: host,
                 appID: appID,
-                port: port
+                port: port,
+                sourceIdentity: sourceIdentity
             )
         }
 
@@ -199,7 +203,8 @@ final class FilterDataProvider: NEFilterDataProvider {
                 reason: .connectionRate,
                 host: host,
                 appID: appID,
-                port: port
+                port: port,
+                sourceIdentity: sourceIdentity
             )
         }
 
@@ -214,7 +219,8 @@ final class FilterDataProvider: NEFilterDataProvider {
         host: String,
         appID: String,
         port: Int,
-        signedMatch: NetworkBlocklist.Match? = nil
+        signedMatch: NetworkBlocklist.Match? = nil,
+        sourceIdentity: (pid: Int32, pidVersion: Int32)? = nil
     ) {
         let normalizedHost = NetworkProtectionConfiguration.normalizedDomain(host) ?? host
         let throttleKey = "\(appID)|\(reason.rawValue)|\(normalizedHost)"
@@ -249,7 +255,9 @@ final class FilterDataProvider: NEFilterDataProvider {
             sourceIssuedAt: reason == .knownThreat ? blocklist.provenance?.issuedAt : nil,
             sourceExpiresAt: reason == .knownThreat ? blocklist.provenance?.expiresAt : nil,
             isTestIndicator: signedMatch?.isTestIndicator == true,
-            indicatorIdentifier: signedMatch?.identifier
+            indicatorIdentifier: signedMatch?.identifier,
+            sourcePID: sourceIdentity?.pid,
+            sourcePIDVersion: sourceIdentity?.pidVersion
         )
         eventWriteQueue.async { [eventStore] in
             eventStore.append(event)
@@ -260,6 +268,26 @@ final class FilterDataProvider: NEFilterDataProvider {
                 deliverImmediately: true
             )
         }
+    }
+
+    /// Decode only the kernel-defined pid/pidversion words from an audit token.
+    /// Avoids a live process lookup on the Network Extension verdict path.
+    private static func processIdentity(for auditToken: Data?) -> (pid: Int32, pidVersion: Int32)? {
+        guard let auditToken, auditToken.count == MemoryLayout<UInt32>.size * 8 else {
+            return nil
+        }
+        let bytes = [UInt8](auditToken)
+        func word(_ index: Int) -> UInt32 {
+            let offset = index * 4
+            return UInt32(bytes[offset])
+                | (UInt32(bytes[offset + 1]) << 8)
+                | (UInt32(bytes[offset + 2]) << 16)
+                | (UInt32(bytes[offset + 3]) << 24)
+        }
+        let pid = Int32(bitPattern: word(5))
+        let pidVersion = Int32(bitPattern: word(7))
+        guard pid > 0, pidVersion >= 0 else { return nil }
+        return (pid, pidVersion)
     }
 
     private func signingIdentifier(for auditToken: Data?) -> String? {
