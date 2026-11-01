@@ -114,13 +114,41 @@ final class RansomwareAtomicRenameTests: XCTestCase {
                        "Spotlight indexing (mds_stores)")
     }
 
-    func test_routineMapAndTmpDestinationsDoNotCountAsRansomwareExtensions() {
+    func test_routineMapTmpAndProcessingDestinationsDoNotCountAsRansomwareExtensions() {
         XCTAssertNil(RansomwareRenamePolicy.introducedExtension(
             source: "/tmp/a.old", destination: "/tmp/a.map"
         ))
         XCTAssertNil(RansomwareRenamePolicy.introducedExtension(
             source: "/tmp/a.old", destination: "/tmp/a.tmp"
         ))
+        XCTAssertNil(RansomwareRenamePolicy.introducedExtension(
+            source: "/tmp/item.cache", destination: "/tmp/item.cache.processing"
+        ))
+    }
+
+    func test_processingWorkflowBurstDoesNotCountButLockedBurstStillDoes() {
+        let tracker = BehaviorTracker()
+        let now = Date()
+
+        for index in 0..<8 {
+            tracker.recordRename(
+                pid: 52, processGroupID: 52, processPath: "/system-service",
+                source: "/tmp/work/item-\(index).cache",
+                destination: "/tmp/work/item-\(index).cache.processing",
+                at: now
+            )
+        }
+        XCTAssertNil(tracker.extensionChangeBurst(pid: 52, window: 10))
+
+        for index in 0..<8 {
+            tracker.recordRename(
+                pid: 53, processGroupID: 53, processPath: "/untrusted-actor",
+                source: "/tmp/docs/report-\(index).pdf",
+                destination: "/tmp/docs/report-\(index).pdf.locked",
+                at: now
+            )
+        }
+        XCTAssertEqual(tracker.extensionChangeBurst(pid: 53, window: 10)?.fileCount, 8)
     }
 
     func test_separatePlatformMvProcessesAggregateByResponsibleLineageAndDirectory() {
