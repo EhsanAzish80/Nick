@@ -2251,7 +2251,10 @@ final class ESEventHandler {
             ).metadata
         }
         let writer = actorPID.flatMap { processTree?.attackChain(pid: $0).last }
-        var metadata = attribution ?? [:]
+        var metadata = violation.metadata ?? [:]
+        if let attribution {
+            metadata.merge(attribution) { _, attributedValue in attributedValue }
+        }
         if let writerPath = actorPath ?? writer?.path {
             metadata["fimWriterName"] = URL(fileURLWithPath: writerPath).lastPathComponent
             metadata["fimWriterPath"] = writerPath
@@ -2262,6 +2265,11 @@ final class ESEventHandler {
             metadata["rule"] = "shell_profile_modification"
             metadata["ruleTier"] = suspicious ? "protected" : "review"
             metadata["signalSeverity"] = suspicious ? "high" : "medium"
+        } else if violation.violationType == .deleted {
+            metadata["reason"] = "file_integrity_deleted"
+            metadata["rule"] = "file_integrity_deleted"
+            metadata["ruleTier"] = "review"
+            metadata["signalSeverity"] = "medium"
         }
         let attributed = IntegrityViolation(
             id: violation.id,

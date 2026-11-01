@@ -7,6 +7,59 @@ import XCTest
 
 final class FileIntegrityPathPolicyTests: XCTestCase {
 
+    func test_unacknowledgedCreatedThenDeletedProducesDeletionEvidence() throws {
+        let path = "/Users/example/Library/LaunchAgents/com.example.transient.plist"
+        let createdAt = Date(timeIntervalSince1970: 100)
+        let removedAt = Date(timeIntervalSince1970: 110)
+        let created = IntegrityViolation(
+            path: path,
+            violationType: .created,
+            expectedHash: nil,
+            actualHash: "created-hash",
+            timestamp: createdAt
+        )
+
+        let deletion = try XCTUnwrap(FileIntegrityDeletionEvidence.violation(
+            path: path,
+            baselineHash: nil,
+            pendingViolations: [created],
+            removedAt: removedAt
+        ))
+
+        XCTAssertEqual(deletion.violationType, .deleted)
+        XCTAssertEqual(deletion.expectedHash, "created-hash")
+        XCTAssertNil(deletion.actualHash)
+        XCTAssertEqual(deletion.metadata?["createdAt"], "1970-01-01T00:01:40Z")
+        XCTAssertEqual(deletion.metadata?["removedAt"], "1970-01-01T00:01:50Z")
+        XCTAssertEqual(
+            deletion.metadata?["evidence"],
+            "created at 1970-01-01T00:01:40Z and removed at 1970-01-01T00:01:50Z without review"
+        )
+    }
+
+    func test_neverSeenAbsentFileProducesNoDeletionEvidence() {
+        XCTAssertNil(FileIntegrityDeletionEvidence.violation(
+            path: "/Users/example/Library/LaunchAgents/never-seen.plist",
+            baselineHash: nil,
+            pendingViolations: [],
+            removedAt: Date()
+        ))
+    }
+
+    func test_baselinedFileDeletionRemainsUnchanged() throws {
+        let deletion = try XCTUnwrap(FileIntegrityDeletionEvidence.violation(
+            path: "/Library/LaunchDaemons/com.example.baselined.plist",
+            baselineHash: "baseline-hash",
+            pendingViolations: [],
+            removedAt: Date(timeIntervalSince1970: 200)
+        ))
+
+        XCTAssertEqual(deletion.violationType, .deleted)
+        XCTAssertEqual(deletion.expectedHash, "baseline-hash")
+        XCTAssertNil(deletion.actualHash)
+        XCTAssertNil(deletion.metadata)
+    }
+
     func test_quicklyRestoredShellProfileUsesEventEvidenceInsteadOfPeriodicHashOnly() throws {
         let projectRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

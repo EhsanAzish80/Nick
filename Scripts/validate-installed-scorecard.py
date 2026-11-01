@@ -66,7 +66,7 @@ INSTRUCTIONS = {
     "tcc-modification": "Run the declared synthetic TCC-change fixture.",
     "nick-tamper": "Run the documented Nick self-tamper validation fixture.",
     "permission-modification": "Change permissions only on the declared scratch fixture.",
-    "file-deletion": "Create an inert LaunchAgent, wait for Nick to baseline it, then delete it without loading it.",
+    "file-deletion": "Create an inert LaunchAgent as your user; the recorder waits for durable creation evidence, then asks the fixture to delete it.",
     "encoded-payload": "Run the declared harmless encoded-payload fixture.",
     "write-then-swap": "Run the declared random-byte write-then-swap scratch fixture.",
     "system-discovery": "Run the declared system-discovery fixture.",
@@ -110,7 +110,7 @@ EXPECTED = {
     # without inflating threat totals or contacting a malicious host.
     "T1071.001": ({"NICK_CANARY_WEB", "nick_test_indicator"}, {"inform"}),
 }
-ROOT_FIXTURES = {"launch-daemon-add", "file-deletion"}
+ROOT_FIXTURES = {"launch-daemon-add"}
 INTERACTIVE_FIXTURES = {"tcc-modification"}
 DETECTION_ONLY_TECHNIQUES = {"T1070.004"}
 COMPLETED_STATUSES = {"PASS", "PREVENTED", "DETECTED", "PASS (field evidence)"}
@@ -276,6 +276,7 @@ def matching_incidents(
     after: dict[str, dict[str, Any]],
     expected_reasons: set[str],
     expected_tiers: set[str],
+    expected_path: str | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
     """Return only newly persisted occurrences matching this replay row."""
     matches: list[tuple[str, dict[str, Any]]] = []
@@ -283,9 +284,11 @@ def matching_incidents(
         record = after[identifier]
         reasons = set(record["reasons"])
         tiers = set(record["tiers"])
+        paths = {os.path.normpath(path) for path in record.get("paths", []) if path}
+        path_matches = expected_path is None or os.path.normpath(expected_path) in paths
         if reasons.intersection(expected_reasons) and (
             not tiers or tiers.intersection(expected_tiers)
-        ):
+        ) and path_matches:
             matches.append((identifier, record))
     return matches
 
@@ -294,6 +297,7 @@ def wait_for_matching_incidents(
     before: dict[str, dict[str, Any]],
     expected_reasons: set[str],
     expected_tiers: set[str],
+    expected_path: str | None = None,
     timeout: float = 15.0,
     poll_interval: float = 0.5,
 ) -> tuple[dict[str, dict[str, Any]], list[tuple[str, dict[str, Any]]]]:
@@ -306,11 +310,100 @@ def wait_for_matching_incidents(
     deadline = time.monotonic() + timeout
     after = load_incident_fingerprints()
     while True:
-        matches = matching_incidents(before, after, expected_reasons, expected_tiers)
+        matches = matching_incidents(
+            before, after, expected_reasons, expected_tiers, expected_path
+        )
         if matches or time.monotonic() >= deadline:
             return after, matches
         time.sleep(poll_interval)
         after = load_incident_fingerprints()
+
+
+def run_file_deletion_replay(
+    fixture: Path,
+    scratch: str,
+    user: str,
+    before: dict[str, dict[str, Any]],
+    started: float,
+) -> dict[str, str]:
+    """Drive the user file operations around root-store evidence polling."""
+    target = str(
+        Path(pwd.getpwnam(user).pw_dir)
+        / "Library/LaunchAgents/com.ehsanazish.nick.fixture.deletion.plist"
+    )
+    marker = Path(scratch) / "file-deletion-phase2"
+    process = subprocess.Popen(
+        user_fixture_command(fixture, scratch, user),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    creation_after: dict[str, dict[str, Any]] = before
+    creation_matches: list[tuple[str, dict[str, Any]]] = []
+    output = ""
+    try:
+        creation_after, creation_matches = wait_for_matching_incidents(
+            before,
+            {"file_integrity_created"},
+            {"review", "protected"},
+            expected_path=target,
+            timeout=30,
+        )
+        marker.touch(exist_ok=True)
+        try:
+            output, _ = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    finally:
+        marker.touch(exist_ok=True)
+        if process.poll() is None:
+            process.terminate()
+            try:
+                trailing, _ = process.communicate(timeout=5)
+                output += trailing or ""
+            except subprocess.TimeoutExpired:
+                process.kill()
+                trailing, _ = process.communicate()
+                output += trailing or ""
+    if output.strip():
+        print(output.rstrip())
+
+    reminder = (
+        "Reminder: the created and deleted findings remain pending for you "
+        "to acknowledge in Nick; the recorder did not acknowledge them."
+    )
+    if not creation_matches:
+        print("Creation was not detected within 30 seconds; cleanup still ran.")
+        print(reminder)
+        return {"status": "FAIL", "evidence": "creation not detected"}
+
+    _, deletion_matches = wait_for_matching_incidents(
+        creation_after,
+        {"file_integrity_deleted"},
+        {"review", "protected"},
+        expected_path=target,
+        timeout=30,
+    )
+    print(reminder)
+    if not deletion_matches:
+        return {
+            "status": "FAIL",
+            "evidence": "creation detected as expected; deletion not detected",
+        }
+
+    created_id, created = creation_matches[0]
+    deleted_id, deleted = deletion_matches[0]
+    tier = sorted(set(deleted["tiers"]).intersection({"review", "protected"}))[0]
+    latency = time.time() - started
+    return {
+        "status": "DETECTED",
+        "evidence": (
+            f"created={created_id} (expected evidence, tier="
+            f"{','.join(created['tiers']) or 'not recorded'}); "
+            f"deleted={deleted_id}; rule=file_integrity_deleted; "
+            f"tier={tier}; observed<= {latency:.2f}s"
+        ),
+    }
 
 
 def installed_app_build(info_plist: Path = INSTALLED_APP_INFO) -> str:
@@ -478,7 +571,7 @@ def main() -> int:
     else:
         techniques_to_run = techniques
     if args.dry_run:
-        for index, technique in enumerate(techniques, 1):
+        for index, technique in enumerate(techniques_to_run, 1):
             reasons, tiers = EXPECTED[technique["id"]]
             print(f"{index:02d}. {technique['id']} {technique['name']}")
             print(f"    fixture: Scripts/fixtures/{technique['fixture']}.sh")
@@ -552,6 +645,22 @@ def main() -> int:
                 command = user_fixture_command(fixture, scratch, user)
             else:
                 command = [str(fixture)]
+            if fixture_name == "file-deletion":
+                if uid <= 0:
+                    results[technique["id"]] = {
+                        "status": "FAIL",
+                        "evidence": "invoking user unavailable; fixture was not run as root",
+                    }
+                    print("No SUDO_UID was available; refusing to run this home fixture as root.")
+                    continue
+                results[technique["id"]] = run_file_deletion_replay(
+                    fixture, scratch, user, before, started
+                )
+                print(
+                    f"Measured: {results[technique['id']]['status']} "
+                    f"({results[technique['id']]['evidence']})"
+                )
+                continue
             interactive = fixture_name in INTERACTIVE_FIXTURES
             completed = subprocess.run(
                 command, env=environment, check=False, text=True,

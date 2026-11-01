@@ -13,7 +13,12 @@ fi
 
 launch_agents="$user_home/Library/LaunchAgents"
 plist="$launch_agents/$fixture_name"
-baseline="${NICK_FIM_BASELINE_PATH:-/Library/Application Support/com.ehsanazish.nick/fim_baseline.json}"
+phase2_marker="${NICK_FIXTURE_ROOT:?NICK_FIXTURE_ROOT is required}/file-deletion-phase2"
+
+if [ "$(id -u)" -eq 0 ]; then
+    echo "This fixture must run as the invoking user, never as root." >&2
+    exit 77
+fi
 
 if [ -e "$plist" ]; then
     echo "Refusing to replace existing fixture path: $plist" >&2
@@ -25,7 +30,12 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$launch_agents"
+if [ ! -d "$launch_agents" ]; then
+    if ! mkdir -p "$launch_agents"; then
+        echo "Could not create $launch_agents as $invoking_user; skipping file-deletion fixture." >&2
+        exit 78
+    fi
+fi
 umask 077
 printf '%s\n' \
     '<?xml version="1.0" encoding="UTF-8"?>' \
@@ -35,35 +45,17 @@ printf '%s\n' \
     '<key>ProgramArguments</key><array><string>/usr/bin/true</string></array>' \
     '</dict></plist>' > "$plist"
 
-# Deletion is meaningful only after Nick has recorded this exact file in its
-# integrity baseline. Bound the wait so a disconnected or stale monitor cannot
-# leave the replay hanging indefinitely.
+# The root recorder observes the durable creation evidence, then creates the
+# phase marker. The fixture itself never reads Nick's root-owned stores.
 attempt=0
-while [ "$attempt" -lt 30 ]; do
-    if /usr/bin/python3 - "$baseline" "$plist" <<'PY'
-import json
-import pathlib
-import sys
-
-baseline = pathlib.Path(sys.argv[1])
-target = sys.argv[2]
-try:
-    payload = json.loads(baseline.read_text(encoding="utf-8"))
-except (OSError, ValueError):
-    raise SystemExit(1)
-entries = payload.get("entries", payload) if isinstance(payload, dict) else {}
-raise SystemExit(0 if target in entries else 1)
-PY
-    then
+while [ "$attempt" -lt 35 ]; do
+    if [ -e "$phase2_marker" ]; then
         rm -f -- "$plist"
-        # Give Endpoint Security time to deliver the deletion evidence; the
-        # recorder independently waits for durable file_integrity_deleted.
-        sleep 2
         exit 0
     fi
     attempt=$((attempt + 1))
     sleep 1
 done
 
-echo "Nick did not baseline the inert LaunchAgent within 30 seconds; deletion was not attempted." >&2
+echo "Recorder did not start deletion phase within 35 seconds; fixture cleaned up." >&2
 exit 75

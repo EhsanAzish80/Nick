@@ -78,15 +78,42 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
         self.assertEqual(record["tiers"], ["review"])
 
     def test_matching_incidents_accepts_a_new_grouped_occurrence_only(self):
-        before = {"incident:1:new": {"reasons": ["credential_store_access"], "tiers": ["review"]}}
+        before = {"incident:1:new": {
+            "reasons": ["credential_store_access"], "tiers": ["review"], "paths": []
+        }}
         after = {
             **before,
-            "incident:2:new": {"reasons": ["credential_store_access"], "tiers": ["review"]},
+            "incident:2:new": {
+                "reasons": ["credential_store_access"], "tiers": ["review"], "paths": []
+            },
         }
         matches = MODULE.matching_incidents(
             before, after, {"credential_store_access"}, {"review"}
         )
         self.assertEqual([identifier for identifier, _ in matches], ["incident:2:new"])
+
+    def test_matching_incidents_can_require_the_exact_fixture_path(self):
+        before = {}
+        after = {
+            "wrong:1:new": {
+                "reasons": ["file_integrity_deleted"],
+                "tiers": ["review"],
+                "paths": ["/Users/example/Library/LaunchAgents/other.plist"],
+            },
+            "right:1:new": {
+                "reasons": ["file_integrity_deleted"],
+                "tiers": ["review"],
+                "paths": ["/Users/example/Library/LaunchAgents/fixture.plist"],
+            },
+        }
+        matches = MODULE.matching_incidents(
+            before,
+            after,
+            {"file_integrity_deleted"},
+            {"review"},
+            "/Users/example/Library/LaunchAgents/fixture.plist",
+        )
+        self.assertEqual([identifier for identifier, _ in matches], ["right:1:new"])
 
     def test_wait_polls_until_delayed_expected_evidence_arrives(self):
         before = {"old:1:new": {"reasons": ["process_discovery"], "tiers": ["review"]}}
@@ -199,23 +226,25 @@ class InstalledBuildTests(unittest.TestCase):
         self.assertEqual(row["fixture"], "file-deletion")
         self.assertIn("file_integrity_deleted", MODULE.EXPECTED["T1070.004"][0])
         self.assertIn("T1070.004", MODULE.DETECTION_ONLY_TECHNIQUES)
+        self.assertNotIn("file-deletion", MODULE.ROOT_FIXTURES)
 
     def test_detected_rows_are_complete_for_failed_reruns(self):
         self.assertIn("DETECTED", MODULE.COMPLETED_STATUSES)
 
-    def test_file_deletion_waits_for_baseline_then_cleans_up(self):
+    def test_file_deletion_waits_for_recorder_phase_then_cleans_up(self):
         fixture = MODULE.ROOT / "Scripts" / "fixtures" / "file-deletion.sh"
         with tempfile.TemporaryDirectory(prefix="nick-delete-fixture-") as directory:
             root = Path(directory)
             home = root / "home"
             launch_agents = home / "Library" / "LaunchAgents"
-            launch_agents.mkdir(parents=True)
             target = launch_agents / "com.ehsanazish.nick.fixture.deletion.plist"
-            baseline = root / "fim_baseline.json"
+            scratch = root / "scratch"
+            scratch.mkdir()
+            marker = scratch / "file-deletion-phase2"
             environment = os.environ.copy()
             environment.update({
                 "NICK_FIXTURE_HOME": str(home),
-                "NICK_FIM_BASELINE_PATH": str(baseline),
+                "NICK_FIXTURE_ROOT": str(scratch),
             })
             process = subprocess.Popen(
                 [str(fixture)], env=environment, text=True,
@@ -225,13 +254,55 @@ class InstalledBuildTests(unittest.TestCase):
             while not target.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
             self.assertTrue(target.exists(), "fixture did not create the inert plist")
-            baseline.write_text(json.dumps({
-                "version": 2,
-                "entries": {str(target): "fixture-hash"},
-            }), encoding="utf-8")
+            self.assertTrue(launch_agents.is_dir(), "user fixture did not create LaunchAgents")
+            marker.touch()
             output, _ = process.communicate(timeout=5)
             self.assertEqual(process.returncode, 0, output)
             self.assertFalse(target.exists(), "cleanup trap left the fixture behind")
+
+    def test_file_deletion_two_phase_recorder_reports_detected_and_reminds(self):
+        created = ({"created:1:new": {
+            "reasons": ["file_integrity_created"],
+            "tiers": ["review"],
+            "paths": ["/Users/fixture/Library/LaunchAgents/com.ehsanazish.nick.fixture.deletion.plist"],
+        }}, [("created:1:new", {
+            "reasons": ["file_integrity_created"], "tiers": ["review"]
+        })])
+        deleted = ({}, [("deleted:1:new", {
+            "reasons": ["file_integrity_deleted"], "tiers": ["review"]
+        })])
+        process = mock.Mock()
+        process.communicate.return_value = ("", None)
+        process.poll.return_value = 0
+        user = mock.Mock(pw_dir="/Users/fixture")
+        with tempfile.TemporaryDirectory(prefix="nick-delete-recorder-") as scratch, \
+             mock.patch.object(MODULE.pwd, "getpwnam", return_value=user), \
+             mock.patch.object(MODULE.subprocess, "Popen", return_value=process), \
+             mock.patch.object(MODULE, "wait_for_matching_incidents", side_effect=[created, deleted]), \
+             mock.patch("builtins.print") as output:
+            result = MODULE.run_file_deletion_replay(
+                Path("/fixtures/file-deletion.sh"), scratch, "fixture", {}, time.time()
+            )
+        self.assertEqual(result["status"], "DETECTED")
+        self.assertIn("created=created:1:new", result["evidence"])
+        self.assertIn("deleted=deleted:1:new", result["evidence"])
+        self.assertTrue(any("remain pending" in str(call) for call in output.call_args_list))
+
+    def test_file_deletion_creation_timeout_still_releases_fixture_cleanup(self):
+        process = mock.Mock()
+        process.communicate.return_value = ("", None)
+        process.poll.return_value = 0
+        user = mock.Mock(pw_dir="/Users/fixture")
+        with tempfile.TemporaryDirectory(prefix="nick-delete-recorder-") as scratch, \
+             mock.patch.object(MODULE.pwd, "getpwnam", return_value=user), \
+             mock.patch.object(MODULE.subprocess, "Popen", return_value=process), \
+             mock.patch.object(MODULE, "wait_for_matching_incidents", return_value=({}, [])), \
+             mock.patch("builtins.print"):
+            result = MODULE.run_file_deletion_replay(
+                Path("/fixtures/file-deletion.sh"), scratch, "fixture", {}, time.time()
+            )
+            self.assertTrue((Path(scratch) / "file-deletion-phase2").exists())
+        self.assertEqual(result, {"status": "FAIL", "evidence": "creation not detected"})
 
 
 class PreviousResultsTests(unittest.TestCase):
