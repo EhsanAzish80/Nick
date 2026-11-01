@@ -66,7 +66,7 @@ INSTRUCTIONS = {
     "tcc-modification": "Run the declared synthetic TCC-change fixture.",
     "nick-tamper": "Run the documented Nick self-tamper validation fixture.",
     "permission-modification": "Change permissions only on the declared scratch fixture.",
-    "protected-file-deletion": "Attempt the declared protected scratch-file deletion fixture.",
+    "file-deletion": "Create an inert LaunchAgent, wait for Nick to baseline it, then delete it without loading it.",
     "encoded-payload": "Run the declared harmless encoded-payload fixture.",
     "write-then-swap": "Run the declared random-byte write-then-swap scratch fixture.",
     "system-discovery": "Run the declared system-discovery fixture.",
@@ -110,8 +110,10 @@ EXPECTED = {
     # without inflating threat totals or contacting a malicious host.
     "T1071.001": ({"NICK_CANARY_WEB", "nick_test_indicator"}, {"inform"}),
 }
-ROOT_FIXTURES = {"launch-daemon-add"}
+ROOT_FIXTURES = {"launch-daemon-add", "file-deletion"}
 INTERACTIVE_FIXTURES = {"tcc-modification"}
+DETECTION_ONLY_TECHNIQUES = {"T1070.004"}
+COMPLETED_STATUSES = {"PASS", "PREVENTED", "DETECTED", "PASS (field evidence)"}
 EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
 
 
@@ -259,8 +261,13 @@ def matching_prevention(
     return None
 
 
-def measured_status(prevention: dict[str, str] | None) -> str:
+def measured_status(
+    prevention: dict[str, str] | None,
+    technique_id: str | None = None,
+) -> str:
     """A process exit is not proof that Nick prevented the technique."""
+    if technique_id in DETECTION_ONLY_TECHNIQUES:
+        return "DETECTED"
     return "PREVENTED" if prevention is not None else "PASS"
 
 
@@ -441,7 +448,7 @@ def main() -> int:
     parser.add_argument("--only", action="append", default=[], metavar="ID[,ID]",
                         help="run only the selected ATT&CK row IDs")
     parser.add_argument("--failed", action="store_true",
-                        help="run only rows not previously PASS or PREVENTED")
+                        help="run only rows not previously PASS, PREVENTED, or DETECTED")
     parser.add_argument("--field-evidence", action="append", default=[], metavar="ID=INCIDENT_ID",
                         help="accept a matching persisted field incident for a manual row")
     parser.add_argument(
@@ -461,7 +468,7 @@ def main() -> int:
     if args.failed:
         selected |= {
             technique["id"] for technique in techniques
-            if old_results.get(technique["id"], {}).get("status") not in {"PASS", "PREVENTED", "PASS (field evidence)"}
+            if old_results.get(technique["id"], {}).get("status") not in COMPLETED_STATUSES
         }
     if selected:
         unknown = selected - {technique["id"] for technique in techniques}
@@ -582,7 +589,7 @@ def main() -> int:
             tier = sorted(set(record["tiers"]).intersection(expected_tiers))[0] if record["tiers"] else "not recorded"
             evidence = f"{identifier}; rule={rule}; tier={tier}; observed<= {latency:.2f}s"
             prevention = matching_prevention(prevention_before, prevention_after, record)
-            status = measured_status(prevention)
+            status = measured_status(prevention, technique["id"])
             if prevention is not None:
                 evidence += f"; prevention={prevention['kind']} target={prevention['target']}"
             results[technique["id"]] = {"status": status, "evidence": evidence}

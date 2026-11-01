@@ -1,10 +1,12 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import plistlib
 import subprocess
 import sqlite3
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -27,6 +29,13 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
         self.assertEqual(
             MODULE.measured_status({"kind": "quarantine", "target": "/tmp/eicar"}),
             "PREVENTED",
+        )
+
+    def test_file_deletion_is_detection_only_even_with_prevention_evidence(self):
+        prevention = {"kind": "deny", "target": "/tmp/unrelated"}
+        self.assertEqual(
+            MODULE.measured_status(prevention, "T1070.004"),
+            "DETECTED",
         )
 
     def test_quarantine_database_is_authoritative_prevention_evidence(self):
@@ -183,6 +192,46 @@ class InstalledBuildTests(unittest.TestCase):
             MODULE.EXPECTED["T1548.006"],
             ({"tcc-permission-modified"}, {"review", "observed"}),
         )
+
+    def test_file_deletion_uses_inert_baselined_fixture(self):
+        manifest = json.loads(MODULE.MANIFEST.read_text(encoding="utf-8"))
+        row = next(item for item in manifest["techniques"] if item["id"] == "T1070.004")
+        self.assertEqual(row["fixture"], "file-deletion")
+        self.assertIn("file_integrity_deleted", MODULE.EXPECTED["T1070.004"][0])
+        self.assertIn("T1070.004", MODULE.DETECTION_ONLY_TECHNIQUES)
+
+    def test_detected_rows_are_complete_for_failed_reruns(self):
+        self.assertIn("DETECTED", MODULE.COMPLETED_STATUSES)
+
+    def test_file_deletion_waits_for_baseline_then_cleans_up(self):
+        fixture = MODULE.ROOT / "Scripts" / "fixtures" / "file-deletion.sh"
+        with tempfile.TemporaryDirectory(prefix="nick-delete-fixture-") as directory:
+            root = Path(directory)
+            home = root / "home"
+            launch_agents = home / "Library" / "LaunchAgents"
+            launch_agents.mkdir(parents=True)
+            target = launch_agents / "com.ehsanazish.nick.fixture.deletion.plist"
+            baseline = root / "fim_baseline.json"
+            environment = os.environ.copy()
+            environment.update({
+                "NICK_FIXTURE_HOME": str(home),
+                "NICK_FIM_BASELINE_PATH": str(baseline),
+            })
+            process = subprocess.Popen(
+                [str(fixture)], env=environment, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            deadline = time.monotonic() + 5
+            while not target.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(target.exists(), "fixture did not create the inert plist")
+            baseline.write_text(json.dumps({
+                "version": 2,
+                "entries": {str(target): "fixture-hash"},
+            }), encoding="utf-8")
+            output, _ = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 0, output)
+            self.assertFalse(target.exists(), "cleanup trap left the fixture behind")
 
 
 class PreviousResultsTests(unittest.TestCase):
