@@ -39,7 +39,11 @@ THREAT_JOURNALS = (
 )
 START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
-EXPECTED_BUILD = "5079"
+FULL_START_MARKER = "<!-- installed-full-scorecard:start -->"
+FULL_END_MARKER = "<!-- installed-full-scorecard:end -->"
+EXPECTED_BUILD = "5080"
+SETTINGS = Path("/Library/Application Support/com.ehsanazish.nick/state/settings.json")
+SIGNATURE_DB = Path("/Library/Application Support/com.ehsanazish.nick/signatures.db")
 INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
 SYSTEM_EXTENSIONS = Path("/usr/bin/systemextensionsctl")
 EXPECTED_EXTENSIONS = (
@@ -113,8 +117,45 @@ EXPECTED = {
 ROOT_FIXTURES = {"launch-daemon-add"}
 INTERACTIVE_FIXTURES = {"tcc-modification"}
 DETECTION_ONLY_TECHNIQUES = {"T1070.004"}
+MAPPING_REVIEW_TECHNIQUES = {
+    "T1547.015", "T1218", "T1222.002", "T1082", "T1057", "T1071.001",
+}
+MANDATORY_TECHNIQUE_FAMILIES = {
+    "tampering with Nick": {"T1562.001"},
+    "credential access": {"T1555.001", "T1555.003", "T1552.004", "T1552.001"},
+    "persistence": {"T1543.001", "T1543.004", "T1547.015", "T1053.003", "T1546.004"},
+    "download-to-shell": {"T1059.004"},
+}
 COMPLETED_STATUSES = {"PASS", "PREVENTED", "DETECTED", "PASS (field evidence)"}
 EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+
+
+class FixtureLineage:
+    """Process identity observed while one declared fixture was running."""
+
+    def __init__(self, root_pid: int, pids: set[int] | None = None):
+        self.root_pid = root_pid
+        self.pids = set(pids or ())
+        self.process_groups: set[int] = set()
+        self.sessions: set[int] = set()
+
+    def includes(self, record: dict[str, Any]) -> bool:
+        process_ids = set(record.get("processIDs", []))
+        parent_ids = set(record.get("parentPIDs", []))
+        groups = set(record.get("processGroupIDs", []))
+        sessions = set(record.get("sessionIDs", []))
+        return bool(
+            process_ids.intersection(self.pids)
+            or parent_ids.intersection(self.pids)
+            or groups.intersection(self.process_groups)
+            # A login session contains many unrelated processes.  Session
+            # identity is supporting evidence only; a shared process group is
+            # still required before it can establish fixture lineage.
+            or (
+                groups.intersection(self.process_groups)
+                and sessions.intersection(self.sessions)
+            )
+        )
 
 
 def prepare_fixture_scratch(scratch: str, uid: int, gid: int) -> None:
@@ -136,13 +177,92 @@ def user_fixture_command(fixture: Path, scratch: str, user: str) -> list[str]:
     ]
 
 
-def decode_privileged_store(raw: bytes) -> Any:
-    """Decode PrivilegedIncidentStoreRecord's JSON/base64 payload wrapper."""
+def console_user_fixture_command(fixture: Path, scratch: str, user: str, uid: int) -> list[str]:
+    """Run a GUI fixture in the logged-in user's launchd session."""
+    return [
+        "/bin/launchctl", "asuser", str(uid),
+        *user_fixture_command(fixture, scratch, user),
+    ]
+
+
+def process_snapshot() -> dict[int, tuple[int, int, int]]:
+    """Return pid -> (ppid, process group, session) without trusting names."""
+    completed = subprocess.run(
+        ["/bin/ps", "-axo", "pid=,ppid=,pgid=,sess="],
+        check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    if completed.returncode != 0:
+        return {}
+    snapshot: dict[int, tuple[int, int, int]] = {}
+    for line in completed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 4 or not all(part.lstrip("-").isdigit() for part in parts):
+            continue
+        pid, ppid, group, session = map(int, parts)
+        snapshot[pid] = (ppid, group, session)
+    return snapshot
+
+
+def extend_fixture_lineage(lineage: FixtureLineage, snapshot: dict[int, tuple[int, int, int]]) -> None:
+    """Add descendants of the fixture root, including short-lived intermediates."""
+    lineage.pids.add(lineage.root_pid)
+    changed = True
+    while changed:
+        changed = False
+        for pid, (parent, group, session) in snapshot.items():
+            if pid in lineage.pids or parent not in lineage.pids:
+                continue
+            lineage.pids.add(pid)
+            changed = True
+
+    for pid in lineage.pids:
+        values = snapshot.get(pid)
+        if values is None:
+            continue
+        _, group, session = values
+        if group > 0:
+            lineage.process_groups.add(group)
+        if session > 0:
+            lineage.sessions.add(session)
+
+
+def run_fixture_with_lineage(
+    command: list[str], environment: dict[str, str], interactive: bool, timeout: float = 60,
+) -> tuple[subprocess.CompletedProcess[str], FixtureLineage]:
+    """Run a fixture and sample its pid/pgid/session lineage while it is alive."""
+    process = subprocess.Popen(
+        command,
+        env=environment,
+        text=True,
+        stdout=None if interactive else subprocess.PIPE,
+        stderr=None if interactive else subprocess.STDOUT,
+    )
+    lineage = FixtureLineage(root_pid=process.pid, pids={process.pid})
+    deadline = time.monotonic() + timeout
+    while process.poll() is None and time.monotonic() < deadline:
+        extend_fixture_lineage(lineage, process_snapshot())
+        time.sleep(0.02)
+    if process.poll() is None:
+        process.kill()
+        stdout, _ = process.communicate()
+        raise subprocess.TimeoutExpired(command, timeout, output=stdout)
+    extend_fixture_lineage(lineage, process_snapshot())
+    stdout, _ = process.communicate()
+    return subprocess.CompletedProcess(command, process.returncode, stdout, None), lineage
+
+
+def decode_privileged_payload(raw: bytes) -> Any:
+    """Decode the authenticated root-store JSON/base64 payload wrapper."""
     record = json.loads(raw.decode("utf-8"))
     if not isinstance(record, dict) or not isinstance(record.get("payload"), str):
-        raise ValueError("incident store is not a PrivilegedIncidentStoreRecord")
+        raise ValueError("store is not a PrivilegedIncidentStoreRecord")
     payload = base64.b64decode(record["payload"], validate=True)
-    snapshot = json.loads(payload.decode("utf-8"))
+    return json.loads(payload.decode("utf-8"))
+
+
+def decode_privileged_store(raw: bytes) -> Any:
+    """Decode and validate the incident snapshot payload."""
+    snapshot = decode_privileged_payload(raw)
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("incidents"), list):
         raise ValueError("privileged payload is not an incident snapshot")
     return snapshot
@@ -179,6 +299,20 @@ def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[
                         for signal in signals if isinstance(signal, dict)
                         and isinstance(signal.get("fileInfo"), dict)
                         and signal.get("fileInfo", {}).get("path")})
+        process_infos = [signal.get("processInfo", {}) for signal in signals
+                         if isinstance(signal, dict) and isinstance(signal.get("processInfo"), dict)]
+        def integer_values(*keys: str) -> list[int]:
+            values: set[int] = set()
+            for item in [*metadata, *process_infos]:
+                if not isinstance(item, dict):
+                    continue
+                for key in keys:
+                    value = item.get(key)
+                    if isinstance(value, int) and value > 0:
+                        values.add(value)
+                    elif isinstance(value, str) and value.isdigit() and int(value) > 0:
+                        values.add(int(value))
+            return sorted(values)
         hashes = {str(signal.get("fileInfo", {}).get("sha256Hash") or "").lower()
                   for signal in signals if isinstance(signal, dict)
                   and isinstance(signal.get("fileInfo"), dict)}
@@ -194,6 +328,10 @@ def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[
             "signalSeverities": signal_severities,
             "title": title,
             "paths": paths,
+            "processIDs": integer_values("pid", "actorPID", "responsiblePID"),
+            "parentPIDs": integer_values("parentPID", "ppid"),
+            "processGroupIDs": integer_values("processGroupID", "processGroup", "pgid"),
+            "sessionIDs": integer_values("sessionID", "session"),
             "lastSeen": alert.get("lastSeen") or alert.get("timestamp"),
         }
     return found
@@ -281,6 +419,7 @@ def matching_incidents(
     expected_reasons: set[str],
     expected_tiers: set[str],
     expected_path: str | None = None,
+    fixture_lineage: FixtureLineage | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
     """Return only newly persisted occurrences matching this replay row."""
     matches: list[tuple[str, dict[str, Any]]] = []
@@ -290,9 +429,10 @@ def matching_incidents(
         tiers = set(record["tiers"])
         paths = {os.path.normpath(path) for path in record.get("paths", []) if path}
         path_matches = expected_path is None or os.path.normpath(expected_path) in paths
+        lineage_matches = fixture_lineage is None or fixture_lineage.includes(record)
         if reasons.intersection(expected_reasons) and (
             not tiers or tiers.intersection(expected_tiers)
-        ) and path_matches:
+        ) and path_matches and lineage_matches:
             matches.append((identifier, record))
     return matches
 
@@ -302,6 +442,7 @@ def wait_for_matching_incidents(
     expected_reasons: set[str],
     expected_tiers: set[str],
     expected_path: str | None = None,
+    fixture_lineage: FixtureLineage | None = None,
     timeout: float = 15.0,
     poll_interval: float = 0.5,
 ) -> tuple[dict[str, dict[str, Any]], list[tuple[str, dict[str, Any]]]]:
@@ -315,12 +456,44 @@ def wait_for_matching_incidents(
     after = load_incident_fingerprints()
     while True:
         matches = matching_incidents(
-            before, after, expected_reasons, expected_tiers, expected_path
+            before, after, expected_reasons, expected_tiers, expected_path, fixture_lineage
         )
         if matches or time.monotonic() >= deadline:
             return after, matches
         time.sleep(poll_interval)
         after = load_incident_fingerprints()
+
+
+def describe_new_occurrences(
+    before: dict[str, dict[str, Any]],
+    after: dict[str, dict[str, Any]],
+    fixture_lineage: FixtureLineage | None,
+) -> None:
+    """Print every new occurrence so a mapping review cannot hide noise."""
+    new_ids = sorted(set(after) - set(before))
+    if not new_ids:
+        print("Occurrence review: no new durable occurrence appeared in the row window.")
+        return
+    print("Occurrence review (new durable evidence in this row window):")
+    for identifier in new_ids:
+        record = after[identifier]
+        lineage = "match" if fixture_lineage and fixture_lineage.includes(record) else "no match"
+        if fixture_lineage is None:
+            lineage = "not required"
+        print(
+            "  - " + identifier
+            + f"; rules={','.join(record['reasons']) or 'none'}"
+            + f"; tiers={','.join(record['tiers']) or 'none'}"
+            + f"; pids={','.join(map(str, record.get('processIDs', []))) or 'none'}"
+            + f"; lineage={lineage}"
+        )
+
+
+def strict_mode_configuration(settings_path: Path = SETTINGS) -> tuple[bool, bool]:
+    snapshot = decode_privileged_payload(settings_path.read_bytes())
+    if not isinstance(snapshot, dict):
+        raise ValueError("settings payload is not an object")
+    return bool(snapshot.get("strictModeEnabled")), bool(snapshot.get("blockingKillSwitch"))
 
 
 def run_file_deletion_replay(
@@ -492,6 +665,132 @@ def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[st
     PROGRESS_DOC.write_text(updated, encoding="utf-8")
 
 
+def manifest_hashes(path: Path) -> tuple[str, set[str]]:
+    """Read external hash-only JSON/JSONL/text without touching samples."""
+    if not path.is_file():
+        raise ValueError(f"hash manifest not found: {path}")
+    raw = path.read_text(encoding="utf-8")
+    source = path.name
+    hashes: set[str] = set()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = None
+    if isinstance(value, dict):
+        source = str(value.get("source") or source)
+        entries = value.get("samples") or value.get("hashes") or []
+        for entry in entries:
+            digest = entry.get("sha256") if isinstance(entry, dict) else entry
+            if isinstance(digest, str):
+                hashes.add(digest.lower())
+    elif isinstance(value, list):
+        for entry in value:
+            digest = entry.get("sha256") if isinstance(entry, dict) else entry
+            if isinstance(digest, str):
+                hashes.add(digest.lower())
+    else:
+        for line in raw.splitlines():
+            token = line.strip().split()[0] if line.strip() else ""
+            if token:
+                hashes.add(token.lower())
+    invalid = sorted(item for item in hashes if re.fullmatch(r"[0-9a-f]{64}", item) is None)
+    if invalid:
+        raise ValueError(f"manifest contains {len(invalid)} invalid SHA-256 value(s)")
+    if not hashes:
+        raise ValueError("manifest contains no SHA-256 hashes")
+    if "eset" in source.lower() or "eset" in path.name.lower():
+        raise ValueError("the ESET source set is not an independent measurement set")
+    return source, hashes
+
+
+def replay_hash_manifest(path: Path, database_path: Path = SIGNATURE_DB) -> dict[str, str]:
+    source, hashes = manifest_hashes(path.resolve())
+    if not database_path.is_file():
+        raise ValueError(f"installed signature database not found: {database_path}")
+    placeholders = ",".join("?" for _ in hashes)
+    with sqlite3.connect(f"file:{database_path}?mode=ro", uri=True) as database:
+        rows = database.execute(
+            f"SELECT hash FROM signatures WHERE hash IN ({placeholders})", sorted(hashes)
+        )
+        alerted = {str(row[0]).lower() for row in rows}
+    percent = 100.0 * len(alerted) / len(hashes)
+    return {
+        "source": source,
+        "total": str(len(hashes)),
+        "alerted": str(len(alerted)),
+        "percentage": f"{percent:.2f}%",
+        "manifestSHA256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+def full_scorecard_rows(
+    techniques: list[dict[str, Any]],
+    results: dict[str, dict[str, str]],
+    hash_result: dict[str, str] | None = None,
+) -> list[str]:
+    successes = [item for item in techniques
+                 if results.get(item["id"], {}).get("status") in COMPLETED_STATUSES]
+    prevented = [item for item in techniques
+                 if results.get(item["id"], {}).get("status") == "PREVENTED"]
+    evidence_ids = [
+        results[item["id"]]["evidence"].split(";", 1)[0]
+        for item in successes if results[item["id"]].get("evidence")
+    ]
+    hash_current = "not measured"
+    hash_evidence = "not measured"
+    if hash_result:
+        hash_current = f"{hash_result['percentage']} alerted ({hash_result['alerted']}/{hash_result['total']})"
+        hash_evidence = f"manifest sha256 {hash_result['manifestSHA256']}; source {hash_result['source']}"
+    attack_percent = 100.0 * len(successes) / 24
+    prevention_percent = 100.0 * len(prevented) / 24
+    attack_evidence = ", ".join(evidence_ids) if evidence_ids else "not measured"
+    successful_ids = {item["id"] for item in successes}
+    mandatory_missing = {
+        family: sorted(ids - successful_ids)
+        for family, ids in MANDATORY_TECHNIQUE_FAMILIES.items()
+        if ids - successful_ids
+    }
+    if mandatory_missing:
+        mandatory_result = "mandatory incomplete"
+        mandatory_evidence = "; ".join(
+            f"{family}: {', '.join(ids)} not measured"
+            for family, ids in mandatory_missing.items()
+        )
+    else:
+        mandatory_result = "all mandatory rows alerted"
+        mandatory_evidence = "all pinned mandatory-family rows have measured evidence"
+    return [
+        "## 5.1 scorecard — installed evidence",
+        "",
+        "| Metric | 4/10 target (settle) | 1/10 stretch (aim) | Current result | Evidence |",
+        "|---|---|---|---|---|",
+        f"| Known families — hash/signature (versioned, deduplicated manifest) | ≥ 90% alerted | ≥ 98% | {hash_current} | {hash_evidence} |",
+        "| Known families — behaviour only (hash rules off) | ≥ 60% (set real number after 5.0.1 baseline) | ≥ 85% | not measured | not measured — requires a disposable VM behaviour run |",
+        f"| ATT&CK for macOS, 24 pinned techniques | ≥ 80% alerted; all mandatory alerted; ≥ 25% preventable (strict mode) | 100% alerted; ≥ 60% preventable | {len(successes)}/24 alerted ({attack_percent:.2f}%); {len(prevented)}/24 prevented ({prevention_percent:.2f}%); {mandatory_result} | {attack_evidence}; {mandatory_evidence} |",
+        "| Root: extension stopped, app alive | alert ≤ 60 s | ≤ 10 s | pending | not measured; manual steps: keep Nick open; find the endpoint PID with `pgrep -f '/Library/SystemExtensions/.*/com.ehsanazish.nick.NickExtension.systemextension/Contents/MacOS/com.ehsanazish.nick.NickExtension'`; verify `ps -p <PID> -o command=`; run `sudo kill -9 <PID>`; wait up to 60 s; record the persisted incident ID and timestamps; confirm relaunch |",
+        "| Root: extension and app both gone | gap reported on next start, every run | gap includes the bounded interruption window and corroborating local evidence | pending | not measured; manual steps: record T1; verify and stop the endpoint PID as above; immediately Force Quit Nick; wait 60 s; reopen `/Applications/Nick.app`; record the persisted gap incident, T2, and bounded interval; confirm reconnection |",
+        "| False positives, ≥ 40 active workload hours, fixed manifest, counted per incident key | ≤ 1 review-tier, 0 protected | 0 | not measured | not measured for build 5080 |",
+        "| ES health | p99 < 100 ms, 0 deadline misses, 0 acks without persistence | p99 < 30 ms | not measured | not measured for build 5080 |",
+    ]
+
+
+def update_full_scorecard(
+    techniques: list[dict[str, Any]], results: dict[str, dict[str, str]],
+    hash_result: dict[str, str] | None = None,
+) -> None:
+    block = FULL_START_MARKER + "\n" + "\n".join(
+        full_scorecard_rows(techniques, results, hash_result)
+    ) + "\n" + FULL_END_MARKER
+    original = PROGRESS_DOC.read_text(encoding="utf-8") if PROGRESS_DOC.exists() else "# Nick 5.1 progress\n"
+    if FULL_START_MARKER in original and FULL_END_MARKER in original:
+        prefix, tail = original.split(FULL_START_MARKER, 1)
+        _, suffix = tail.split(FULL_END_MARKER, 1)
+        updated = prefix.rstrip() + "\n\n" + block + suffix
+    else:
+        updated = original.rstrip() + "\n\n" + block + "\n"
+    PROGRESS_DOC.write_text(updated, encoding="utf-8")
+
+
 def markdown_table_columns(line: str) -> list[str]:
     """Split one Markdown table row without a backtracking expression."""
     if len(line) < 2 or line[0] != "|" or line[-1] != "|":
@@ -548,6 +847,10 @@ def main() -> int:
                         help="run only rows not previously PASS, PREVENTED, or DETECTED")
     parser.add_argument("--field-evidence", action="append", default=[], metavar="ID=INCIDENT_ID",
                         help="accept a matching persisted field incident for a manual row")
+    parser.add_argument("--strict", action="store_true",
+                        help="require installed Strict Mode and report only durable prevention evidence")
+    parser.add_argument("--hash-manifest", type=Path, metavar="PATH",
+                        help="compare an external SHA-256-only manifest with the installed catalog")
     parser.add_argument(
         "--inspect-store", action="store_true",
         help="decode a store supplied on standard input and print recorder fingerprints"
@@ -592,6 +895,27 @@ def main() -> int:
     except RuntimeError as error:
         raise SystemExit(f"Installed build check failed: {error}") from error
 
+    if args.strict:
+        try:
+            strict_enabled, kill_switch = strict_mode_configuration()
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise SystemExit(f"Could not verify installed Strict Mode: {error}") from error
+        if not strict_enabled or kill_switch:
+            raise SystemExit(
+                "--strict requires Strict Mode ON and Emergency stop blocking OFF in the installed app."
+            )
+
+    hash_result: dict[str, str] | None = None
+    if args.hash_manifest:
+        try:
+            hash_result = replay_hash_manifest(args.hash_manifest)
+        except (OSError, ValueError, sqlite3.Error) as error:
+            raise SystemExit(f"Hash replay failed: {error}") from error
+        print(
+            f"Hash replay: {hash_result['alerted']}/{hash_result['total']} "
+            f"({hash_result['percentage']}) present in the installed signature catalog."
+        )
+
     results: dict[str, dict[str, str]] = dict(old_results)
     total = len(techniques_to_run)
     print(f"Expected recorder build: {EXPECTED_BUILD}")
@@ -599,6 +923,15 @@ def main() -> int:
     for bundle_id in EXPECTED_EXTENSIONS:
         print(f"Active {bundle_id} build: {extension_builds[bundle_id]}")
     print(f"Nick installed {total}-technique replay. Use declared synthetic fixtures only.")
+    if args.strict:
+        print("Strict Mode replay: ON; only durable quarantine, remediation, kill, or AUTH-deny evidence counts as PREVENTED.")
+    corpus_only = bool(args.hash_manifest) and not (
+        args.only or args.failed or args.field_evidence or args.strict
+    )
+    if corpus_only:
+        update_full_scorecard(techniques, results, hash_result)
+        print(f"Wrote the hash-level result to {PROGRESS_DOC}; no sample was stored or executed.")
+        return 0
     field_evidence = dict(item.split("=", 1) for item in args.field_evidence if "=" in item)
     all_incidents = load_incident_fingerprints()
     for index, technique in enumerate(techniques_to_run, 1):
@@ -635,6 +968,7 @@ def main() -> int:
         if fixture.parent != fixtures_root or not fixture.is_file():
             print("Fixture is missing; row remains pending.")
             continue
+        print(f"Fixture action: {fixture}")
         started = time.time()
         manual_completed = False
         fixture_returncode = 0
@@ -646,7 +980,10 @@ def main() -> int:
             prepare_fixture_scratch(scratch, uid, gid)
             if uid > 0 and fixture_name not in ROOT_FIXTURES:
                 user = pwd.getpwuid(uid).pw_name
-                command = user_fixture_command(fixture, scratch, user)
+                if fixture_name == "login-item-add":
+                    command = console_user_fixture_command(fixture, scratch, user, uid)
+                else:
+                    command = user_fixture_command(fixture, scratch, user)
             else:
                 command = [str(fixture)]
             if fixture_name == "file-deletion":
@@ -666,11 +1003,8 @@ def main() -> int:
                 )
                 continue
             interactive = fixture_name in INTERACTIVE_FIXTURES
-            completed = subprocess.run(
-                command, env=environment, check=False, text=True,
-                stdout=None if interactive else subprocess.PIPE,
-                stderr=None if interactive else subprocess.STDOUT,
-                timeout=60,
+            completed, fixture_lineage = run_fixture_with_lineage(
+                command, environment, interactive, timeout=60,
             )
             fixture_returncode = completed.returncode
             if completed.stdout:
@@ -690,9 +1024,12 @@ def main() -> int:
                     "because prevention may have stopped it."
                 )
         expected_reasons, expected_tiers = EXPECTED[technique["id"]]
+        required_lineage = fixture_lineage if technique["id"] in MAPPING_REVIEW_TECHNIQUES else None
         after, matches = wait_for_matching_incidents(
-            before, expected_reasons, expected_tiers
+            before, expected_reasons, expected_tiers,
+            fixture_lineage=required_lineage,
         )
+        describe_new_occurrences(before, after, required_lineage)
         prevention_after = prevention_fingerprints()
         new_ids = sorted(set(after) - set(before))
         if matches:
@@ -705,6 +1042,9 @@ def main() -> int:
             status = measured_status(prevention, technique["id"])
             if prevention is not None:
                 evidence += f"; prevention={prevention['kind']} target={prevention['target']}"
+            if args.strict and status != "PREVENTED":
+                status = "DETECTED"
+                evidence += "; strict mode produced no durable prevention record"
             results[technique["id"]] = {"status": status, "evidence": evidence}
             print(f"Measured: {status} ({rule}, {tier}, <= {latency:.2f}s)")
             continue
@@ -722,6 +1062,19 @@ def main() -> int:
         print(f"No matching persisted evidence; recorded as {status}.")
 
     update_progress(techniques, results)
+    update_full_scorecard(techniques, results, hash_result)
+    prevented_rows = sorted(
+        technique["id"] for technique in techniques
+        if results.get(technique["id"], {}).get("status") == "PREVENTED"
+    )
+    if args.strict:
+        detection_only = sorted(
+            technique["id"] for technique in techniques
+            if results.get(technique["id"], {}).get("status") in {"PASS", "DETECTED", "PASS (field evidence)"}
+        )
+        print(f"Strict prevention proven today: {', '.join(prevented_rows) or 'none'}")
+        print(f"Detected but not prevented in this run: {', '.join(detection_only) or 'none'}")
+        print(f"Strict target: {len(prevented_rows)}/24 PREVENTED; required minimum is 6/24.")
     print(f"\nWrote measured rows and pending placeholders to {PROGRESS_DOC}")
     return 0
 

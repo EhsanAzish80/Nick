@@ -1,4 +1,5 @@
 import importlib.util
+import base64
 import json
 import os
 from pathlib import Path
@@ -116,6 +117,38 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
         )
         self.assertEqual([identifier for identifier, _ in matches], ["right:1:new"])
 
+    def test_mapping_review_rejects_an_unrelated_background_occurrence(self):
+        lineage = MODULE.FixtureLineage(4100, {4100, 4101})
+        lineage.process_groups.add(4100)
+        after = {
+            "background:1:new": {
+                "reasons": ["system_discovery"], "tiers": ["review"],
+                "paths": [], "processIDs": [900], "parentPIDs": [1],
+                "processGroupIDs": [900], "sessionIDs": [100],
+            },
+            "fixture:1:new": {
+                "reasons": ["system_discovery"], "tiers": ["review"],
+                "paths": [], "processIDs": [4101], "parentPIDs": [4100],
+                "processGroupIDs": [4100], "sessionIDs": [200],
+            },
+        }
+        matches = MODULE.matching_incidents(
+            {}, after, {"system_discovery"}, {"review"}, fixture_lineage=lineage
+        )
+        self.assertEqual([identifier for identifier, _ in matches], ["fixture:1:new"])
+
+    def test_occurrence_count_increase_is_new_evidence_for_web_canary(self):
+        before = {"canary:1:reviewed": {
+            "reasons": ["NICK_CANARY_WEB"], "tiers": ["inform"], "paths": [],
+        }}
+        after = {**before, "canary:2:reviewed": {
+            "reasons": ["NICK_CANARY_WEB"], "tiers": ["inform"], "paths": [],
+        }}
+        matches = MODULE.matching_incidents(
+            before, after, {"NICK_CANARY_WEB"}, {"inform"}
+        )
+        self.assertEqual([identifier for identifier, _ in matches], ["canary:2:reviewed"])
+
     def test_wait_polls_until_delayed_expected_evidence_arrives(self):
         before = {"old:1:new": {"reasons": ["process_discovery"], "tiers": ["review"]}}
         unrelated = {
@@ -179,6 +212,84 @@ class FixtureInvocationTests(unittest.TestCase):
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             )
             self.assertEqual(completed.returncode, 0, completed.stdout)
+
+    def test_login_item_runs_in_the_console_launchd_session(self):
+        fixture = ROOT / "Scripts" / "fixtures" / "login-item-add.sh"
+        user = pwd.getpwuid(os.getuid()).pw_name
+        command = MODULE.console_user_fixture_command(fixture, "/tmp/fixture", user, 501)
+        self.assertEqual(command[:3], ["/bin/launchctl", "asuser", "501"])
+        self.assertEqual(command[3:8], ["/usr/bin/sudo", "-H", "-u", user, "--"])
+
+
+class CorpusAndStrictModeTests(unittest.TestCase):
+    def test_external_hash_manifest_replays_hashes_without_samples(self):
+        with tempfile.TemporaryDirectory(prefix="nick-hash-replay-") as directory:
+            root = Path(directory)
+            first = "a" * 64
+            second = "b" * 64
+            manifest = root / "independent.json"
+            manifest.write_text(json.dumps({
+                "source": "independent licensed corpus",
+                "samples": [{"sha256": first}, {"sha256": second}],
+            }), encoding="utf-8")
+            database = root / "signatures.db"
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE signatures (hash TEXT PRIMARY KEY)")
+                connection.execute("INSERT INTO signatures VALUES (?)", (first,))
+            result = MODULE.replay_hash_manifest(manifest, database)
+        self.assertEqual(result["total"], "2")
+        self.assertEqual(result["alerted"], "1")
+        self.assertEqual(result["percentage"], "50.00%")
+
+    def test_eset_manifest_is_refused_as_measurement_set(self):
+        with tempfile.TemporaryDirectory(prefix="nick-hash-replay-") as directory:
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text(json.dumps({
+                "source": "ESET research set", "hashes": ["a" * 64],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not an independent"):
+                MODULE.manifest_hashes(manifest)
+
+    def test_strict_mode_reads_authenticated_settings_payload(self):
+        payload = base64.b64encode(json.dumps({
+            "strictModeEnabled": True, "blockingKillSwitch": False,
+        }).encode()).decode()
+        with tempfile.TemporaryDirectory(prefix="nick-strict-") as directory:
+            settings = Path(directory) / "settings.json"
+            settings.write_text(json.dumps({"payload": payload}), encoding="utf-8")
+            self.assertEqual(MODULE.strict_mode_configuration(settings), (True, False))
+
+    def test_scorecard_keeps_the_attack_denominator_at_24(self):
+        techniques = [{"id": f"T{index}", "name": str(index)} for index in range(24)]
+        rows = MODULE.full_scorecard_rows(techniques, {})
+        attack = next(row for row in rows if "ATT&CK for macOS" in row)
+        self.assertIn("0/24 alerted", attack)
+        self.assertIn("0/24 prevented", attack)
+
+    def test_scorecard_does_not_hide_missing_mandatory_rows(self):
+        techniques = json.loads(MODULE.MANIFEST.read_text(encoding="utf-8"))["techniques"]
+        results = {
+            item["id"]: {"status": "PASS", "evidence": f"evidence-{item['id']}"}
+            for item in techniques if item["id"] != "T1562.001"
+        }
+        attack = next(
+            row for row in MODULE.full_scorecard_rows(techniques, results)
+            if "ATT&CK for macOS" in row
+        )
+        self.assertIn("mandatory incomplete", attack)
+        self.assertIn("tampering with Nick: T1562.001 not measured", attack)
+
+    def test_scorecard_reports_mandatory_complete_only_with_all_rows(self):
+        techniques = json.loads(MODULE.MANIFEST.read_text(encoding="utf-8"))["techniques"]
+        results = {
+            item["id"]: {"status": "PASS", "evidence": f"evidence-{item['id']}"}
+            for item in techniques
+        }
+        attack = next(
+            row for row in MODULE.full_scorecard_rows(techniques, results)
+            if "ATT&CK for macOS" in row
+        )
+        self.assertIn("all mandatory rows alerted", attack)
 
 
 class InstalledBuildTests(unittest.TestCase):
