@@ -1005,12 +1005,21 @@ def main() -> int:
         manual_completed = False
         fixture_returncode = 0
         fixture_correlation_value: str | None = None
+        fixture_expected_path: str | None = None
         with tempfile.TemporaryDirectory(prefix="nick-scorecard-") as scratch:
             environment = os.environ.copy()
             environment["NICK_FIXTURE_ROOT"] = scratch
             uid = int(os.environ.get("SUDO_UID", "0"))
             gid = int(os.environ.get("SUDO_GID", "0"))
             prepare_fixture_scratch(scratch, uid, gid)
+            if fixture_name == "login-item-add":
+                # BTM attributes the change to System Events and does not
+                # reliably preserve the fixture bundle identifier. The exact,
+                # randomized app path is persisted, however, and uniquely ties
+                # the incident to this recorder run.
+                fixture_expected_path = os.path.join(
+                    scratch, "Nick Login Item Fixture.app"
+                )
             if uid > 0 and fixture_name not in ROOT_FIXTURES:
                 user = pwd.getpwuid(uid).pw_name
                 if fixture_name == "login-item-add":
@@ -1065,15 +1074,19 @@ def main() -> int:
                 )
         expected_reasons, expected_tiers = EXPECTED[technique["id"]]
         required_lineage = fixture_lineage if technique["id"] in MAPPING_REVIEW_TECHNIQUES else None
-        if technique["id"] == LOGIN_ITEMS_TECHNIQUE and fixture_correlation_value:
+        if technique["id"] == LOGIN_ITEMS_TECHNIQUE and fixture_expected_path:
             # BTM reports the daemon that commits the login item, not the
-            # originating osascript process. Preserve strict correlation by
-            # requiring the fixture's unique, per-run bundle identifier.
+            # originating osascript process. Preserve strict correlation with
+            # the fixture's exact randomized app path instead of accepting an
+            # unrelated background-item event from the same time window.
             required_lineage = None
         after, matches = wait_for_matching_incidents(
             before, expected_reasons, expected_tiers,
+            expected_path=fixture_expected_path,
             fixture_lineage=required_lineage,
-            expected_correlation_value=fixture_correlation_value,
+            expected_correlation_value=(
+                fixture_correlation_value if fixture_expected_path is None else None
+            ),
         )
         describe_new_occurrences(before, after, required_lineage)
         prevention_after = prevention_fingerprints()

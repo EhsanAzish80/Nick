@@ -167,6 +167,25 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
         )
         self.assertEqual([identifier for identifier, _ in matches], ["fixture:1:new"])
 
+    def test_login_item_matches_exact_randomized_fixture_app_path(self):
+        fixture_path = "/tmp/nick-scorecard-abc123/Nick Login Item Fixture.app"
+        after = {
+            "unrelated:1:new": {
+                "reasons": ["background-item-added"], "tiers": ["review"],
+                "paths": ["/Applications/Unrelated.app"],
+            },
+            "fixture:1:new": {
+                "reasons": ["background-item-added"], "tiers": ["review"],
+                "paths": [fixture_path],
+                "processIDs": [86148],
+            },
+        }
+        matches = MODULE.matching_incidents(
+            {}, after, {"background-item-added"}, {"review"},
+            expected_path=fixture_path,
+        )
+        self.assertEqual([identifier for identifier, _ in matches], ["fixture:1:new"])
+
     def test_network_canary_still_requires_fixture_process_lineage(self):
         lineage = MODULE.FixtureLineage(4200, {4200, 4201})
         after = {
