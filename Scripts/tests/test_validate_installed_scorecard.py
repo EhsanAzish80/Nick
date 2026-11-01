@@ -188,19 +188,20 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
 
     def test_btm_persistence_path_is_normalized_as_path_evidence(self):
         fixture_path = "/tmp/nick-scorecard-a95bgdfz/Nick Login Item Fixture.app"
+        persisted_path = os.path.realpath(fixture_path)
         snapshot = {"incidents": [{
             "id": "btm-fixture", "state": "new",
             "alert": {"occurrenceCount": 1, "contributingSignals": [{
                 "metadata": {
                     "rule": "background-item-added",
                     "ruleTier": "review",
-                    "persistencePath": fixture_path,
+                    "persistencePath": persisted_path,
                     "launchItemLabel": "Nick Login Item Fixture",
                 }
             }]},
         }]}
         record = next(iter(MODULE.incident_fingerprints_from_snapshot(snapshot).values()))
-        self.assertEqual(record["paths"], [fixture_path])
+        self.assertEqual(record["paths"], [persisted_path])
         matches = MODULE.matching_incidents(
             {}, {"fixture:1:new": record},
             {"background-item-added"}, {"review"},

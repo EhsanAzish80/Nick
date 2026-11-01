@@ -445,8 +445,12 @@ def matching_incidents(
         record = after[identifier]
         reasons = set(record["reasons"])
         tiers = set(record["tiers"])
-        paths = {os.path.normpath(path) for path in record.get("paths", []) if path}
-        path_matches = expected_path is None or os.path.normpath(expected_path) in paths
+        # Endpoint Security reports resolved paths (`/private/tmp/...`) while
+        # fixtures may be launched through the user-facing `/tmp` symlink.
+        # Compare canonical paths so the same file is not rejected solely due
+        # to that macOS path alias.
+        paths = {os.path.realpath(path) for path in record.get("paths", []) if path}
+        path_matches = expected_path is None or os.path.realpath(expected_path) in paths
         lineage_matches = fixture_lineage is None or fixture_lineage.includes(record)
         correlation_matches = expected_correlation_value is None or (
             expected_correlation_value in set(record.get("correlationValues", []))
