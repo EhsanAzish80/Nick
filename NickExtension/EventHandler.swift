@@ -1409,13 +1409,16 @@ final class ESEventHandler {
             pid: instigatorPID,
             pathHint: instigatorPath
         )
-        let identityMatchesClient = identity.map { candidate in
-            (appBundleID.isEmpty == false && candidate.bundleID == appBundleID)
-                || (appPath.isEmpty == false && candidate.path == appPath)
-        } ?? false
-        let validatedAppleClient = identityMatchesClient && identity.map {
-            $0.signing == .applePlatform || $0.signing == .appleSigned
-        } == true
+        let validatedAppleClient = TCCAffectedClientTrustPolicy.isValidatedAppleClient(
+            appBundleID: appBundleID,
+            appPath: appPath,
+            liveBundleID: identity?.bundleID,
+            livePath: identity?.path,
+            liveIsValidatedApple: identity.map {
+                $0.signing == .applePlatform || $0.signing == .appleSigned
+            } ?? false,
+            validateApplePath: Self.validatesTCCAppleCode(at:)
+        )
         let affectsNick = appBundleID == "com.ehsanazish.nick" || appPath.contains("/Nick.app/")
         let affectedName = affectsNick ? "Nick" : (identity?.name
             ?? (appBundleID.isEmpty ? URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent : appBundleID))
@@ -1430,10 +1433,18 @@ final class ESEventHandler {
             "nickPermissionLost": affectsNick && !isGranted ? "true" : "false"
         ]
 
-        if validatedAppleClient {
+        let disposition = TCCAffectedClientTrustPolicy.disposition(
+            validatedAppleClient: validatedAppleClient,
+            isGranted: isGranted,
+            service: service,
+            affectsNick: affectsNick
+        )
+
+        if disposition == .timelineOnly {
             // Apple installers and system components receive short-lived TCC
-            // changes during normal package work. Preserve them in the event
-            // timeline without creating a review item.
+            // revocations during normal package work. Preserve them in the
+            // event timeline without creating a review item. Sensitive grants
+            // never take this path, even when the client is Apple-signed.
             metadata["timelineOnly"] = "true"
             pushEvent(ESEvent(
                 eventType: .notifyTCCModify,
@@ -1446,13 +1457,7 @@ final class ESEventHandler {
             return
         }
 
-        let sensitiveGrantServices: Set<String> = [
-            "kTCCServiceSystemPolicyAllFiles", "kTCCServiceAccessibility",
-            "kTCCServiceScreenCapture", "kTCCServiceListenEvent",
-            "kTCCServicePostEvent"
-        ]
-        let actionable = (affectsNick && !isGranted)
-            || (isGranted && sensitiveGrantServices.contains(service))
+        let actionable = disposition == .actionable
         metadata["deliveryLevel"] = actionable ? "interrupt" : "inform"
         if affectsNick && !isGranted { metadata["openSettingsAction"] = "true" }
         reportAppleSecurityEvent(
@@ -1467,6 +1472,29 @@ final class ESEventHandler {
             ruleTier: actionable ? "review" : "observed",
             metadata: metadata
         )
+    }
+
+    /// Validates the affected executable reported by TCC itself. No executable
+    /// name, bundle identifier prefix, or filesystem layout is proof of Apple
+    /// ownership.
+    private static func validatesTCCAppleCode(at path: String) -> Bool {
+        ESCallbackSafetyGuard.requireOffCallbackThread("SecStaticCode validation")
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(
+            URL(fileURLWithPath: path) as CFURL,
+            [],
+            &code
+        ) == errSecSuccess, let code else { return false }
+
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            "anchor apple" as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess, let requirement else { return false }
+
+        let flags = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures)
+        return SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess
     }
 
     /// Converts Apple-authored Endpoint Security notifications into the same

@@ -25,7 +25,9 @@ struct AlertListView: View {
     @State private var timelineSearch = ""
 
     private var visibleAlerts: [ThreatAlert] {
-        engine.alerts.filter { $0.isVisibleInActiveAlerts(showInformational: showTrustedAlerts) }
+        engine.alerts.filter {
+            engine.isVisibleInActiveAlerts($0, showInformational: showTrustedAlerts)
+        }
     }
 
     var body: some View {

@@ -36,6 +36,7 @@ let previouslyObservedExtensionBuild: String? = {
 /// crashed or stopped extension can never leave Smart Scan falsely green.
 func writeExtensionHealth() {
     let esMetrics = EndpointSecurityClient.healthMetrics.snapshot()
+    let projectedDiskBytesPerDay = esMetrics.projectedDiskBytesPerDay.values.reduce(0, +)
     let fullDiskAccessReady: Bool = {
         guard let handle = FileHandle(
             forReadingAtPath: "/Library/Application Support/com.apple.TCC/TCC.db"
@@ -67,7 +68,14 @@ func writeExtensionHealth() {
         "deadlineMissCount": esMetrics.deadlineMisses,
         "credentialPathCandidateCount": esMetrics.credentialOpenEvaluations,
         "credentialOpenFindingCount": esMetrics.credentialOpenFindings,
-        "nickProtectedPathMaintenanceCount": esMetrics.nickProtectedPathMaintenance
+        "nickProtectedPathMaintenanceCount": esMetrics.nickProtectedPathMaintenance,
+        "diskWriteCountsByWriter": esMetrics.diskWriteCounts,
+        "diskWriteBytesByWriter": esMetrics.diskWriteBytes,
+        "diskWriteMeasurementSeconds": esMetrics.diskWriteMeasurementSeconds,
+        "projectedDiskBytesPerDayByWriter": esMetrics.projectedDiskBytesPerDay,
+        "projectedDiskBytesPerDay": projectedDiskBytesPerDay,
+        "diskWriteDailyTargetBytes": ExtensionDiskWriteBudget.dailyTargetBytes,
+        "diskWriteBudgetExceeded": projectedDiskBytesPerDay > Double(ExtensionDiskWriteBudget.dailyTargetBytes)
     ]
     if let (_, provenance) = signedIntelligenceStore.loadBestAvailable() {
         health["threatBundleVersion"] = provenance.version
@@ -101,6 +109,7 @@ func writeExtensionHealth() {
             [.posixPermissions: 0o600],
             ofItemAtPath: healthPath
         )
+        EndpointSecurityClient.healthMetrics.recordDiskWrite(writer: "extension-health", bytes: data.count)
     } catch {
         logger.error("Could not publish extension health: \(error.localizedDescription, privacy: .public)")
     }
@@ -548,7 +557,9 @@ _ = protectionContinuityLedger.recordHeartbeat(
     extensionBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
 )
 let healthTimer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-healthTimer.schedule(deadline: .now() + 10, repeating: 10)
+// Thirty seconds keeps the liveness proof comfortably inside the 75-second
+// stale window while cutting heartbeat writes by two thirds.
+healthTimer.schedule(deadline: .now() + 30, repeating: 30)
 healthTimer.setEventHandler(handler: writeExtensionHealth)
 healthTimer.resume()
 

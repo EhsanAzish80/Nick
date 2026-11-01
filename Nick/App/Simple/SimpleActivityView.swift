@@ -239,7 +239,7 @@ struct SimpleActivityRow: View {
                     .foregroundStyle(Color.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
-                Text("\(item.detail) · \(item.date.formatted(date: .omitted, time: .shortened))")
+                Text(activityDetail)
                     .font(.system(size: 11))
                     .foregroundStyle(Color.nickSecondaryText)
             }
@@ -256,6 +256,13 @@ struct SimpleActivityRow: View {
         .padding(.vertical, 10)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+
+    private var activityDetail: String {
+        let repeatText = item.occurrenceCount > 1
+            ? "Seen \(DisplayNumber.count(item.occurrenceCount)) times · "
+            : ""
+        return "\(repeatText)\(item.detail) · \(item.date.formatted(date: .omitted, time: .shortened))"
     }
 }
 

@@ -127,6 +127,34 @@ final class SimpleActivityFeedTests: XCTestCase {
         XCTAssertEqual(items[1].title, "Stopped “dropper” from running")
     }
 
+    func test_recurrenceSortsByLastSeenAndShowsOccurrenceCount() {
+        let olderFirstSeenButRepeated = SimpleActivityFeed.AlertInput(
+            id: UUID(),
+            headline: "Repeated activity",
+            level: .warning,
+            date: now,
+            needsAction: true,
+            occurrenceCount: 4
+        )
+        let newerFirstSeenButNotRepeated = SimpleActivityFeed.AlertInput(
+            id: UUID(),
+            headline: "One-time activity",
+            level: .warning,
+            date: now.addingTimeInterval(-60),
+            needsAction: true
+        )
+
+        let items = SimpleActivityFeed.items(
+            alerts: [newerFirstSeenButNotRepeated, olderFirstSeenButRepeated],
+            quarantine: [],
+            blocked: [],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(items.map(\.title), ["Repeated activity", "One-time activity"])
+        XCTAssertEqual(items.first?.occurrenceCount, 4)
+    }
+
     func test_actionableAlertsAreNeedsAction() {
         let items = SimpleActivityFeed.items(
             alerts: [
@@ -634,6 +662,35 @@ final class SimpleActivityFeedTests: XCTestCase {
             now: now
         )
         XCTAssertEqual(hero.state, .attention)
+    }
+
+    @MainActor
+    func test_advancedActiveFilterUsesIncidentStatusAfterProcessEnds() throws {
+        let protected = protectedPersistenceAlert()
+        let incident = SecurityIncident(
+            key: "ended-protected-finding",
+            alert: protected,
+            evidence: protected.contributingSignals.map(Evidence.init(signal:)),
+            state: .new
+        )
+        let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [incident],
+            dismissalTombstones: [],
+            expectedCooldowns: [:]
+        ))
+        let engine = SecurityEngine()
+        try engine.installPrivilegedIncidentStore(
+            payload: payload,
+            persistence: { _, _, _ in },
+            authorizer: { _, _ in .approved(IncidentActionApproval(authorizationExternalForm: nil)) },
+            removeLegacyState: false
+        )
+
+        XCTAssertEqual(engine.displayStatus(for: protected), .needsReview)
+        XCTAssertTrue(engine.isVisibleInActiveAlerts(protected, showInformational: false))
+        // This isolated engine has no live sensor pipeline, so sensorProblem
+        // correctly wins the headline priority; the incident must still count.
+        XCTAssertEqual(engine.protectionStatus.count, 1)
     }
 
     func test_filters() {

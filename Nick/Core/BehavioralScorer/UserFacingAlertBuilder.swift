@@ -605,9 +605,16 @@ final class UserFacingAlertBuilder: Sendable {
                     actions: [.showDetails, .dismiss]
                 )
             }
+            let networkSignal = signals.first(where: { signal in
+                signal.metadata["reason"]?.hasPrefix("network_extension_") == true
+            })
+            let app = NetworkEventContext.displayName(
+                for: networkSignal?.metadata["appIdentifier"]
+            )
+            let destination = networkSignal?.metadata["destination"] ?? "an unknown destination"
             return AlertPattern(
-                headline: "An app made an unusual network connection",
-                explanation: "An app tried to connect to a server that Nick flagged as potentially dangerous. "
+                headline: "\(app) made an unusual connection to \(destination)",
+                explanation: "\(app) tried to connect to \(destination), which Nick flagged as potentially unusual. "
                     + "This can be malware communication, but raw IP addresses and uncommon ports are also used by legitimate software. "
                     + "Nick recorded the attempt; passive monitoring did not block it.",
                 assessment: "Needs your review",

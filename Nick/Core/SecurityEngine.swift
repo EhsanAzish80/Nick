@@ -457,6 +457,11 @@ final class SecurityEngine {
         incident(for: alert)?.displayStatus ?? IncidentDisplayStatus(alert: alert)
     }
 
+    func isVisibleInActiveAlerts(_ alert: ThreatAlert, showInformational: Bool) -> Bool {
+        let status = displayStatus(for: alert)
+        return status.contributesToProtectionStatus || (showInformational && status == .observed)
+    }
+
     /// Canonical status/count consumed by every top-level protection surface.
     var protectionStatus: ProtectionStatus {
         ProtectionStatus.evaluate(
@@ -610,11 +615,15 @@ final class SecurityEngine {
         guard !confirmedAlerts.isEmpty else { return }
         Task { @MainActor in
             let (formatter, outputs) = buildPipeline()
+            var deliveredAlertIDs: [UUID] = []
             for alert in confirmedAlerts {
                 if await NotificationManager.shared.send(for: alert) {
-                    _ = incidentStore.markNotificationDelivered(alertID: alert.id, at: Date())
+                    deliveredAlertIDs.append(alert.id)
                 }
                 await emitAlert(alert, formatter: formatter, outputs: outputs)
+            }
+            if !deliveredAlertIDs.isEmpty {
+                _ = incidentStore.markNotificationsDelivered(alertIDs: deliveredAlertIDs, at: Date())
             }
         }
     }

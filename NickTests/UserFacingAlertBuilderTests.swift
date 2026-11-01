@@ -7,6 +7,36 @@ import XCTest
 
 final class UserFacingAlertBuilderTests: XCTestCase {
 
+    func testUnusualNetworkTitleNamesAppAndDestination() {
+        let signal = ThreatSignal(
+            source: .network,
+            severity: .medium,
+            title: "Connection used an uncommon port",
+            description: "Network observation",
+            context: .init(metadata: [
+                "reason": "network_extension_unusualPort",
+                "appIdentifier": "com.spotify.client",
+                "destination": "api.example.test",
+            ])
+        )
+        let alert = ThreatAlert(
+            score: 0.5,
+            content: .init(
+                title: signal.title,
+                description: signal.description,
+                severity: .medium,
+                recommendedAction: "Review"
+            ),
+            contributingSignals: [signal]
+        )
+
+        let result = UserFacingAlertBuilder.shared.build(from: alert)
+
+        XCTAssertEqual(result.headline, "Spotify made an unusual connection to api.example.test")
+        XCTAssertTrue(result.explanation.contains("Spotify"))
+        XCTAssertTrue(result.explanation.contains("api.example.test"))
+    }
+
     func testProcessChainTitleNamesActorAndBehavior() {
         let signal = ThreatSignal(
             source: .process,

@@ -483,8 +483,21 @@ final class IncidentStore {
     /// requests must not consume the recurrence window.
     @discardableResult
     func markNotificationDelivered(alertID: UUID, at timestamp: Date) -> UInt64? {
-        guard let index = incidents.firstIndex(where: { $0.alert.id == alertID }) else { return nil }
-        incidents[index].lastNotifiedAt = timestamp
+        markNotificationsDelivered(alertIDs: [alertID], at: timestamp)
+    }
+
+    /// Applies one durable snapshot update for a notification batch instead
+    /// of rewriting the complete root-owned store once per alert.
+    @discardableResult
+    func markNotificationsDelivered(alertIDs: [UUID], at timestamp: Date) -> UInt64? {
+        let identifiers = Set(alertIDs)
+        guard !identifiers.isEmpty else { return nil }
+        var updated = false
+        for index in incidents.indices where identifiers.contains(incidents[index].alert.id) {
+            incidents[index].lastNotifiedAt = timestamp
+            updated = true
+        }
+        guard updated else { return nil }
         return persist(force: true)
     }
 
@@ -653,7 +666,11 @@ final class IncidentStore {
                 outcomes.append(.coalesced(0))
                 if isProtected(candidate) {
                     let wasHidden = !prior.isVisible
-                    let shouldReopen = prior.state != .new || wasHidden
+                    // A user review is a durable verdict for an identical
+                    // recurrence. Keep the evidence/count, but do not turn the
+                    // same finding actionable again unless its severity rises.
+                    let reviewedAndUnchanged = prior.state == .reviewed && !escalated
+                    let shouldReopen = !reviewedAndUnchanged && (prior.state != .new || wasHidden)
                     let currentTime = now()
                     let outsideNotificationWindow = prior.lastNotifiedAt.map {
                         currentTime.timeIntervalSince($0) >= 600
@@ -667,7 +684,7 @@ final class IncidentStore {
                         incidents[index].isVisible = true
                         recordAction(.reopened, actor: .automatic, at: index)
                     }
-                    if shouldReopen || outsideNotificationWindow {
+                    if shouldReopen || (!reviewedAndUnchanged && outsideNotificationWindow) {
                         newlyActionable.append(incidents[index].alert)
                         notificationIncidentIDs.insert(incidents[index].alert.id)
                         notificationSignalIDs.formUnion(candidateSignalIDs)

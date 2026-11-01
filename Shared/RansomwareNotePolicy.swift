@@ -226,7 +226,7 @@ enum RansomwareRenamePolicy {
 
     private static let temporaryExtensions: Set<String> = [
         "tmp", "temp", "download", "crdownload", "part", "partial", "opdownload",
-        "swp", "swx", "lock", "new", "writing", "inprogress",
+        "swp", "swx", "lock", "new", "writing", "inprogress", "processing",
     ]
 
     /// Formats applications routinely produce by renaming. Ransomware never
@@ -234,7 +234,7 @@ enum RansomwareRenamePolicy {
     private static let routineDestinationExtensions: Set<String> = [
         "json", "plist", "xml", "db", "sqlite", "sqlite3", "wal", "shm", "log", "txt",
         "md", "csv", "html", "css", "js", "ts", "swift", "h", "m", "c", "cpp", "o",
-        "make", "map", "tmp", "temp", "cmake",
+        "make", "map", "tmp", "temp", "processing", "cmake",
         "png", "jpg", "jpeg", "heic", "gif", "webp", "mov", "mp4", "m4a", "mp3", "wav",
         "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
         "zip", "gz", "tar", "dmg", "pkg", "app", "bak", "old", "orig", "backup",

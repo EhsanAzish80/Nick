@@ -243,6 +243,7 @@ final class DetectionPolicyTests: XCTestCase {
             ("/a/doc.pages", "/a/doc.sb-4c1a-abc"),
             ("/a/notes.txt", "/a/notes.txt"),
             ("/a/report.docx", "/a/report.docx.bak"),
+            ("/a/item.cache", "/a/item.cache.processing"),
             (
                 "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/CMakeScratch/TryCompile-test/CMakeFiles/cmTC.dir/build",
                 "/Users/test/Projects/DimensionForge/Prototypes/Boolean/.build-manifold/release/CMakeFiles/CMakeScratch/TryCompile-test/CMakeFiles/cmTC.dir/build.make"

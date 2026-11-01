@@ -3,6 +3,40 @@ import Security
 @testable import Nick
 
 final class PrivilegedIncidentFileStoreTests: XCTestCase {
+    func test_writeObserverCountsOnlyActualStoreWrites() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NickWriteMetrics-\(UUID().uuidString)/state/incidents.json")
+        var observations: [(writer: String, bytes: Int)] = []
+        let store = PrivilegedIncidentFileStore(fileURL: fileURL) { writer, bytes in
+            observations.append((writer, bytes))
+        }
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let payload = try XCTUnwrap("{\"incidents\":[]}".data(using: .utf8))
+
+        let migrated = store.migrate(payload: payload)
+        let record = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: migrated.record)
+        _ = store.replace(payload: payload, expectedRevision: record.revision)
+
+        XCTAssertEqual(observations.count, 1)
+        XCTAssertEqual(observations.first?.writer, "incident-store")
+        XCTAssertGreaterThan(observations.first?.bytes ?? 0, payload.count)
+    }
+
+    func test_expectedDailyPersistenceWorkloadStaysUnderFiftyMegabytes() {
+        // 5076's observed store was about 315 KB. The coalesced design budgets
+        // 50 whole-store commits/day, 1,000 small journal records, one compact,
+        // and a bounded 30-second heartbeat.
+        let projected = ExtensionDiskWriteBudget.projectedDailyBytes(
+            healthRecordBytes: 4 * 1_024,
+            heartbeatInterval: 30,
+            incidentSnapshotBytes: 315 * 1_024,
+            incidentWritesPerDay: 50,
+            endpointJournalBytesPerDay: 2 * 1_024 * 1_024,
+            endpointCompactionBytesPerDay: 315 * 1_024
+        )
+
+        XCTAssertLessThanOrEqual(projected, ExtensionDiskWriteBudget.dailyTargetBytes)
+    }
     private var temporaryDirectory: URL!
 
     override func setUpWithError() throws {

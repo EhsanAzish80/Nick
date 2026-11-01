@@ -4,6 +4,26 @@
 
 import Foundation
 
+enum ExtensionDiskWriteBudget {
+    static let dailyTargetBytes: UInt64 = 50 * 1_024 * 1_024
+
+    static func projectedDailyBytes(
+        healthRecordBytes: Int,
+        heartbeatInterval: TimeInterval,
+        incidentSnapshotBytes: Int,
+        incidentWritesPerDay: Int,
+        endpointJournalBytesPerDay: Int,
+        endpointCompactionBytesPerDay: Int
+    ) -> UInt64 {
+        let heartbeatWrites = Int(86_400 / max(heartbeatInterval, 1))
+        let total = max(0, healthRecordBytes) * heartbeatWrites
+            + max(0, incidentSnapshotBytes) * max(0, incidentWritesPerDay)
+            + max(0, endpointJournalBytesPerDay)
+            + max(0, endpointCompactionBytesPerDay)
+        return UInt64(total)
+    }
+}
+
 /// Root-owned, file-backed storage used by the Endpoint Security extension.
 /// The payload is opaque here so the privileged process does not duplicate the
 /// app's incident model. All access is serialized and revisions prevent an
@@ -21,16 +41,19 @@ final class PrivilegedIncidentFileStore: @unchecked Sendable {
     private let directoryURL: URL
     private let queue = DispatchQueue(label: "com.ehsanazish.nick.incident-store")
     private let fileManager: FileManager
+    private let writeObserver: ((String, Int) -> Void)?
 
     init(
         fileURL: URL = URL(
             fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/incidents.json"
         ),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        writeObserver: ((String, Int) -> Void)? = nil
     ) {
         self.fileURL = fileURL
         self.directoryURL = fileURL.deletingLastPathComponent()
         self.fileManager = fileManager
+        self.writeObserver = writeObserver
     }
 
     func load() -> Data {
@@ -107,6 +130,10 @@ final class PrivilegedIncidentFileStore: @unchecked Sendable {
         let encoded = try JSONEncoder().encode(record)
         try encoded.write(to: fileURL, options: [.atomic])
         try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        writeObserver?(
+            fileURL.lastPathComponent == "incidents.json" ? "incident-store" : "settings-store",
+            encoded.count
+        )
     }
 
     private func prepareDirectory() throws {

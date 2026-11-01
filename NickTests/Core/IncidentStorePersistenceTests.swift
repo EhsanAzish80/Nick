@@ -269,8 +269,8 @@ final class IncidentStorePersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func test_resolvedReviewedAndHiddenProtectedIncidentsReopenVisibleAndNotifyOnce() throws {
-        for action in [IncidentActionKind.resolved, .reviewed, .hidden] {
+    func test_resolvedProtectedIncidentReopensVisibleAndNotifiesOnce() throws {
+        for action in [IncidentActionKind.resolved] {
             var clock = Date(timeIntervalSince1970: 20_000)
             let store = IncidentStore(persistOnInit: false, now: { clock })
             let first = try tamperAlert(operation: .unlink)
@@ -293,6 +293,56 @@ final class IncidentStorePersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func test_identicalReviewedProtectedRecurrenceKeepsReviewVerdict() throws {
+        for action in [IncidentActionKind.reviewed, .hidden] {
+            var clock = Date(timeIntervalSince1970: 25_000)
+            let store = IncidentStore(persistOnInit: false, now: { clock })
+            let first = try tamperAlert(operation: .unlink)
+            _ = store.ingest([first])
+            store.performAuthenticatedUserAction(action, alertID: first.id)
+
+            clock.addTimeInterval(900)
+            let result = store.ingest([try tamperAlert(operation: .unlink)])
+
+            XCTAssertTrue(result.newlyActionable.isEmpty, "action=\(action)")
+            XCTAssertEqual(store.incidents.first?.state, .reviewed)
+            XCTAssertEqual(store.incidents.first?.isVisible, action != .hidden)
+            XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 2)
+            XCTAssertEqual(store.incidents.first?.actions.last?.action, action)
+            XCTAssertNil(store.incidents.first?.reopenedAfterState)
+        }
+    }
+
+    @MainActor
+    func test_dismissalTombstonesAreBounded() throws {
+        let store = IncidentStore(persistOnInit: false)
+        for index in 0...IncidentStore.maximumDismissalTombstones {
+            let finding = try XCTUnwrap(ExtensionFinding(event: Self.tamperEvent(
+                operation: .unlink,
+                target: "/Applications/Nick.app/tombstone-\(index)"
+            )))
+            let alert = ThreatAlert(
+                score: finding.score,
+                content: AlertContent(
+                    title: finding.signal.title,
+                    description: finding.signal.description,
+                    severity: finding.signal.severity,
+                    recommendedAction: finding.recommendedAction
+                ),
+                contributingSignals: [finding.signal],
+                timestamp: finding.signal.timestamp
+            )
+            _ = store.ingest([alert])
+            store.performAuthenticatedUserAction(.dismissed, alertID: alert.id)
+        }
+
+        XCTAssertEqual(
+            store.dismissedAlertDeduplicationKeys.count,
+            IncidentStore.maximumDismissalTombstones
+        )
+    }
+
+    @MainActor
     func test_newProtectedRepeatWithinTenMinutesIncrementsWithoutSecondNotification() throws {
         var clock = Date(timeIntervalSince1970: 30_000)
         let store = IncidentStore(persistOnInit: false, now: { clock })
@@ -306,6 +356,31 @@ final class IncidentStorePersistenceTests: XCTestCase {
         let repeatResult = store.ingest([try tamperAlert(operation: .unlink)])
         XCTAssertEqual(repeatResult.newlyActionable.count, 0)
         XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 2)
+    }
+
+    @MainActor
+    func test_notificationBatchPersistsAllDeliveryTimesInOneGeneration() throws {
+        var persisted: [(Data, UInt64)] = []
+        let store = IncidentStore(persistOnInit: false)
+        let emptySnapshot = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [], dismissalTombstones: [], expectedCooldowns: [:]
+        ))
+        try store.installPrivilegedSnapshot(emptySnapshot) { payload, generation in
+            persisted.append((payload, generation))
+        }
+        let first = try tamperAlert(operation: .unlink)
+        let second = try tamperAlert(operation: .truncate)
+        _ = store.ingest([first, second])
+        persisted.removeAll()
+
+        let timestamp = Date(timeIntervalSince1970: 55_000)
+        let generation = store.markNotificationsDelivered(
+            alertIDs: [first.id, second.id], at: timestamp
+        )
+
+        XCTAssertNotNil(generation)
+        XCTAssertEqual(persisted.count, 1)
+        XCTAssertEqual(store.incidents.map(\.lastNotifiedAt), [timestamp, timestamp])
     }
 
     @MainActor
