@@ -8,6 +8,18 @@ import Foundation
 /// belongs to the client whose TCC record changed, not merely the process that
 /// caused the change.
 enum TCCAffectedClientTrustPolicy {
+    enum ChangeDisposition: Equatable {
+        case timelineOnly
+        case inform
+        case actionable
+    }
+
+    private static let sensitiveGrantServices: Set<String> = [
+        "kTCCServiceSystemPolicyAllFiles", "kTCCServiceAccessibility",
+        "kTCCServiceScreenCapture", "kTCCServiceListenEvent",
+        "kTCCServicePostEvent"
+    ]
+
     static func isValidatedAppleClient(
         appBundleID: String,
         appPath: String,
@@ -29,6 +41,26 @@ enum TCCAffectedClientTrustPolicy {
 
         guard appPath.hasPrefix("/") else { return false }
         return validateApplePath(appPath)
+    }
+
+    /// Apple-owned clients commonly receive short-lived revocations during
+    /// installs and system maintenance. A sensitive grant remains actionable
+    /// regardless of Apple identity: Terminal, osascript, and system
+    /// interpreters are useful TCC-abuse targets too.
+    static func disposition(
+        validatedAppleClient: Bool,
+        isGranted: Bool,
+        service: String,
+        affectsNick: Bool
+    ) -> ChangeDisposition {
+        if validatedAppleClient && !isGranted && !affectsNick {
+            return .timelineOnly
+        }
+        if (affectsNick && !isGranted)
+            || (isGranted && sensitiveGrantServices.contains(service)) {
+            return .actionable
+        }
+        return .inform
     }
 
     private static func canonicalPath(_ path: String) -> String {

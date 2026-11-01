@@ -34,4 +34,50 @@ final class TCCAffectedClientTrustTests: XCTestCase {
             validateApplePath: { _ in false }
         ))
     }
+
+    func testValidatedAppleRevocationIsTimelineOnly() {
+        XCTAssertEqual(TCCAffectedClientTrustPolicy.disposition(
+            validatedAppleClient: true,
+            isGranted: false,
+            service: "kTCCServiceSystemPolicyAllFiles",
+            affectsNick: false
+        ), .timelineOnly)
+    }
+
+    func testValidatedAppleSensitiveGrantsRemainActionable() {
+        let sensitiveServices = [
+            "kTCCServiceSystemPolicyAllFiles",
+            "kTCCServiceAccessibility",
+            "kTCCServiceScreenCapture",
+            "kTCCServiceListenEvent",
+            "kTCCServicePostEvent",
+        ]
+
+        for service in sensitiveServices {
+            XCTAssertEqual(TCCAffectedClientTrustPolicy.disposition(
+                validatedAppleClient: true,
+                isGranted: true,
+                service: service,
+                affectsNick: false
+            ), .actionable, "Apple-signed client grant must remain actionable for \(service)")
+        }
+    }
+
+    func testNickPermissionRevocationRemainsActionable() {
+        XCTAssertEqual(TCCAffectedClientTrustPolicy.disposition(
+            validatedAppleClient: true,
+            isGranted: false,
+            service: "kTCCServiceSystemPolicyAllFiles",
+            affectsNick: true
+        ), .actionable)
+    }
+
+    func testValidatedAppleNonSensitiveGrantIsInformational() {
+        XCTAssertEqual(TCCAffectedClientTrustPolicy.disposition(
+            validatedAppleClient: true,
+            isGranted: true,
+            service: "kTCCServiceCalendar",
+            affectsNick: false
+        ), .inform)
+    }
 }

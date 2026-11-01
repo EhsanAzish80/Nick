@@ -1433,10 +1433,18 @@ final class ESEventHandler {
             "nickPermissionLost": affectsNick && !isGranted ? "true" : "false"
         ]
 
-        if validatedAppleClient {
+        let disposition = TCCAffectedClientTrustPolicy.disposition(
+            validatedAppleClient: validatedAppleClient,
+            isGranted: isGranted,
+            service: service,
+            affectsNick: affectsNick
+        )
+
+        if disposition == .timelineOnly {
             // Apple installers and system components receive short-lived TCC
-            // changes during normal package work. Preserve them in the event
-            // timeline without creating a review item.
+            // revocations during normal package work. Preserve them in the
+            // event timeline without creating a review item. Sensitive grants
+            // never take this path, even when the client is Apple-signed.
             metadata["timelineOnly"] = "true"
             pushEvent(ESEvent(
                 eventType: .notifyTCCModify,
@@ -1449,13 +1457,7 @@ final class ESEventHandler {
             return
         }
 
-        let sensitiveGrantServices: Set<String> = [
-            "kTCCServiceSystemPolicyAllFiles", "kTCCServiceAccessibility",
-            "kTCCServiceScreenCapture", "kTCCServiceListenEvent",
-            "kTCCServicePostEvent"
-        ]
-        let actionable = (affectsNick && !isGranted)
-            || (isGranted && sensitiveGrantServices.contains(service))
+        let actionable = disposition == .actionable
         metadata["deliveryLevel"] = actionable ? "interrupt" : "inform"
         if affectsNick && !isGranted { metadata["openSettingsAction"] = "true" }
         reportAppleSecurityEvent(
