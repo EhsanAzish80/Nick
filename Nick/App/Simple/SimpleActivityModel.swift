@@ -32,6 +32,7 @@ struct SimpleActivityItem: Identifiable, Equatable {
     let date: Date
     let status: Status
     let isHighRisk: Bool
+    let occurrenceCount: Int
 
     var icon: String {
         switch status {
@@ -84,6 +85,7 @@ enum SimpleActivityFeed {
         let date: Date
         let displayStatus: IncidentDisplayStatus
         let isHighRisk: Bool
+        let occurrenceCount: Int
 
         init(
             id: UUID,
@@ -93,7 +95,8 @@ enum SimpleActivityFeed {
             needsAction: Bool,
             isBlocked: Bool = false,
             displayStatus: IncidentDisplayStatus? = nil,
-            isHighRisk: Bool = false
+            isHighRisk: Bool = false,
+            occurrenceCount: Int = 1
         ) {
             self.id = id
             self.headline = headline
@@ -102,6 +105,7 @@ enum SimpleActivityFeed {
             self.displayStatus = displayStatus
                 ?? (isBlocked ? .blocked : (needsAction ? .needsReview : .observed))
             self.isHighRisk = isHighRisk
+            self.occurrenceCount = max(1, occurrenceCount)
         }
     }
 
@@ -162,7 +166,8 @@ enum SimpleActivityFeed {
                 needsAction: displayStatus == .needsReview && actionable.contains(alert.id),
                 isBlocked: displayStatus == .blocked,
                 displayStatus: displayStatus,
-                isHighRisk: user.severity == .critical && alert.hasProtectedEvidence
+                isHighRisk: user.severity == .critical && alert.hasProtectedEvidence,
+                occurrenceCount: alert.occurrenceCount
             )
         }
     }
@@ -234,7 +239,8 @@ enum SimpleActivityFeed {
                     : (alert.level == .warning ? "Nick warned you" : "Nick observed activity"),
                 date: alert.date,
                 status: status,
-                isHighRisk: alert.isHighRisk
+                isHighRisk: alert.isHighRisk,
+                occurrenceCount: alert.occurrenceCount
             ))
         }
 
@@ -248,7 +254,8 @@ enum SimpleActivityFeed {
                 detail: "It can’t run from there",
                 date: record.quarantinedAt,
                 status: .quarantined,
-                isHighRisk: false
+                isHighRisk: false,
+                occurrenceCount: 1
             ))
         }
 
@@ -274,7 +281,8 @@ enum SimpleActivityFeed {
                 detail: key.failed ? "Nick will retry from its protected journal" : "Blocked by real-time protection\(times)",
                 date: group.map(\.date).max() ?? key.day,
                 status: key.failed ? .needsAction : .blocked,
-                isHighRisk: false
+                isHighRisk: false,
+                occurrenceCount: group.count
             ))
         }
 

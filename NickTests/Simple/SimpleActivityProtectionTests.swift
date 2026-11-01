@@ -127,6 +127,34 @@ final class SimpleActivityFeedTests: XCTestCase {
         XCTAssertEqual(items[1].title, "Stopped “dropper” from running")
     }
 
+    func test_recurrenceSortsByLastSeenAndShowsOccurrenceCount() {
+        let olderFirstSeenButRepeated = SimpleActivityFeed.AlertInput(
+            id: UUID(),
+            headline: "Repeated activity",
+            level: .warning,
+            date: now,
+            needsAction: true,
+            occurrenceCount: 4
+        )
+        let newerFirstSeenButNotRepeated = SimpleActivityFeed.AlertInput(
+            id: UUID(),
+            headline: "One-time activity",
+            level: .warning,
+            date: now.addingTimeInterval(-60),
+            needsAction: true
+        )
+
+        let items = SimpleActivityFeed.items(
+            alerts: [newerFirstSeenButNotRepeated, olderFirstSeenButRepeated],
+            quarantine: [],
+            blocked: [],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(items.map(\.title), ["Repeated activity", "One-time activity"])
+        XCTAssertEqual(items.first?.occurrenceCount, 4)
+    }
+
     func test_actionableAlertsAreNeedsAction() {
         let items = SimpleActivityFeed.items(
             alerts: [
