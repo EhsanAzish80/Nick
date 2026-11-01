@@ -16,13 +16,25 @@ final class IncidentStorePersistenceTests: XCTestCase {
                 "signalSeverity": "high"
             ])
         )
+        let tccSignal = ThreatSignal(
+            source: .endpointSecurity,
+            severity: .medium,
+            timestamp: Date(timeIntervalSince1970: 101),
+            title: "Automation permission granted",
+            description: "Fixture",
+            context: ThreatSignalContext(metadata: [
+                "appleEvent": "tcc-permission-modified",
+                "ruleTier": "review",
+                "signalSeverity": "medium"
+            ])
+        )
         let alert = ThreatAlert(
             score: 0.9,
             content: .init(
                 title: "Launch daemon added", description: "Fixture",
                 severity: .high, recommendedAction: "Review"
             ),
-            contributingSignals: [signal],
+            contributingSignals: [signal, tccSignal],
             timestamp: Date(timeIntervalSince1970: 100),
             occurrenceCount: 3
         )
@@ -61,10 +73,10 @@ final class IncidentStorePersistenceTests: XCTestCase {
         let fingerprint = try XCTUnwrap(decoded.values.first as? [String: Any])
         XCTAssertEqual(
             fingerprint["reasons"] as? [String],
-            ["background-item-added", "persist_new_launchdaemon"]
+            ["background-item-added", "persist_new_launchdaemon", "tcc-permission-modified"]
         )
-        XCTAssertEqual(fingerprint["tiers"] as? [String], ["protected"])
-        XCTAssertEqual(fingerprint["signalSeverities"] as? [String], ["high"])
+        XCTAssertEqual(fingerprint["tiers"] as? [String], ["protected", "review"])
+        XCTAssertEqual(fingerprint["signalSeverities"] as? [String], ["high", "medium"])
         XCTAssertTrue(try XCTUnwrap(decoded.keys.first).hasSuffix(":3:reviewed"))
     }
 

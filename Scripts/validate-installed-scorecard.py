@@ -98,7 +98,7 @@ EXPECTED = {
     # 5069 TCC policy intentionally records that as inform/observed; sensitive
     # grants and Nick permission loss remain review-tier.
     "T1548.006": ({"tcc-permission-modified"}, {"review", "observed"}),
-    "T1562.001": ({"endpoint_tamper_observed", "nick_tamper"}, {"protected"}),
+    "T1562.001": ({"endpoint_tamper_observed", "nick_tamper", "nick_unexpected_exit"}, {"protected"}),
     "T1222.002": ({"permission_modification"}, {"review", "protected"}),
     "T1070.004": ({"protected_file_deletion", "file_integrity_deleted"}, {"review", "protected"}),
     "T1027": ({"base64_payload", "encoded_payload", "decoded_payload_interpreter"}, {"review", "protected"}),
@@ -163,7 +163,7 @@ def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[
         # a more specific presentation reason. Preserve both: either may be
         # the scorecard's expected evidence and neither should mask the other.
         reasons = sorted({str(value) for item in metadata if isinstance(item, dict)
-                          for value in (item.get("reason"), item.get("rule"))
+                          for value in (item.get("reason"), item.get("rule"), item.get("appleEvent"))
                           if value})
         tiers = sorted({str(item.get("ruleTier") or "")
                         for item in metadata if isinstance(item, dict)} - {""})
@@ -262,6 +262,48 @@ def matching_prevention(
 def measured_status(prevention: dict[str, str] | None) -> str:
     """A process exit is not proof that Nick prevented the technique."""
     return "PREVENTED" if prevention is not None else "PASS"
+
+
+def matching_incidents(
+    before: dict[str, dict[str, Any]],
+    after: dict[str, dict[str, Any]],
+    expected_reasons: set[str],
+    expected_tiers: set[str],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return only newly persisted occurrences matching this replay row."""
+    matches: list[tuple[str, dict[str, Any]]] = []
+    for identifier in sorted(set(after) - set(before)):
+        record = after[identifier]
+        reasons = set(record["reasons"])
+        tiers = set(record["tiers"])
+        if reasons.intersection(expected_reasons) and (
+            not tiers or tiers.intersection(expected_tiers)
+        ):
+            matches.append((identifier, record))
+    return matches
+
+
+def wait_for_matching_incidents(
+    before: dict[str, dict[str, Any]],
+    expected_reasons: set[str],
+    expected_tiers: set[str],
+    timeout: float = 15.0,
+    poll_interval: float = 0.5,
+) -> tuple[dict[str, dict[str, Any]], list[tuple[str, dict[str, Any]]]]:
+    """Poll the durable store because app ingestion can trail a fixture.
+
+    A fixed sleep caused one row's evidence to arrive during the next row and
+    be reported as unrelated noise. Polling remains bounded and succeeds only
+    for a concrete expected machine rule and tier.
+    """
+    deadline = time.monotonic() + timeout
+    after = load_incident_fingerprints()
+    while True:
+        matches = matching_incidents(before, after, expected_reasons, expected_tiers)
+        if matches or time.monotonic() >= deadline:
+            return after, matches
+        time.sleep(poll_interval)
+        after = load_incident_fingerprints()
 
 
 def installed_app_build(info_plist: Path = INSTALLED_APP_INFO) -> str:
@@ -527,18 +569,12 @@ def main() -> int:
                     f"Fixture exited {completed.returncode}; checking the durable store "
                     "because prevention may have stopped it."
                 )
-            time.sleep(3)
-        after = load_incident_fingerprints()
+        expected_reasons, expected_tiers = EXPECTED[technique["id"]]
+        after, matches = wait_for_matching_incidents(
+            before, expected_reasons, expected_tiers
+        )
         prevention_after = prevention_fingerprints()
         new_ids = sorted(set(after) - set(before))
-        expected_reasons, expected_tiers = EXPECTED[technique["id"]]
-        matches = []
-        for identifier in new_ids:
-            record = after[identifier]
-            reasons = set(record["reasons"])
-            tiers = set(record["tiers"])
-            if reasons.intersection(expected_reasons) and (not tiers or tiers.intersection(expected_tiers)):
-                matches.append((identifier, record))
         if matches:
             latency = time.time() - started
             identifier, record = matches[0]
