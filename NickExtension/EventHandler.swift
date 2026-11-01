@@ -1805,15 +1805,20 @@ final class ESEventHandler {
                                 || interactivePipelineFinding != nil,
                             hasQuarantineOrigin: Self.hasQuarantineOrigin(at: targetPath)
                         ) == .review
-                    let reviewBehavior = localTemporaryExecution
-                        || finding.reason == "encoded_payload"
-                        || finding.tier == .review
+                    let effectiveTier: LOLBinExecutionPolicy.Tier = localTemporaryExecution
+                        ? .review
+                        : finding.tier
+                    let ruleTier = effectiveTier.rawValue
+                    let signalSeverity = effectiveTier == .observed
+                        ? "info"
+                        : (effectiveTier == .review ? "medium" : finding.severity)
                     var metadata = [
                         "reason": finding.reason,
                         "rule": finding.reason,
-                        "ruleTier": reviewBehavior ? "review" : "protected",
+                        "ruleTier": ruleTier,
                         "detectionKind": "lolbin-behavior",
-                        "signalSeverity": reviewBehavior ? "medium" : finding.severity,
+                        "signalSeverity": signalSeverity,
+                        "deliveryLevel": effectiveTier == .observed ? "silent" : "inform",
                         "execTargetPath": targetPath
                     ]
                     if let matchedCommand = finding.matchedCommand {

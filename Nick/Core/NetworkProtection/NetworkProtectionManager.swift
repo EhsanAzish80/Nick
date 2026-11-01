@@ -528,6 +528,12 @@ struct NetworkFinding: Sendable {
         if isTestIndicator {
             metadata["indicatorID"] = event.indicatorIdentifier ?? "NICK_CANARY_WEB"
         }
+        if let sourcePID = event.sourcePID {
+            metadata["pid"] = String(sourcePID)
+        }
+        if let sourcePIDVersion = event.sourcePIDVersion {
+            metadata["pidVersion"] = String(sourcePIDVersion)
+        }
         signal = ThreatSignal(
             id: event.id,
             source: .network,

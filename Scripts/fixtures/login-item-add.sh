@@ -4,6 +4,7 @@ set -eu
 root=${NICK_FIXTURE_ROOT:-/tmp/NickScorecard-login-item}
 app="$root/Nick Login Item Fixture.app"
 identifier="com.3nsofts.nick.scorecard.loginitem.$(date +%s)"
+printf 'NICK_FIXTURE_LOGIN_ITEM=%s\n' "$identifier"
 
 cleanup() {
   /usr/bin/osascript - "$identifier" <<'APPLESCRIPT' >/dev/null 2>&1 || true

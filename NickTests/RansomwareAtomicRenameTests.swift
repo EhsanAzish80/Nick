@@ -112,6 +112,22 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         ))
         XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.mds_stores"),
                        "Spotlight indexing (mds_stores)")
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.geod"
+        ))
+        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: false, signingID: "com.apple.geod"
+        ))
+        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.geod"),
+                       "Apple Maps data (geod)")
+        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: true, signingID: "com.apple.parsec-fbf"
+        ))
+        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
+            isPlatformBinary: false, signingID: "com.apple.parsec-fbf"
+        ))
+        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.parsec-fbf"),
+                       "Apple system data (parsec-fbf)")
     }
 
     func test_routineMapTmpAndProcessingDestinationsDoNotCountAsRansomwareExtensions() {

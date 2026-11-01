@@ -196,6 +196,10 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
     /// Set only by NickNetFilter after matching a verified signed bundle.
     let isTestIndicator: Bool
     let indicatorIdentifier: String?
+    /// Kernel process identity captured from NEFilterFlow.sourceAppAuditToken.
+    /// Both values are required because a PID can be reused after exit.
+    let sourcePID: Int32?
+    let sourcePIDVersion: Int32?
 
     init(
         id: UUID = UUID(),
@@ -210,7 +214,9 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
         sourceIssuedAt: Date? = nil,
         sourceExpiresAt: Date? = nil,
         isTestIndicator: Bool = false,
-        indicatorIdentifier: String? = nil
+        indicatorIdentifier: String? = nil,
+        sourcePID: Int32? = nil,
+        sourcePIDVersion: Int32? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -225,6 +231,8 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
         self.sourceExpiresAt = sourceExpiresAt
         self.isTestIndicator = isTestIndicator
         self.indicatorIdentifier = indicatorIdentifier
+        self.sourcePID = sourcePID
+        self.sourcePIDVersion = sourcePIDVersion
     }
 
     init(
@@ -250,6 +258,7 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, timestamp, host, appIdentifier, decision, reason, reasonTitle, port
         case sourceVersion, sourceIssuedAt, sourceExpiresAt, isTestIndicator, indicatorIdentifier
+        case sourcePID, sourcePIDVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -270,6 +279,8 @@ struct NetworkBlockEvent: Codable, Identifiable, Hashable, Sendable {
         sourceExpiresAt = try container.decodeIfPresent(Date.self, forKey: .sourceExpiresAt)
         isTestIndicator = try container.decodeIfPresent(Bool.self, forKey: .isTestIndicator) ?? false
         indicatorIdentifier = try container.decodeIfPresent(String.self, forKey: .indicatorIdentifier)
+        sourcePID = try container.decodeIfPresent(Int32.self, forKey: .sourcePID)
+        sourcePIDVersion = try container.decodeIfPresent(Int32.self, forKey: .sourcePIDVersion)
     }
 }
 

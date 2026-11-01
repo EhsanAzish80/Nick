@@ -2,6 +2,40 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+    func testStandaloneDecoderIsObservedAndDoesNotClaimInterpreterExecution() throws {
+        let event = ESEvent(
+            eventType: .authExec,
+            processPath: "/bin/zsh",
+            pid: 88,
+            parentPid: 77,
+            decision: .allow,
+            threat: .init(
+                threatName: "Decoded an encoded payload",
+                threatFamily: "lolbin-behavior",
+                metadata: [
+                    "reason": "encoded_payload",
+                    "rule": "encoded_payload",
+                    "ruleTier": "observed",
+                    "detectionKind": "lolbin-behavior",
+                    "signalSeverity": "info",
+                    "deliveryLevel": "silent",
+                    "execTargetPath": "/usr/bin/base64",
+                    "matchedCommand": "/usr/bin/base64 -D"
+                ]
+            )
+        )
+
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.severity, .info)
+        XCTAssertEqual(finding.score, 0.1)
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "observed")
+        XCTAssertEqual(
+            finding.signal.description,
+            "Nick saw a command decode encoded content. It did not observe that output being executed."
+        )
+        XCTAssertFalse(finding.signal.description.contains("interpreter"))
+    }
+
     func testEndpointFindingUsesStableFamilyIDInsteadOfDisplayTitle() throws {
         let event = ESEvent(
             eventType: .notifyWrite,
