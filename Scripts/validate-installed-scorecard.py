@@ -19,6 +19,7 @@ import plistlib
 import pwd
 import re
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -81,10 +82,14 @@ INSTRUCTIONS = {
 # Expected persisted evidence. Alternatives are deliberate where macOS may
 # report the same declared technique through BTM or FIM. A row passes only when
 # one of these concrete reasons is newly persisted.
+LOGIN_ITEMS_TECHNIQUE = "T1547.015"
+NOT_MEASURED = "not measured"
+FIELD_EVIDENCE_STATUS = "PASS (field evidence)"
+
 EXPECTED = {
     "T1543.001": ({"background-item-added", "file_integrity_created", "file_integrity_modified"}, {"review", "protected"}),
     "T1543.004": ({"background-item-added", "file_integrity_created", "file_integrity_modified"}, {"review", "protected"}),
-    "T1547.015": ({"background-item-added"}, {"review"}),
+    LOGIN_ITEMS_TECHNIQUE: ({"background-item-added"}, {"review"}),
     "T1053.003": ({"file_integrity_created", "file_integrity_modified", "cron_modification"}, {"review", "protected"}),
     "T1546.004": ({"shell_profile_modification", "file_integrity_modified"}, {"review", "protected"}),
     "T1059.004": ({"download_pipe_interpreter", "curl_pipe_shell", "wget_pipe_shell"}, {"protected"}),
@@ -118,15 +123,15 @@ ROOT_FIXTURES = {"launch-daemon-add"}
 INTERACTIVE_FIXTURES = {"tcc-modification"}
 DETECTION_ONLY_TECHNIQUES = {"T1070.004"}
 MAPPING_REVIEW_TECHNIQUES = {
-    "T1547.015", "T1218", "T1222.002", "T1082", "T1057", "T1071.001",
+    LOGIN_ITEMS_TECHNIQUE, "T1218", "T1222.002", "T1082", "T1057", "T1071.001",
 }
 MANDATORY_TECHNIQUE_FAMILIES = {
     "tampering with Nick": {"T1562.001"},
     "credential access": {"T1555.001", "T1555.003", "T1552.004", "T1552.001"},
-    "persistence": {"T1543.001", "T1543.004", "T1547.015", "T1053.003", "T1546.004"},
+    "persistence": {"T1543.001", "T1543.004", LOGIN_ITEMS_TECHNIQUE, "T1053.003", "T1546.004"},
     "download-to-shell": {"T1059.004"},
 }
-COMPLETED_STATUSES = {"PASS", "PREVENTED", "DETECTED", "PASS (field evidence)"}
+COMPLETED_STATUSES = {"PASS", "PREVENTED", "DETECTED", FIELD_EVIDENCE_STATUS}
 EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
 
 
@@ -650,7 +655,7 @@ def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[st
         "|---|---|---|---|",
     ]
     for technique in techniques:
-        result = results.get(technique["id"], {"status": "pending", "evidence": "not measured"})
+        result = results.get(technique["id"], {"status": "pending", "evidence": NOT_MEASURED})
         evidence = result["evidence"].replace("|", "\\|").replace("\n", " ")
         rows.append(f"| {technique['id']} | {technique['name']} | {result['status']} | {evidence} |")
     block = START_MARKER + "\n" + "\n".join(rows) + "\n" + END_MARKER
@@ -665,34 +670,45 @@ def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[st
     PROGRESS_DOC.write_text(updated, encoding="utf-8")
 
 
-def manifest_hashes(path: Path) -> tuple[str, set[str]]:
+def read_external_manifest(path: Path) -> tuple[Path, bytes]:
+    """Read one bounded, non-symlink regular file supplied by the operator."""
+    resolved = path.expanduser().resolve(strict=True)
+    descriptor = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode):
+            raise ValueError(f"hash manifest is not a regular file: {resolved}")
+        if status.st_size > 64 * 1024 * 1024:
+            raise ValueError("hash manifest exceeds the 64 MiB limit")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return resolved, stream.read()
+    finally:
+        os.close(descriptor)
+
+
+def manifest_entries(value: Any, raw: str) -> tuple[str | None, list[Any]]:
+    if isinstance(value, dict):
+        return value.get("source"), value.get("samples") or value.get("hashes") or []
+    if isinstance(value, list):
+        return None, value
+    return None, [line.strip().split()[0] for line in raw.splitlines() if line.strip()]
+
+
+def manifest_hashes(path: Path, manifest_data: bytes) -> tuple[str, set[str]]:
     """Read external hash-only JSON/JSONL/text without touching samples."""
-    if not path.is_file():
-        raise ValueError(f"hash manifest not found: {path}")
-    raw = path.read_text(encoding="utf-8")
+    raw = manifest_data.decode("utf-8")
     source = path.name
     hashes: set[str] = set()
     try:
         value = json.loads(raw)
     except json.JSONDecodeError:
         value = None
-    if isinstance(value, dict):
-        source = str(value.get("source") or source)
-        entries = value.get("samples") or value.get("hashes") or []
-        for entry in entries:
-            digest = entry.get("sha256") if isinstance(entry, dict) else entry
-            if isinstance(digest, str):
-                hashes.add(digest.lower())
-    elif isinstance(value, list):
-        for entry in value:
-            digest = entry.get("sha256") if isinstance(entry, dict) else entry
-            if isinstance(digest, str):
-                hashes.add(digest.lower())
-    else:
-        for line in raw.splitlines():
-            token = line.strip().split()[0] if line.strip() else ""
-            if token:
-                hashes.add(token.lower())
+    declared_source, entries = manifest_entries(value, raw)
+    source = str(declared_source or source)
+    for entry in entries:
+        digest = entry.get("sha256") if isinstance(entry, dict) else entry
+        if isinstance(digest, str):
+            hashes.add(digest.lower())
     invalid = sorted(item for item in hashes if re.fullmatch(r"[0-9a-f]{64}", item) is None)
     if invalid:
         raise ValueError(f"manifest contains {len(invalid)} invalid SHA-256 value(s)")
@@ -704,7 +720,8 @@ def manifest_hashes(path: Path) -> tuple[str, set[str]]:
 
 
 def replay_hash_manifest(path: Path, database_path: Path = SIGNATURE_DB) -> dict[str, str]:
-    source, hashes = manifest_hashes(path.resolve())
+    resolved, manifest_data = read_external_manifest(path)
+    source, hashes = manifest_hashes(resolved, manifest_data)
     if not database_path.is_file():
         raise ValueError(f"installed signature database not found: {database_path}")
     placeholders = ",".join("?" for _ in hashes)
@@ -719,15 +736,13 @@ def replay_hash_manifest(path: Path, database_path: Path = SIGNATURE_DB) -> dict
         "total": str(len(hashes)),
         "alerted": str(len(alerted)),
         "percentage": f"{percent:.2f}%",
-        "manifestSHA256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "manifestSHA256": hashlib.sha256(manifest_data).hexdigest(),
     }
 
 
-def full_scorecard_rows(
-    techniques: list[dict[str, Any]],
-    results: dict[str, dict[str, str]],
-    hash_result: dict[str, str] | None = None,
-) -> list[str]:
+def attack_scorecard_summary(
+    techniques: list[dict[str, Any]], results: dict[str, dict[str, str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, str, str]:
     successes = [item for item in techniques
                  if results.get(item["id"], {}).get("status") in COMPLETED_STATUSES]
     prevented = [item for item in techniques
@@ -736,29 +751,36 @@ def full_scorecard_rows(
         results[item["id"]]["evidence"].split(";", 1)[0]
         for item in successes if results[item["id"]].get("evidence")
     ]
-    hash_current = "not measured"
-    hash_evidence = "not measured"
+    successful_ids = {item["id"] for item in successes}
+    missing = {
+        family: sorted(ids - successful_ids)
+        for family, ids in MANDATORY_TECHNIQUE_FAMILIES.items()
+        if ids - successful_ids
+    }
+    if not missing:
+        return successes, prevented, ", ".join(evidence_ids) or NOT_MEASURED, \
+            "all mandatory rows alerted", "all pinned mandatory-family rows have measured evidence"
+    evidence = "; ".join(
+        f"{family}: {', '.join(ids)} not measured" for family, ids in missing.items()
+    )
+    return successes, prevented, ", ".join(evidence_ids) or NOT_MEASURED, \
+        "mandatory incomplete", evidence
+
+
+def full_scorecard_rows(
+    techniques: list[dict[str, Any]],
+    results: dict[str, dict[str, str]],
+    hash_result: dict[str, str] | None = None,
+) -> list[str]:
+    successes, prevented, attack_evidence, mandatory_result, mandatory_evidence = \
+        attack_scorecard_summary(techniques, results)
+    hash_current = NOT_MEASURED
+    hash_evidence = NOT_MEASURED
     if hash_result:
         hash_current = f"{hash_result['percentage']} alerted ({hash_result['alerted']}/{hash_result['total']})"
         hash_evidence = f"manifest sha256 {hash_result['manifestSHA256']}; source {hash_result['source']}"
     attack_percent = 100.0 * len(successes) / 24
     prevention_percent = 100.0 * len(prevented) / 24
-    attack_evidence = ", ".join(evidence_ids) if evidence_ids else "not measured"
-    successful_ids = {item["id"] for item in successes}
-    mandatory_missing = {
-        family: sorted(ids - successful_ids)
-        for family, ids in MANDATORY_TECHNIQUE_FAMILIES.items()
-        if ids - successful_ids
-    }
-    if mandatory_missing:
-        mandatory_result = "mandatory incomplete"
-        mandatory_evidence = "; ".join(
-            f"{family}: {', '.join(ids)} not measured"
-            for family, ids in mandatory_missing.items()
-        )
-    else:
-        mandatory_result = "all mandatory rows alerted"
-        mandatory_evidence = "all pinned mandatory-family rows have measured evidence"
     return [
         "## 5.1 scorecard — installed evidence",
         "",
@@ -898,7 +920,7 @@ def main() -> int:
     if args.strict:
         try:
             strict_enabled, kill_switch = strict_mode_configuration()
-        except (OSError, ValueError, json.JSONDecodeError) as error:
+        except (OSError, ValueError) as error:
             raise SystemExit(f"Could not verify installed Strict Mode: {error}") from error
         if not strict_enabled or kill_switch:
             raise SystemExit(
@@ -947,7 +969,7 @@ def main() -> int:
                                       for _, record in matches):
                 raise SystemExit(f"Field incident {incident_id} does not match {technique['id']}")
             results[technique["id"]] = {
-                "status": "PASS (field evidence)",
+                "status": FIELD_EVIDENCE_STATUS,
                 "evidence": f"persisted incident {incident_id}; verified existing field evidence",
             }
             print("Accepted matching persisted field evidence.")
@@ -1070,7 +1092,7 @@ def main() -> int:
     if args.strict:
         detection_only = sorted(
             technique["id"] for technique in techniques
-            if results.get(technique["id"], {}).get("status") in {"PASS", "DETECTED", "PASS (field evidence)"}
+            if results.get(technique["id"], {}).get("status") in {"PASS", "DETECTED", FIELD_EVIDENCE_STATUS}
         )
         print(f"Strict prevention proven today: {', '.join(prevented_rows) or 'none'}")
         print(f"Detected but not prevented in this run: {', '.join(detection_only) or 'none'}")

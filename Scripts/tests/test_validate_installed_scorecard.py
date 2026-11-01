@@ -248,7 +248,7 @@ class CorpusAndStrictModeTests(unittest.TestCase):
                 "source": "ESET research set", "hashes": ["a" * 64],
             }), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "not an independent"):
-                MODULE.manifest_hashes(manifest)
+                MODULE.manifest_hashes(manifest, manifest.read_bytes())
 
     def test_strict_mode_reads_authenticated_settings_payload(self):
         payload = base64.b64encode(json.dumps({
