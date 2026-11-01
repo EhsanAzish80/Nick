@@ -483,8 +483,21 @@ final class IncidentStore {
     /// requests must not consume the recurrence window.
     @discardableResult
     func markNotificationDelivered(alertID: UUID, at timestamp: Date) -> UInt64? {
-        guard let index = incidents.firstIndex(where: { $0.alert.id == alertID }) else { return nil }
-        incidents[index].lastNotifiedAt = timestamp
+        markNotificationsDelivered(alertIDs: [alertID], at: timestamp)
+    }
+
+    /// Applies one durable snapshot update for a notification batch instead
+    /// of rewriting the complete root-owned store once per alert.
+    @discardableResult
+    func markNotificationsDelivered(alertIDs: [UUID], at timestamp: Date) -> UInt64? {
+        let identifiers = Set(alertIDs)
+        guard !identifiers.isEmpty else { return nil }
+        var updated = false
+        for index in incidents.indices where identifiers.contains(incidents[index].alert.id) {
+            incidents[index].lastNotifiedAt = timestamp
+            updated = true
+        }
+        guard updated else { return nil }
         return persist(force: true)
     }
 

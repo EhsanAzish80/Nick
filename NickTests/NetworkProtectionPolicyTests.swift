@@ -1445,7 +1445,10 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             reasonTitle: NetworkObservationReason.knownThreat.userTitle,
             port: 53
         )
-        let manager = NetworkProtectionManager()
+        // This test owns its injected event. Do not watch the shared event
+        // file, where another full-suite test may publish unrelated fixtures
+        // and over-fulfil this single-submission expectation.
+        let manager = NetworkProtectionManager(eventsURLProvider: { nil })
         manager.activateDurableCursor(deliveredEventIDs: [])
         let submitted = expectation(description: "failed event retried")
         submitted.expectedFulfillmentCount = 2
@@ -1482,7 +1485,10 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             reason: NetworkObservationReason.scamGuardian.rawValue,
             reasonTitle: NetworkObservationReason.scamGuardian.userTitle
         )
-        let manager = NetworkProtectionManager()
+        // This test owns its injected event. Do not watch the shared event
+        // file, where another full-suite test may publish unrelated fixtures
+        // and over-fulfil this single-submission expectation.
+        let manager = NetworkProtectionManager(eventsURLProvider: { nil })
         manager.activateDurableCursor(deliveredEventIDs: [])
         let submitted = expectation(description: "policy suppression submitted once")
         var submissionCount = 0

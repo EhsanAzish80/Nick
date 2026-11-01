@@ -180,4 +180,28 @@ final class ParentChainAnalyzerTests: XCTestCase {
         XCTAssertTrue(chain.contains("Brave Browser"))
         XCTAssertTrue(chain.contains("sh"))
     }
+
+    func test_appToDownloaderIsSilentAndStoresBoundedRedactedEvidence() throws {
+        let parent = makeProc(pid: 1_200, name: "DeveloperTool", parentPID: 1)
+        let downloader = NickProcessInfo(
+            pid: 1_201, path: "/usr/bin/curl", name: "curl",
+            parentPID: parent.pid, parentName: parent.name,
+            signingStatus: .signed(teamID: "APPLE"),
+            metadata: ProcessMetadata(arguments: [
+                "curl", "-H", "Authorization: Bearer secret",
+                "-o", "/tmp/archive.zip", "https://example.test/archive.zip"
+            ])
+        )
+
+        let signal = try XCTUnwrap(ParentChainAnalyzer.evaluateChain(
+            ParentChainAnalyzer.buildChain(for: downloader, allProcesses: [parent, downloader])
+        ))
+
+        XCTAssertEqual(signal.severity, .info)
+        XCTAssertEqual(signal.metadata["deliveryLevel"], "silent")
+        XCTAssertEqual(signal.metadata["destinationHost"], "example.test")
+        XCTAssertEqual(signal.metadata["outputPath"], "/tmp/archive.zip")
+        XCTAssertFalse(signal.metadata["matchedCommand", default: ""].contains("Bearer secret"))
+        XCTAssertTrue(signal.metadata["matchedCommand", default: ""].contains("<redacted>"))
+    }
 }

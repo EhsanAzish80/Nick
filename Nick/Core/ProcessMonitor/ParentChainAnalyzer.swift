@@ -16,7 +16,7 @@ import Foundation
 /// - Browser → shell  (e.g., Safari → bash — code execution via browser exploit)
 /// - Office app → shell  (e.g., Word, Excel → osascript — macro-based attack)
 /// - PDF viewer → shell  (e.g., Preview → python — PDF exploit)
-/// - App → curl/wget  (arbitrary app downloading and executing — less specific, medium)
+/// - App → curl/wget  (recorded as context; escalated only with follow-on behavior)
 /// - Deep shell nesting  (shell → shell → shell — obfuscation indicator)
 ///
 /// Trust is applied during correlation; it never prevents collection of a suspicious
@@ -184,16 +184,17 @@ enum ParentChainAnalyzer {
            !downloaderNames.contains(parent.name.lowercased()) {
             return ThreatSignal(
                 source: .process,
-                severity: .medium,
+                severity: .info,
                 title: "Application spawning network downloader",
-                description: "'\(leaf.name)' (PID \(leaf.pid)) was spawned from '\(parent.name)'. Applications should not directly spawn download utilities.",
+                description: "'\(leaf.name)' (PID \(leaf.pid)) was spawned from '\(parent.name)'. Nick recorded the download context and will escalate only if related risky behavior follows.",
                 context: ThreatSignalContext(
                     processInfo: leaf,
-                    metadata: [
+                    metadata: downloaderEvidence(for: leaf, chainNames: chainNames).merging([
                         "reason": "app_to_downloader",
                         "detector": "ParentChainAnalyzer",
-                        "chain": chainNames.joined(separator: " → ")
-                    ]
+                        "chain": chainNames.joined(separator: " → "),
+                        "deliveryLevel": "silent"
+                    ], uniquingKeysWith: { _, new in new })
                 )
             )
         }
@@ -219,6 +220,54 @@ enum ParentChainAnalyzer {
         }
 
         return nil
+    }
+
+    /// Evidence retained for a downloader observation. Arguments are bounded
+    /// and common credential-bearing forms are redacted before persistence.
+    private static func downloaderEvidence(
+        for process: NickProcessInfo,
+        chainNames: [String]
+    ) -> [String: String] {
+        let bounded = Array(process.arguments.prefix(64))
+        let redacted = bounded.enumerated().map { index, argument -> String in
+            let prior = index > 0 ? bounded[index - 1].lowercased() : ""
+            if ["-u", "--user", "-h", "--header", "--proxy-user"].contains(prior) {
+                return "<redacted>"
+            }
+            let lowered = argument.lowercased()
+            if lowered.contains("authorization:") || lowered.contains("token=")
+                || lowered.contains("password=") || lowered.contains("apikey=") {
+                return "<redacted>"
+            }
+            return String(argument.prefix(512))
+        }
+        let command = redacted.joined(separator: " ").prefix(4_096)
+        let urlArgument = bounded.first { value in
+            guard let url = URL(string: value), let scheme = url.scheme?.lowercased() else { return false }
+            return scheme == "http" || scheme == "https"
+        }
+        var outputPath: String?
+        for (index, argument) in bounded.enumerated() {
+            if ["-o", "--output", "-O", "--output-document"].contains(argument),
+               bounded.indices.contains(index + 1) {
+                outputPath = bounded[index + 1]
+                break
+            }
+            if argument.hasPrefix("--output=") || argument.hasPrefix("--output-document=") {
+                outputPath = argument.split(separator: "=", maxSplits: 1).last.map(String.init)
+                break
+            }
+        }
+        var metadata: [String: String] = [
+            "matchedCommand": String(command),
+            "responsibleChain": chainNames.joined(separator: " → ")
+        ]
+        if let urlArgument {
+            metadata["destinationURL"] = String(urlArgument.prefix(2_048))
+            metadata["destinationHost"] = URL(string: urlArgument)?.host
+        }
+        if let outputPath { metadata["outputPath"] = String(outputPath.prefix(1_024)) }
+        return metadata
     }
 
     /// Evaluates all processes in a snapshot for suspicious chain patterns.

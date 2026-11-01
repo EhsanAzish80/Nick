@@ -636,6 +636,35 @@ final class SimpleActivityFeedTests: XCTestCase {
         XCTAssertEqual(hero.state, .attention)
     }
 
+    @MainActor
+    func test_advancedActiveFilterUsesIncidentStatusAfterProcessEnds() throws {
+        let protected = protectedPersistenceAlert()
+        let incident = SecurityIncident(
+            key: "ended-protected-finding",
+            alert: protected,
+            evidence: protected.contributingSignals.map(Evidence.init(signal:)),
+            state: .new
+        )
+        let payload = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [incident],
+            dismissalTombstones: [],
+            expectedCooldowns: [:]
+        ))
+        let engine = SecurityEngine()
+        try engine.installPrivilegedIncidentStore(
+            payload: payload,
+            persistence: { _, _, _ in },
+            authorizer: { _, _ in .approved(IncidentActionApproval(authorizationExternalForm: nil)) },
+            removeLegacyState: false
+        )
+
+        XCTAssertEqual(engine.displayStatus(for: protected), .needsReview)
+        XCTAssertTrue(engine.isVisibleInActiveAlerts(protected, showInformational: false))
+        // This isolated engine has no live sensor pipeline, so sensorProblem
+        // correctly wins the headline priority; the incident must still count.
+        XCTAssertEqual(engine.protectionStatus.count, 1)
+    }
+
     func test_filters() {
         let items = SimpleActivityFeed.items(
             alerts: [alert("A", level: .warning, hoursAgo: 1, needsAction: true)],

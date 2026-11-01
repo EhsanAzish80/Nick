@@ -94,12 +94,18 @@ struct BehaviorIncidentPresentation: Equatable, Sendable {
             $0.metadata["class"] == "behavior"
                 || $0.metadata["detectionKind"]?.hasSuffix("-behavior") == true
         } ?? false
-        responsibleAppName = metadata["responsibleAppName"].flatMap(Self.nonEmpty) ?? "Unknown app"
+        let rawChain = metadata["responsibleChain"].flatMap(Self.nonEmpty)
+            ?? metadata["chain"].flatMap(Self.nonEmpty)
+        let rawChainParts = rawChain?.components(separatedBy: " → ").compactMap(Self.namedComponent) ?? []
+        responsibleAppName = metadata["responsibleAppName"].flatMap(Self.namedComponent)
+            ?? signal?.processInfo?.parentName.flatMap(Self.namedComponent)
+            ?? rawChainParts.dropLast().last
+            ?? "Unknown app"
         bundleID = metadata["responsibleAppBundleID"].flatMap(Self.nonEmpty)
         teamID = metadata["responsibleAppTeamID"].flatMap(Self.nonEmpty)
         signing = metadata["responsibleAppSigning"].flatMap(Self.nonEmpty) ?? "Unknown"
         appPath = metadata["responsibleAppPath"].flatMap(Self.nonEmpty)
-        chain = metadata["responsibleChain"].flatMap(Self.nonEmpty) ?? "Unknown app"
+        chain = rawChain ?? "Unknown app"
         let chainParts = chain.components(separatedBy: " → ").filter { !$0.isEmpty }
         responsibleLine = chainParts.count > 1
             ? "\(responsibleAppName) ran this · via \(chainParts.dropFirst().joined(separator: " → "))"
@@ -118,6 +124,14 @@ struct BehaviorIncidentPresentation: Equatable, Sendable {
     }
 
     private static func nonEmpty(_ value: String) -> String? { value.isEmpty ? nil : value }
+
+    private static func namedComponent(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !["unknown", "unknown app", "?"].contains(trimmed.lowercased()) else {
+            return nil
+        }
+        return trimmed
+    }
 }
 
 private extension SigningStatus {

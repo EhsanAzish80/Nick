@@ -309,6 +309,31 @@ final class IncidentStorePersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func test_notificationBatchPersistsAllDeliveryTimesInOneGeneration() throws {
+        var persisted: [(Data, UInt64)] = []
+        let store = IncidentStore(persistOnInit: false)
+        let emptySnapshot = try JSONEncoder().encode(IncidentStoreSnapshot(
+            incidents: [], dismissalTombstones: [], expectedCooldowns: [:]
+        ))
+        try store.installPrivilegedSnapshot(emptySnapshot) { payload, generation in
+            persisted.append((payload, generation))
+        }
+        let first = try tamperAlert(operation: .unlink)
+        let second = try tamperAlert(operation: .truncate)
+        _ = store.ingest([first, second])
+        persisted.removeAll()
+
+        let timestamp = Date(timeIntervalSince1970: 55_000)
+        let generation = store.markNotificationsDelivered(
+            alertIDs: [first.id, second.id], at: timestamp
+        )
+
+        XCTAssertNotNil(generation)
+        XCTAssertEqual(persisted.count, 1)
+        XCTAssertEqual(store.incidents.map(\.lastNotifiedAt), [timestamp, timestamp])
+    }
+
+    @MainActor
     func test_newProtectedRepeatAfterTenMinutesNotifiesWithSameIncidentIdentifier() throws {
         var clock = Date(timeIntervalSince1970: 40_000)
         let store = IncidentStore(persistOnInit: false, now: { clock })

@@ -487,17 +487,56 @@ struct CorrelationRule: Sendable {
         let hasExploitLikeParent = matches.contains {
             ["browser_to_shell", "office_to_shell", "pdf_to_shell"].contains($0.metadata["reason"] ?? "")
         }
+        let downloaderMatches = matches.filter { $0.metadata["reason"] == "app_to_downloader" }
+        let otherMatches = matches.filter { $0.metadata["reason"] != "app_to_downloader" }
+        let downloaderEscalated = downloaderMatches.contains { downloader in
+            signals.contains { followOn in
+                isDownloaderFollowOn(followOn, downloader: downloader)
+            }
+        }
+        let standaloneDownloader = otherMatches.isEmpty && !downloaderEscalated
         let processNames = matches.compactMap { $0.processInfo?.name }.joined(separator: ", ")
         return ThreatAlert(
-            score: hasExploitLikeParent ? 0.80 : 0.65,
+            score: standaloneDownloader ? 0.10 : (hasExploitLikeParent ? 0.80 : 0.65),
             content: AlertContent(
                 title: "Suspicious process chain detected",
-                description: "Process(es) '\(processNames)' exhibit a suspicious parent-child relationship. This pattern is commonly used by exploit payloads and document-based malware.",
-                severity: hasExploitLikeParent ? .high : .medium,
-                recommendedAction: "Investigate the parent application and terminate suspicious child processes. Check browser/office extensions and recently opened documents."
+                description: standaloneDownloader
+                    ? "Process '\(processNames)' started a downloader. Nick recorded it silently and found no related execution or persistence behavior."
+                    : "Process(es) '\(processNames)' exhibit a suspicious parent-child relationship with related risky behavior.",
+                severity: standaloneDownloader ? .info : (hasExploitLikeParent ? .high : .medium),
+                recommendedAction: standaloneDownloader
+                    ? "No action is required unless you do not recognise the download."
+                    : "Investigate the parent application and related downloaded output."
             ),
-            contributingSignals: matches
+            contributingSignals: standaloneDownloader ? downloaderMatches : matches + signals.filter { followOn in
+                downloaderMatches.contains { downloader in
+                    isDownloaderFollowOn(followOn, downloader: downloader)
+                }
+            }
         )
+    }
+
+    private static func isDownloaderFollowOn(_ signal: ThreatSignal, downloader: ThreatSignal) -> Bool {
+        guard signal.id != downloader.id else { return false }
+        let sameLineage: Bool = {
+            guard let downloaderProcess = downloader.processInfo, let process = signal.processInfo else { return false }
+            return process.pid == downloaderProcess.pid
+                || process.parentPID == downloaderProcess.pid
+                || process.pid == downloaderProcess.parentPID
+                || process.parentPID == downloaderProcess.parentPID
+        }()
+        guard sameLineage else { return false }
+        let reason = EvidenceRulePolicy.ruleID(for: signal).lowercased()
+        let path = (signal.fileInfo?.path ?? signal.metadata["path"] ?? "").lowercased()
+        let riskyReason = reason.contains("quarantine") || reason.contains("execute")
+            || reason.contains("download_pipe") || reason.contains("decoded_payload")
+            || reason.contains("shell_profile") || reason.contains("persistence")
+        let madeExecutable = signal.metadata["madeExecutable"] == "true"
+            || signal.metadata["modeChange"]?.contains("+x") == true
+        let persistencePath = path.contains("/launchagents/") || path.contains("/launchdaemons/")
+            || path.hasSuffix("/.zshrc") || path.hasSuffix("/.zprofile")
+            || path.hasSuffix("/.bashrc") || path.hasSuffix("/.profile")
+        return riskyReason || madeExecutable || persistencePath
     }
 
     /// Outbound connection to a raw IP address without DNS resolution.

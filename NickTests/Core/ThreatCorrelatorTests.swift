@@ -133,6 +133,82 @@ final class ThreatCorrelatorTests: XCTestCase {
         XCTAssertTrue(alerts.isEmpty)
     }
 
+    func test_correlate_standaloneAppDownloaderIsSilentInformation() async throws {
+        let downloader = makeSignal(
+            source: .process,
+            severity: .info,
+            metadata: [
+                "reason": "app_to_downloader",
+                "rule": "suspicious_parent_chain",
+                "deliveryLevel": "silent",
+            ],
+            processInfo: NickProcessInfo(
+                pid: 100,
+                path: "/usr/bin/curl",
+                name: "curl",
+                parentPID: 50,
+                parentName: "DeveloperTool",
+                signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.curl")
+            )
+        )
+
+        await correlator.ingest([downloader])
+        let alerts = await correlator.correlate()
+        let alert = try XCTUnwrap(alerts.first {
+            $0.contributingSignals.contains { $0.id == downloader.id }
+        })
+
+        XCTAssertEqual(alert.severity, SignalSeverity.info)
+        XCTAssertEqual(alert.score, 0.10, accuracy: 0.001)
+        XCTAssertEqual(alert.contributingSignals.map { $0.id }, [downloader.id])
+    }
+
+    func test_correlate_appDownloaderEscalatesAfterSameLineagePersistenceWrite() async throws {
+        let downloader = makeSignal(
+            source: .process,
+            severity: .info,
+            metadata: [
+                "reason": "app_to_downloader",
+                "rule": "suspicious_parent_chain",
+            ],
+            processInfo: NickProcessInfo(
+                pid: 100,
+                path: "/usr/bin/curl",
+                name: "curl",
+                parentPID: 50,
+                parentName: "DeveloperTool",
+                signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.curl")
+            )
+        )
+        let persistence = makeSignal(
+            source: .persistence,
+            severity: .medium,
+            metadata: [
+                "reason": "shell_profile_modification",
+                "rule": "shell_profile_modification",
+                "path": "/Users/test/.zshrc",
+            ],
+            processInfo: NickProcessInfo(
+                pid: 101,
+                path: "/bin/sh",
+                name: "sh",
+                parentPID: 100,
+                parentName: "curl",
+                signingStatus: .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.sh")
+            )
+        )
+
+        await correlator.ingest([downloader, persistence])
+        let alerts = await correlator.correlate()
+        let alert = try XCTUnwrap(alerts.first {
+            let ids = Set($0.contributingSignals.map(\.id))
+            return ids.contains(downloader.id) && ids.contains(persistence.id)
+        })
+
+        XCTAssertGreaterThanOrEqual(alert.severity, SignalSeverity.medium)
+        XCTAssertGreaterThan(alert.score, 0.10)
+    }
+
     func test_correlate_invalidTmpBinarySignal_returnsHighAlert() async {
         let signal = makeSignal(
             source: .process,
@@ -1978,7 +2054,8 @@ final class ThreatCorrelatorTests: XCTestCase {
         severity: SignalSeverity = .medium,
         timestamp: Date = Date(),
         title: String = "Test Signal",
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        processInfo: NickProcessInfo? = nil
     ) -> ThreatSignal {
         ThreatSignal(
             source: source,
@@ -1986,7 +2063,7 @@ final class ThreatCorrelatorTests: XCTestCase {
             timestamp: timestamp,
             title: title,
             description: "Test signal for \(source.rawValue)",
-            context: ThreatSignalContext(metadata: metadata)
+            context: ThreatSignalContext(processInfo: processInfo, metadata: metadata)
         )
     }
 
