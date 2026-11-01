@@ -170,18 +170,23 @@ final class FileIntegrityMonitor {
 
         lock.lock()
         let expected = baselines[expanded]
+        let pending = Array(pendingViolations.values)
         lock.unlock()
 
         let actual = hashFile(expanded)
 
+        if actual == nil {
+            guard let deletion = FileIntegrityDeletionEvidence.violation(
+                path: expanded,
+                baselineHash: expected,
+                pendingViolations: pending,
+                removedAt: Date()
+            ) else { return nil }
+            return recordPending(deletion)
+        }
+
         if let expected {
-            if actual == nil {
-                // File deleted
-                return recordPending(IntegrityViolation(
-                    path: expanded, violationType: .deleted,
-                    expectedHash: expected, actualHash: nil, timestamp: Date()
-                ))
-            } else if actual != expected {
+            if actual != expected {
                 return recordPending(IntegrityViolation(
                     path: expanded, violationType: .modified,
                     expectedHash: expected, actualHash: actual, timestamp: Date()

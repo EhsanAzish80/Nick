@@ -22,7 +22,7 @@
     {"id":"T1548.006","name":"TCC Manipulation","category":"defense-evasion","mandatory":false,"fixture":"tcc-modification"},
     {"id":"T1562.001","name":"Impair Defenses","category":"defense-evasion","mandatory":true,"fixture":"nick-tamper"},
     {"id":"T1222.002","name":"Linux and Mac File and Directory Permissions Modification","category":"defense-evasion","mandatory":false,"fixture":"permission-modification"},
-    {"id":"T1070.004","name":"File Deletion","category":"defense-evasion","mandatory":false,"fixture":"protected-file-deletion"},
+    {"id":"T1070.004","name":"File Deletion","category":"defense-evasion","mandatory":false,"fixture":"file-deletion"},
     {"id":"T1027","name":"Obfuscated Files or Information","category":"defense-evasion","mandatory":false,"fixture":"encoded-payload"},
     {"id":"T1486","name":"Data Encrypted for Impact","category":"impact","mandatory":false,"fixture":"write-then-swap"},
     {"id":"T1082","name":"System Information Discovery","category":"discovery","mandatory":false,"fixture":"system-discovery"},

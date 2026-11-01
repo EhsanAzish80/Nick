@@ -351,3 +351,47 @@ public struct IntegrityViolation: Codable, Sendable, Identifiable {
         self.metadata = metadata
     }
 }
+
+/// Stable evidence attached when an unacknowledged creation disappears before
+/// it can become part of the authenticated FIM baseline.
+public enum FileIntegrityDeletionEvidence {
+    public static func violation(
+        path: String,
+        baselineHash: String?,
+        pendingViolations: [IntegrityViolation],
+        removedAt: Date
+    ) -> IntegrityViolation? {
+        if let baselineHash {
+            return IntegrityViolation(
+                path: path,
+                violationType: .deleted,
+                expectedHash: baselineHash,
+                actualHash: nil,
+                timestamp: removedAt
+            )
+        }
+        guard let created = pendingViolations
+            .filter({ $0.path == path && $0.violationType == .created })
+            .max(by: { $0.timestamp < $1.timestamp })
+        else { return nil }
+        return IntegrityViolation(
+            path: path,
+            violationType: .deleted,
+            expectedHash: created.actualHash,
+            actualHash: nil,
+            timestamp: removedAt,
+            metadata: metadata(createdAt: created.timestamp, removedAt: removedAt)
+        )
+    }
+
+    private static func metadata(createdAt: Date, removedAt: Date) -> [String: String] {
+        let formatter = ISO8601DateFormatter()
+        let created = formatter.string(from: createdAt)
+        let removed = formatter.string(from: removedAt)
+        return [
+            "createdAt": created,
+            "removedAt": removed,
+            "evidence": "created at \(created) and removed at \(removed) without review",
+        ]
+    }
+}
