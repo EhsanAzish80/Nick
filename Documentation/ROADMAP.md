@@ -103,44 +103,40 @@ Released 2026-10-16.
 - Add a built-product rule gate and keep production policy material out of
   built test artifacts.
 
-## Version 5.1.1: measurement and detector hardening
+## Version 5.1: signed protection updates and detector reliability
 
-- Prove the installed Endpoint Security `AUTH_OPEN` credential path with a
-  synthetic credential-store fixture before treating credential coverage as
-  measured.
-- Confirm Chromium-family stores with explicit Brave, Edge, Arc, Opera and
-  Vivaldi regression cases.
-- Detect hidden-answer AppleScript password prompts as review-tier credential
-  findings without recording prompt contents or entered secrets.
-- Correlate download-to-interpreter behavior from a network socket, remote-URL
-  argument, shared pipe and ancestry. Executable names and signing identifiers
-  do not establish downloader behavior; validated identity adjusts confidence
-  only.
-- Preserve inherited pipe evidence across short-lived fork/exec races and
-  verify the installed path with a safe local real-timing fixture.
-- Continue broadening interpreter-role evidence where neither a validated code
-  identity nor an executable role can be established safely.
-- Re-run the evidence scorecard after installed validation. No effectiveness
-  rating is claimed while required measurements remain pending.
+Released 2026-11-02.
 
-## Version 5.1: trusted rule and signature updates
+- Added verified, signed protection-intelligence updates with expiry,
+  rollback protection, last-known-good recovery and offline use.
+- Added an opt-in Strict Mode for eligible high-confidence rules. Strict Mode
+  remains off by default, and unsigned community rules are never eligible for
+  automatic enforcement.
+- Expanded local detection and responsible-app attribution across credential,
+  persistence, shell-pipeline, file-integrity and ransomware behavior.
+- Hardened durable incident delivery, Endpoint Security response handling and
+  extension-restart recovery.
+- Reorganized Settings into clear General, Protection, Network, Privacy & Data,
+  Exceptions, Logging and About sections, with technical controls gated in
+  Simple mode, while preserving existing authorization flows.
+- Added installed-build replay tooling so detection and prevention evidence can
+  be measured separately.
 
-### Interface work
+Nick 5.1 makes no effectiveness-rating claim. The installed replay cleared the
+release detection threshold, while broader prevention and remaining timing
+measurements are tracked for 5.1.1.
 
-- Join related shell events into one incident chain.
-- Reorganize Settings in both Simple and Advanced modes.
-- Continue expanding the shared Simple and Advanced Storage screen. Nick 5.0
-  credits its JunkYard-powered cleanup engine and links to the full JunkYard
-  Cleaner App Store product from the Storage screen in both modes.
+## Version 5.1.1: prevention and timing validation
 
-- Publish Nick-maintained, signed YARA, network-rule and hash bundles.
-- Add staged rollout, expiry, rollback, and last-known-good recovery.
-- Display rule source, version, signing status, and last successful update.
-- Add deterministic false-positive tests before accepting a rule bundle.
-- Keep rules usable offline after verification.
-- Optional, opt-in network blocking for high-confidence signed rules.
-
-No unsigned community rule is eligible for automatic enforcement.
+- Expand opt-in Strict Mode prevention for high-confidence credential theft,
+  quarantine abuse, self-tampering and destructive file behavior, with a
+  reviewed recovery path for legitimate software.
+- Reduce app-side incident-ingestion delay so time-sensitive findings arrive
+  inside their declared measurement windows.
+- Re-run the installed replay, prevention evidence, workload soak and an
+  independent hash-corpus measurement on one frozen build.
+- Keep detection-only and prevented outcomes distinct. No 4/10 effectiveness
+  claim will be made until the required evidence is measured on that build.
 
 ## Version 5.2: expands local learning
 

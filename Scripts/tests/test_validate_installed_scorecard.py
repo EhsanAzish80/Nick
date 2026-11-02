@@ -272,6 +272,55 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
 
 
 class FixtureInvocationTests(unittest.TestCase):
+    def test_gatekeeper_fixture_builds_only_an_inert_quarantined_scratch_app(self):
+        fixture = (MODULE.ROOT / "Scripts/fixtures/gatekeeper-user-override.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("NICK_FIXTURE_ROOT", fixture)
+        self.assertIn("osacompile", fixture)
+        self.assertIn("com.apple.quarantine", fixture)
+        self.assertIn("lsregister", fixture)
+        self.assertIn("date +%s", fixture)
+        self.assertIn("spctl --assess", fixture)
+        self.assertNotIn("00000000", fixture)
+        self.assertIn("Do NOT choose Move to Trash", fixture)
+        self.assertIn("x-apple.systempreferences:com.apple.preference.security?General", fixture)
+        self.assertIn("on run", fixture)
+        self.assertIn("quit", fixture)
+        self.assertNotIn("curl", fixture)
+        self.assertNotIn("http", fixture)
+
+    def test_gui_privacy_fixtures_run_in_the_console_users_launchd_session(self):
+        self.assertIn("gatekeeper-user-override", MODULE.INTERACTIVE_FIXTURES)
+        self.assertIn("tcc-modification", MODULE.INTERACTIVE_FIXTURES)
+
+    def test_tcc_fixture_registers_its_bundle_before_targeted_reset(self):
+        fixture = (MODULE.ROOT / "Scripts/fixtures/tcc-modification.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("lsregister", fixture)
+        self.assertIn("NSAppleEventsUsageDescription", fixture)
+        self.assertIn("NICK_FIXTURE_HOME", fixture)
+        self.assertIn("Applications/Nick Scorecard Fixtures", fixture)
+        self.assertIn("trap cleanup", fixture)
+        self.assertIn('display dialog "Nick TCC fixture completed."', fixture)
+        self.assertIn("If an Apple Events prompt appears", fixture)
+        self.assertNotIn('root="${NICK_FIXTURE_ROOT', fixture)
+        self.assertLess(fixture.index('"$lsregister" -f "$app"'), fixture.index("tccutil reset"))
+
+    def test_browser_store_fixture_uses_an_ad_hoc_helper_not_an_apple_reader(self):
+        fixture = (MODULE.ROOT / "Scripts/fixtures/browser-store-read.sh").read_text(
+            encoding="utf-8"
+        )
+        helper = MODULE.ROOT / "Scripts/fixtures/helpers/credential-store-reader.c"
+
+        self.assertIn("NICK_FIXTURE_ROOT", fixture)
+        self.assertIn("xcrun clang", fixture)
+        self.assertNotIn("/bin/cat", fixture)
+        self.assertTrue(helper.is_file())
+
     def test_web_protocol_row_uses_only_the_signed_harmless_canary(self):
         reasons, tiers = MODULE.EXPECTED["T1071.001"]
         self.assertIn("NICK_CANARY_WEB", reasons)
@@ -350,6 +399,30 @@ class CorpusAndStrictModeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not an independent"):
                 MODULE.manifest_hashes(manifest, manifest.read_bytes())
 
+    def test_progress_writer_replaces_root_owned_output_with_invoking_user_owner(self):
+        with tempfile.TemporaryDirectory(prefix="nick-progress-writer-") as directory:
+            progress = Path(directory) / "progress.md"
+            progress.write_text("old", encoding="utf-8")
+            with mock.patch.object(MODULE, "PROGRESS_DOC", progress), \
+                 mock.patch.object(MODULE.os, "geteuid", return_value=0), \
+                 mock.patch.dict(MODULE.os.environ, {"SUDO_UID": "501", "SUDO_GID": "20"}), \
+                 mock.patch.object(MODULE.os, "chown") as chown:
+                MODULE.write_progress_document("new")
+            self.assertEqual(progress.read_text(encoding="utf-8"), "new")
+            chown.assert_called_once()
+            self.assertEqual(chown.call_args.args[1:], (501, 20))
+
+    def test_progress_heading_describes_cumulative_evidence(self):
+        techniques = [{"id": "T1", "name": "One"}]
+        with tempfile.TemporaryDirectory(prefix="nick-progress-heading-") as directory:
+            progress = Path(directory) / "progress.md"
+            with mock.patch.object(MODULE, "PROGRESS_DOC", progress):
+                MODULE.update_progress(techniques, {})
+            rendered = progress.read_text(encoding="utf-8")
+        self.assertIn(
+            f"cumulative evidence through build {MODULE.EXPECTED_BUILD}", rendered
+        )
+
     def test_strict_mode_reads_authenticated_settings_payload(self):
         payload = base64.b64encode(json.dumps({
             "strictModeEnabled": True, "blockingKillSwitch": False,
@@ -365,6 +438,31 @@ class CorpusAndStrictModeTests(unittest.TestCase):
         attack = next(row for row in rows if "ATT&CK for macOS" in row)
         self.assertIn("0/24 alerted", attack)
         self.assertIn("0/24 prevented", attack)
+
+    def test_scorecard_keeps_known_family_corpus_metrics_deferred(self):
+        techniques = [{"id": f"T{index}", "name": str(index)} for index in range(24)]
+        rendered = "\n".join(MODULE.full_scorecard_rows(techniques, {}))
+        self.assertIn("Known families", rendered)
+        self.assertIn("hash/signature", rendered)
+        self.assertIn("not measured", rendered)
+
+    def test_scorecard_uses_current_expected_build_for_unmeasured_runtime_rows(self):
+        techniques = [{"id": f"T{index}", "name": str(index)} for index in range(24)]
+        rows = MODULE.full_scorecard_rows(techniques, {})
+        false_positive = next(row for row in rows if "False positives" in row)
+        health = next(row for row in rows if "ES health" in row)
+        self.assertIn(f"build {MODULE.EXPECTED_BUILD}", false_positive)
+        self.assertIn(f"build {MODULE.EXPECTED_BUILD}", health)
+
+    def test_scorecard_preserves_build_5084_continuity_evidence(self):
+        techniques = [{"id": f"T{index}", "name": str(index)} for index in range(24)]
+        rows = MODULE.full_scorecard_rows(techniques, {})
+        app_alive = next(row for row in rows if "extension stopped, app alive" in row)
+        both_gone = next(row for row in rows if "extension and app both gone" in row)
+        self.assertIn("| PASS |", app_alive)
+        self.assertIn("D33C26DD-4F34-40D3-A78D-1490454C12D7:1:new", app_alive)
+        self.assertIn("| PASS |", both_gone)
+        self.assertIn("actual extension gap was ~1 s", both_gone)
 
     def test_scorecard_does_not_hide_missing_mandatory_rows(self):
         techniques = json.loads(MODULE.MANIFEST.read_text(encoding="utf-8"))["techniques"]
@@ -524,6 +622,30 @@ class InstalledBuildTests(unittest.TestCase):
 
 
 class PreviousResultsTests(unittest.TestCase):
+    def test_incomplete_rerun_does_not_erase_completed_cumulative_evidence(self):
+        previous = {
+            "T1070.004": {"status": "DETECTED", "evidence": "incident=old"},
+            "T1555.003": {"status": "RAN: NO EVIDENCE", "evidence": "old miss"},
+        }
+        current = {
+            "T1070.004": {"status": "FAIL", "evidence": "prior pending state"},
+            "T1555.003": {"status": "PASS", "evidence": "incident=new"},
+        }
+
+        merged = MODULE.retain_completed_results(previous, current)
+
+        self.assertEqual(merged["T1070.004"], previous["T1070.004"])
+        self.assertEqual(merged["T1555.003"], current["T1555.003"])
+
+    def test_prevention_upgrades_prior_detection(self):
+        previous = {"T1204.002": {"status": "PASS", "evidence": "detected"}}
+        current = {"T1204.002": {"status": "PREVENTED", "evidence": "quarantined"}}
+
+        self.assertEqual(
+            MODULE.retain_completed_results(previous, current)["T1204.002"],
+            current["T1204.002"],
+        )
+
     def test_previous_results_parses_status_and_escaped_evidence_pipe(self):
         content = "\n".join([
             "| ID | Technique | Result | Evidence |",

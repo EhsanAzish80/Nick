@@ -45,26 +45,26 @@ verifies the extracted app again, and rejects an invalid or unexpected
 installer signature.
 
 ```sh
-EXPECTED_VERSION=5.0.0 EXPECTED_BUILD=5052 ./Packaging/release.sh
+EXPECTED_VERSION=5.1.0 EXPECTED_BUILD=5085 ./Packaging/release.sh
 ```
 
 Nick's historical Sparkle key is stored in the login Keychain under the
 `nick-legacy` account. Keep that key available so existing installations can
 authenticate future updates. Never commit or upload an exported private key.
 
-For v5.0.0, publish the immutable build 5052 package as
-`Nick-5.0.0-build-5052.pkg` at:
+For v5.1.0, publish the immutable build 5085 package as
+`Nick-5.1.0-build-5085.pkg` at:
 
-`https://github.com/EhsanAzish80/Nick/releases/download/v5.0.0/Nick-5.0.0-build-5052.pkg`
+`https://github.com/EhsanAzish80/Nick/releases/download/v5.1.0/Nick-5.1.0-build-5085.pkg`
 
 Then replace the hosted `https://3nsofts.com/nick/appcast.xml` with
-`Packaging/Release/v5.0.0/appcast.xml`. The package must not be modified after
+`Packaging/Release/v5.1.0/appcast.xml`. The package must not be modified after
 its Sparkle signature and length have been recorded in the appcast.
 
 `release.sh` passes `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` to the
 archive command, so explicitly supplied release values override the project
-defaults. Build numbers are monotonic: the next build after the shipped 5052
-must be greater than 5052.
+defaults. Build numbers are monotonic: the next build after the shipped 5085
+must be greater than 5085.
 
 ## Website and GitHub disk image
 
@@ -72,8 +72,8 @@ Keep Sparkle pointed directly at the signed package. For manual downloads,
 wrap that same notarized package in Nick's branded disk image:
 
 ```sh
-PKG_PATH=/private/tmp/NickBuild-5052/Nick-5.0.0-build-5052.pkg \
-OUTPUT_PATH=/private/tmp/NickBuild-5052/Nick-5.0.0-build-5052.dmg \
+PKG_PATH=/private/tmp/NickBuild-5085/Nick-5.1.0-build-5085.pkg \
+OUTPUT_PATH=/private/tmp/NickBuild-5085/Nick-5.1.0-build-5085.dmg \
 ./Packaging/build-dmg.sh
 ```
 
@@ -82,5 +82,5 @@ image. It is independently Developer ID signed, notarized, stapled, and checked
 by Gatekeeper.
 
 The published checksums are recorded in
-`Packaging/Release/v5.0.0/SHA256SUMS.txt`. Recreate that file whenever either
+`Packaging/Release/v5.1.0/SHA256SUMS.txt`. Recreate that file whenever either
 immutable release artifact changes.

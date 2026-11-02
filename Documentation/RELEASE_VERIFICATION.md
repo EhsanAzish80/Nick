@@ -26,11 +26,11 @@ Expected results:
 - `codesign` exits successfully and reports that the application satisfies its
   designated requirement.
 
-Nick 5.0.0 shipped as build 5052. Any subsequent build must use a build number
-greater than 5052. After uploading the package and appcast, run:
+Nick 5.1.0 ships as build 5085. Any subsequent build must use a build number
+greater than 5085. After uploading the package and appcast, run:
 
 ```sh
-Packaging/validate-live-appcast.sh https://3nsofts.com/nick/appcast.xml 5052
+Packaging/validate-live-appcast.sh https://3nsofts.com/nick/appcast.xml 5085
 ```
 
 Expected output reports the live build, its lower predecessor, and the exact

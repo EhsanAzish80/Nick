@@ -8,6 +8,52 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-11-02
+
+### Added
+
+- Signed threat-intelligence bundle updates with signature, expiry, rollback,
+  last-known-good and user-visible update status.
+- Opt-in Strict Mode and an emergency stop that preserve detection while
+  allowing the user to control supported prevention.
+- Credential-store, download-to-interpreter, hidden-password-prompt,
+  persistence, transient file-deletion and ransomware-behavior evidence.
+- Installed ATT&CK replay tooling with build matching and durable evidence
+  provenance; no effectiveness rating is claimed from that internal evidence.
+- Harmless signed file and web canaries for validating the update path without
+  using live malware or hostile destinations.
+
+### Changed
+
+- Settings now uses separate General, Protection, Network, Privacy & Data,
+  Exceptions, Logging and About tabs, with a gated technical view in Simple
+  mode and search in Advanced mode.
+- Activity uses stable rule identifiers, behavior-first titles, last-seen
+  ordering and visible occurrence counts.
+- Endpoint findings are journaled and incident/settings writes are coalesced to
+  reduce steady-state disk writes while retaining persistence acknowledgements.
+- Routine Apple maintenance, installer, sync and atomic-replacement activity is
+  classified more precisely without name- or path-only trust.
+
+### Fixed
+
+- Endpoint Security callback paths avoid blocking process inspection and XPC
+  reply continuations complete exactly once across reconnects.
+- Protection continuity distinguishes sanctioned updates, ordinary restarts and
+  unexpected gaps.
+- Browser-store ownership, keychain-transfer verification, launch-item grouping,
+  scan self-approval and responsible-app attribution no longer create the
+  previously observed duplicate or self-generated findings.
+- Network calls no longer wait for diagnostic event-file rewrites.
+
+### Known limitations
+
+- Strict Mode remains off by default. The release does not claim the roadmap's
+  4/10 effectiveness target; broader prevention and detection-latency work are
+  planned for 5.1.1.
+- Independent known-family corpus coverage and behavior-only effectiveness are
+  not measured for this release.
+
 ## [5.0.0] - 2026-10-16
 
 ### Added
@@ -424,7 +470,8 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v5.1.0...HEAD
+[5.1.0]: https://github.com/EhsanAzish80/Nick/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/EhsanAzish80/Nick/compare/v4.6.3...v5.0.0
 [4.6.3]: https://github.com/EhsanAzish80/Nick/compare/v4.6.2...v4.6.3
 [4.6.2]: https://github.com/EhsanAzish80/Nick/releases/tag/v4.6.2

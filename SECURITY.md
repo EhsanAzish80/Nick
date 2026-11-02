@@ -9,12 +9,13 @@ material, or malware sample.
 
 | Version | Security updates |
 |---|---|
-| 5.0.x latest published release | Supported |
+| 5.1.x latest published release | Supported |
+| 5.0.x latest published release | Critical security fixes only, until 2026-12-02 |
 | 4.6.3 | Critical security fixes only, until 2026-11-16; unsupported after that |
 | Earlier releases and modified builds | Not supported |
 
-Users on 4.6.3 should update to 5.0. See the upgrade notes in the
-[5.0 release notes](Packaging/Release/v5.0.0/RELEASE_NOTES.md).
+Users on 4.6.3 or 5.0 should update to 5.1. See the upgrade notes in the
+[5.1 release notes](Packaging/Release/v5.1.0/RELEASE_NOTES.md).
 
 Only artifacts published through the
 [official GitHub Releases page](https://github.com/EhsanAzish80/Nick/releases)
