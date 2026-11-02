@@ -35,6 +35,32 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         XCTAssertNil(tracker.extensionChangeBurst(pid: 40, window: 10))
     }
 
+    func test_multiSuffixFinalizationsBySeparateHelpersDoNotCountAsRansomware() {
+        let tracker = BehaviorTracker()
+        let now = Date()
+        let scope = BehaviorTracker.RenameBurstScope(
+            lineage: "responsible:1060",
+            destinationDirectory: "/tmp/cache"
+        )
+
+        for index in 0..<12 {
+            tracker.recordCreate(
+                pid: Int32(100 + index), processGroupID: Int32(100 + index),
+                processPath: "/usr/bin/touch",
+                path: "/tmp/cache/archive-\(index).tar.zst.tmp", at: now
+            )
+            tracker.recordRename(
+                pid: Int32(200 + index), processGroupID: Int32(200 + index),
+                processPath: "/bin/mv",
+                source: "/tmp/cache/archive-\(index).tar.zst.tmp",
+                destination: "/tmp/cache/archive-\(index).tar.zst",
+                burstScope: scope, at: now.addingTimeInterval(1)
+            )
+        }
+
+        XCTAssertNil(tracker.extensionChangeBurst(pid: -1, burstScope: scope, window: 10))
+    }
+
     func test_eightPreexistingFilesRenamedToLockedCountAsBurst() {
         let tracker = BehaviorTracker()
         let now = Date()

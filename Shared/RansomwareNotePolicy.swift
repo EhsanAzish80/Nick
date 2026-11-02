@@ -212,6 +212,17 @@ enum RansomwareRenamePolicy {
         let destinationExtension = (destinationName as NSString).pathExtension.lowercased()
         let destinationStemExtension = ((destinationName as NSString)
             .deletingPathExtension as NSString).pathExtension.lowercased()
+        // Finalising a temporary path by removing exactly one suffix is an
+        // atomic-save shape even when a helper such as `mv` performs the
+        // rename for the writer (`archive.tar.zst.tmp` -> `archive.tar.zst`).
+        // Content replacement evidence is evaluated separately by
+        // BehaviorTracker and still overrides this path-only exemption.
+        let sourceWithoutTemporarySuffix = (source as NSString).deletingPathExtension
+        if temporaryExtensions.contains(sourceExtension),
+           URL(fileURLWithPath: sourceWithoutTemporarySuffix).standardizedFileURL.path
+               == URL(fileURLWithPath: destination).standardizedFileURL.path {
+            return nil
+        }
         // A temporary/hidden file renamed over `document.ext.locked` is the
         // write-then-swap ransomware shape. Preserve the ordinary atomic-save
         // exemption for `.tmp -> final.cmake`, but count an extension appended
