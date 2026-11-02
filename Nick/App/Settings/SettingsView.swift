@@ -20,6 +20,64 @@ private enum SettingsPrefsURL {
     static let keyboardShortcuts = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts")!
 }
 
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case general, protection, network, privacy, advanced, exceptions, logging, about
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .protection: "Protection"
+        case .network: "Network"
+        case .privacy: "Privacy & Data"
+        case .advanced: "Advanced"
+        case .exceptions: "Exceptions"
+        case .logging: "Logging"
+        case .about: "About"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .general: "gearshape"
+        case .protection: "checkmark.shield"
+        case .network: "globe"
+        case .privacy: "lock"
+        case .advanced: "slider.horizontal.3"
+        case .exceptions: "person.badge.shield.checkmark"
+        case .logging: "terminal"
+        case .about: "info.circle"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .general: "How Nick starts, looks, alerts you and stays up to date."
+        case .protection: "What Nick checks, how often, and when it steps in."
+        case .network: "Stop scam and malware sites, and choose what's always allowed."
+        case .privacy: "What Nick remembers on this Mac, and how to clear it."
+        case .advanced: "Exceptions, monitored folders, logging and integrations."
+        case .exceptions: "Trusted processes, suppression rules, developer repositories and watched folders."
+        case .logging: "Send alerts to log files, a SIEM webhook or standard output."
+        case .about: "Version, licences, update diagnostics and removal."
+        }
+    }
+
+    static func visible(for mode: InterfaceMode) -> [SettingsTab] {
+        mode == .simple
+            ? [.general, .protection, .network, .privacy, .advanced, .about]
+            : [.general, .protection, .network, .privacy, .exceptions, .logging, .about]
+    }
+}
+
+private struct SettingsSearchEntry: Identifiable {
+    let title: String
+    let keywords: String
+    let tab: SettingsTab
+    var id: String { "\(tab.rawValue).\(title)" }
+}
+
 // ════════════════════════════════════════════════════════════════
 // MARK: - SettingsView
 // ════════════════════════════════════════════════════════════════
@@ -86,44 +144,35 @@ struct SettingsView: View {
     /// Simple mode keeps the technical sections behind this disclosure.
     @State private var showsAdvancedSettings = false
     @AppStorage("autoCheckUpdates") private var autoCheckUpdates: Bool = true
+    @SceneStorage("settings.selectedTab") private var selectedTabRawValue = SettingsTab.general.rawValue
+    @State private var settingsSearch = ""
+
+    private var selectedTab: SettingsTab {
+        get { SettingsTab(rawValue: selectedTabRawValue) ?? .general }
+        nonmutating set { selectedTabRawValue = newValue.rawValue }
+    }
 
     // MARK: Body
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-
-                Form {
-                    generalSection
-                    appearanceSection
-                    notificationsSection
-                    scanningSection
-                    networkProtectionSection
-                    if interfaceMode == .advanced {
-                        technicalSections
-                    }
-                    finderIntegrationSection
-                    dataSection
-                    updatesSection
-                    maintenanceSection
-                    acknowledgementsSection
-                    if interfaceMode == .simple {
-                        advancedSettingsDisclosure
-                        if showsAdvancedSettings {
-                            technicalSections
-                        }
-                    }
-                }
-                .formStyle(.grouped)
-                .scrollDisabled(true)
-                .environment(\.layoutDirection, .leftToRight)
-
-                footer
+        VStack(spacing: 0) {
+            SettingsHeader(
+                tab: selectedTab,
+                mode: interfaceMode,
+                searchText: $settingsSearch
+            )
+            SettingsTabBar(
+                tabs: SettingsTab.visible(for: interfaceMode),
+                selection: Binding(get: { selectedTab }, set: { selectedTab = $0 })
+            )
+            Divider()
+            if settingsSearch.isEmpty {
+                settingsTabContent
+            } else {
+                settingsSearchResults
             }
-            .frame(maxWidth: 720)
-            .frame(maxWidth: .infinity)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             refreshLaunchAtLogin()
             webhookURLString = engine.webhookURLString ?? ""
@@ -131,6 +180,14 @@ struct SettingsView: View {
         .task { await networkProtection.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshLaunchAtLogin()
+        }
+        .onChange(of: interfaceMode) { oldMode, newMode in
+            guard oldMode != newMode else { return }
+            if newMode == .simple, selectedTab == .exceptions || selectedTab == .logging {
+                selectedTab = .advanced
+            } else if newMode == .advanced, selectedTab == .advanced {
+                selectedTab = .exceptions
+            }
         }
         .sheet(isPresented: $showsAcknowledgements) {
             AcknowledgementsView()
@@ -142,6 +199,110 @@ struct SettingsView: View {
         .sheet(isPresented: $showsLegacyDismissals) {
             LegacyDismissalsView()
                 .environment(engine)
+        }
+    }
+
+    @ViewBuilder
+    private var settingsTabContent: some View {
+        ScrollView {
+            Form {
+                switch selectedTab {
+                case .general:
+                    generalSection
+                    appearanceSection
+                    notificationsSection
+                    updatesSection
+                case .protection:
+                    scanningSection
+                    finderIntegrationSection
+                    protectionDataSection
+                case .network:
+                    networkProtectionSection
+                case .privacy:
+                    privacyDataSection
+                case .advanced:
+                    advancedSettingsDisclosure
+                    if showsAdvancedSettings { technicalSections }
+                case .exceptions:
+                    monitoredDirectoriesSection
+                    trustedProcessesSection
+                    suppressionRulesSection
+                case .logging:
+                    integrationsSection
+#if DEBUG
+                    debugValidationSection
+#endif
+                case .about:
+                    aboutAppSection
+                    updateDiagnosticsSection
+                    maintenanceSection
+                    acknowledgementsSection
+                }
+            }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            .environment(\.layoutDirection, .leftToRight)
+            .frame(maxWidth: 680)
+            .padding(.horizontal, 40)
+            .padding(.bottom, 32)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var searchEntries: [SettingsSearchEntry] {
+        [
+            .init(title: "Launch at login", keywords: "startup open", tab: .general),
+            .init(title: "Appearance", keywords: "theme system light dark", tab: .general),
+            .init(title: "Minimum severity", keywords: "alerts notifications", tab: .general),
+            .init(title: "Updates", keywords: "automatic check version", tab: .general),
+            .init(title: "Scheduled deep scan", keywords: "full scan background sweep", tab: .protection),
+            .init(title: "Automatic protection updates", keywords: "signed threat intelligence", tab: .protection),
+            .init(title: "Strict blocking", keywords: "block malware strict mode", tab: .protection),
+            .init(title: "Emergency stop blocking", keywords: "kill switch pause", tab: .protection),
+            .init(title: "Network Protection", keywords: "filter websites apps", tab: .network),
+            .init(title: "Allowed websites and apps", keywords: "allowlist temporary access", tab: .network),
+            .init(title: "Learn from my decisions", keywords: "review learning dismissed", tab: .privacy),
+            .init(title: "Clear alert history", keywords: "reset scan history", tab: .privacy),
+            .init(title: "Trusted processes", keywords: "exceptions approved repositories", tab: .exceptions),
+            .init(title: "Suppression rules", keywords: "exceptions monitored folders", tab: .exceptions),
+            .init(title: "Logging and integrations", keywords: "webhook json cef stdout", tab: .logging),
+            .init(title: "Acknowledgements", keywords: "version licence github", tab: .about),
+            .init(title: "Uninstall Nick", keywords: "remove helper maintenance", tab: .about)
+        ]
+    }
+
+    private var settingsSearchResults: some View {
+        let query = settingsSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches = searchEntries.filter {
+            "\($0.title) \($0.keywords) \($0.tab.title)".localizedCaseInsensitiveContains(query)
+        }
+        return ScrollView {
+            LazyVStack(spacing: 1) {
+                ForEach(matches) { entry in
+                    Button {
+                        settingsSearch = ""
+                        selectedTab = entry.tab == .advanced && interfaceMode == .advanced ? .exceptions : entry.tab
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(entry.title).font(.system(size: 13, weight: .medium))
+                                Text(entry.tab.title).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                        }
+                        .padding(14)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Divider()
+                }
+            }
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.separator.opacity(0.6)))
+            .frame(maxWidth: 680)
+            .padding(40)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -188,48 +349,53 @@ struct SettingsView: View {
 
     private var advancedSettingsDisclosure: some View {
         Section {
-            LabeledTile(
-                icon: "wrench.and.screwdriver.fill", tint: .gray,
-                title: "Show advanced settings",
-                subtitle: "Logging and integrations, monitored folders, trusted processes and alert rules."
-            ) {
-                Toggle("", isOn: $showsAdvancedSettings.animation())
-                    .labelsHidden()
-                    .accessibilityLabel("Show advanced settings")
-                    .toggleStyle(.switch)
+            VStack(spacing: 14) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.secondary)
+                    .frame(height: 64)
+                Text("Settings for experienced users")
+                    .font(.system(size: 15, weight: .semibold))
+                Text("Nick's defaults are safe, and most people never need to change these. Changing them can hide alerts or reduce what Nick watches.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 500)
+                Button(showsAdvancedSettings ? "Hide Advanced Settings" : "Show Advanced Settings") {
+                    withAnimation { showsAdvancedSettings.toggle() }
+                }
+                .buttonStyle(.borderedProminent)
+                Text("Want the full technical app? Switch to Advanced view in General, or press ⇧⌘A.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
         } footer: {
-            Text("Most people never need these. Nick’s defaults are safe.")
+            Text("What's inside: Exceptions, monitored folders, logging and integrations.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
         }
     }
 
+    @ViewBuilder
     private var generalSection: some View {
-        Section("General") {
+        Section("View") {
+            ViewModeChooser(selection: $interfaceMode)
+        }
+        Section("Startup & appearance") {
             LabeledTile(
                 icon: "power", tint: .green,
-                title: "Launch at login",
-                subtitle: "Start Nick automatically when you log in."
+                title: interfaceMode == .simple ? "Open Nick when I log in" : "Launch at login",
+                subtitle: interfaceMode == .simple
+                    ? "Recommended, so protection is running from the start."
+                    : "Start Nick automatically when you log in."
             ) {
                 Toggle("", isOn: $launchAtLogin)
                     .labelsHidden()
                     .accessibilityLabel("Launch Nick at login")
                     .toggleStyle(.switch)
                     .onChange(of: launchAtLogin) { _, newValue in toggleLaunchAtLogin(newValue) }
-            }
-            LabeledTile(
-                icon: "slider.horizontal.3", tint: .gray,
-                title: "Show advanced tools",
-                subtitle: "Processes, network, persistence, rule details and diagnostics. You can also press ⇧⌘A."
-            ) {
-                Toggle("", isOn: Binding(
-                    get: { interfaceMode == .advanced },
-                    set: { interfaceMode = $0 ? .advanced : .simple }
-                ))
-                .labelsHidden()
-                .accessibilityLabel("Show advanced tools")
-                .toggleStyle(.switch)
             }
         }
     }
@@ -966,8 +1132,8 @@ struct SettingsView: View {
         }
     }
 
-    private var dataSection: some View {
-        Section("Data") {
+    private var protectionDataSection: some View {
+        Section("Updates to protection") {
             LabeledTile(
                 icon: "shield.lefthalf.filled.badge.checkmark", tint: .blue,
                 title: "Automatic protection updates",
@@ -1020,6 +1186,12 @@ struct SettingsView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var privacyDataSection: some View {
+        Section("Learning") {
             LabeledTile(
                 icon: "brain.head.profile", tint: .purple,
                 title: "Learn from my review decisions",
@@ -1055,6 +1227,8 @@ struct SettingsView: View {
                         .controlSize(.small)
                 }
             }
+        }
+        Section("Help improve detection") {
             LabeledTile(
                 icon: "brain", tint: .blue,
                 title: "Contribute to detection improvements",
@@ -1074,6 +1248,8 @@ struct SettingsView: View {
                         .controlSize(.small)
                 }
             }
+        }
+        Section("Clear history") {
             LabeledTile(
                 icon: "exclamationmark.triangle.fill", tint: .red,
                 title: "Clear alert history",
@@ -1230,22 +1406,9 @@ struct SettingsView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
-            Button("Copy Update Diagnostics") {
-                let version = "\(appVersion) (\(appBuild))"
-                let checked = updateLastCheckTime > 0
-                    ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(.iso8601)
-                    : "never"
-                let text = "Nick \(version)\nFeed: \(updateFeedURL)\nLast check: \(checked)\nResult: \(updateLastCheckResult)\nUpdate available: \(updateAvailable)"
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-            }
-            .controlSize(.small)
         } header: {
             Text("Updates")
         } footer: {
-            Text("Update feed: \(updateFeedURL)")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
             if let updateCheckStatus {
                 Text(updateCheckStatus)
                     .font(.system(size: 11.5, weight: .medium))
@@ -1255,6 +1418,49 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .nickUpdateCheckStatus)) { note in
             guard let status = note.object as? String else { return }
             updateCheckStatus = status
+        }
+    }
+
+    private var aboutAppSection: some View {
+        Section {
+            LabeledTile(
+                icon: "checkmark.shield.fill", tint: .green,
+                title: "Nick",
+                subtitle: "Version \(appVersion) · Build \(appBuild) · AGPL-3.0"
+            ) {
+                Link("Open Source on GitHub", destination: URL(string: "https://github.com/EhsanAzish80/Nick")!)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private var updateDiagnosticsSection: some View {
+        Section("Update diagnostics") {
+            LabeledTile(
+                icon: "clock.arrow.circlepath", tint: .blue,
+                title: "Last check",
+                subtitle: updateLastCheckTime > 0
+                    ? "\(Date(timeIntervalSince1970: updateLastCheckTime).formatted(date: .abbreviated, time: .shortened)) · \(updateLastCheckResult)"
+                    : "Never checked"
+            ) {
+                Button("Copy Update Diagnostics") {
+                    let version = "\(appVersion) (\(appBuild))"
+                    let checked = updateLastCheckTime > 0
+                        ? Date(timeIntervalSince1970: updateLastCheckTime).formatted(.iso8601)
+                        : "never"
+                    let text = "Nick \(version)\nFeed: \(updateFeedURL)\nLast check: \(checked)\nResult: \(updateLastCheckResult)\nUpdate available: \(updateAvailable)"
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+                .controlSize(.small)
+            }
+            if interfaceMode == .advanced {
+                LabeledTile(
+                    icon: "network", tint: .indigo,
+                    title: "Update feed",
+                    subtitle: updateFeedURL
+                ) { EmptyView() }
+            }
         }
     }
 
@@ -1534,6 +1740,151 @@ struct SettingsView: View {
                     .stroke(Color.white.opacity(0.35), lineWidth: 0.5)
                     .blendMode(.plusLighter)
             )
+    }
+}
+
+private struct SettingsHeader: View {
+    let tab: SettingsTab
+    let mode: InterfaceMode
+    @Binding var searchText: String
+
+    var body: some View {
+        HStack(spacing: 18) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Settings")
+                    .font(.system(size: 22, weight: .bold))
+                Text(tab.subtitle)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 16)
+            if mode == .advanced {
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search settings", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .onExitCommand { searchText = "" }
+                }
+                .padding(.horizontal, 10)
+                .frame(width: 220, height: 30)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(.separator.opacity(0.6)))
+            } else {
+                Text("Simple view")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(.secondary.opacity(0.10), in: Capsule())
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 16)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+}
+
+private struct ViewModeChooser: View {
+    @Binding var selection: InterfaceMode
+
+    var body: some View {
+        HStack(spacing: 12) {
+            choice(
+                .simple,
+                icon: "checkmark.shield.fill",
+                name: "Simple",
+                badge: "Recommended",
+                detail: "The essentials, with alerts explained in plain words."
+            )
+            choice(
+                .advanced,
+                icon: "slider.horizontal.3",
+                name: "Advanced",
+                badge: "⇧⌘A",
+                detail: "Processes, network, persistence, rule details, diagnostics and every technical setting."
+            )
+        }
+    }
+
+    private func choice(
+        _ mode: InterfaceMode,
+        icon: String,
+        name: String,
+        badge: String,
+        detail: String
+    ) -> some View {
+        Button { selection = mode } label: {
+            VStack(alignment: .leading, spacing: 9) {
+                Image(systemName: icon)
+                    .font(.system(size: 26))
+                    .foregroundStyle(selection == mode ? Color.accentColor : Color.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+                HStack {
+                    Image(systemName: selection == mode ? "largecircle.fill.circle" : "circle")
+                        .foregroundStyle(selection == mode ? Color.accentColor : Color.secondary)
+                    Text(name).font(.system(size: 14, weight: .semibold))
+                    Spacer()
+                    Text(badge)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.secondary.opacity(0.10), in: Capsule())
+                }
+                Text(detail)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 142, alignment: .topLeading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(selection == mode ? Color.accentColor : Color.secondary.opacity(0.25),
+                            lineWidth: selection == mode ? 2 : 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(name) view")
+        .accessibilityAddTraits(selection == mode ? .isSelected : [])
+    }
+}
+
+private struct SettingsTabBar: View {
+    let tabs: [SettingsTab]
+    @Binding var selection: SettingsTab
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 3) {
+                ForEach(tabs) { tab in
+                    Button { selection = tab } label: {
+                        VStack(spacing: 3) {
+                            Image(systemName: tab.icon).font(.system(size: 18))
+                            Text(tab.title).font(.system(size: 11.5, weight: selection == tab ? .semibold : .regular))
+                        }
+                        .foregroundStyle(selection == tab ? Color.accentColor : Color.secondary)
+                        .frame(minWidth: 72)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(selection == tab ? Color.accentColor.opacity(0.10) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selection == tab ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 

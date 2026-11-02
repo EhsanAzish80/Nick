@@ -192,7 +192,28 @@ enum LOLBinExecutionPolicy {
         hasQuarantineOrigin: Bool
     ) -> Tier {
         actorIdentityValidated && responsibleChainValidated
-            && !hasNetworkOrigin && !hasQuarantineOrigin ? .review : .protected
+            && !hasNetworkOrigin && !hasQuarantineOrigin ? .observed : .protected
+    }
+
+    /// Discovery commands are useful evidence when they are part of a hostile
+    /// chain, but ordinary validated developer tooling inventories processes
+    /// and the Mac constantly. Keep the standalone event in the timeline and
+    /// escalate only when provenance supplies another suspicious signal.
+    static func effectiveTier(
+        for finding: Finding,
+        actorIdentityValidated: Bool,
+        responsibleChainValidated: Bool,
+        hasNetworkOrigin: Bool,
+        hasQuarantineOrigin: Bool
+    ) -> Tier {
+        guard actorIdentityValidated, responsibleChainValidated,
+              !hasNetworkOrigin, !hasQuarantineOrigin else { return finding.tier }
+        switch finding.reason {
+        case "mktemp_execute", "system_discovery", "process_discovery":
+            return .observed
+        default:
+            return finding.tier
+        }
     }
 
     /// Extracts the command supplied to a shell's command flag. A shell with no
@@ -375,6 +396,7 @@ enum CredentialAccessPolicy {
     static func findingForOpen(
         path: String,
         responsibleIdentity: ValidatedIdentity?,
+        actorIdentity: ValidatedIdentity? = nil,
         actorIdentityValidated: Bool = false,
         actorIsValidatedApplePlatform: Bool = false,
         actorIsOwnResponsibleProcess: Bool = false,
@@ -403,7 +425,12 @@ enum CredentialAccessPolicy {
                 store: .keychain
             )
         }
-        if ownsStore(path: path, identity: responsibleIdentity) {
+        // Helpers and XPC services often have their own validated bundle ID
+        // while the responsible process is the containing app. Either exact
+        // SecCode identity may establish ownership; a path or display name
+        // alone never can.
+        if ownsStore(path: path, identity: actorIdentity)
+            || ownsStore(path: path, identity: responsibleIdentity) {
             return nil
         }
         return findingForOpen(

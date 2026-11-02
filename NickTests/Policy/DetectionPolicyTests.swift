@@ -237,6 +237,7 @@ final class DetectionPolicyTests: XCTestCase {
 
         let routine: [(String, String)] = [
             ("/a/config.json.tmp", "/a/config.json"),
+            ("/a/archive.tar.zst.tmp", "/a/archive.tar.zst"),
             ("/a/file.crdownload", "/a/file.dmg"),
             ("/a/photo.heic", "/a/photo.jpg"),
             ("/a/.index.lock", "/a/.index"),

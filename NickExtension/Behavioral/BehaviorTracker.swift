@@ -235,11 +235,18 @@ final class BehaviorTracker {
         // A freshly written temporary renamed to `document.ext.locked` is the
         // common write-then-swap ransomware shape. It must not inherit the
         // ordinary atomic-save exemption merely because the temporary was
-        // created by the same process. Safe build-tool swaps such as
-        // `target.cmake.tmp` -> `target.cmake` do not append an extension.
+        // created by the same process. Conversely, an exact one-suffix
+        // finalization (`archive.tar.zst.tmp` -> `archive.tar.zst`) is a normal
+        // atomic save even though the destination still has multiple suffixes.
+        // Content evidence always overrides this exemption.
         let destinationURL = URL(fileURLWithPath: destination)
+        let sourceURL = URL(fileURLWithPath: source)
+        let isExactTemporaryFinalization = isAtomicSwap
+            && sourceURL.deletingPathExtension().standardizedFileURL.path
+                == destinationURL.standardizedFileURL.path
         let appendsExtensionToNamedFile = !destinationURL.pathExtension.isEmpty
             && !destinationURL.deletingPathExtension().pathExtension.isEmpty
+            && !isExactTemporaryFinalization
         let event = BehaviorEvent(
             timestamp: timestamp,
             type: .fileRename,

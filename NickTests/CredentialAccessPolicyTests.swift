@@ -100,6 +100,35 @@ final class CredentialAccessPolicyTests: XCTestCase {
         ))
     }
 
+    func testValidatedHelperOwnsItsStoreWhenResponsibleAppDiffers() {
+        let responsibleApp = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.openai.chat", teamID: "VALIDTEAM",
+            signingValidated: true, isApplePlatform: false
+        )
+        let helper = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.openai.codex.service", teamID: "VALIDTEAM",
+            signingValidated: true, isApplePlatform: false
+        )
+        let path = "/Users/test/Library/HTTPStorages/com.openai.codex.service/Cookies"
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
+            path: path,
+            responsibleIdentity: responsibleApp,
+            actorIdentity: helper,
+            actorIdentityValidated: true
+        ))
+
+        let unvalidatedHelper = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.openai.codex.service", teamID: "SPOOF",
+            signingValidated: false, isApplePlatform: false
+        )
+        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+            path: path,
+            responsibleIdentity: responsibleApp,
+            actorIdentity: unvalidatedHelper,
+            actorIdentityValidated: false
+        ))
+    }
+
     func testKeychainDumpAndSecretReadCommandsAlertWithoutRecordingArguments() {
         let appleSecurityCLI = CredentialAccessPolicy.ValidatedIdentity(
             bundleID: "com.apple.security", teamID: nil,

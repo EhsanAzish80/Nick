@@ -1,6 +1,6 @@
 # Nick Architecture
 
-This document describes the architecture implemented in Nick 5.0.0. It is for
+This document describes the architecture implemented in Nick 5.1.0. It is for
 contributors and reviewers who want to understand the product's current
 boundaries. Planned and inactive components are identified explicitly.
 

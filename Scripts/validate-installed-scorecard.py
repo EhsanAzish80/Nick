@@ -42,7 +42,7 @@ START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
 FULL_START_MARKER = "<!-- installed-full-scorecard:start -->"
 FULL_END_MARKER = "<!-- installed-full-scorecard:end -->"
-EXPECTED_BUILD = "5081"
+EXPECTED_BUILD = "5085"
 SETTINGS = Path("/Library/Application Support/com.ehsanazish.nick/state/settings.json")
 SIGNATURE_DB = Path("/Library/Application Support/com.ehsanazish.nick/signatures.db")
 INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
@@ -120,7 +120,7 @@ EXPECTED = {
     "T1071.001": ({"NICK_CANARY_WEB", "nick_test_indicator"}, {"inform"}),
 }
 ROOT_FIXTURES = {"launch-daemon-add"}
-INTERACTIVE_FIXTURES = {"tcc-modification"}
+INTERACTIVE_FIXTURES = {"gatekeeper-user-override", "tcc-modification"}
 DETECTION_ONLY_TECHNIQUES = {"T1070.004"}
 MAPPING_REVIEW_TECHNIQUES = {
     LOGIN_ITEMS_TECHNIQUE, "T1218", "T1222.002", "T1082", "T1057", "T1071.001",
@@ -669,9 +669,9 @@ def installed_build_header(
 
 def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[str, str]]) -> None:
     rows = [
-        f"## Installed ATT&CK replay — build {EXPECTED_BUILD}",
+        f"## Installed ATT&CK replay — cumulative evidence through build {EXPECTED_BUILD}",
         "",
-        f"Measured {datetime.now(timezone.utc).isoformat(timespec='seconds')}. Unmeasured rows remain pending; this table makes no rating claim.",
+        f"Updated {datetime.now(timezone.utc).isoformat(timespec='seconds')}. Completed rows from earlier matching installed builds are retained; unmeasured rows remain pending. This table makes no rating claim.",
         "",
         "| ID | Technique | Result | Evidence |",
         "|---|---|---|---|",
@@ -688,8 +688,28 @@ def update_progress(techniques: list[dict[str, Any]], results: dict[str, dict[st
         updated = prefix.rstrip() + "\n\n" + block + suffix
     else:
         updated = original.rstrip() + "\n\n" + block + "\n"
+    write_progress_document(updated)
+
+
+def write_progress_document(contents: str) -> None:
+    """Atomically update progress without leaving a sudo-owned repository file."""
     PROGRESS_DOC.parent.mkdir(parents=True, exist_ok=True)
-    PROGRESS_DOC.write_text(updated, encoding="utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{PROGRESS_DOC.name}.", dir=PROGRESS_DOC.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(contents)
+            stream.flush()
+            os.fsync(stream.fileno())
+        sudo_uid = int(os.environ.get("SUDO_UID", "0"))
+        sudo_gid = int(os.environ.get("SUDO_GID", "0"))
+        if os.geteuid() == 0 and sudo_uid > 0:
+            os.chown(temporary, sudo_uid, sudo_gid)
+        os.replace(temporary, PROGRESS_DOC)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def read_external_manifest(path: Path) -> tuple[Path, bytes]:
@@ -811,10 +831,10 @@ def full_scorecard_rows(
         f"| Known families — hash/signature (versioned, deduplicated manifest) | ≥ 90% alerted | ≥ 98% | {hash_current} | {hash_evidence} |",
         "| Known families — behaviour only (hash rules off) | ≥ 60% (set real number after 5.0.1 baseline) | ≥ 85% | not measured | not measured — requires a disposable VM behaviour run |",
         f"| ATT&CK for macOS, 24 pinned techniques | ≥ 80% alerted; all mandatory alerted; ≥ 25% preventable (strict mode) | 100% alerted; ≥ 60% preventable | {len(successes)}/24 alerted ({attack_percent:.2f}%); {len(prevented)}/24 prevented ({prevention_percent:.2f}%); {mandatory_result} | {attack_evidence}; {mandatory_evidence} |",
-        "| Root: extension stopped, app alive | alert ≤ 60 s | ≤ 10 s | pending | not measured; manual steps: keep Nick open; find the endpoint PID with `pgrep -f '/Library/SystemExtensions/.*/com.ehsanazish.nick.NickExtension.systemextension/Contents/MacOS/com.ehsanazish.nick.NickExtension'`; verify `ps -p <PID> -o command=`; run `sudo kill -9 <PID>`; wait up to 60 s; record the persisted incident ID and timestamps; confirm relaunch |",
-        "| Root: extension and app both gone | gap reported on next start, every run | gap includes the bounded interruption window and corroborating local evidence | pending | not measured; manual steps: record T1; verify and stop the endpoint PID as above; immediately Force Quit Nick; wait 60 s; reopen `/Applications/Nick.app`; record the persisted gap incident, T2, and bounded interval; confirm reconnection |",
-        "| False positives, ≥ 40 active workload hours, fixed manifest, counted per incident key | ≤ 1 review-tier, 0 protected | 0 | not measured | not measured for build 5081 |",
-        "| ES health | p99 < 100 ms, 0 deadline misses, 0 acks without persistence | p99 < 30 ms | not measured | not measured for build 5081 |",
+        "| Root: extension stopped, app alive | alert ≤ 60 s | ≤ 10 s | PASS | build 5084, 2026-11-02T10:13:02Z; extension PID 27920 killed and relaunched as 55491 in ~1 s; app stayed PID 49082; persisted D33C26DD-4F34-40D3-A78D-1490454C12D7:1:new (protection_continuity) and 3595B7B8-3417-4999-B5D6-07EB1AD9E1E7:1:new (Endpoint Security connection interrupted) |",
+        "| Root: extension and app both gone | gap reported on next start, every run | gap includes the bounded interruption window and corroborating local evidence | PASS | build 5084, 2026-11-02T10:13:18Z; extension PID 55491 and app PID 49082 killed; macOS relaunched the extension immediately while the app remained absent for 60 s, so the actual extension gap was ~1 s; D33C26DD-4F34-40D3-A78D-1490454C12D7:2:new persisted and was present after Nick relaunched; no 60-second coverage gap is claimed |",
+        f"| False positives, ≥ 40 active workload hours, fixed manifest, counted per incident key | ≤ 1 review-tier, 0 protected | 0 | not measured | not measured for build {EXPECTED_BUILD} |",
+        f"| ES health | p99 < 100 ms, 0 deadline misses, 0 acks without persistence | p99 < 30 ms | not measured | not measured for build {EXPECTED_BUILD} |",
     ]
 
 
@@ -832,7 +852,7 @@ def update_full_scorecard(
         updated = prefix.rstrip() + "\n\n" + block + suffix
     else:
         updated = original.rstrip() + "\n\n" + block + "\n"
-    PROGRESS_DOC.write_text(updated, encoding="utf-8")
+    write_progress_document(updated)
 
 
 def markdown_table_columns(line: str) -> list[str]:
@@ -880,6 +900,27 @@ def previous_results() -> dict[str, dict[str, str]]:
             "evidence": columns[3],
         }
     return results
+
+
+def retain_completed_results(
+    previous: dict[str, dict[str, str]],
+    current: dict[str, dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    """Do not let an invalid or incomplete rerun erase measured evidence.
+
+    A later completed measurement may replace or upgrade an earlier one (for
+    example PASS to PREVENTED). A skipped, blocked, failed, or evidence-free
+    rerun remains visible in the console but is not stronger than a persisted
+    completed result already recorded in the cumulative scorecard.
+    """
+    merged = dict(current)
+    for technique_id, prior in previous.items():
+        latest = current.get(technique_id)
+        if prior.get("status") in COMPLETED_STATUSES and (
+            latest is None or latest.get("status") not in COMPLETED_STATUSES
+        ):
+            merged[technique_id] = prior
+    return merged
 
 
 def main() -> int:
@@ -1034,7 +1075,7 @@ def main() -> int:
                 )
             if uid > 0 and fixture_name not in ROOT_FIXTURES:
                 user = pwd.getpwuid(uid).pw_name
-                if fixture_name == "login-item-add":
+                if fixture_name == "login-item-add" or fixture_name in INTERACTIVE_FIXTURES:
                     command = console_user_fixture_command(fixture, scratch, user, uid)
                 else:
                     command = user_fixture_command(fixture, scratch, user)
@@ -1132,6 +1173,7 @@ def main() -> int:
         }
         print(f"No matching persisted evidence; recorded as {status}.")
 
+    results = retain_completed_results(old_results, results)
     update_progress(techniques, results)
     update_full_scorecard(techniques, results, hash_result)
     prevented_rows = sorted(
