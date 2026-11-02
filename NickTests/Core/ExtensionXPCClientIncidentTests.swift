@@ -179,6 +179,24 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     }
 
 #if DEBUG
+    func test_durableAcknowledgementForcesPendingCoalescedSnapshotImmediately() {
+        XCTAssertTrue(ExtensionXPCClient.shouldForceIncidentStoreDrain(
+            pendingGeneration: 7,
+            requestedGeneration: 6,
+            writeInFlight: false
+        ))
+        XCTAssertFalse(ExtensionXPCClient.shouldForceIncidentStoreDrain(
+            pendingGeneration: 5,
+            requestedGeneration: 6,
+            writeInFlight: false
+        ))
+        XCTAssertFalse(ExtensionXPCClient.shouldForceIncidentStoreDrain(
+            pendingGeneration: 7,
+            requestedGeneration: 6,
+            writeInFlight: true
+        ))
+    }
+
     @MainActor
     func test_establishedConnectionLossSchedulesReconnectAfterBootstrap() {
         let client = ExtensionXPCClient()

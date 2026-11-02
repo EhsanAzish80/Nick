@@ -1797,17 +1797,14 @@ final class ESEventHandler {
                     let validatedSameChain = trustedSigner
                         && (attribution?.app?.signing == .signed
                             || attribution?.app?.signing == .applePlatform)
-                    let localTemporaryExecution = finding.reason == "mktemp_execute"
-                        && LOLBinExecutionPolicy.mktempTier(
-                            actorIdentityValidated: trustedSigner,
-                            responsibleChainValidated: validatedSameChain,
-                            hasNetworkOrigin: pipelineEvidence.hasNetworkSocket
-                                || interactivePipelineFinding != nil,
-                            hasQuarantineOrigin: Self.hasQuarantineOrigin(at: targetPath)
-                        ) == .review
-                    let effectiveTier: LOLBinExecutionPolicy.Tier = localTemporaryExecution
-                        ? .review
-                        : finding.tier
+                    let effectiveTier = LOLBinExecutionPolicy.effectiveTier(
+                        for: finding,
+                        actorIdentityValidated: trustedSigner,
+                        responsibleChainValidated: validatedSameChain,
+                        hasNetworkOrigin: pipelineEvidence.hasNetworkSocket
+                            || interactivePipelineFinding != nil,
+                        hasQuarantineOrigin: Self.hasQuarantineOrigin(at: targetPath)
+                    )
                     let ruleTier = effectiveTier.rawValue
                     let signalSeverity = effectiveTier == .observed
                         ? "info"
@@ -1965,6 +1962,7 @@ final class ESEventHandler {
         let finding = CredentialAccessPolicy.findingForOpen(
             path: path,
             responsibleIdentity: attribution?.app.map(Self.credentialIdentity),
+            actorIdentity: Self.credentialIdentity(actorIdentity),
             actorIdentityValidated: actorIdentity.isValidIdentitySignature,
             actorIsValidatedApplePlatform: actorIdentity.isPlatformBinary
                 && actorIdentity.isValidIdentitySignature,
@@ -2219,6 +2217,17 @@ final class ESEventHandler {
                 || identity.signing == .appleSigned
                 || identity.signing == .applePlatform,
             isApplePlatform: identity.signing == .applePlatform
+        )
+    }
+
+    private static func credentialIdentity(
+        _ identity: TamperActorIdentity
+    ) -> CredentialAccessPolicy.ValidatedIdentity {
+        CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: identity.signingID,
+            teamID: identity.teamID,
+            signingValidated: identity.isValidIdentitySignature,
+            isApplePlatform: identity.isPlatformBinary
         )
     }
 

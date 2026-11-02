@@ -910,9 +910,10 @@ public final class ExtensionXPCClient: NSObject {
         scheduleIncidentStoreDrain(immediate: authorizationExternalForm != nil)
     }
 
-    /// Coalesces bursts of whole-snapshot updates. Security events still wait
-    /// for the resulting durable generation before acknowledgement; they no
-    /// longer force one 300 KB rewrite per notification or grouped occurrence.
+    /// Coalesces routine whole-snapshot updates for five seconds. A security
+    /// event which is waiting for durable persistence explicitly forces the
+    /// pending snapshot out in `awaitIncidentStorePersistence`, so delivery
+    /// acknowledgements never wait behind this UI/state write budget.
     private func scheduleIncidentStoreDrain(immediate: Bool = false) {
         guard !incidentWriteInFlight else { return }
         if immediate {
@@ -923,11 +924,20 @@ public final class ExtensionXPCClient: NSObject {
         }
         guard incidentWriteDrainTask == nil else { return }
         incidentWriteDrainTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: .seconds(5))
             guard let self, !Task.isCancelled else { return }
             self.incidentWriteDrainTask = nil
             self.drainIncidentStoreWrites()
         }
+    }
+
+    nonisolated static func shouldForceIncidentStoreDrain(
+        pendingGeneration: UInt64?,
+        requestedGeneration: UInt64,
+        writeInFlight: Bool
+    ) -> Bool {
+        !writeInFlight
+            && pendingGeneration.map { $0 >= requestedGeneration } == true
     }
 
     private func drainIncidentStoreWrites() {
@@ -990,6 +1000,19 @@ public final class ExtensionXPCClient: NSObject {
         guard connection != nil, incidentRevision != nil else { return nil }
         let result = await withCheckedContinuation { continuation in
             incidentWriteWaiters.append((generation, continuation))
+            // Threat delivery calls this before it may acknowledge the
+            // extension. Register the waiter first, then cancel the routine
+            // five-second window and persist now so even an immediate test
+            // reply cannot race past the continuation.
+            if Self.shouldForceIncidentStoreDrain(
+                pendingGeneration: pendingIncidentGeneration,
+                requestedGeneration: generation,
+                writeInFlight: incidentWriteInFlight
+            ) {
+                incidentWriteDrainTask?.cancel()
+                incidentWriteDrainTask = nil
+                drainIncidentStoreWrites()
+            }
         }
         return (generation, result)
     }

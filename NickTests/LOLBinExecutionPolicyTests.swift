@@ -8,7 +8,7 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
             responsibleChainValidated: true,
             hasNetworkOrigin: false,
             hasQuarantineOrigin: false
-        ), .review)
+        ), .observed)
         XCTAssertEqual(LOLBinExecutionPolicy.mktempTier(
             actorIdentityValidated: true,
             responsibleChainValidated: true,
@@ -27,6 +27,32 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
             hasNetworkOrigin: false,
             hasQuarantineOrigin: false
         ), .protected)
+    }
+
+
+    func test_validatedRoutineDiscoveryStaysObservedWithoutRiskProvenance() throws {
+        for invocation in [
+            ("/usr/sbin/system_profiler", ["system_profiler", "SPSoftwareDataType"]),
+            ("/bin/ps", ["ps", "-axo", "pid,ppid,command"]),
+        ] {
+            let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
+                executablePath: invocation.0, arguments: invocation.1
+            ))
+            XCTAssertEqual(LOLBinExecutionPolicy.effectiveTier(
+                for: finding,
+                actorIdentityValidated: true,
+                responsibleChainValidated: true,
+                hasNetworkOrigin: false,
+                hasQuarantineOrigin: false
+            ), .observed)
+            XCTAssertEqual(LOLBinExecutionPolicy.effectiveTier(
+                for: finding,
+                actorIdentityValidated: true,
+                responsibleChainValidated: true,
+                hasNetworkOrigin: true,
+                hasQuarantineOrigin: false
+            ), .review)
+        }
     }
     func test_shortLivedCurlPipeIsClassifiedAtExec() throws {
         let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
