@@ -179,21 +179,30 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     }
 
 #if DEBUG
-    func test_durableAcknowledgementForcesPendingCoalescedSnapshotImmediately() {
+    func test_durableAcknowledgementForcesOnlyUrgentPendingSnapshotImmediately() {
         XCTAssertTrue(ExtensionXPCClient.shouldForceIncidentStoreDrain(
             pendingGeneration: 7,
             requestedGeneration: 6,
-            writeInFlight: false
+            writeInFlight: false,
+            urgent: true
         ))
         XCTAssertFalse(ExtensionXPCClient.shouldForceIncidentStoreDrain(
             pendingGeneration: 5,
             requestedGeneration: 6,
-            writeInFlight: false
+            writeInFlight: false,
+            urgent: true
         ))
         XCTAssertFalse(ExtensionXPCClient.shouldForceIncidentStoreDrain(
             pendingGeneration: 7,
             requestedGeneration: 6,
-            writeInFlight: true
+            writeInFlight: true,
+            urgent: true
+        ))
+        XCTAssertFalse(ExtensionXPCClient.shouldForceIncidentStoreDrain(
+            pendingGeneration: 7,
+            requestedGeneration: 6,
+            writeInFlight: false,
+            urgent: false
         ))
     }
 

@@ -910,10 +910,11 @@ public final class ExtensionXPCClient: NSObject {
         scheduleIncidentStoreDrain(immediate: authorizationExternalForm != nil)
     }
 
-    /// Coalesces routine whole-snapshot updates for five seconds. A security
-    /// event which is waiting for durable persistence explicitly forces the
-    /// pending snapshot out in `awaitIncidentStorePersistence`, so delivery
-    /// acknowledgements never wait behind this UI/state write budget.
+    /// Coalesces routine whole-snapshot updates for fifteen minutes. Confirmed
+    /// extension findings already live in the root-owned, synchronized event
+    /// journal while they wait. New incidents and protected findings force an
+    /// immediate snapshot; repeated low-risk occurrences are acknowledged only
+    /// after this bounded batch lands in the incident store.
     private func scheduleIncidentStoreDrain(immediate: Bool = false) {
         guard !incidentWriteInFlight else { return }
         if immediate {
@@ -924,7 +925,7 @@ public final class ExtensionXPCClient: NSObject {
         }
         guard incidentWriteDrainTask == nil else { return }
         incidentWriteDrainTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(15 * 60))
             guard let self, !Task.isCancelled else { return }
             self.incidentWriteDrainTask = nil
             self.drainIncidentStoreWrites()
@@ -934,9 +935,11 @@ public final class ExtensionXPCClient: NSObject {
     nonisolated static func shouldForceIncidentStoreDrain(
         pendingGeneration: UInt64?,
         requestedGeneration: UInt64,
-        writeInFlight: Bool
+        writeInFlight: Bool,
+        urgent: Bool
     ) -> Bool {
-        !writeInFlight
+        urgent
+            && !writeInFlight
             && pendingGeneration.map { $0 >= requestedGeneration } == true
     }
 
@@ -991,7 +994,10 @@ public final class ExtensionXPCClient: NSObject {
     /// queued by the caller. A later successful generation covers all earlier
     /// still-pending generations; a failed reply fails every waiter it covers
     /// so those journal events remain eligible for redelivery.
-    func awaitIncidentStorePersistence(generation: UInt64) async -> (UInt64, Bool)? {
+    func awaitIncidentStorePersistence(
+        generation: UInt64,
+        urgent: Bool = true
+    ) async -> (UInt64, Bool)? {
         guard generation > 0, generation <= incidentWriteGeneration else {
             ackWithoutPersistenceCount += 1
             return nil
@@ -1000,14 +1006,15 @@ public final class ExtensionXPCClient: NSObject {
         guard connection != nil, incidentRevision != nil else { return nil }
         let result = await withCheckedContinuation { continuation in
             incidentWriteWaiters.append((generation, continuation))
-            // Threat delivery calls this before it may acknowledge the
-            // extension. Register the waiter first, then cancel the routine
-            // five-second window and persist now so even an immediate test
-            // reply cannot race past the continuation.
+            // Register the waiter before deciding whether to force the write,
+            // so even an immediate XPC reply cannot race past the continuation.
+            // Non-urgent findings remain unacknowledged in the extension's
+            // synchronized journal until the routine batch is durable.
             if Self.shouldForceIncidentStoreDrain(
                 pendingGeneration: pendingIncidentGeneration,
                 requestedGeneration: generation,
-                writeInFlight: incidentWriteInFlight
+                writeInFlight: incidentWriteInFlight,
+                urgent: urgent
             ) {
                 incidentWriteDrainTask?.cancel()
                 incidentWriteDrainTask = nil
@@ -1348,10 +1355,26 @@ public final class ExtensionXPCClient: NSObject {
         let outcome = await findingHandler(finding)
         switch outcome {
         case .persisted(let requiredGeneration), .coalesced(let requiredGeneration):
+            let protectedTier = event.metadata?["ruleTier"] == "protected"
+            let highSeverity = ["high", "critical"].contains(
+                event.metadata?["signalSeverity"]?.lowercased() ?? ""
+            )
+            let requiresImmediateSnapshot: Bool
+            switch outcome {
+            case .persisted:
+                requiresImmediateSnapshot = true
+            case .coalesced:
+                requiresImmediateSnapshot = protectedTier || highSeverity
+            default:
+                requiresImmediateSnapshot = true
+            }
             let persistence = if let incidentPersistenceOverride {
                 await incidentPersistenceOverride(requiredGeneration)
             } else {
-                await awaitIncidentStorePersistence(generation: requiredGeneration)
+                await awaitIncidentStorePersistence(
+                    generation: requiredGeneration,
+                    urgent: requiresImmediateSnapshot
+                )
             }
             guard let (generation, succeeded) = persistence,
                   generation == requiredGeneration, succeeded else {
