@@ -42,7 +42,7 @@ START_MARKER = "<!-- installed-attack-scorecard:start -->"
 END_MARKER = "<!-- installed-attack-scorecard:end -->"
 FULL_START_MARKER = "<!-- installed-full-scorecard:start -->"
 FULL_END_MARKER = "<!-- installed-full-scorecard:end -->"
-EXPECTED_BUILD = "5085"
+EXPECTED_BUILD = "5101"
 SETTINGS = Path("/Library/Application Support/com.ehsanazish.nick/state/settings.json")
 SIGNATURE_DB = Path("/Library/Application Support/com.ehsanazish.nick/signatures.db")
 INSTALLED_APP_INFO = Path("/Applications/Nick.app/Contents/Info.plist")
@@ -69,7 +69,7 @@ INSTRUCTIONS = {
     "wallet-file-read": "Read the synthetic wallet fixture; never use real wallet data.",
     "gatekeeper-user-override": "Run the declared Gatekeeper override fixture against the scratch app.",
     "tcc-modification": "Run the declared synthetic TCC-change fixture.",
-    "nick-tamper": "Run the documented Nick self-tamper validation fixture.",
+    "nick-tamper": "Try to suspend Nick's Endpoint Security extension and resume it immediately if allowed.",
     "permission-modification": "Change permissions only on the declared scratch fixture.",
     "file-deletion": "Create an inert LaunchAgent as your user; the recorder waits for durable creation evidence, then asks the fixture to delete it.",
     "encoded-payload": "Run the declared harmless encoded-payload fixture.",
@@ -107,7 +107,7 @@ EXPECTED = {
     # 5069 TCC policy intentionally records that as inform/observed; sensitive
     # grants and Nick permission loss remain review-tier.
     "T1548.006": ({"tcc-permission-modified"}, {"review", "observed"}),
-    "T1562.001": ({"endpoint_tamper_observed", "nick_tamper", "nick_unexpected_exit"}, {"protected"}),
+    "T1562.001": ({"endpoint_tamper_observed", "nick_tamper", "nick_unexpected_exit", "nick_signal_denied"}, {"protected"}),
     "T1222.002": ({"permission_modification"}, {"review", "protected"}),
     "T1070.004": ({"protected_file_deletion", "file_integrity_deleted"}, {"review", "protected"}),
     "T1027": ({"base64_payload", "encoded_payload", "decoded_payload_interpreter"}, {"review", "protected"}),
@@ -119,7 +119,7 @@ EXPECTED = {
     # without inflating threat totals or contacting a malicious host.
     "T1071.001": ({"NICK_CANARY_WEB", "nick_test_indicator"}, {"inform"}),
 }
-ROOT_FIXTURES = {"launch-daemon-add"}
+ROOT_FIXTURES = {"launch-daemon-add", "nick-tamper"}
 INTERACTIVE_FIXTURES = {"gatekeeper-user-override", "tcc-modification"}
 DETECTION_ONLY_TECHNIQUES = {"T1070.004"}
 MAPPING_REVIEW_TECHNIQUES = {
@@ -314,7 +314,18 @@ def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[
         persistence_paths = {str(item.get("persistencePath") or "")
                              for item in metadata if isinstance(item, dict)
                              and item.get("persistencePath")}
-        paths = sorted(file_paths | persistence_paths)
+        execution_paths = {str(item["execTargetPath"]) for item in metadata
+                           if isinstance(item, dict) and item.get("execTargetPath")}
+        rename_paths = {str(item[key]) for item in metadata if isinstance(item, dict)
+                        for key in ("renameSource", "renameDestination") if item.get(key)}
+        paths = sorted(file_paths | persistence_paths | execution_paths | rename_paths)
+        endpoint_denied = any(
+            isinstance(item, dict)
+            and (item.get("endpointDecision") == "deny"
+                 or (item.get("reason") == "nick_signal_denied"
+                     and item.get("tamperDisposition") == "blocked"))
+            for item in metadata
+        )
         process_infos = [signal.get("processInfo", {}) for signal in signals
                          if isinstance(signal, dict) and isinstance(signal.get("processInfo"), dict)]
         def integer_values(*keys: str) -> list[int]:
@@ -344,6 +355,7 @@ def incident_fingerprints_from_snapshot(data: dict[str, Any]) -> dict[str, dict[
             "signalSeverities": signal_severities,
             "title": title,
             "paths": paths,
+            "endpointDenied": endpoint_denied,
             "processIDs": integer_values("pid", "actorPID", "responsiblePID"),
             "parentPIDs": integer_values("parentPID", "ppid"),
             "processGroupIDs": integer_values("processGroupID", "processGroup", "pgid"),
@@ -396,7 +408,7 @@ def prevention_fingerprints() -> dict[str, dict[str, str]]:
                             "target": str(action.get("target") or payload.get("threatPath") or ""),
                             "detail": str(action.get("detail") or payload.get("threatName") or ""),
                         }
-            elif kind == "endpointEvent" and str(payload.get("decision", "")).lower() == "deny":
+            elif kind in {"endpointEvent", "threat"} and str(payload.get("decision", "")).lower() == "deny":
                 found[f"auth-deny:{identifier}"] = {
                     "kind": "AUTH deny",
                     "target": str(payload.get("filePath") or payload.get("processPath") or ""),
@@ -411,11 +423,14 @@ def matching_prevention(
     incident: dict[str, Any],
 ) -> dict[str, str] | None:
     paths = {os.path.realpath(path) for path in incident.get("paths", []) if path}
+    if incident.get("endpointDenied"):
+        return {"kind": "AUTH deny", "target": sorted(paths)[0] if paths else "",
+                "detail": "denial retained in the matched durable incident"}
     for identifier in sorted(set(after) - set(before)):
         record = after[identifier]
         target = record.get("target", "")
         canonical = os.path.realpath(target) if target else ""
-        if not paths or canonical in paths:
+        if canonical in paths:
             return record
     return None
 
@@ -471,6 +486,8 @@ def wait_for_matching_incidents(
     expected_correlation_value: str | None = None,
     timeout: float = 15.0,
     poll_interval: float = 0.5,
+    require_prevention: bool = False,
+    prevention_before: dict[str, dict[str, str]] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[tuple[str, dict[str, Any]]]]:
     """Poll the durable store because app ingestion can trail a fixture.
 
@@ -485,7 +502,12 @@ def wait_for_matching_incidents(
             before, after, expected_reasons, expected_tiers, expected_path, fixture_lineage,
             expected_correlation_value
         )
-        if matches or time.monotonic() >= deadline:
+        proven = bool(matches)
+        if matches and require_prevention:
+            current_prevention = prevention_fingerprints()
+            proven = any(matching_prevention(prevention_before or {}, current_prevention, record)
+                         for _, record in matches)
+        if proven or time.monotonic() >= deadline:
             return after, matches
         time.sleep(poll_interval)
         after = load_incident_fingerprints()
@@ -891,7 +913,12 @@ def previous_results() -> dict[str, dict[str, str]]:
     if not PROGRESS_DOC.exists():
         return {}
     results: dict[str, dict[str, str]] = {}
-    for line in PROGRESS_DOC.read_text(encoding="utf-8").splitlines():
+    lines = PROGRESS_DOC.read_text(encoding="utf-8").splitlines()
+    build_heading = "## Installed ATT&CK replay — cumulative evidence through build "
+    if any(line.startswith(build_heading) and line.removeprefix(build_heading) != EXPECTED_BUILD
+           for line in lines):
+        return {}
+    for line in lines:
         columns = markdown_table_columns(line)
         if len(columns) != 4 or not is_technique_id(columns[0]):
             continue
@@ -987,7 +1014,10 @@ def main() -> int:
             raise SystemExit(f"Could not verify installed Strict Mode: {error}") from error
         if not strict_enabled or kill_switch:
             raise SystemExit(
-                "--strict requires Strict Mode ON and Emergency stop blocking OFF in the installed app."
+                "--strict requires Strict blocking ON and Emergency stop blocking OFF "
+                "in Nick > Settings > Protection. Saved settings: "
+                f"Strict blocking {'ON' if strict_enabled else 'OFF'}, "
+                f"Emergency stop blocking {'ON' if kill_switch else 'OFF'}."
             )
 
     hash_result: dict[str, str] | None = None
@@ -1040,6 +1070,9 @@ def main() -> int:
         before = load_incident_fingerprints()
         prevention_before = prevention_fingerprints()
         action = input("Run? [Y/n], s to leave pending, q to stop: ").strip().lower()
+        while action not in {"", "y", "n", "s", "q"}:
+            print("Enter y, n, s, or q. This prompt does not need a password.")
+            action = input("Run? [Y/n], s to leave pending, q to stop: ").strip().lower()
         if action == "q":
             break
         if action in {"n", "s"}:
@@ -1073,9 +1106,15 @@ def main() -> int:
                 fixture_expected_path = os.path.join(
                     scratch, "Nick Login Item Fixture.app"
                 )
+            elif fixture_name == "downloaded-executable":
+                fixture_expected_path = os.path.join(scratch, "downloaded-fixture.sh")
+            elif fixture_name == "ssh-key-read":
+                fixture_expected_path = os.path.join(scratch, ".ssh", "id_nick_scorecard")
+            elif fixture_name == "browser-store-read":
+                fixture_expected_path = os.path.join(scratch, "Login Data")
             if uid > 0 and fixture_name not in ROOT_FIXTURES:
                 user = pwd.getpwuid(uid).pw_name
-                if fixture_name == "login-item-add" or fixture_name in INTERACTIVE_FIXTURES:
+                if fixture_name in {"login-item-add", "keychain-dump-pattern"} or fixture_name in INTERACTIVE_FIXTURES:
                     command = console_user_fixture_command(fixture, scratch, user, uid)
                 else:
                     command = user_fixture_command(fixture, scratch, user)
@@ -1127,6 +1166,10 @@ def main() -> int:
                 )
         expected_reasons, expected_tiers = EXPECTED[technique["id"]]
         required_lineage = fixture_lineage if technique["id"] in MAPPING_REVIEW_TECHNIQUES else None
+        if fixture_name == "keychain-dump-pattern":
+            # Other clients read the Keychain concurrently. Require a sampled
+            # fixture process or parent, without relying on shared groups.
+            required_lineage = FixtureLineage(fixture_lineage.root_pid, fixture_lineage.pids)
         if technique["id"] == LOGIN_ITEMS_TECHNIQUE and fixture_expected_path:
             # BTM reports the daemon that commits the login item, not the
             # originating osascript process. Preserve strict correlation with
@@ -1137,6 +1180,8 @@ def main() -> int:
             before, expected_reasons, expected_tiers,
             expected_path=fixture_expected_path,
             fixture_lineage=required_lineage,
+            require_prevention=args.strict,
+            prevention_before=prevention_before,
             expected_correlation_value=(
                 fixture_correlation_value if fixture_expected_path is None else None
             ),
@@ -1146,7 +1191,11 @@ def main() -> int:
         new_ids = sorted(set(after) - set(before))
         if matches:
             latency = time.time() - started
-            identifier, record = matches[0]
+            identifier, record = next(
+                (match for match in matches
+                 if matching_prevention(prevention_before, prevention_after, match[1])),
+                matches[0],
+            )
             rule = sorted(set(record["reasons"]).intersection(expected_reasons))[0]
             tier = sorted(set(record["tiers"]).intersection(expected_tiers))[0] if record["tiers"] else "not recorded"
             evidence = f"{identifier}; rule={rule}; tier={tier}; observed<= {latency:.2f}s"

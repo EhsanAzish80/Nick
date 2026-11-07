@@ -79,6 +79,38 @@ enum ExecutionTrustPolicy {
         return !hasTrustedSigner || isHighRiskLocation(path)
     }
 
+    /// Select only the interpreter's script operand, never data arguments after
+    /// a script or inline program. argv includes argv[0], as supplied by ES.
+    static func scriptOperand(executablePath: String, arguments: [String]) -> String? {
+        let name = URL(fileURLWithPath: executablePath).lastPathComponent.lowercased()
+        let shells: Set<String> = ["sh", "bash", "zsh", "ksh", "fish"]
+        let runtimes: Set<String> = ["python", "python3", "node", "perl", "ruby", "osascript"]
+        guard shells.contains(name) || runtimes.contains(name), arguments.count > 1 else { return nil }
+        var index = 1
+        while index < arguments.count {
+            let argument = arguments[index]
+            if argument == "--" {
+                index += 1
+                break
+            }
+            if argument == "-" { return nil } // stdin, following operands are data
+            if !argument.hasPrefix("-") { break }
+            if shells.contains(name) {
+                // Inline command and stdin modes have no script-file operand.
+                if argument.dropFirst().contains("c") || argument.dropFirst().contains("s") { return nil }
+                guard ["-e", "-u", "-x", "-v", "-f", "-n", "-l", "-ex", "-eu", "-eux"].contains(argument) else { return nil }
+            } else {
+                if ["-c", "-m", "-e", "--eval", "-p", "--print"].contains(argument) { return nil }
+                // Unknown/runtime options may consume operands; don't guess.
+                guard ["-B", "-E", "-I", "-s", "-S", "-u", "-O", "-OO"].contains(argument),
+                      name == "python" || name == "python3" else { return nil }
+            }
+            index += 1
+        }
+        guard index < arguments.count, arguments[index].hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: arguments[index]).standardizedFileURL.path
+    }
+
     /// Returns the review severity for execution provenance that macOS marked
     /// as quarantined but that has no validated Developer ID or platform
     /// identity. A downloader/interpreter parent raises urgency; it never

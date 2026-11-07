@@ -53,7 +53,8 @@ enum LOLBinExecutionPolicy {
         }
         if name == "xattr", lowered.contains("com.apple.quarantine"),
            arguments.contains("-d") || arguments.contains("-c") {
-            return Finding(title: "Quarantine attribute removal", reason: "quarantine_removal", severity: "high", matchedCommand: nil)
+            return Finding(title: "Quarantine attribute removal", reason: "quarantine_removal",
+                           severity: "high", matchedCommand: redact(arguments.joined(separator: " ")))
         }
         if ["python", "python3", "ruby", "perl"].contains(name),
            ["base64", "b64decode", "decode64"].contains(where: lowered.contains),
@@ -204,16 +205,33 @@ enum LOLBinExecutionPolicy {
         actorIdentityValidated: Bool,
         responsibleChainValidated: Bool,
         hasNetworkOrigin: Bool,
-        hasQuarantineOrigin: Bool
+        hasQuarantineOrigin: Bool,
+        isAppleCrashDiagnostics: Bool = false,
+        isScopedUpdaterMaintenance: Bool = false
     ) -> Tier {
-        guard actorIdentityValidated, responsibleChainValidated,
+        guard actorIdentityValidated,
+              responsibleChainValidated || (finding.reason == "system_discovery" && isAppleCrashDiagnostics),
               !hasNetworkOrigin, !hasQuarantineOrigin else { return finding.tier }
         switch finding.reason {
+        case "quarantine_removal" where isScopedUpdaterMaintenance:
+            return .observed
         case "mktemp_execute", "system_discovery", "process_discovery":
             return .observed
         default:
             return finding.tier
         }
+    }
+
+    static func isScopedGoogleUpdaterQuarantineRemoval(
+        arguments: [String], updaterExecutable: String
+    ) -> Bool {
+        guard arguments.count == 4, arguments[1] == "-d",
+              arguments[2] == "com.apple.quarantine", arguments[3].hasPrefix("/") else { return false }
+        let executable = URL(fileURLWithPath: updaterExecutable).resolvingSymlinksInPath().path
+        let destination = URL(fileURLWithPath: arguments[3]).resolvingSymlinksInPath().path
+        guard let bundleBoundary = executable.range(of: "/GoogleUpdater.app/Contents/") else { return false }
+        let contents = executable[..<bundleBoundary.upperBound]
+        return destination.hasPrefix(contents) && FileManager.default.fileExists(atPath: destination)
     }
 
     /// Extracts the command supplied to a shell's command flag. A shell with no
@@ -429,8 +447,10 @@ enum CredentialAccessPolicy {
         // while the responsible process is the containing app. Either exact
         // SecCode identity may establish ownership; a path or display name
         // alone never can.
+        let isValidatedSameTeamHelper = actorIdentity?.signingValidated == true
+            && actorIdentity?.teamID.map { !$0.isEmpty && $0 == responsibleIdentity?.teamID } == true
         if ownsStore(path: path, identity: actorIdentity)
-            || ownsStore(path: path, identity: responsibleIdentity) {
+            || (isValidatedSameTeamHelper && ownsStore(path: path, identity: responsibleIdentity)) {
             return nil
         }
         return findingForOpen(
@@ -447,6 +467,15 @@ enum CredentialAccessPolicy {
     /// Returns true only when a SecCode-validated reader is accessing data in
     /// the standard per-bundle locations for its own exact bundle identifier.
     /// Paths and display names never establish identity by themselves.
+    /// Nick's validated scanner may inspect browser stores without exempting
+    /// unrelated same-team programs, credential writes, or private keys.
+    static func isNickBrowserScan(identity: ValidatedIdentity?, store: Store?, readOnly: Bool) -> Bool {
+        guard readOnly, let identity, identity.signingValidated,
+              identity.bundleID == "com.ehsanazish.nick", identity.teamID == "UXGW5V3BY6"
+        else { return false }
+        return store == .browserCookies || store == .browserLogins
+    }
+
     static func ownsStore(path: String, identity: ValidatedIdentity?) -> Bool {
         guard let identity,
               identity.signingValidated,
@@ -458,6 +487,21 @@ enum CredentialAccessPolicy {
             return (0...(components.count - sequence.count)).contains { offset in
                 Array(components[offset..<(offset + sequence.count)]) == sequence
             }
+        }
+        // Electron profiles use product names instead of bundle identifiers.
+        // Bind these aliases to validated distribution identities, never names.
+        let profileNames: [String]
+        switch (identity.teamID, bundleID) {
+        case ("2DC432GLL2", "com.openai.chat"), ("2DC432GLL2", "com.openai.codex"):
+            profileNames = ["ChatGPT", "Codex"]
+        case ("Q6L2SF6YDW", "com.anthropic.claudefordesktop"):
+            profileNames = ["Claude"]
+        case ("BQR82RBBHL", "com.tinyspeck.slackmacgap"):
+            profileNames = ["Slack"]
+        default: profileNames = []
+        }
+        if profileNames.contains(where: { containsSequence(["Library", "Application Support", $0]) }) {
+            return true
         }
         return containsSequence(["Library", "Containers", bundleID])
             || containsSequence(["Library", "HTTPStorages", bundleID])
@@ -486,6 +530,59 @@ enum CredentialAccessPolicy {
             reason: "credential_store_access",
             store: store
         )
+    }
+
+    static func sshAddFinding(arguments: [String], keyPath: String, actorUID: UInt32,
+                              fileUID: UInt32, actorIsAppleSSHAdd: Bool) -> Finding? {
+        guard actorIsAppleSSHAdd, actorUID != 0, actorUID == fileUID,
+              sensitiveStore(at: keyPath) == .sshPrivateKey else { return nil }
+        let operands = Array(arguments.dropFirst())
+        guard operands == [keyPath] || operands == ["--apple-use-keychain", keyPath] else { return nil }
+        return Finding(title: "Added an SSH key to the authentication agent",
+                       reason: "ssh_agent_authentication", store: .sshPrivateKey,
+                       tier: "observed", severity: "info")
+    }
+
+    static func gitSSHSigningFinding(
+        arguments: [String], keyPath: String, actorUID: UInt32, fileUID: UInt32,
+        actorIsAppleKeygen: Bool, parentIsAppleGit: Bool
+    ) -> Finding? {
+        guard actorIsAppleKeygen, parentIsAppleGit, actorUID != 0, actorUID == fileUID,
+              sensitiveStore(at: keyPath) == .sshPrivateKey,
+              arguments.count == 7 || (arguments.count == 8 && arguments[7].hasPrefix("/")),
+              Array(arguments[1...5]) == ["-Y", "sign", "-n", "git", "-f"],
+              arguments[6] == keyPath else { return nil }
+        return Finding(title: "Opened an SSH private key for Git signing",
+                       reason: "ssh_git_signing", store: .sshPrivateKey,
+                       tier: "observed", severity: "info")
+    }
+
+    static func gitSSHTransportFinding(
+        arguments: [String], keyPath: String, actorUID: UInt32, fileUID: UInt32,
+        actorIsAppleSSH: Bool, parentIsAppleGit: Bool
+    ) -> Finding? {
+        guard actorIsAppleSSH, parentIsAppleGit, actorUID != 0, actorUID == fileUID,
+              sensitiveStore(at: keyPath) == .sshPrivateKey else { return nil }
+        var transport = arguments.dropFirst()
+        if transport.prefix(2).elementsEqual(["-o", "SendEnv=GIT_PROTOCOL"]) {
+            transport = transport.dropFirst(2)
+        }
+        if transport.first == "-i" {
+            guard transport.dropFirst().first == keyPath else { return nil }
+            transport = transport.dropFirst(2)
+        } else {
+            let key = URL(fileURLWithPath: keyPath)
+            guard key.deletingLastPathComponent().lastPathComponent == ".ssh",
+                  ["id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk"]
+                    .contains(key.lastPathComponent) else { return nil }
+        }
+        guard transport.count == 2, let host = transport.first, !host.isEmpty,
+              !host.hasPrefix("-"), let command = transport.last,
+              ["git-upload-pack ", "git-receive-pack ", "git-upload-archive "]
+                .contains(where: command.hasPrefix) else { return nil }
+        return Finding(title: "Opened an SSH private key for Git authentication",
+                       reason: "ssh_git_authentication", store: .sshPrivateKey,
+                       tier: "observed", severity: "info")
     }
 
     static func findingForKeychainTransfer() -> Finding {
@@ -529,6 +626,17 @@ enum CredentialAccessPolicy {
 
     static func armsKeychainCorrelation(reason: String) -> Bool {
         reason == "hidden_password_prompt"
+    }
+
+    /// Retain operation flags only; command arguments can contain secret values.
+    static func keychainCommandEvidence(arguments: [String]) -> [String: String] {
+        guard let index = arguments.firstIndex(of: "dump-keychain") else { return [:] }
+        let flags = arguments.dropFirst(index + 1).filter { $0.hasPrefix("-") }
+            .flatMap { $0.dropFirst() }
+        return ["credentialOperation": "dump-keychain",
+                "keychainDecryptRequested": String(flags.contains("d")),
+                "keychainRawRequested": String(flags.contains("r")),
+                "keychainInteractiveRequested": String(flags.contains("i"))]
     }
 
     static func findingForExec(

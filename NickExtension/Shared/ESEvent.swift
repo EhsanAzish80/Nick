@@ -133,6 +133,8 @@ public struct ESEvent: Codable, Identifiable, Sendable {
 public enum ESEventType: String, Codable, Sendable {
     case authExec    = "AUTH_EXEC"
     case authOpen    = "AUTH_OPEN"
+    case authCopyFile = "AUTH_COPYFILE"
+    case authRename = "AUTH_RENAME"
     case notifyOpen  = "NOTIFY_OPEN"
     case notifyFork  = "NOTIFY_FORK"
     case notifyExit  = "NOTIFY_EXIT"

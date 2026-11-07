@@ -239,7 +239,7 @@ struct SimpleAlertSheet: View {
                     .tint(Color.nickAccent)
             }
             Spacer()
-            if behaviorPresentation.status == .needsReview {
+            if behaviorPresentation.status == .needsReview || (behaviorPresentation.status == .blocked && engine.incident(for: alert)?.state != .reviewed) {
                 Button("Mark as reviewed") {
                     engine.markAlertReviewed(alert.id)
                     dismiss()

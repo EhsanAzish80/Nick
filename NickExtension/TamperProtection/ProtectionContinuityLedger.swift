@@ -16,6 +16,7 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
     private let url: URL
     private let lock = NSLock()
     private var state: State
+    private var startupTransition: (startedAt: Date, endedAt: Date)?
 
     init(url: URL) {
         self.url = url
@@ -77,6 +78,15 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
         }
     }
 
+    func startupTransitionCovers(_ observation: AppObservedProtectionGap) -> Bool {
+        lock.withLock {
+            guard let startupTransition else { return false }
+            return ProtectionContinuityPolicy.startupTransitionCovers(
+                observation, startedAt: startupTransition.startedAt, endedAt: startupTransition.endedAt
+            )
+        }
+    }
+
     func evaluateStart(
         now: Date,
         bootSessionUUID: String,
@@ -116,6 +126,7 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
                 _ = persistLocked()
                 return nil
             }
+            startupTransition = (previous.wallTime, now)
             if kind == .updated, let currentExtensionBuild {
                 state.recentUpdate = ProtectionCompletedUpdate(
                     extensionBuild: currentExtensionBuild,

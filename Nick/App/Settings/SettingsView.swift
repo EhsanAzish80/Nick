@@ -189,6 +189,14 @@ struct SettingsView: View {
                 selectedTab = .exceptions
             }
         }
+        .alert("Remove incident history?", isPresented: $showClearAlertsConfirmation) {
+            Button("Remove Incident History", role: .destructive) {
+                engine.clearIncidentHistory()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes incident history and resets its counter. Learned decisions, dismissals, suppression rules, trusted processes, cooldowns, quarantine records, and settings stay unchanged.")
+        }
         .sheet(isPresented: $showsAcknowledgements) {
             AcknowledgementsView()
         }
@@ -1259,18 +1267,6 @@ struct SettingsView: View {
                     showClearAlertsConfirmation = true
                 }
                 .controlSize(.small)
-            }
-            .alert(
-                "Remove incident history?",
-                isPresented: $showClearAlertsConfirmation
-            ) {
-                Button("Remove Incident History", role: .destructive) { engine.clearIncidentHistory() }
-                
-                Button("Cancel", role: .cancel) {
-                    // .cancel role: SwiftUI dismisses the dialog automatically — no action body needed.
-                }
-            } message: {
-                Text("Removes incident history and resets its counter. Learned decisions, dismissals, suppression rules, trusted processes, cooldowns, quarantine records, and settings stay unchanged.")
             }
 
             LabeledTile(

@@ -15,6 +15,83 @@ final class DeveloperIDTrustValidator: @unchecked Sendable {
     static let shared = DeveloperIDTrustValidator()
     private let lock = NSLock()
     private var cache: [Data: Bool] = [:]
+    private var appleImageCache: [Data: Bool] = [:]
+    private var distributionCache: [Data: Bool] = [:]
+    private var preparedOwningApps = Set<Data>()
+    private var owningApps: [Data: CredentialAccessPolicy.ValidatedIdentity] = [:]
+
+    func needsOwningAppPreparation(cdhash: Data) -> Bool {
+        lock.withLock { !preparedOwningApps.contains(cdhash) }
+    }
+
+    func cachedOwningApp(cdhash: Data) -> CredentialAccessPolicy.ValidatedIdentity? {
+        lock.withLock { owningApps[cdhash] }
+    }
+
+    /// Bind a validated helper image to a containing app signed by the same
+    /// distribution team. No filesystem or certificate work occurs on AUTH.
+    func prepareOwningApp(path: String, actorHash: Data, actorTeam: String?) {
+        lock.withLock { _ = preparedOwningApps.insert(actorHash) }
+        guard let actorTeam, !actorTeam.isEmpty, cachedValidation(cdhash: actorHash) == true,
+              let range = path.range(of: ".app/") else { return }
+        let appPath = String(path[..<range.lowerBound]) + ".app"
+        guard isValidatedDistribution(path: appPath) else { return }
+        var code: SecStaticCode?
+        var information: CFDictionary?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: appPath) as CFURL, [], &code) == errSecSuccess,
+              let code,
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let info = information as? [String: Any],
+              info[kSecCodeInfoTeamIdentifier as String] as? String == actorTeam,
+              let identifier = info[kSecCodeInfoIdentifier as String] as? String else { return }
+        let identity = CredentialAccessPolicy.ValidatedIdentity(bundleID: identifier, teamID: actorTeam,
+            signingValidated: true, isApplePlatform: false)
+        lock.withLock { owningApps[actorHash] = identity }
+    }
+
+    func cachedValidation(cdhash: Data) -> Bool? {
+        lock.withLock { distributionCache[cdhash] }
+    }
+
+    /// Own-store authorization also accepts Apple's Mac App Store distribution
+    /// certificate, not merely Developer ID. Kernel IDs are compared separately.
+    func isValidatedDistribution(path: String) -> Bool {
+        var code: SecStaticCode?
+        var information: CFDictionary?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code,
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let info = information as? [String: Any],
+              let hash = info[kSecCodeInfoUnique as String] as? Data else { return false }
+        if let cached = cachedValidation(cdhash: hash) { return cached }
+        var requirement: SecRequirement?
+        let text = "anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.13] exists or certificate leaf[field.1.2.840.113635.100.6.1.9] exists)"
+        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        let flags = UInt32(kSecCSDoNotValidateResources) | (UInt32(1) << 30) | (UInt32(1) << 31)
+        let valid = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: flags), requirement) == errSecSuccess
+        lock.withLock { distributionCache[hash] = valid }
+        return valid
+    }
+
+    /// Verify an exited parent's exact captured image, without querying a PID
+    /// that may have exited or been reused by the time queued work runs.
+    func isAppleImage(path: String, expectedHash: Data) -> Bool {
+        if let cached = lock.withLock({ appleImageCache[expectedHash] }) { return cached }
+        var code: SecStaticCode?
+        var information: CFDictionary?
+        var requirement: SecRequirement?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code,
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let info = information as? [String: Any],
+              info[kSecCodeInfoUnique as String] as? Data == expectedHash,
+              SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { return false }
+        let valid = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSDoNotValidateResources), requirement) == errSecSuccess
+        lock.withLock { appleImageCache[expectedHash] = valid }
+        return valid
+    }
 
     func isValidated(path: String) -> Bool {
         var code: SecStaticCode?

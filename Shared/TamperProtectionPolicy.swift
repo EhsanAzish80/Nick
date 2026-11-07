@@ -51,6 +51,14 @@ struct ProtectionCompletedUpdate: Codable, Equatable, Sendable {
 }
 
 enum ProtectionContinuityPolicy {
+    static func startupTransitionCovers(
+        _ observation: AppObservedProtectionGap, startedAt: Date, endedAt: Date
+    ) -> Bool {
+        observation.observedAt >= startedAt
+            && observation.observedAt <= endedAt.addingTimeInterval(20)
+            && observation.lastHealthyAt.map { $0 < endedAt } != false
+    }
+
     struct Decision: Equatable, Sendable {
         let kind: ProtectionContinuityIncident.Kind
         let transitionKey: String
@@ -166,7 +174,7 @@ enum TamperProtectedOperation: String, Codable, CaseIterable, Sendable {
     case copyfile
 }
 
-struct TamperActorIdentity: Sendable, Equatable {
+struct TamperActorIdentity: Sendable, Equatable, Codable {
     let teamID: String?
     let signingID: String?
     let codesigningFlags: UInt32

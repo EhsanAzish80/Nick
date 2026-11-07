@@ -54,6 +54,59 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
             ), .review)
         }
     }
+    func test_appleCrashDiagnosticsKeepsOnlyValidatedUncorrelatedDiscoveryObserved() throws {
+        let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
+            executablePath: "/usr/sbin/system_profiler",
+            arguments: ["system_profiler", "-nospawn", "-xml", "SPThunderboltDataType", "-detailLevel", "full"]
+        ))
+        XCTAssertEqual(LOLBinExecutionPolicy.effectiveTier(
+            for: finding, actorIdentityValidated: true, responsibleChainValidated: false,
+            hasNetworkOrigin: false, hasQuarantineOrigin: false, isAppleCrashDiagnostics: true
+        ), .observed)
+        XCTAssertEqual(LOLBinExecutionPolicy.effectiveTier(
+            for: finding, actorIdentityValidated: true, responsibleChainValidated: false,
+            hasNetworkOrigin: false, hasQuarantineOrigin: false
+        ), .review)
+        XCTAssertEqual(LOLBinExecutionPolicy.effectiveTier(
+            for: finding, actorIdentityValidated: true, responsibleChainValidated: false,
+            hasNetworkOrigin: false, hasQuarantineOrigin: true, isAppleCrashDiagnostics: true
+        ), .review)
+    }
+
+    func testUpdaterQuarantineRemovalRequiresAnExactSingleTargetWithinItsBundle() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let contents = root.appendingPathComponent("GoogleUpdater.app/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let payload = contents.appendingPathComponent("payload")
+        let outside = root.appendingPathComponent("outside")
+        try Data([0]).write(to: payload)
+        try Data([0]).write(to: outside)
+        let link = contents.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let updater = contents.appendingPathComponent("GoogleUpdater").path
+        let command = ["xattr", "-d", "com.apple.quarantine"]
+        XCTAssertTrue(LOLBinExecutionPolicy.isScopedGoogleUpdaterQuarantineRemoval(
+            arguments: command + [payload.path], updaterExecutable: updater
+        ))
+        for targets in [[outside.path], [link.path], [payload.path, outside.path]] {
+            XCTAssertFalse(LOLBinExecutionPolicy.isScopedGoogleUpdaterQuarantineRemoval(
+                arguments: command + targets, updaterExecutable: updater
+            ))
+        }
+        let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
+            executablePath: "/usr/bin/xattr", arguments: command + [payload.path]
+        ))
+        XCTAssertEqual(LOLBinExecutionPolicy.effectiveTier(
+            for: finding, actorIdentityValidated: true, responsibleChainValidated: true,
+            hasNetworkOrigin: false, hasQuarantineOrigin: false, isScopedUpdaterMaintenance: true
+        ), .observed)
+        XCTAssertEqual(LOLBinExecutionPolicy.effectiveTier(
+            for: finding, actorIdentityValidated: true, responsibleChainValidated: true,
+            hasNetworkOrigin: false, hasQuarantineOrigin: false
+        ), finding.tier)
+    }
+
     func test_shortLivedCurlPipeIsClassifiedAtExec() throws {
         let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
             executablePath: "/bin/sh",

@@ -238,6 +238,7 @@ public final class ExtensionXPCClient: NSObject {
     private var securitySettingsWriteInFlight = false
     private var pendingIncidentPayload: Data?
     private var pendingIncidentGeneration: UInt64?
+    private var pendingIncidentWriteIsUrgent = false
     private var pendingIncidentAuthorization: Data?
     private var incidentWriteInFlight = false
     private var incidentWriteDrainTask: Task<Void, Never>?
@@ -414,6 +415,7 @@ public final class ExtensionXPCClient: NSObject {
         incidentWriteDrainTask?.cancel()
         incidentWriteDrainTask = nil
         incidentWriteInFlight = false
+        pendingIncidentWriteIsUrgent = false
         let waiters = incidentWriteWaiters
         incidentWriteWaiters.removeAll()
         for (_, continuation) in waiters {
@@ -915,9 +917,9 @@ public final class ExtensionXPCClient: NSObject {
     /// journal while they wait. New incidents and protected findings force an
     /// immediate snapshot; repeated low-risk occurrences are acknowledged only
     /// after this bounded batch lands in the incident store.
-    private func scheduleIncidentStoreDrain(immediate: Bool = false) {
+    private func scheduleIncidentStoreDrain(immediate: Bool = false, retryUrgentWrite: Bool = false) {
         guard !incidentWriteInFlight else { return }
-        if immediate {
+        if immediate || (pendingIncidentWriteIsUrgent && !retryUrgentWrite) {
             incidentWriteDrainTask?.cancel()
             incidentWriteDrainTask = nil
             drainIncidentStoreWrites()
@@ -925,7 +927,7 @@ public final class ExtensionXPCClient: NSObject {
         }
         guard incidentWriteDrainTask == nil else { return }
         incidentWriteDrainTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(15 * 60))
+            try? await Task.sleep(for: .seconds(retryUrgentWrite ? 5 : 15 * 60))
             guard let self, !Task.isCancelled else { return }
             self.incidentWriteDrainTask = nil
             self.drainIncidentStoreWrites()
@@ -951,6 +953,8 @@ public final class ExtensionXPCClient: NSObject {
               let proxy = extensionProxy() else { return }
         pendingIncidentPayload = nil
         pendingIncidentGeneration = nil
+        let writeWasUrgent = pendingIncidentWriteIsUrgent
+        pendingIncidentWriteIsUrgent = false
         let authorization = pendingIncidentAuthorization
         pendingIncidentAuthorization = nil
         incidentWriteInFlight = true
@@ -968,6 +972,7 @@ public final class ExtensionXPCClient: NSObject {
                 if !accepted, authorization == nil {
                     self.pendingIncidentPayload = self.pendingIncidentPayload ?? payload
                     self.pendingIncidentGeneration = self.pendingIncidentGeneration ?? generation
+                    self.pendingIncidentWriteIsUrgent = self.pendingIncidentWriteIsUrgent || writeWasUrgent
                 } else if !accepted {
                     Self.logger.error("Authorized incident-store write was rejected; authoritative state retained")
                 }
@@ -975,7 +980,9 @@ public final class ExtensionXPCClient: NSObject {
                 if accepted && record != nil {
                     self.incidentPersistenceConfirmationHandler?(generation)
                 }
-                self.scheduleIncidentStoreDrain()
+                self.scheduleIncidentStoreDrain(
+                    retryUrgentWrite: !accepted && authorization == nil && writeWasUrgent
+                )
             }
         }
         let xpcReply: @Sendable (Bool, Data) -> Void = { completion.resolve(($0, $1)) }
@@ -1010,6 +1017,11 @@ public final class ExtensionXPCClient: NSObject {
             // so even an immediate XPC reply cannot race past the continuation.
             // Non-urgent findings remain unacknowledged in the extension's
             // synchronized journal until the routine batch is durable.
+            if urgent, pendingIncidentGeneration.map({ $0 >= generation }) == true {
+                // A write already in flight cannot cover this pending snapshot.
+                // Its completion must drain this generation without the routine delay.
+                pendingIncidentWriteIsUrgent = true
+            }
             if Self.shouldForceIncidentStoreDrain(
                 pendingGeneration: pendingIncidentGeneration,
                 requestedGeneration: generation,
@@ -1286,7 +1298,7 @@ public final class ExtensionXPCClient: NSObject {
 
     private func loadPersistedEvents() {
         guard let proxy = extensionProxy() else { return }
-        let completion = MainActorOneShot<Data> { [weak self] data in
+        let completion = OneShotDataReply { [weak self] data in
             guard let replay = try? JSONDecoder().decode([PersistedExtensionFinding].self, from: data) else {
                 return
             }
@@ -1299,7 +1311,7 @@ public final class ExtensionXPCClient: NSObject {
                     }
                 }
                 if !acknowledgedThreatIDs.isEmpty {
-                    proxy.acknowledgePersistedThreats(eventIDs: acknowledgedThreatIDs)
+                    self.extensionProxy()?.acknowledgePersistedThreats(eventIDs: acknowledgedThreatIDs)
                 }
             }
         }
@@ -1355,16 +1367,18 @@ public final class ExtensionXPCClient: NSObject {
         let outcome = await findingHandler(finding)
         switch outcome {
         case .persisted(let requiredGeneration), .coalesced(let requiredGeneration):
-            let protectedTier = event.metadata?["ruleTier"] == "protected"
-            let highSeverity = ["high", "critical"].contains(
-                event.metadata?["signalSeverity"]?.lowercased() ?? ""
-            )
             let requiresImmediateSnapshot: Bool
             switch outcome {
             case .persisted:
                 requiresImmediateSnapshot = true
             case .coalesced:
-                requiresImmediateSnapshot = protectedTier || highSeverity
+                // Scanner findings can omit raw tier metadata (including EICAR).
+                // Use the same normalized policy that was persisted by the handler.
+                requiresImmediateSnapshot = Self.requiresImmediateOrdinaryFindingSnapshot(
+                    isNew: false,
+                    tier: finding.signal.metadata["ruleTier"],
+                    reason: finding.signal.metadata["reason"]
+                ) || finding.signal.severity >= .high
             default:
                 requiresImmediateSnapshot = true
             }
@@ -1496,9 +1510,32 @@ public final class ExtensionXPCClient: NSObject {
         if values.count > maxEventCount { values.removeLast(values.count - maxEventCount) }
     }
 
+    nonisolated static func requiresImmediateOrdinaryFindingSnapshot(
+        isNew: Bool, tier: String?, reason: String?
+    ) -> Bool {
+        isNew || tier == "review" || tier == "protected" || reason == "quarantine_executable"
+    }
+
     private func deliver(_ finding: ExtensionFinding) {
         guard let findingHandler else { return }
-        Task { await findingHandler(finding) }
+        Task { [weak self] in
+            let outcome = await findingHandler(finding)
+            // Ordinary events (including FIM and command evidence) need the
+            // same durability boundary as the dedicated threat channel.
+            guard let generation = outcome.generation else { return }
+            let isNew: Bool
+            if case .persisted = outcome { isNew = true } else { isNew = false }
+            let urgent = Self.requiresImmediateOrdinaryFindingSnapshot(
+                isNew: isNew,
+                tier: finding.signal.metadata["ruleTier"],
+                reason: finding.signal.metadata["reason"]
+            )
+            if let override = self?.incidentPersistenceOverride {
+                _ = await override(generation)
+            } else {
+                _ = await self?.awaitIncidentStorePersistence(generation: generation, urgent: urgent)
+            }
+        }
     }
 
     // MARK: - Outbound Calls (Container App → Extension)
@@ -1623,29 +1660,45 @@ public final class ExtensionXPCClient: NSObject {
         id: UUID,
         completion: @escaping @MainActor (Bool) -> Void
     ) {
-        guard let proxy = extensionProxy() else {
-            completion(false)
+        acknowledgeFIMViolations(ids: [id]) { completion($0 == 1) }
+    }
+
+    func acknowledgeFIMViolations(
+        ids: [UUID],
+        completion: @escaping @MainActor (Int) -> Void
+    ) {
+        guard !ids.isEmpty, let proxy = extensionProxy() else {
+            completion(0)
             return
         }
         guard let authorization = requestProtectionModificationAuthorization() else {
-            completion(false)
+            completion(0)
             return
         }
-        let reply = MainActorOneShot<Bool> { [weak self] accepted in
-            self?.finishProtectionAuthorization(authorization)
-            if accepted {
-                self?.integrityViolations.removeAll { $0.id == id }
-                self?.applyOrDeferIntegrityAcknowledgement(id)
+        Task { @MainActor in
+            var count = 0
+            for id in ids {
+                let accepted = await withCheckedContinuation { continuation in
+                    let reply = MainActorOneShot<Bool> { continuation.resume(returning: $0) }
+                    let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
+                    proxy.acknowledgeFIMViolation(
+                        id: id.uuidString,
+                        authorizationExternalForm: authorization,
+                        reply: xpcReply
+                    )
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+                        reply.resolve(false)
+                    }
+                }
+                if accepted {
+                    integrityViolations.removeAll { $0.id == id }
+                    applyOrDeferIntegrityAcknowledgement(id)
+                    count += 1
+                }
             }
-            completion(accepted)
+            finishProtectionAuthorization(authorization)
+            completion(count)
         }
-        let xpcReply: @Sendable (Bool) -> Void = { reply.resolve($0) }
-        proxy.acknowledgeFIMViolation(
-            id: id.uuidString,
-            authorizationExternalForm: authorization,
-            reply: xpcReply
-        )
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { reply.resolve(false) }
     }
 
     /// Instructs the extension to deploy ransomware canary files into common user directories.
@@ -1893,6 +1946,9 @@ struct ExtensionFinding: Sendable {
         if isTamper {
             metadata["tamperDisposition"] = event.decision == .deny ? "blocked" : "observed"
         }
+        if event.decision == .deny {
+            metadata["endpointDecision"] = "deny"
+        }
         signal = ThreatSignal(
             id: event.id,
             source: .endpointSecurity,
@@ -1958,7 +2014,13 @@ struct ExtensionFinding: Sendable {
             case "Nick app observed protection unavailable":
                 return "Nick could not reach its Endpoint Security extension during the recorded interval."
             case "Protection interrupted":
-                return "Nick's Endpoint Security extension stopped unexpectedly and restarted. Events during the recorded interval may not have been observed."
+                let summary = "Nick's Endpoint Security extension stopped unexpectedly and restarted."
+                let impact = "Events during the recorded interval may not have been observed."
+                if let rawDuration = event.metadata?["gapDurationSeconds"],
+                   let seconds = Int(rawDuration), seconds >= 0 {
+                    return "\(summary) Time from the last recorded heartbeat to restart: \(seconds) s. \(impact)"
+                }
+                return "\(summary) \(impact)"
             case "Protection updated":
                 return "Nick replaced its Endpoint Security extension with a newer build."
             case "Protection resumed after restart":
@@ -2021,6 +2083,17 @@ struct ExtensionFinding: Sendable {
             default:
                 return "Nick saw a command perform security-sensitive behavior."
             }
+        }
+        if event.metadata?["detectionKind"] == "credential-access" {
+            let store = event.metadata?["credentialStore"] ?? "credential store"
+            return event.decision == .deny
+                ? "Nick blocked access to \(store). No credential contents were collected."
+                : "Nick observed access to \(store). This records file access, not a malware-content match."
+        }
+        if event.metadata?["reason"] == "quarantine_executable" {
+            return event.decision == .deny
+                ? "Nick blocked an attempt to run untrusted code marked with macOS download quarantine."
+                : "Nick observed untrusted code run with the macOS download quarantine marker."
         }
         if event.metadata?["detectionKind"] == "ransomware-behavior" {
             let actor = URL(fileURLWithPath: event.processPath).lastPathComponent

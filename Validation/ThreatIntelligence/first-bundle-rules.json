@@ -4,6 +4,9 @@
     { "identifier": "ESET_Keydnap_Backdoor", "confidence": "high", "blockable": true },
     { "identifier": "ESET_Keydnap_Downloader", "confidence": "high", "blockable": true },
     { "identifier": "TRELLIX_ARC_MALW_Thiefquest", "confidence": "high", "blockable": true },
-    { "identifier": "VOLEXITY_Apt_Malware_Macos_Gimmick", "confidence": "high", "blockable": true }
+    { "identifier": "VOLEXITY_Apt_Malware_Macos_Gimmick", "confidence": "high", "blockable": true },
+    { "identifier": "credential_store_access", "confidence": "high", "blockable": true },
+    { "identifier": "keychain_store_transfer", "confidence": "high", "blockable": true },
+    { "identifier": "mass_file_rename", "confidence": "high", "blockable": true }
   ]
 }

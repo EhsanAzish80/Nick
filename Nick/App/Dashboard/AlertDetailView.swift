@@ -315,7 +315,7 @@ struct AlertDetailView: View {
 
             Button("Copy JSON") { copyJSON() }
                 .buttonStyle(.nickSecondary)
-            if displayStatus == .needsReview {
+            if displayStatus == .needsReview || (displayStatus == .blocked && engine.incident(for: alert)?.state != .reviewed) {
                 Button("Mark as reviewed") {
                     engine.markAlertReviewed(alert.id)
                     dismiss()

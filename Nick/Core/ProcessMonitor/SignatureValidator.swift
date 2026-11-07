@@ -232,6 +232,15 @@ final class SignatureValidator: @unchecked Sendable {
         return cache.count
     }
 
+    func validatesNotarizedBundle(atPath path: String) -> Bool {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code else { return false }
+        let flags = SecCSFlags(rawValue: UInt32(kSecCSStrictValidate)
+            | UInt32(kSecCSCheckAllArchitectures) | UInt32(kSecCSCheckNestedCode))
+        return satisfies("anchor apple generic and notarized", code: code, validationFlags: flags)
+    }
+
     /// Resolves `.pending` signing statuses for a list of processes asynchronously.
     ///
     /// Iterates `processes`, skipping entries that already have a resolved status.

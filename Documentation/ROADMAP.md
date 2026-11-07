@@ -133,10 +133,17 @@ measurements are tracked for 5.1.1.
   reviewed recovery path for legitimate software.
 - Reduce app-side incident-ingestion delay so time-sensitive findings arrive
   inside their declared measurement windows.
-- Re-run the installed replay, prevention evidence, workload soak and an
-  independent hash-corpus measurement on one frozen build.
+- Verify detection timing and prevention separately with installed replay, and
+  keep independent hash-corpus measurement as a separate effectiveness gate.
 - Keep detection-only and prevented outcomes distinct. No 4/10 effectiveness
   claim will be made until the required evidence is measured on that build.
+
+Build 5101 release validation: 995 Swift tests, 52 Python tests, signed/notarized
+installer, and six installed synthetic prevention cases passed. Broader 5100
+replay recorded 21/24 detections including every mandatory family; it is not
+represented as a full 5101 run. Independent hash/behavior corpus results and ES
+p99/deadline measurements remain open effectiveness work. No 4/10 rating is
+claimed, and no additional soak is required for this patch release.
 
 ## Version 5.2: expands local learning
 

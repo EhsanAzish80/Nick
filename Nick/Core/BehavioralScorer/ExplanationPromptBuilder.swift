@@ -106,6 +106,10 @@ final class ExplanationPromptBuilder {
                    "Avoid opening related files and consider removing the flagged item."
         }
 
+        if alert.severity == .info || alert.contributingSignals.allSatisfy({ $0.source == .avCapture }) {
+            return alert.description + " " + alert.recommendedAction
+        }
+
         // Generic fallback
         let evidenceSummary = alert.contributingSignals.count == 1
             ? "One suspicious signal was observed from \(processPath). "

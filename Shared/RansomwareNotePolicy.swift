@@ -92,17 +92,140 @@ enum BrowserDownloadRenamePolicy {
 /// Excludes validated Apple storage-maintenance actors whose normal work is a
 /// stream of atomic renames. Identity validation happens before this policy;
 /// a copied binary or process using one of these names does not qualify.
+enum ScopedUpdaterRenamePolicy {
+    static func matchesWhatsAppResourceRename(
+        actorIsAppleDitto: Bool, updaterValidated: Bool, updaterPath: String,
+        updaterTeamID: String?, source: String, destination: String
+    ) -> Bool {
+        let root = "/Applications/WhatsApp.app/Contents/"
+        guard actorIsAppleDitto, updaterValidated, updaterTeamID == "57T9237FN3",
+              updaterPath.hasPrefix(root + "Frameworks/Sparkle.framework/Versions/"),
+              updaterPath.hasSuffix("/Autoupdate"),
+              (destination as NSString).pathExtension.lowercased() == "mom" else { return false }
+        return [source, destination].allSatisfy {
+            URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root)
+        }
+    }
+
+    static func matchesCodexSessionCompression(
+        developerIDValidated: Bool, teamID: String?, signingID: String?,
+        source: String, destination: String
+    ) -> Bool {
+        guard developerIDValidated, teamID == "2DC432GLL2", signingID == "codex" else { return false }
+        let src = URL(fileURLWithPath: source).standardizedFileURL
+        let dst = URL(fileURLWithPath: destination).standardizedFileURL
+        let parent = src.deletingLastPathComponent()
+        let parts = parent.pathComponents
+        guard parent == dst.deletingLastPathComponent(), parts.count == 8,
+              parts[1] == "Users", parts[3] == ".codex", parts[4] == "sessions",
+              parts[5].count == 4, parts[6].count == 2, parts[7].count == 2,
+              parts[5...7].allSatisfy({ $0.allSatisfy(\.isNumber) }),
+              src.lastPathComponent.hasPrefix("rollout-compress-"), src.pathExtension == "tmp",
+              dst.lastPathComponent.hasPrefix("rollout-"), dst.lastPathComponent.hasSuffix(".jsonl.zst")
+        else { return false }
+        return true
+    }
+
+    static func matchesOpenAISparkleRename(
+        processPath: String, signingID: String?, teamID: String?,
+        source: String, destination: String
+    ) -> Bool {
+        guard teamID == "2DC432GLL2" else { return false }
+        let sparkleSuffix: String
+        switch signingID {
+        case "Autoupdate": sparkleSuffix = "/Autoupdate"
+        case "org.sparkle-project.Sparkle.Updater":
+            sparkleSuffix = "/Updater.app/Contents/MacOS/Updater"
+        default: return false
+        }
+        return ["/Applications/ChatGPT.app", "/Applications/Codex.app"].contains { app in
+            let framework = app + "/Contents/Frameworks/Sparkle.framework/Versions/"
+            guard processPath.hasPrefix(framework), processPath.hasSuffix(sparkleSuffix) else { return false }
+            let root = app + "/Contents/"
+            return [source, destination].allSatisfy { path in
+                URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+                    .hasPrefix(root)
+            }
+        }
+    }
+}
+
 enum AppleSyncRenamePolicy {
-    static func shouldExclude(isPlatformBinary: Bool, signingID: String?) -> Bool {
-        guard isPlatformBinary, let signingID else { return false }
-        return signingID == "com.apple.bird"
-            || signingID == "com.apple.cloudd"
-            || signingID == "com.apple.fileproviderd"
-            || signingID == "com.apple.mds_stores"
-            || signingID == "com.apple.geod"
-            || signingID == "com.apple.parsec-fbf"
-            || signingID.hasPrefix("com.apple.FileProvider.")
-            || signingID.hasPrefix("com.apple.fileprovider.")
+    static func isRoutineMaintenanceRename(
+        isPlatformBinary: Bool, signingID: String?, source: String, destination: String
+    ) -> Bool {
+        guard isPlatformBinary else { return false }
+        func canonicalPath(_ path: String) -> String {
+            let resolved = URL(fileURLWithPath: path).standardizedFileURL.path
+            return resolved.hasPrefix("/var/") ? "/private" + resolved : resolved
+        }
+        let source = canonicalPath(source)
+        let destination = canonicalPath(destination)
+        let suffix = (destination as NSString).pathExtension.lowercased()
+        switch signingID {
+        case "com.apple.logd":
+            let root = "/private/var/db/diagnostics/"
+            return suffix == "tracev3" && source.hasPrefix(root) && destination.hasPrefix(root)
+        case "com.apple.system_installd":
+            let root = "/Applications/Xcode.app/Contents/"
+            return suffix == "icns" && source.hasPrefix(root) && destination.hasPrefix(root)
+        case "com.apple.mds_stores":
+            return ["/.Spotlight-V100/", "/System/Volumes/Data/.Spotlight-V100/"]
+                .contains { source.hasPrefix($0) && destination.hasPrefix($0) }
+        case "com.apple.bird", "com.apple.cloudd":
+            if signingID == "com.apple.bird", isCloudDocsStagingTransfer(source, destination) { return true }
+            return ["map", "meta"].contains(suffix) && sameUserMaintenanceDirectory(
+                source, destination, directory: "Library/Application Support/CloudDocs"
+            )
+        case "com.apple.fileproviderd":
+            return suffix == "meta" && sameUserMaintenanceDirectory(
+                source, destination, directory: "Library/Application Support/FileProvider"
+            )
+        case "com.apple.geod":
+            let src = URL(fileURLWithPath: source).pathComponents
+            guard src.count == 9, src[1] == "Users", src[3...7].elementsEqual(["Library", "Containers", "com.apple.geod", "Data", "tmp"]),
+                  UUID(uuidString: src[8]) != nil else { return false }
+            let root = "/Users/\(src[2])/Library/Caches/GeoServices/"
+            let expected = suffix == "styl" ? "Resources" : (suffix == "iconconfigpack" ? "RegionalResources" : "")
+            return !expected.isEmpty && (destination as NSString).deletingLastPathComponent == root + expected
+        case "com.apple.parsec-fbf":
+            return suffix == "processing" && sameUserMaintenanceDirectory(
+                source, destination, directory: "Library/Caches/com.apple.parsec-fbf"
+            )
+        default:
+            return false
+        }
+    }
+
+    private static func isCloudDocsStagingTransfer(_ source: String, _ destination: String) -> Bool {
+        let parts = URL(fileURLWithPath: source).pathComponents
+        guard parts.count > 3, parts[1] == "Users" else { return false }
+        let library = "/Users/\(parts[2])/Library/"
+        let fileProvider = library + "Application Support/FileProvider/"
+        let cloud = library + "Application Support/CloudDocs/session/"
+        if source.hasPrefix(fileProvider) {
+            let relative = String(source.dropFirst(fileProvider.count)).split(separator: "/").map(String.init)
+            if relative.count == 5, UUID(uuidString: relative[0]) != nil,
+               relative[1...3].elementsEqual(["wharf", "wharf", "propagate"]),
+               !relative[4].isEmpty, relative[4].allSatisfy(\.isNumber),
+               (destination as NSString).deletingLastPathComponent == cloud + "i",
+               (destination as NSString).pathExtension == "pcm" { return true }
+        }
+        // A downloaded item moves from CloudDocs' private staging slot to
+        // the same user's iCloud provider DownloadStage, preserving its name.
+        let download = library + "Group Containers/group.com.apple.iCloudDrive/File Provider Storage/DownloadStage/"
+        let name = (destination as NSString).lastPathComponent
+        return name.hasPrefix("content-") && source == cloud + "d/" + name + "/item"
+            && (destination as NSString).deletingLastPathComponent + "/" == download
+    }
+
+    private static func sameUserMaintenanceDirectory(
+        _ source: String, _ destination: String, directory: String
+    ) -> Bool {
+        let parts = URL(fileURLWithPath: source).pathComponents
+        guard parts.count > 3, parts[1] == "Users" else { return false }
+        let root = "/Users/\(parts[2])/\(directory)/"
+        return source.hasPrefix(root) && destination.hasPrefix(root)
     }
 
     static func displayRole(signingID: String?) -> String? {

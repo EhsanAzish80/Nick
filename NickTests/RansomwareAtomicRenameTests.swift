@@ -1,7 +1,25 @@
 import XCTest
+import Darwin
 @testable import Nick
 
 final class RansomwareAtomicRenameTests: XCTestCase {
+    func testPrefixReaderRejectsFIFOWithoutWaitingForWriter() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifo = root.appendingPathComponent("pipe").path
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+        let start = Date()
+        XCTAssertNil(RegularFilePrefixReader.read(path: fifo, maximumBytes: 1024))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        let file = root.appendingPathComponent("regular")
+        try Data("abcdef".utf8).write(to: file)
+        XCTAssertEqual(RegularFilePrefixReader.read(path: file.path, maximumBytes: 3), Data("abc".utf8))
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        XCTAssertNil(RegularFilePrefixReader.read(path: link.path, maximumBytes: 3))
+        XCTAssertNil(RegularFilePrefixReader.read(path: root.path, maximumBytes: 3))
+    }
     func test_cmakeStyleRecentCreatesRenamedToFinalAcrossEightFoldersDoNotCount() {
         let tracker = BehaviorTracker()
         let now = Date()
@@ -131,48 +149,118 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         )
     }
 
-    func test_appleSyncDaemonIdentityIsExcludedButNameAloneIsNot() {
-        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: true, signingID: "com.apple.bird"
+    func test_appleMaintenanceRenamesRequirePlatformIdentityAndBothPathsInScope() {
+        for (identity, root, suffix) in [
+            ("com.apple.logd", "/var/db/diagnostics/Persist/", "tracev3"),
+            ("com.apple.system_installd", "/Applications/Xcode.app/Contents/Resources/", "icns"),
+            ("com.apple.mds_stores", "/.Spotlight-V100/Store-V2/", "db"),
+            ("com.apple.mds_stores", "/System/Volumes/Data/.Spotlight-V100/Store-V2/", "db"),
+            ("com.apple.bird", "/Users/example/Library/Application Support/CloudDocs/", "map"),
+            ("com.apple.bird", "/Users/example/Library/Application Support/CloudDocs/", "meta"),
+            ("com.apple.fileproviderd", "/Users/example/Library/Application Support/FileProvider/", "meta"),
+            ("com.apple.parsec-fbf", "/Users/example/Library/Caches/com.apple.parsec-fbf/", "processing")
+        ] {
+            XCTAssertTrue(AppleSyncRenamePolicy.isRoutineMaintenanceRename(
+                isPlatformBinary: true, signingID: identity,
+                source: root + "pending", destination: root + "file." + suffix
+            ))
+            XCTAssertFalse(AppleSyncRenamePolicy.isRoutineMaintenanceRename(
+                isPlatformBinary: false, signingID: identity,
+                source: root + "pending", destination: root + "file." + suffix
+            ))
+            XCTAssertFalse(AppleSyncRenamePolicy.isRoutineMaintenanceRename(
+                isPlatformBinary: true, signingID: identity,
+                source: "/Users/example/Documents/file", destination: root + "file." + suffix
+            ))
+        }
+    }
+
+    func testWhatsAppUpdaterOnlyExemptsValidatedInBundleModelResources() {
+        let root = "/Applications/WhatsApp.app/Contents/"
+        func matches(_ destination: String, valid: Bool = true) -> Bool {
+            ScopedUpdaterRenamePolicy.matchesWhatsAppResourceRename(actorIsAppleDitto: true,
+                updaterValidated: valid, updaterPath: root + "Frameworks/Sparkle.framework/Versions/B/Autoupdate",
+                updaterTeamID: "57T9237FN3", source: root + "Resources/model.tmp", destination: destination)
+        }
+        XCTAssertTrue(matches(root + "Resources/model.mom"))
+        XCTAssertFalse(matches(root + "Resources/model.mom", valid: false))
+        XCTAssertFalse(matches("/Users/test/Documents/model.mom"))
+        XCTAssertFalse(matches(root + "Resources/model.locked"))
+    }
+
+    func testObservedCloudDocsTransfersAreScopedToSameUserAndStagingStructure() {
+        let lib = "/Users/test/Library/"
+        let source = lib + "Application Support/FileProvider/EC428E58-1A69-4DFA-A6EA-AF1072C33F5A/wharf/wharf/propagate/244405655"
+        let destination = lib + "Application Support/CloudDocs/session/i/f40351d.pcm"
+        func routine(_ src: String, _ dst: String, platform: Bool = true) -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: "com.apple.bird", source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/")))
+        XCTAssertFalse(routine("/Users/test/Documents/file", destination))
+        XCTAssertFalse(routine(source, "/Users/test/Documents/file.pcm"))
+        XCTAssertFalse(routine(source, destination + ".locked"))
+        let name = "content-4285782-bi5eo-43A056B4-611F-48D4-93D5-2FB915A8E422.woff2"
+        let downloadSource = lib + "Application Support/CloudDocs/session/d/" + name + "/item"
+        let downloadDestination = lib + "Group Containers/group.com.apple.iCloudDrive/File Provider Storage/DownloadStage/" + name
+        XCTAssertTrue(routine(downloadSource, downloadDestination))
+        XCTAssertFalse(routine(downloadSource, downloadDestination + "-different"))
+        XCTAssertFalse(routine(downloadSource, downloadDestination.replacingOccurrences(of: "DownloadStage", with: "Documents")))
+    }
+
+    func testGeoServicesResourceRefreshRequiresObservedContainerAndCacheScope() {
+        let source = "/Users/test/Library/Containers/com.apple.geod/Data/tmp/D5F22F84-7F03-4991-BB9B-38AB4404EA3B"
+        for (folder, file) in [("Resources", "globe-default-iosmac-7420@2x.styl"),
+                                ("RegionalResources", "Localized_Poi_TUR_Icons-187.iconconfigpack")] {
+            let destination = "/Users/test/Library/Caches/GeoServices/" + folder + "/" + file
+            func routine(_ src: String, _ dst: String, platform: Bool = true) -> Bool {
+                AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                    signingID: "com.apple.geod", source: src, destination: dst)
+            }
+            XCTAssertTrue(routine(source, destination))
+            XCTAssertFalse(routine(source, destination, platform: false))
+            XCTAssertFalse(routine(source, destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/")))
+            XCTAssertFalse(routine(source, "/Users/test/Documents/" + file))
+            XCTAssertFalse(routine(source.replacingOccurrences(of: "com.apple.geod", with: "com.evil.geod"), destination))
+        }
+    }
+
+    func testCodexCompressionRequiresValidatedIdentityAndExactSessionOperation() {
+        let folder = "/Users/test/.codex/sessions/2026/10/29/"
+        func routine(_ src: String, _ dst: String, validated: Bool = true, team: String = "2DC432GLL2") -> Bool {
+            ScopedUpdaterRenamePolicy.matchesCodexSessionCompression(developerIDValidated: validated,
+                teamID: team, signingID: "codex", source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(folder + "rollout-compress-e3yOrg.tmp", folder + "rollout-session.jsonl.zst"))
+        XCTAssertFalse(routine(folder + "rollout-compress-e3yOrg.tmp", folder + "rollout-session.jsonl.zst", validated: false))
+        XCTAssertFalse(routine(folder + "rollout-compress-e3yOrg.tmp", folder + "rollout-session.jsonl.zst", team: "SPOOF"))
+        XCTAssertFalse(routine(folder + "rollout-compress-e3yOrg.tmp", "/Users/test/Documents/rollout-session.jsonl.zst"))
+        XCTAssertFalse(routine(folder + "rollout-compress-e3yOrg.tmp", folder + "rollout-session.locked"))
+        XCTAssertFalse(routine(folder + "document.txt", folder + "rollout-session.jsonl.zst"))
+    }
+
+    func test_fileProviderCannotExemptUserDocumentRenames() {
+        XCTAssertFalse(AppleSyncRenamePolicy.isRoutineMaintenanceRename(
+            isPlatformBinary: true, signingID: "com.apple.fileproviderd",
+            source: "/Users/example/Documents/report.pdf",
+            destination: "/Users/example/Documents/report.pdf.locked"
         ))
-        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: false, signingID: "com.apple.bird"
-        ))
-        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.bird"),
-                       "iCloud Drive (bird)")
-        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: true, signingID: "com.apple.cloudd"
-        ))
-        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: true, signingID: "com.apple.fileproviderd"
-        ))
-        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: true, signingID: "com.apple.FileProvider.Example"
-        ))
-        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: true, signingID: "com.apple.mds_stores"
-        ))
-        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: false, signingID: "com.apple.mds_stores"
-        ))
-        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.mds_stores"),
-                       "Spotlight indexing (mds_stores)")
-        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: true, signingID: "com.apple.geod"
-        ))
-        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: false, signingID: "com.apple.geod"
-        ))
-        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.geod"),
-                       "Apple Maps data (geod)")
-        XCTAssertTrue(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: true, signingID: "com.apple.parsec-fbf"
-        ))
-        XCTAssertFalse(AppleSyncRenamePolicy.shouldExclude(
-            isPlatformBinary: false, signingID: "com.apple.parsec-fbf"
-        ))
-        XCTAssertEqual(AppleSyncRenamePolicy.displayRole(signingID: "com.apple.parsec-fbf"),
-                       "Apple system data (parsec-fbf)")
+    }
+
+    func testOpenAIUpdaterRenameRequiresSameAppAndVerifiedIdentityCandidate() {
+        let app = "/Applications/ChatGPT.app/Contents/"
+        let helper = app + "Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+        func matches(team: String, destination: String) -> Bool {
+            ScopedUpdaterRenamePolicy.matchesOpenAISparkleRename(
+                processPath: helper, signingID: "Autoupdate", teamID: team,
+                source: app + "Resources/staged", destination: destination
+            )
+        }
+        XCTAssertTrue(matches(team: "2DC432GLL2", destination: app + "Resources/current"))
+        XCTAssertFalse(matches(team: "UNRELATED", destination: app + "Resources/current"))
+        XCTAssertFalse(matches(team: "2DC432GLL2", destination: "/Users/example/Documents/report.locked"))
     }
 
     func test_routineMapTmpAndProcessingDestinationsDoNotCountAsRansomwareExtensions() {

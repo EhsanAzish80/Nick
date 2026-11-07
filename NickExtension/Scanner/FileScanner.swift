@@ -107,7 +107,7 @@ final class FileScanner {
                 identity: identity,
                 hash: entry.hash,
                 isThreat: entry.isThreat,
-                mayBlock: entry.mayBlock,
+                mayBlock: allowsEnforcement(of: entry),
                 threatName: entry.threatName,
                 threatFamily: entry.threatFamily,
                 isTestIndicator: entry.isTestIndicator,
@@ -187,11 +187,12 @@ final class FileScanner {
             identity: identity,
             hash: hash,
             isThreat: isThreat,
-            mayBlock: mayBlock,
+            mayBlock: hashMatch != nil,
             threatName: threatName,
             threatFamily: threatFamily,
             isTestIndicator: isTestIndicator,
-            indicatorIdentifier: hashMatch?.indicatorIdentifier
+            indicatorIdentifier: hashMatch?.indicatorIdentifier,
+            actionableYARARules: actionableYARAMatches.map(\.ruleName)
         )
 
         return ScanResult(
@@ -255,7 +256,7 @@ final class FileScanner {
                 identity: identity,
                 hash: cached.hash,
                 isThreat: true,
-                mayBlock: cached.mayBlock,
+                mayBlock: allowsEnforcement(of: cached),
                 threatName: cached.threatName,
                 threatFamily: cached.threatFamily,
                 isTestIndicator: cached.isTestIndicator,
@@ -314,11 +315,14 @@ final class FileScanner {
     }
 
     func allowsEnforcement(of entry: ScanCache.Entry?) -> Bool {
-        guard let entry, entry.mayBlock, strictBlockingPolicy.allowsAnyBlocking else {
+        guard let entry, strictBlockingPolicy.allowsAnyBlocking else {
             return false
         }
-        return !entry.isTestIndicator
-            || strictBlockingPolicy.currentConfiguration.strictModeEnabled
+        if entry.mayBlock {
+            return !entry.isTestIndicator
+                || strictBlockingPolicy.currentConfiguration.strictModeEnabled
+        }
+        return entry.actionableYARARules.contains(where: strictBlockingPolicy.allowsRule)
     }
 
     func allowsAutomaticRemediation(of result: ScanResult) -> Bool {
@@ -328,6 +332,10 @@ final class FileScanner {
     }
 
     var allowsAnyBlocking: Bool { strictBlockingPolicy.allowsAnyBlocking }
+
+    func allowsStrictRule(_ identifier: String) -> Bool {
+        strictBlockingPolicy.allowsRule(identifier)
+    }
 
     private let signatureCountLock = NSLock()
     private var cachedHasSignatures = false

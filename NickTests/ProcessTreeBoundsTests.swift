@@ -2,6 +2,37 @@ import XCTest
 @testable import Nick
 
 final class ProcessTreeBoundsTests: XCTestCase {
+    func testQueuedCredentialReadKeepsExecArgumentsUntilOrderedExitCleanup() {
+        let tree = ProcessTree()
+        let queue = DispatchQueue(label: "NickTests.credential-order")
+        let key = "/Users/test/.ssh/id_ed25519_signing"
+        let args = ["/usr/bin/ssh-keygen", "-Y", "sign", "-n", "git", "-f", key, "/tmp/.git_signing_buffer_tmpABC"]
+        let gitIdentity = ProcessTree.ProcessCodeIdentity(teamID: "APPLE_PLATFORM", signingID: "com.apple.git",
+            codesigningFlags: ExecutionTrustPolicy.csValid, isPlatformBinary: true)
+        tree.recordExec(pid: 40, ppid: 1, path: "/usr/bin/git", args: ["git", "commit"],
+                        identity: gitIdentity, codeHash: Data([1, 2, 3]))
+        tree.recordExec(pid: 41, ppid: 40, path: "/usr/bin/ssh-keygen", args: args)
+        let read = expectation(description: "queued read classified before exit")
+        let finished = expectation(description: "exit drained")
+        queue.async {
+            let actor = tree.attackChain(pid: 41).last!
+            XCTAssertNil(actor.exitTime)
+            XCTAssertEqual(actor.args, args)
+            XCTAssertEqual(tree.attackChain(pid: 40).last?.codeIdentity, gitIdentity)
+            XCTAssertEqual(CredentialAccessPolicy.gitSSHSigningFinding(arguments: actor.args,
+                keyPath: key, actorUID: 501, fileUID: 501, actorIsAppleKeygen: true,
+                parentIsAppleGit: true)?.tier, "observed")
+            read.fulfill()
+        }
+        tree.recordExit(pid: 41, exitCode: 0, afterPendingWorkOn: queue)
+        queue.async {
+            XCTAssertNotNil(tree.attackChain(pid: 41).last?.exitTime)
+            XCTAssertTrue(tree.attackChain(pid: 41).last?.args.isEmpty == true)
+            finished.fulfill()
+        }
+        wait(for: [read, finished], timeout: 2)
+    }
+
     func testESCallbackHotPathUsesKernelMessageFieldsNotForeignProcessQueries() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()

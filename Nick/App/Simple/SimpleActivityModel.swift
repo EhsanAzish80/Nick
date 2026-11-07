@@ -114,12 +114,14 @@ enum SimpleActivityFeed {
         let name: String
         let date: Date
         let wasLaunch: Bool
+        let wasRename: Bool
         let persistenceFailed: Bool
 
-        init(name: String, date: Date, wasLaunch: Bool, persistenceFailed: Bool = false) {
+        init(name: String, date: Date, wasLaunch: Bool, wasRename: Bool = false, persistenceFailed: Bool = false) {
             self.name = name
             self.date = date
             self.wasLaunch = wasLaunch
+            self.wasRename = wasRename
             self.persistenceFailed = persistenceFailed
         }
     }
@@ -197,10 +199,12 @@ enum SimpleActivityFeed {
 
     static func blockedInputs(
         from events: [ESEvent],
-        failedThreatEventIDs: Set<UUID> = []
+        failedThreatEventIDs: Set<UUID> = [],
+        representedDenialIDs: Set<UUID> = []
     ) -> [BlockedInput] {
         events.compactMap { event in
             guard event.decision == .deny else { return nil }
+            guard !representedDenialIDs.contains(event.id) else { return nil }
             let isTamper = event.threatFamily == "tamper"
             guard !isTamper || failedThreatEventIDs.contains(event.id) else { return nil }
             let path = event.filePath ?? event.processPath
@@ -210,6 +214,7 @@ enum SimpleActivityFeed {
                 name: name,
                 date: event.timestamp,
                 wasLaunch: event.eventType == .authExec,
+                wasRename: event.eventType == .authRename,
                 persistenceFailed: failedThreatEventIDs.contains(event.id)
             )
         }
@@ -261,23 +266,24 @@ enum SimpleActivityFeed {
 
         // Repeated blocks of the same item on the same day collapse to one line.
         // A block of something already in Quarantine is covered by that line.
-        struct Key: Hashable { let name: String; let day: Date; let launch: Bool; let failed: Bool }
+        struct Key: Hashable { let name: String; let day: Date; let launch: Bool; let rename: Bool; let failed: Bool }
         let groups = Dictionary(grouping: blocked.filter { !quarantinedNames.contains($0.name) }) {
             Key(
                 name: $0.name,
                 day: calendar.startOfDay(for: $0.date),
                 launch: $0.wasLaunch,
+                rename: $0.wasRename,
                 failed: $0.persistenceFailed
             )
         }
         for (key, group) in groups {
             let times = group.count == 1 ? "" : " (\(group.count) times)"
             items.append(SimpleActivityItem(
-                id: "b-\(key.launch ? "x" : "o")-\(Int(key.day.timeIntervalSince1970))-\(key.name)",
+                id: "b-\(key.rename ? "r" : (key.launch ? "x" : "o"))-\(Int(key.day.timeIntervalSince1970))-\(key.name)",
                 source: .blocked,
                 title: key.failed
                     ? "Could not save blocked evidence for “\(key.name)”"
-                    : (key.launch ? "Stopped “\(key.name)” from running" : "Stopped “\(key.name)” from opening"),
+                    : (key.rename ? "Stopped “\(key.name)” from being renamed" : (key.launch ? "Stopped “\(key.name)” from running" : "Stopped “\(key.name)” from opening")),
                 detail: key.failed ? "Nick will retry from its protected journal" : "Blocked by real-time protection\(times)",
                 date: group.map(\.date).max() ?? key.day,
                 status: key.failed ? .needsAction : .blocked,

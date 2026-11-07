@@ -203,16 +203,20 @@ struct ThreatAlert: Identifiable, Sendable, Codable, Equatable {
     /// Returns one incident containing the newest evidence and an incremented
     /// occurrence count while preserving the original identity and first-seen time.
     func mergingOccurrence(_ newer: ThreatAlert) -> ThreatAlert {
-        let preferred = newer.severity >= severity ? newer : self
+        let reclassifiedAsObserved = !hasProtectedEvidence && !newer.contributingSignals.isEmpty
+            && newer.contributingSignals.allSatisfy {
+                $0.metadata["ruleTier"] == "observed" && $0.metadata["deliveryLevel"] == "silent"
+            }
+        let preferred = reclassifiedAsObserved || newer.severity >= severity ? newer : self
         return ThreatAlert(
             id: id,
-            score: max(score, newer.score),
+            score: reclassifiedAsObserved ? newer.score : max(score, newer.score),
             content: AlertContent(
                 title: preferred.title,
                 description: preferred.description,
-                severity: max(severity, newer.severity),
+                severity: reclassifiedAsObserved ? newer.severity : max(severity, newer.severity),
                 recommendedAction: preferred.recommendedAction,
-                explanation: newer.explanation ?? explanation
+                explanation: preferred.explanation
             ),
             contributingSignals: newer.contributingSignals,
             timestamp: firstSeen,

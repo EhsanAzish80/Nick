@@ -198,6 +198,7 @@ final class DeepScanner {
         // publishes progress, at most a few times per second.
         let workerCount = Self.workerCount()
         var completed = 0
+        var scanSignals: [ThreatSignal] = []
         var lastPublish = Date.distantPast
         let deadline = startTime.addingTimeInterval(scanTimeBudget)
 
@@ -243,7 +244,7 @@ final class DeepScanner {
                 inFlight -= 1
                 guard !Task.isCancelled else { continue }
                 completed += 1
-                await merge(outcome)
+                scanSignals.append(contentsOf: merge(outcome, scanID: scanID))
 
                 let now = Date()
                 if now.timeIntervalSince(lastPublish) >= 0.2 {
@@ -267,6 +268,21 @@ final class DeepScanner {
         }
         enumeration.cancel()
         isIndexing = false
+        if let engine, let severity = scanSignals.map(\.severity).max() {
+            let alert = ThreatAlert(
+                score: Double(severity.rawValue) / 4.0,
+                content: AlertContent(
+                    title: "Deep Scan findings",
+                    description: "Deep Scan recorded \(scanSignals.count) actionable findings.",
+                    severity: severity,
+                    recommendedAction: "Review the individual files in Scan."
+                ),
+                contributingSignals: scanSignals
+            )
+            for actionable in engine.addAlert(alert) {
+                await NotificationManager.shared.send(for: actionable)
+            }
+        }
 
         guard !Task.isCancelled else { return finishCancelledScan(scanID: scanID) }
 
@@ -385,26 +401,37 @@ final class DeepScanner {
                 getxattr(filePath, attribute, nil, 0, 0, 0) >= 0
             }
         }
+        let notarizedInstalledFramework = quarantined && validated
+            && installedFrameworkAppPath(normalized).map {
+                SignatureValidator.shared.validatesNotarizedBundle(atPath: $0)
+            } == true
         return FileTrustContext(
             isValidatedCode: validated,
             isApplePlatform: apple,
-            hasQuarantineOrigin: quarantined,
+            hasQuarantineOrigin: quarantined && !notarizedInstalledFramework,
             isRiskyWritableLocation: temporary || userStaging || writableOutsideBundle
         )
     }
 
+    /// The caller supplies the resolved file path so a symlink outside the
+    /// sealed framework cannot borrow trust from an installed app.
+    nonisolated static func installedFrameworkAppPath(_ path: String) -> String? {
+        let components = URL(fileURLWithPath: path).pathComponents
+        guard components.count >= 7, components[1] == "Applications",
+              components[2].hasSuffix(".app"), components[3] == "Contents",
+              components[4] == "Frameworks", components[5].hasSuffix(".framework")
+        else { return nil }
+        return "/Applications/" + components[2]
+    }
+
     /// Records one file's findings and forwards actionable ones to the correlator.
-    private func merge(_ outcome: FileOutcome) async {
+    private func merge(_ outcome: FileOutcome, scanID: UUID) -> [ThreatSignal] {
         if outcome.nickBundleSignatureFailure {
             bundleIntegrityFailures.append(outcome.path)
             threatsFound += 1
-            guard let eng = engine else { return }
-            let signal = Self.nickBundleIntegrityFailureSignal(bundlePath: outcome.path)
-            let alerts = await eng.ingestSignals([signal])
-            for alert in alerts { await NotificationManager.shared.send(for: alert) }
-            return
+            return [Self.nickBundleIntegrityFailureSignal(bundlePath: outcome.path, scanID: scanID)]
         }
-        guard !outcome.classified.isEmpty else { return }
+        guard !outcome.classified.isEmpty else { return [] }
         results.append(contentsOf: outcome.classified.map { $0.0 })
         for (match, verdict) in outcome.classified {
             resultVerdicts[Self.matchKey(for: match)] = verdict
@@ -422,8 +449,7 @@ final class DeepScanner {
         // correlator. Safe verdicts (.applicationData, .developmentArtifact,
         // .likelySafe) still appear in the Deep Scan results view for
         // transparency but do not create alerts or fire notifications.
-        guard let eng = engine, !actionableMatches.isEmpty else { return }
-        let signals = actionableMatches.map { match in
+        return actionableMatches.map { match in
             ThreatSignal(
                 source: .yara,
                 severity: Self.signalSeverity(for: match),
@@ -440,6 +466,7 @@ final class DeepScanner {
                     ),
                     metadata: [
                         "path": match.filePath,
+                        "deepScanID": scanID.uuidString,
                         "rule": match.ruleName,
                         "yaraRules": match.ruleName,
                         // Third-party rule licenses (DRL 1.1) require the
@@ -450,25 +477,23 @@ final class DeepScanner {
                 )
             )
         }
-        let alerts = await eng.ingestSignals(signals)
-        for alert in alerts {
-            await NotificationManager.shared.send(for: alert)
-        }
     }
 
-    nonisolated static func nickBundleIntegrityFailureSignal(bundlePath: String) -> ThreatSignal {
-        ThreatSignal(
+    nonisolated static func nickBundleIntegrityFailureSignal(bundlePath: String, scanID: UUID? = nil) -> ThreatSignal {
+        var metadata = [
+            "rule": "nick_app_signature_validation_failed",
+            "class": "integrity",
+            "bundle_path": bundlePath,
+            "remediation": "reinstall-official-package",
+            "quarantineEligible": "false",
+        ]
+        metadata["deepScanID"] = scanID?.uuidString
+        return ThreatSignal(
             source: .systemAudit,
             severity: .critical,
             title: "Nick's app bundle failed signature validation",
             description: "Nick's installed app failed strict Developer ID and nested-code validation. Reinstall Nick from the official package.",
-            context: ThreatSignalContext(metadata: [
-                "rule": "nick_app_signature_validation_failed",
-                "class": "integrity",
-                "bundle_path": bundlePath,
-                "remediation": "reinstall-official-package",
-                "quarantineEligible": "false",
-            ])
+            context: ThreatSignalContext(metadata: metadata)
         )
     }
 
@@ -726,6 +751,11 @@ final class DeepScanner {
     ) -> ThreatVerdict {
         let path = match.filePath.lowercased()
 
+        // File-format and signing context apply to heuristics, not family signatures.
+        if YARAVerdictPolicy.ruleClass(ruleName: match.ruleName, metadata: match.metadata) == .signature {
+            return .threat
+        }
+
         // Email attachment heuristics are intentionally built from common script
         // fragments. Those fragments are only meaningful when the file is a format
         // that can actually carry the behavior described by the rule. For example,
@@ -735,12 +765,6 @@ final class DeepScanner {
         // but never turn a context-incompatible match into an active alert.
         if !isEmailRuleApplicable(match.ruleName, to: match.filePath) {
             return .applicationData
-        }
-
-        // Concrete malware-family signatures remain actionable in every location.
-        // A dropper controls its path, so location cannot override this evidence.
-        if YARAVerdictPolicy.ruleClass(ruleName: match.ruleName, metadata: match.metadata) == .signature {
-            return .threat
         }
 
         // A validated signature is useful negative context only for broad

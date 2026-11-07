@@ -30,6 +30,7 @@ final class ScanCache {
         /// to deny access. A YARA/behavioural match remains reportable but must
         /// never silently break the app that produced or opened the file.
         let mayBlock: Bool
+        var actionableYARARules: [String] = []
         let threatName: String?
         let threatFamily: String?
         /// Set only from an identifier carried by a verified signed bundle.
@@ -185,6 +186,7 @@ final class ScanCache {
         threatFamily: String? = nil,
         isTestIndicator: Bool = false,
         indicatorIdentifier: String? = nil,
+        actionableYARARules: [String] = [],
         ttl: TimeInterval = defaultTTL
     ) {
         var entry = Entry(
@@ -192,6 +194,7 @@ final class ScanCache {
             hash: hash,
             isThreat: isThreat,
             mayBlock: mayBlock,
+            actionableYARARules: actionableYARARules,
             threatName: threatName,
             threatFamily: threatFamily,
             isTestIndicator: isTestIndicator,

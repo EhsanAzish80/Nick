@@ -8,6 +8,19 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+## [5.1.1] - 2026-11-07
+
+### Fixed
+
+- Scope routine maintenance/updater findings using validated identity and paths.
+- Preserve Git signing context and prevent Nick scanner self-blocking.
+- Reject special files before extension prefix reads to avoid stalled reporting.
+- Persist new findings and actionable recurrences promptly, including scanner findings without raw tier metadata.
+- Record successful AUTH denials accurately for Strict Mode credential, tamper and ransomware protection.
+- Correct menu-bar activation, alert review, rename wording and history confirmation.
+- Improve validated nested-code scanning and first-run/privacy documentation.
+
+
 ## [5.1.0] - 2026-11-02
 
 ### Added
@@ -470,7 +483,8 @@ See the [Nick 1.1 release](https://github.com/EhsanAzish80/Nick/releases/tag/v1.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v5.1.0...HEAD
+[Unreleased]: https://github.com/EhsanAzish80/Nick/compare/v5.1.1...HEAD
+[5.1.1]: https://github.com/EhsanAzish80/Nick/compare/v5.1.0...v5.1.1
 [5.1.0]: https://github.com/EhsanAzish80/Nick/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/EhsanAzish80/Nick/compare/v4.6.3...v5.0.0
 [4.6.3]: https://github.com/EhsanAzish80/Nick/compare/v4.6.2...v4.6.3

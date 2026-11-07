@@ -28,7 +28,7 @@ struct ProtectionStatus: Equatable, Sendable {
         sensorRunning: Bool
     ) -> ProtectionStatus {
         let representedAlertIDs = Set(incidents.map(\.alert.id))
-        let incidentStatuses = incidents.map(\.displayStatus)
+        let incidentStatuses = incidents.filter(\.requiresAttention).map(\.displayStatus)
         let fallbackAlerts = actionableAlerts.filter { !representedAlertIDs.contains($0.id) }
         let count = incidentStatuses.filter(\.contributesToProtectionStatus).count
             + fallbackAlerts.count + max(0, auditIssueCount)

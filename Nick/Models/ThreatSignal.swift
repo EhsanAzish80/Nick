@@ -338,6 +338,8 @@ enum EvidenceRuleTier: String, Sendable, Codable {
 enum EvidenceRulePolicy {
     private static let reviewRuleIDs: Set<String> = [
         "system_hardening",
+        "system_discovery",
+        "process_discovery",
         "endpoint_management_observed",
         "network_scamGuardian",
         "network_knownThreat",
@@ -368,6 +370,17 @@ enum EvidenceRulePolicy {
         let ruleID = ruleID(for: signal)
         let pathClass = EvidencePathClass(signal: signal, userHomePath: nil)
         let hasHash = !(signal.fileInfo?.sha256Hash ?? signal.metadata["sha256"] ?? "").isEmpty
+        // These distinct IDs are emitted only after exact Apple-tool command,
+        // key ownership, and lineage checks. Generic credential reads retain
+        // the protected default even when their severity is informational.
+        if signal.source == .endpointSecurity, !hasHash, signal.severity == .info,
+           signal.metadata["ruleTier"] == "observed",
+           signal.metadata["deliveryLevel"] == "silent",
+           ["ssh_git_signing", "ssh_git_authentication", "ssh_agent_authentication"].contains(ruleID),
+           case .signed(let teamID, _) = signal.processInfo?.signingStatus,
+           teamID == "APPLE_PLATFORM" {
+            return .review
+        }
         let protectedSource = signal.source == .yara || signal.source == .persistence
         let protectedClass = ruleClass == .signature || ruleClass == .persistence || ruleClass == .integrity
         // A process path identifies the actor. It is not detected-file evidence

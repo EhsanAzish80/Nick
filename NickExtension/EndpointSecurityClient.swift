@@ -111,9 +111,9 @@ final class EndpointSecurityClient {
     ///   - allow: `true` to allow; `false` to deny.
     ///
     /// - Note: Calling this on a NOTIFY event is a no-op (guarded by action-type check).
-    func respond(to message: UnsafePointer<es_message_t>, allow: Bool) {
-        guard let client else { return }
-        guard message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return }
+    @discardableResult
+    func respond(to message: UnsafePointer<es_message_t>, allow: Bool) -> Bool {
+        guard let client, message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return false }
 
         Self.healthMetrics.recordAuthResponse(messageMachTime: message.pointee.mach_time)
         let missedDeadline = mach_absolute_time() >= message.pointee.deadline
@@ -142,6 +142,7 @@ final class EndpointSecurityClient {
                 "Endpoint Security response returned \(ret.rawValue) for event \(message.pointee.event_type.rawValue) — operation was not answered"
             )
         }
+        return ret == ES_RESPOND_RESULT_SUCCESS
     }
 
     /// Unsubscribes from all events and destroys the ES client.

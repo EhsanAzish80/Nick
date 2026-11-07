@@ -2,6 +2,44 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+    @MainActor
+    func testOrdinaryCommandEventCrossesDurabilityBarrierWithoutAnotherEvent() async throws {
+        let client = ExtensionXPCClient()
+        let persisted = expectation(description: "ordinary command generation persisted")
+        client.findingHandler = { _ in .persisted(3) }
+        client.incidentPersistenceOverride = { generation in
+            XCTAssertEqual(generation, 3)
+            persisted.fulfill()
+            return (generation, true)
+        }
+        let event = LOLBinTestFixtures.curlPipeEvent(pid: 422)
+        client.reportEvent(try JSONEncoder().encode(event))
+        await fulfillment(of: [persisted], timeout: 2)
+    }
+
+    func testOrdinaryFindingDurabilityDoesNotWaitForUnrelatedQuarantineEvent() {
+        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: true, tier: "observed", reason: "process_discovery"))
+        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "review", reason: "shell_profile_modification"))
+        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "protected", reason: "file_integrity_deleted"))
+        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "review", reason: "download_pipe_interpreter"))
+        XCTAssertFalse(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "observed", reason: "process_discovery"))
+    }
+    func testScannerRecurrenceUsesNormalizedProtectedTierWithoutRawTier() throws {
+        let event = ESEvent(
+            eventType: .notifyWrite, processPath: "/bin/sh", pid: 42,
+            parentPid: 1, decision: .allow,
+            threat: .init(threatName: "EICAR test file", threatFamily: "test",
+                          metadata: ["reason": "eicar", "category": "test"])
+        )
+        XCTAssertNil(event.metadata?["ruleTier"])
+        let finding = try XCTUnwrap(ExtensionFinding(event: event))
+        XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
+        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(
+            isNew: false, tier: finding.signal.metadata["ruleTier"],
+            reason: finding.signal.metadata["reason"]
+        ))
+    }
+
     func testStandaloneDecoderIsObservedAndDoesNotClaimInterpreterExecution() throws {
         let event = ESEvent(
             eventType: .authExec,
