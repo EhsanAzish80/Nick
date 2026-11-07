@@ -205,10 +205,16 @@ struct SimpleScanView: View {
                             Image(systemName: "doc")
                                 .foregroundStyle(Color.nickSecondaryText)
                                 .accessibilityHidden(true)
-                            Text(file.name)
-                                .font(.system(size: 13, weight: .medium))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(file.name)
+                                    .font(.system(size: 13, weight: .medium))
+                                Text(file.path)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color.nickSecondaryText)
+                            }
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(file.path)
                             Spacer()
                             Button("Show in Finder") {
                                 NSWorkspace.shared.selectFile(file.path, inFileViewerRootedAtPath: "")

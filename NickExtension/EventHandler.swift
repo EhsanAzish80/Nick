@@ -125,6 +125,21 @@ final class ESEventHandler {
             isPlatformBinary: process.is_platform_binary
         )
 
+        func renameBurstScope(for destination: String) -> BehaviorTracker.RenameBurstScope {
+            let renameLineage: String
+            if responsiblePid > 1 {
+                renameLineage = "responsible:\(responsiblePid)"
+            } else if processGroupID > 1 {
+                renameLineage = "process-group:\(processGroupID):session:\(processIdentity.sessionID)"
+            } else {
+                renameLineage = "parent:\(parentPid):session:\(processIdentity.sessionID)"
+            }
+            return BehaviorTracker.RenameBurstScope(
+                lineage: renameLineage,
+                destinationDirectory: (destination as NSString).deletingLastPathComponent
+            )
+        }
+
         switch msg.event_type {
 
         // MARK: AUTH_SIGNAL — protect Nick processes from hostile termination
@@ -161,14 +176,15 @@ final class ESEventHandler {
                         senderIdentity.signingID.map(ids.contains) == true
                     }
             let deadlineExpired = mach_absolute_time() >= msg.deadline
-            let deny = !deadlineExpired && NickSignalProtectionPolicy.shouldDeny(
+            let deny = !deadlineExpired && fileScanner?.allowsAnyBlocking != false
+                && NickSignalProtectionPolicy.shouldDeny(
                 signal: signalNumber,
                 targetIdentity: targetIdentity,
                 senderIdentity: senderIdentity,
                 senderNickIdentityValidated: senderNickValidated
             )
-            esClient?.respond(to: message, allow: !deny)
-            if deny {
+            let responseAccepted = esClient?.respond(to: message, allow: !deny) == true
+            if deny && responseAccepted {
                 dispatchQueue.async { [weak self] in
                     let event = ESEvent(
                         eventType: .notifyWrite,
@@ -178,7 +194,9 @@ final class ESEventHandler {
                         filePath: targetPath,
                         decision: .deny,
                         threat: .init(
-                            threatName: "Attempt to terminate Nick was blocked",
+                            threatName: signalNumber == SIGSTOP
+                                ? "Attempt to suspend Nick protection was blocked"
+                                : "Attempt to interrupt Nick protection was blocked",
                             threatFamily: "tamper",
                             isCodeSigned: senderIdentity.isValidIdentitySignature,
                             teamID: senderIdentity.teamID,
@@ -219,6 +237,35 @@ final class ESEventHandler {
                 teamID: esOptionalString(target.team_id)
             )
 
+            // A plain cp can copy through read/write without AUTH_COPYFILE.
+            // Intercept the unambiguous absolute, two-operand form at launch.
+            if targetPath == "/bin/cp", target.is_platform_binary,
+               targetSigningID == "com.apple.cp", audit_token_to_euid(target.audit_token) != 0,
+               execArguments.count == 3,
+               execArguments[1].hasPrefix("/"), execArguments[2].hasPrefix("/"),
+               fileScanner?.allowsStrictRule("keychain_store_transfer") == true {
+                let source = URL(fileURLWithPath: execArguments[1]).standardizedFileURL.path
+                let destination = URL(fileURLWithPath: execArguments[2]).standardizedFileURL.path
+                if CredentialAccessPolicy.shouldReportKeychainTransfer(
+                    sourcePath: source, destinationPath: destination
+                ) {
+                    if esClient?.respond(to: message, allow: false) == true {
+                        let event = ESEvent(
+                            eventType: .authExec, processPath: targetPath, pid: pid,
+                            parentPid: parentPid, filePath: source, decision: .deny,
+                            threat: .init(
+                                threatName: "Blocked a Keychain copy", threatFamily: "credential-access",
+                                metadata: ["rule": "keychain_store_transfer", "ruleTier": "protected",
+                                           "detectionKind": "credential-access", "credentialStore": "macOS Keychain",
+                                           "credentialOperation": "exec-copy", "credentialDestination": destination]
+                            )
+                        )
+                        dispatchQueue.async { [weak self] in self?.reportThreat(event) }
+                    }
+                    break
+                }
+            }
+
             // AUTH callbacks have a strict deadline. Only consult the in-memory
             // cache before responding; hashing, behavioural analysis and XPC
             // delivery must never hold up process launch.
@@ -241,6 +288,11 @@ final class ESEventHandler {
                 && fileScanner?.hasSignatures == true
 
             // Observation work runs after the AUTH response with value types only.
+            let targetIsPlatformBinary = target.is_platform_binary
+            let targetCodeIdentity = ProcessTree.ProcessCodeIdentity(teamID: targetTeamID, signingID: targetSigningID,
+                codesigningFlags: target.codesigning_flags, isPlatformBinary: target.is_platform_binary)
+            var targetHash = target.cdhash
+            let targetCodeHash = withUnsafeBytes(of: &targetHash) { Data($0) }
             let observe: (Bool, ScanCache.Entry?) -> Void = { [weak self] blocked, verdict in
                 self?.dispatchQueue.async { [weak self] in
                     self?.observeExec(
@@ -249,6 +301,8 @@ final class ESEventHandler {
                         pid: pid,
                         parentPid: parentPid,
                         trustedSigner: trustedSigner,
+                        targetIsPlatformBinary: targetIsPlatformBinary,
+                        targetCodeIdentity: targetCodeIdentity, targetCodeHash: targetCodeHash,
                         scanFirst: verdict == nil,
                         blocked: blocked,
                         verdict: verdict,
@@ -270,8 +324,8 @@ final class ESEventHandler {
                     completion: observe
                 )
             } else {
-                esClient?.respond(to: message, allow: !shouldBlock)
-                observe(shouldBlock, cached)
+                let responseAccepted = esClient?.respond(to: message, allow: !shouldBlock) == true
+                observe(shouldBlock && responseAccepted, cached)
             }
 
         // MARK: AUTH_OPEN — block opening of cached-threat files
@@ -323,7 +377,43 @@ final class ESEventHandler {
                 path: filePath,
                 identity: fileIdentity
             ) ?? false
-            let shouldBlock = !explicitlyAllowed && (fileScanner?.allowsEnforcement(of: cached) ?? false)
+            let actorUID = audit_token_to_euid(process.audit_token)
+            let fileUID = msg.event.open.file.pointee.stat.st_uid
+            let credentialStore = isRegularFile && isReadOpen
+                ? CredentialAccessPolicy.sensitiveStore(at: filePath) : nil
+            // Certificate validation must never stall the ES callback. Resolve
+            // identity-bearing third-party readers on the bounded worker path,
+            // keyed by the exact kernel cdhash, before deciding own-store access.
+            var actorCDHash = process.cdhash
+            let credentialActorHash = withUnsafeBytes(of: &actorCDHash) { Data($0) }
+            let credentialActorValidated = actorHasTrustedSigner(process)
+                || DeveloperIDTrustValidator.shared.cachedValidation(cdhash: credentialActorHash) == true
+            if credentialStore != nil, tamperActorIdentity.isValidIdentitySignature,
+               !actorHasTrustedSigner(process),
+               (DeveloperIDTrustValidator.shared.cachedValidation(cdhash: credentialActorHash) == nil
+                || DeveloperIDTrustValidator.shared.needsOwningAppPreparation(cdhash: credentialActorHash)) {
+                deferCredentialAuthorization(message: message, actorPath: processPath)
+                break
+            }
+            let credentialActor = CredentialAccessPolicy.ValidatedIdentity(
+                bundleID: esOptionalString(process.signing_id),
+                teamID: esOptionalString(process.team_id),
+                signingValidated: credentialActorValidated,
+                isApplePlatform: process.is_platform_binary
+            )
+            let ownsCredentialStore = CredentialAccessPolicy.ownsStore(path: filePath, identity: credentialActor)
+                || CredentialAccessPolicy.ownsStore(path: filePath,
+                    identity: DeveloperIDTrustValidator.shared.cachedOwningApp(cdhash: credentialActorHash))
+            let nickBrowserScan = CredentialAccessPolicy.isNickBrowserScan(
+                identity: credentialActor, store: credentialStore, readOnly: isReadOpen && !isWriteOpen)
+            let strictCredentialRule = "credential_store_access"
+            let blockCredential = !explicitlyAllowed && actorUID != 0 && actorUID == fileUID
+                && !actorHasTrustedSigner(process) && !ownsCredentialStore && !nickBrowserScan
+                && (credentialStore == .browserCookies || credentialStore == .browserLogins
+                    || credentialStore == .sshPrivateKey)
+                && fileScanner?.allowsStrictRule(strictCredentialRule) == true
+            let shouldBlock = blockCredential
+                || (!explicitlyAllowed && (fileScanner?.allowsEnforcement(of: cached) ?? false))
             let approvedStorageMetadataRead = isReadOpen && !isWriteOpen && !shouldBlock
                 && xpcServer?.storageOperationRegistry.permits(
                     pid: pid,
@@ -331,7 +421,7 @@ final class ESEventHandler {
                     event: .metadataRead(path: filePath)
                 ) == true
 
-            esClient?.respond(to: message, allow: !shouldBlock)
+            let responseAccepted = esClient?.respond(to: message, allow: !shouldBlock) == true
 
             if isWriteOpen {
                 let isExactProfile = fileIntegrityMonitor?.isExactShellProfile(filePath) == true
@@ -354,9 +444,9 @@ final class ESEventHandler {
                 isRead: isReadOpen,
                 isRegularFile: isRegularFile,
                 isBlocked: shouldBlock,
-                isApprovedStorageMetadataRead: approvedStorageMetadataRead
+                isApprovedStorageMetadataRead: approvedStorageMetadataRead || nickBrowserScan
             ),
-               let credentialStore = CredentialAccessPolicy.sensitiveStore(at: filePath) {
+               let credentialStore {
                 dispatchQueue.async { [weak self] in
                     self?.observeCredentialStoreOpen(
                         store: credentialStore,
@@ -366,14 +456,15 @@ final class ESEventHandler {
                         parentPID: parentPid,
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
                         processIdentity: processIdentity,
-                        actorIdentity: tamperActorIdentity
+                        actorIdentity: tamperActorIdentity,
+                        sshReadOwner: isWriteOpen ? nil : (actorUID, fileUID)
                     )
                 }
             }
             // Normal file opens are extremely high-volume and add no useful
             // user-facing information. Forward only an actual blocked threat.
-            if shouldBlock {
-                pushEvent(ESEvent(
+            if shouldBlock && responseAccepted {
+                let event = ESEvent(
                     eventType:   .authOpen,
                     processPath: processPath,
                     pid:         pid,
@@ -382,10 +473,22 @@ final class ESEventHandler {
                     decision:    .deny,
                     threat:      ESEvent.ThreatContext(
                         sha256:       cached?.hash,
-                        threatName:   cached?.threatName,
-                        threatFamily: cached?.threatFamily
+                        threatName:   blockCredential ? "Blocked access to a credential store" : cached?.threatName,
+                        threatFamily: blockCredential ? "credential-access" : cached?.threatFamily,
+                        metadata: blockCredential ? [
+                            "reason": strictCredentialRule,
+                            "rule": strictCredentialRule,
+                            "ruleTier": "protected",
+                            "detectionKind": "credential-access",
+                            "credentialStore": credentialStore?.rawValue ?? ""
+                        ] : nil
                     )
-                ))
+                )
+                if blockCredential {
+                    dispatchQueue.async { [weak self] in self?.reportThreat(event) }
+                } else {
+                    pushEvent(event)
+                }
             }
 
         // MARK: AUTH_CREATE — heuristic-only (can't hash a file that doesn't exist yet)
@@ -561,10 +664,27 @@ final class ESEventHandler {
                 path: srcPath,
                 identity: FileIdentity(stat: msg.event.copyfile.source.pointee.stat)
             )
-            let shouldBlock = fileScanner?.allowsEnforcement(of: cached) ?? false
+            let actorUID = audit_token_to_euid(process.audit_token)
+            let blocksKeychainCopy = actorUID != 0
+                && actorUID == msg.event.copyfile.source.pointee.stat.st_uid
+                && parentPid > 1
+                && CredentialAccessPolicy.shouldReportKeychainTransfer(
+                    sourcePath: srcPath, destinationPath: copyDestination
+                )
+                && fileScanner?.allowsStrictRule("keychain_store_transfer") == true
+            let shouldBlock = blocksKeychainCopy || (fileScanner?.allowsEnforcement(of: cached) ?? false)
 
-            esClient?.respond(to: message, allow: !shouldBlock)
-            if CredentialAccessPolicy.sensitiveStore(at: srcPath) == .keychain {
+            let responseAccepted = esClient?.respond(to: message, allow: !shouldBlock) == true
+            if blocksKeychainCopy, responseAccepted {
+                let event = ESEvent(
+                    eventType: .authCopyFile, processPath: processPath, pid: pid,
+                    parentPid: parentPid, filePath: srcPath, decision: .deny,
+                    threat: .init(threatName: "Blocked a Keychain copy", threatFamily: "credential-access",
+                                  metadata: ["rule": "keychain_store_transfer", "ruleTier": "protected",
+                                             "detectionKind": "credential-access", "credentialStore": "keychain"])
+                )
+                dispatchQueue.async { [weak self] in self?.reportThreat(event) }
+            } else if !shouldBlock, CredentialAccessPolicy.sensitiveStore(at: srcPath) == .keychain {
                 dispatchQueue.async { [weak self] in
                     self?.reportKeychainTransfer(
                         sourcePath: srcPath, destinationPath: copyDestination,
@@ -834,8 +954,42 @@ final class ESEventHandler {
             } else {
                 renameBlocked = false
             }
-            esClient?.respond(to: message, allow: !renameBlocked)
-            if CredentialAccessPolicy.sensitiveStore(at: srcPath) == .keychain {
+            let actorUID = audit_token_to_euid(process.audit_token)
+            let extensionAdded = RansomwareRenamePolicy.introducedExtension(
+                source: srcPath, destination: destinationPath
+            )
+            let blocksRansomwareRename: Bool
+            if !protectsRename, actorUID != 0,
+               actorUID == msg.event.rename.source.pointee.stat.st_uid,
+               destinationPath.hasPrefix("/Users/"),
+               (srcPath as NSString).deletingLastPathComponent
+                   == (destinationPath as NSString).deletingLastPathComponent,
+               let extensionAdded, ["locked", "lockbit", "locky", "wncry"].contains(extensionAdded),
+               fileScanner?.allowsStrictRule("mass_file_rename") == true,
+               let burst = behaviorTracker?.extensionChangeBurst(
+                   pid: pid, burstScope: renameBurstScope(for: destinationPath)
+               ),
+               burst.newExtension == extensionAdded,
+               burst.fileCount >= RansomwareDetector.extensionBurstThreshold {
+                blocksRansomwareRename = true
+            } else {
+                blocksRansomwareRename = false
+            }
+            let responseAccepted = esClient?.respond(
+                to: message, allow: !renameBlocked && !blocksRansomwareRename
+            ) == true
+            if blocksRansomwareRename, responseAccepted {
+                let event = ESEvent(
+                    eventType: .authRename, processPath: processPath, pid: pid,
+                    parentPid: parentPid, filePath: destinationPath, decision: .deny,
+                    threat: .init(threatName: "Blocked a ransomware-style rename", threatFamily: "ransomware",
+                                  metadata: ["rule": "mass_file_rename", "ruleTier": "protected",
+                                             "detectionKind": "ransomware-behavior"])
+                )
+                dispatchQueue.async { [weak self] in self?.reportThreat(event) }
+            }
+            if !renameBlocked, !blocksRansomwareRename,
+               CredentialAccessPolicy.sensitiveStore(at: srcPath) == .keychain {
                 dispatchQueue.async { [weak self] in
                     self?.reportKeychainTransfer(
                         sourcePath: srcPath, destinationPath: destinationPath,
@@ -848,7 +1002,7 @@ final class ESEventHandler {
                     )
                 }
             }
-            if !renameBlocked {
+            if !renameBlocked && !blocksRansomwareRename {
                 dispatchQueue.async { [weak self] in
                     guard let self,
                           self.behaviorTracker?.wasRecentlyCreated(
@@ -909,18 +1063,7 @@ final class ESEventHandler {
             let renameActorTrusted = actorHasTrustedSigner(process)
             let renameTeamID = esOptionalString(process.team_id)
             let renameSigningID = esOptionalString(process.signing_id)
-            let renameLineage: String
-            if responsiblePid > 1 {
-                renameLineage = "responsible:\(responsiblePid)"
-            } else if processGroupID > 1 {
-                renameLineage = "process-group:\(processGroupID):session:\(processIdentity.sessionID)"
-            } else {
-                renameLineage = "parent:\(parentPid):session:\(processIdentity.sessionID)"
-            }
-            let renameBurstScope = BehaviorTracker.RenameBurstScope(
-                lineage: renameLineage,
-                destinationDirectory: (notifyDestPath as NSString).deletingLastPathComponent
-            )
+            let renameBurstScope = renameBurstScope(for: notifyDestPath)
             dispatchQueue.async { [weak self] in
                 guard let self else { return }
                 for path in [notifySrcPath, notifyDestPath]
@@ -932,11 +1075,30 @@ final class ESEventHandler {
                         actorPath: processPath
                     )
                 }
-                let excludedAppleSync = AppleSyncRenamePolicy.shouldExclude(
+                guard !AppleSyncRenamePolicy.isRoutineMaintenanceRename(
                     isPlatformBinary: renameActorIsPlatform,
-                    signingID: renameSigningID
-                )
-                guard !excludedAppleSync else { return }
+                    signingID: renameSigningID,
+                    source: notifySrcPath,
+                    destination: notifyDestPath
+                ) else { return }
+                if renameActorIsPlatform, renameSigningID == "com.apple.ditto",
+                   let updater = SecCodeResponsibleProcessIdentityResolver.shared.identity(pid: parentPid, pathHint: nil),
+                   ScopedUpdaterRenamePolicy.matchesWhatsAppResourceRename(
+                    actorIsAppleDitto: true,
+                    updaterValidated: DeveloperIDTrustValidator.shared.isValidatedDistribution(path: updater.path),
+                    updaterPath: self.processTree?.attackChain(pid: parentPid).last?.path ?? "", updaterTeamID: updater.teamID,
+                    source: notifySrcPath, destination: notifyDestPath
+                   ) { return }
+                if ScopedUpdaterRenamePolicy.matchesCodexSessionCompression(
+                    developerIDValidated: true, teamID: renameTeamID, signingID: renameSigningID,
+                    source: notifySrcPath, destination: notifyDestPath
+                ), DeveloperIDTrustValidator.shared.isValidated(path: processPath) { return }
+                if ScopedUpdaterRenamePolicy.matchesOpenAISparkleRename(
+                    processPath: processPath, signingID: renameSigningID, teamID: renameTeamID,
+                    source: notifySrcPath, destination: notifyDestPath
+                ), DeveloperIDTrustValidator.shared.isValidated(path: processPath) {
+                    return
+                }
                 self.behaviorTracker?.recordRename(
                     pid: pid, processGroupID: processGroupID, processPath: processPath,
                     source: notifySrcPath, destination: notifyDestPath,
@@ -975,7 +1137,8 @@ final class ESEventHandler {
                         actorIsPlatformBinary: renameActorIsPlatform,
                         teamID: renameTeamID,
                         signingID: renameSigningID,
-                        burstKey: "\(renameBurstScope.lineage)|\(renameBurstScope.destinationDirectory)"
+                        burstKey: "\(renameBurstScope.lineage)|\(renameBurstScope.destinationDirectory)",
+                        renameSourcePath: notifySrcPath
                     )
                 }
 
@@ -1117,7 +1280,10 @@ final class ESEventHandler {
             behaviorTracker?.cleanupExited(pid: pid)
             // Phase 6: mark process exit in tree
             let exitCode: Int32 = 0  // exit code not provided by notify_exit in this binding
-            processTree?.recordExit(pid: pid, exitCode: exitCode)
+            // Preserve AUTH_OPEN/exec evidence until earlier queued classifiers
+            // have consumed it. A short-lived ssh-keygen otherwise loses argv
+            // before its queued credential read is classified.
+            processTree?.recordExit(pid: pid, exitCode: exitCode, afterPendingWorkOn: dispatchQueue)
             if tamperActorIdentity.teamID == TamperProtectionPolicy.nickTeamID,
                tamperActorIdentity.isValidIdentitySignature,
                tamperActorIdentity.signingID == "com.ehsanazish.nick",
@@ -1581,6 +1747,31 @@ final class ESEventHandler {
         attributes: .concurrent
     )
 
+    /// Use the same deadline budget as pre-launch hashing. On timeout allow
+    /// this operation; never turn unavailable validation into a false denial.
+    private func deferCredentialAuthorization(message: UnsafePointer<es_message_t>, actorPath: String) {
+        let retained = RetainedMessage(message)
+        let budget = Self.preLaunchBudgetNanoseconds(deadline: message.pointee.deadline)
+        preLaunchQueue.asyncAfter(deadline: .now() + .nanoseconds(Int(budget))) { [weak self] in
+            guard retained.claimResponse() else { return }
+            self?.esClient?.respond(to: retained.pointer, allow: true)
+        }
+        preLaunchQueue.async { [weak self] in
+            _ = DeveloperIDTrustValidator.shared.isValidatedDistribution(path: actorPath)
+            var hash = retained.pointer.pointee.process.pointee.cdhash
+            let cdhash = withUnsafeBytes(of: &hash) { Data($0) }
+            DeveloperIDTrustValidator.shared.prepareOwningApp(path: actorPath, actorHash: cdhash,
+                actorTeam: self?.esOptionalString(retained.pointer.pointee.process.pointee.team_id))
+            guard retained.claimResponse(), let self else { return }
+            // A changed image must not recursively request another validation.
+            guard DeveloperIDTrustValidator.shared.cachedValidation(cdhash: cdhash) != nil else {
+                self.esClient?.respond(to: retained.pointer, allow: true)
+                return
+            }
+            self.handle(message: retained.pointer)
+        }
+    }
+
     /// Keeps an ES message alive across queues until it is answered.
     private final class RetainedMessage: @unchecked Sendable {
         let pointer: UnsafePointer<es_message_t>
@@ -1638,11 +1829,11 @@ final class ESEventHandler {
             let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
             Self.logger.debug("Pre-launch exact-hash lookup completed in \(elapsed / 1_000_000) ms")
             let blocked = match != nil && scanner.allowsAnyBlocking
-            self?.esClient?.respond(to: retained.pointer, allow: !blocked)
-            if blocked, let match {
+            let responseAccepted = self?.esClient?.respond(to: retained.pointer, allow: !blocked) == true
+            if blocked && responseAccepted, let match {
                 Self.logger.notice("Blocked first launch of known threat \(match.name, privacy: .public): \(path, privacy: .private)")
             }
-            completion(blocked, scanner.cache.lookup(path: path, identity: identity))
+            completion(blocked && responseAccepted, scanner.cache.lookup(path: path, identity: identity))
         }
     }
 
@@ -1665,6 +1856,9 @@ final class ESEventHandler {
         pid: Int32,
         parentPid: Int32,
         trustedSigner: Bool,
+        targetIsPlatformBinary: Bool,
+        targetCodeIdentity: ProcessTree.ProcessCodeIdentity,
+        targetCodeHash: Data,
         scanFirst: Bool,
         blocked: Bool,
         verdict: ScanCache.Entry?,
@@ -1688,7 +1882,8 @@ final class ESEventHandler {
             pid: pid, processPath: processPath,
             eventType: .processExec, detail: targetPath
         )
-        processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: arguments)
+        processTree?.recordExec(pid: pid, ppid: parentPid, path: targetPath, args: arguments,
+                                identity: targetCodeIdentity, codeHash: targetCodeHash)
         tamperProtection?.handleExecEvent(execPath: targetPath, pid: pid, args: arguments)
 
         let lolbinFinding = LOLBinExecutionPolicy.finding(
@@ -1762,7 +1957,7 @@ final class ESEventHandler {
 
         pushEvent(ESEvent(
             eventType:   .authExec,
-            processPath: processPath,
+            processPath: targetPath,
             pid:         pid,
             parentPid:   parentPid,
             filePath:    targetPath,
@@ -1789,6 +1984,9 @@ final class ESEventHandler {
                         "credentialStore": finding.store.rawValue,
                         "deliveryLevel": delivery.deliveryLevel
                     ]
+                    if finding.reason == "keychain_dump" {
+                        metadata.merge(CredentialAccessPolicy.keychainCommandEvidence(arguments: arguments)) { current, _ in current }
+                    }
                     if let attribution {
                         metadata.merge(attribution.metadata) { current, _ in current }
                     }
@@ -1797,13 +1995,28 @@ final class ESEventHandler {
                     let validatedSameChain = trustedSigner
                         && (attribution?.app?.signing == .signed
                             || attribution?.app?.signing == .applePlatform)
+                    let scopedUpdaterMaintenance = finding.reason == "quarantine_removal"
+                        && targetIsPlatformBinary && signingID == "com.apple.xattr"
+                        && attribution?.app?.bundleID == "com.google.GoogleUpdater"
+                        && attribution?.app?.teamID == "EQHXZ8M8AV"
+                        && attribution?.app.map {
+                            LOLBinExecutionPolicy.isScopedGoogleUpdaterQuarantineRemoval(
+                                arguments: arguments, updaterExecutable: $0.path
+                            )
+                        } == true
                     let effectiveTier = LOLBinExecutionPolicy.effectiveTier(
                         for: finding,
                         actorIdentityValidated: trustedSigner,
                         responsibleChainValidated: validatedSameChain,
                         hasNetworkOrigin: pipelineEvidence.hasNetworkSocket
                             || interactivePipelineFinding != nil,
-                        hasQuarantineOrigin: Self.hasQuarantineOrigin(at: targetPath)
+                        hasQuarantineOrigin: Self.hasQuarantineOrigin(at: targetPath),
+                        isAppleCrashDiagnostics: targetIsPlatformBinary
+                            && signingID == "com.apple.system_profiler"
+                            && attribution?.app?.bundleID == "com.apple.ProblemReporter"
+                            && (attribution?.app?.signing == .appleSigned
+                                || attribution?.app?.signing == .applePlatform),
+                        isScopedUpdaterMaintenance: scopedUpdaterMaintenance
                     )
                     let ruleTier = effectiveTier.rawValue
                     let signalSeverity = effectiveTier == .observed
@@ -1929,7 +2142,8 @@ final class ESEventHandler {
         parentPID: Int32,
         responsiblePID: Int32?,
         processIdentity: ProcessInstanceIdentity,
-        actorIdentity: TamperActorIdentity
+        actorIdentity: TamperActorIdentity,
+        sshReadOwner: (actor: UInt32, file: UInt32)?
     ) {
         EndpointSecurityClient.healthMetrics.recordCredentialOpenEvaluation()
         let attribution = processTree?.responsibleApp(
@@ -1959,7 +2173,42 @@ final class ESEventHandler {
                 at: now
             ) ?? false
         }
-        let finding = CredentialAccessPolicy.findingForOpen(
+        let signingFinding: CredentialAccessPolicy.Finding?
+        if store == .sshPrivateKey, let sshReadOwner,
+           let actor = processTree?.attackChain(pid: actorPID).last,
+           actor.pid == actorPID, actor.ppid == parentPID, actor.exitTime == nil,
+           actor.path == actorPath {
+            let appleActor = actorIdentity.isPlatformBinary && actorIdentity.isValidIdentitySignature
+            let parentNode = processTree?.attackChain(pid: parentPID).last
+            let capturedAppleGit: Bool
+            if let parentNode, parentNode.startTime <= actor.startTime,
+               let identity = parentNode.codeIdentity,
+               identity.isValidIdentitySignature, identity.signingID == "com.apple.git" {
+                capturedAppleGit = identity.isPlatformBinary || parentNode.codeHash.map {
+                    DeveloperIDTrustValidator.shared.isAppleImage(path: parentNode.path, expectedHash: $0)
+                } == true
+            } else { capturedAppleGit = false }
+            let appleGit = capturedAppleGit || ((parentIdentity?.executableSigningID ?? parentIdentity?.bundleID) == "com.apple.git"
+                && (parentIdentity?.signing == .applePlatform || parentIdentity?.signing == .appleSigned))
+            signingFinding = CredentialAccessPolicy.sshAddFinding(
+                arguments: actor.args, keyPath: path, actorUID: sshReadOwner.actor,
+                fileUID: sshReadOwner.file,
+                actorIsAppleSSHAdd: appleActor && actorIdentity.signingID == "com.apple.ssh-add"
+            ) ?? CredentialAccessPolicy.gitSSHSigningFinding(
+                arguments: actor.args, keyPath: path,
+                actorUID: sshReadOwner.actor, fileUID: sshReadOwner.file,
+                actorIsAppleKeygen: appleActor && actorIdentity.signingID == "com.apple.ssh-keygen",
+                parentIsAppleGit: appleGit
+            ) ?? CredentialAccessPolicy.gitSSHTransportFinding(
+                arguments: actor.args, keyPath: path,
+                actorUID: sshReadOwner.actor, fileUID: sshReadOwner.file,
+                actorIsAppleSSH: appleActor && actorIdentity.signingID == "com.apple.ssh",
+                parentIsAppleGit: appleGit
+            )
+        } else {
+            signingFinding = nil
+        }
+        let finding = signingFinding ?? CredentialAccessPolicy.findingForOpen(
             path: path,
             responsibleIdentity: attribution?.app.map(Self.credentialIdentity),
             actorIdentity: Self.credentialIdentity(actorIdentity),
@@ -2034,7 +2283,7 @@ final class ESEventHandler {
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor
         // boundary as well as in Core so a noisy reader cannot flood delivery.
-        let key = "\(actorPID)|\(finding.store.rawValue)"
+        let key = "\(actorPID)|\(finding.store.rawValue)|\(finding.reason)"
         let now = Date()
         let shouldReport = credentialReportLock.withLock { () -> Bool in
             if let previous = lastCredentialReport[key],
@@ -2057,7 +2306,8 @@ final class ESEventHandler {
             "ruleTier": finding.tier,
             "detectionKind": "credential-access",
             "signalSeverity": finding.severity,
-            "credentialStore": finding.store.rawValue
+            "credentialStore": finding.store.rawValue,
+            "deliveryLevel": finding.tier == "observed" ? "silent" : "inform"
         ]
         if let attribution {
             metadata.merge(attribution.metadata) { current, _ in current }
@@ -2316,18 +2566,16 @@ final class ESEventHandler {
         if !executableHasTrustedSigner, hasQuarantineOrigin(at: executablePath) {
             return executablePath
         }
-        guard isInterpreter(executablePath) else { return nil }
-        for argument in arguments where !argument.hasPrefix("-") && argument != executablePath {
-            let candidate = URL(fileURLWithPath: argument).standardizedFileURL.path
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory),
-                  !isDirectory.boolValue,
-                  hasQuarantineOrigin(at: candidate),
-                  !DeveloperIDTrustValidator.shared.isValidated(path: candidate)
-            else { continue }
-            return candidate
-        }
-        return nil
+        guard let candidate = ExecutionTrustPolicy.scriptOperand(
+            executablePath: executablePath, arguments: arguments
+        ) else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory),
+              !isDirectory.boolValue,
+              hasQuarantineOrigin(at: candidate),
+              !DeveloperIDTrustValidator.shared.isValidated(path: candidate)
+        else { return nil }
+        return candidate
     }
 
     private static func shellProfileHasExecutionContent(_ path: String) -> Bool {
@@ -2409,7 +2657,8 @@ final class ESEventHandler {
         actorIsPlatformBinary: Bool = false,
         teamID: String? = nil,
         signingID: String? = nil,
-        burstKey: String? = nil
+        burstKey: String? = nil,
+        renameSourcePath: String? = nil
     ) {
         // One burst produces an event for every file it touches. Report a
         // process once per minute unless the evidence escalates to a block.
@@ -2456,8 +2705,9 @@ final class ESEventHandler {
             "ruleTier": "protected",
             "signalSeverity": alert.confidence >= 0.8 ? "critical" : "high",
             "detectionKind": "ransomware-behavior",
-            "actorValidation": developerIDValidated ? "developer-id" : "unvalidated",
+            "actorValidation": actorIsPlatformBinary ? "apple-platform" : (developerIDValidated ? "developer-id" : "unvalidated"),
             "response": shouldTerminate ? "terminated" : "alert-only",
+            "renameDestination": filePath,
             "indicators": alert.indicators.joined(separator: "; ")
         ]
         if let attribution = processTree?.responsibleApp(
@@ -2467,6 +2717,7 @@ final class ESEventHandler {
         ) {
             ransomwareMetadata.merge(attribution.metadata) { current, _ in current }
         }
+        if let renameSourcePath { ransomwareMetadata["renameSource"] = renameSourcePath }
         if developmentBuild { ransomwareMetadata["developmentContext"] = "repository-build" }
         if let burst = alert.renameBurst {
             ransomwareMetadata["renameExtension"] = burst.newExtension
@@ -2598,9 +2849,7 @@ final class ESEventHandler {
     }
 
     private func boundedFileSample(at path: String, maximumBytes: Int) -> Data? {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.close() }
-        return try? handle.read(upToCount: maximumBytes)
+        RegularFilePrefixReader.read(path: path, maximumBytes: maximumBytes)
     }
 
     private func fileSize(at path: String) -> UInt64? {

@@ -2,6 +2,80 @@ import XCTest
 @testable import Nick
 
 final class CredentialAccessPolicyTests: XCTestCase {
+    func testNickBrowserScanRequiresExactValidatedIdentityAndReadOnlyAccess() {
+        func identity(_ id: String = "com.ehsanazish.nick", _ team: String = "UXGW5V3BY6", _ valid: Bool = true) -> CredentialAccessPolicy.ValidatedIdentity {
+            .init(bundleID: id, teamID: team, signingValidated: valid, isApplePlatform: false)
+        }
+        XCTAssertTrue(CredentialAccessPolicy.isNickBrowserScan(identity: identity(), store: .browserCookies, readOnly: true))
+        XCTAssertTrue(CredentialAccessPolicy.isNickBrowserScan(identity: identity(), store: .browserLogins, readOnly: true))
+        XCTAssertFalse(CredentialAccessPolicy.isNickBrowserScan(identity: identity(), store: .browserCookies, readOnly: false))
+        XCTAssertFalse(CredentialAccessPolicy.isNickBrowserScan(identity: identity(), store: .sshPrivateKey, readOnly: true))
+        XCTAssertFalse(CredentialAccessPolicy.isNickBrowserScan(identity: identity("com.ehsanazish.nick", "OTHER"), store: .browserCookies, readOnly: true))
+        XCTAssertFalse(CredentialAccessPolicy.isNickBrowserScan(identity: identity("com.ehsanazish.nick", "UXGW5V3BY6", false), store: .browserCookies, readOnly: true))
+        XCTAssertFalse(CredentialAccessPolicy.isNickBrowserScan(identity: identity("other"), store: .browserCookies, readOnly: true))
+    }
+    func testKeychainCommandEvidenceNeverRetainsSecretArguments() {
+        let evidence = CredentialAccessPolicy.keychainCommandEvidence(arguments:
+            ["security", "dump-keychain", "-dr", "/tmp/private.keychain-db", "secret-value"])
+        XCTAssertEqual(evidence["keychainDecryptRequested"], "true")
+        XCTAssertEqual(evidence["keychainRawRequested"], "true")
+        XCTAssertEqual(evidence["keychainInteractiveRequested"], "false")
+        XCTAssertFalse(evidence.values.contains { $0.contains("secret-value") || $0.contains("/tmp") })
+    }
+    func testGitSSHTransportRequiresOwnedKeyAndGitRemoteCommand() {
+        let key = "/Users/test/.ssh/id_ed25519"
+        func finding(_ arguments: [String], uid: UInt32 = 501) -> CredentialAccessPolicy.Finding? {
+            CredentialAccessPolicy.gitSSHTransportFinding(
+                arguments: arguments, keyPath: key, actorUID: 501, fileUID: uid,
+                actorIsAppleSSH: true, parentIsAppleGit: true
+            )
+        }
+        let normal = ["ssh", "-o", "SendEnv=GIT_PROTOCOL", "git@example.org", "git-upload-pack 'repo'"]
+        XCTAssertEqual(finding(normal)?.tier, "observed")
+        XCTAssertNil(finding(normal, uid: 502))
+        XCTAssertNil(finding(["ssh", "-i", "/tmp/other", "git@example.org", "git-upload-pack 'repo'"]))
+        XCTAssertNil(finding(["ssh", "git@example.org", "cat /tmp/key"]))
+    }
+
+    func testGitSSHSigningRequiresAppleIdentitiesAndExactOwnedKey() {
+        let key = "/Users/test/.ssh/id_ed25519"
+        let sign = ["ssh-keygen", "-Y", "sign", "-n", "git", "-f", key, "/tmp/message"]
+        func finding(_ args: [String], fileUID: UInt32 = 501, appleGit: Bool = true)
+            -> CredentialAccessPolicy.Finding? {
+            CredentialAccessPolicy.gitSSHSigningFinding(
+                arguments: args, keyPath: key, actorUID: 501, fileUID: fileUID,
+                actorIsAppleKeygen: true, parentIsAppleGit: appleGit
+            )
+        }
+        XCTAssertEqual(finding(sign)?.tier, "observed")
+        XCTAssertNil(finding(sign, fileUID: 502))
+        XCTAssertNil(finding(sign, appleGit: false))
+        XCTAssertNil(finding(["ssh-keygen", "-y", "-f", key]))
+    }
+    func testSSHAgentAuthenticationRequiresExactOwnedKeyAndAppleIdentity() {
+        let key = "/Users/test/.ssh/id_ed25519_signing"
+        func finding(_ args: [String], owner: UInt32 = 501, apple: Bool = true) -> CredentialAccessPolicy.Finding? {
+            CredentialAccessPolicy.sshAddFinding(arguments: args, keyPath: key, actorUID: 501,
+                fileUID: owner, actorIsAppleSSHAdd: apple)
+        }
+        let args = ["ssh-add", "--apple-use-keychain", key]
+        XCTAssertEqual(finding(args)?.tier, "observed")
+        XCTAssertNil(finding(args, owner: 502))
+        XCTAssertNil(finding(args, apple: false))
+        XCTAssertNil(finding(["ssh-add", "-L", key]))
+        XCTAssertNil(finding(["ssh-add", key, "/tmp/other"]))
+    }
+
+    func testProductProfileAliasRequiresValidatedExactDistributionIdentity() {
+        let path = "/Users/test/Library/Application Support/Claude/Cookies"
+        for (team, validated, expected) in [("Q6L2SF6YDW", true, true), ("SPOOF", true, false), ("Q6L2SF6YDW", false, false)] {
+            let identity = CredentialAccessPolicy.ValidatedIdentity(bundleID: "com.anthropic.claudefordesktop", teamID: team,
+                signingValidated: validated, isApplePlatform: false)
+            XCTAssertEqual(CredentialAccessPolicy.ownsStore(path: path, identity: identity), expected)
+            XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: "/Users/test/Library/Application Support/Chrome/Cookies", identity: identity))
+        }
+    }
+
     private let unknown = CredentialAccessPolicy.ValidatedIdentity(
         bundleID: nil, teamID: nil, signingValidated: false, isApplePlatform: false
     )
@@ -78,7 +152,9 @@ final class CredentialAccessPolicyTests: XCTestCase {
             ]
             for path in ownPaths {
                 XCTAssertNil(
-                    CredentialAccessPolicy.findingForOpen(path: path, responsibleIdentity: identity),
+                    CredentialAccessPolicy.findingForOpen(
+                        path: path, responsibleIdentity: identity, actorIdentity: identity
+                    ),
                     "\(name) own-store read should stay silent: \(path)"
                 )
             }
@@ -98,6 +174,25 @@ final class CredentialAccessPolicyTests: XCTestCase {
             path: "/Users/test/Library/HTTPStorages/com.openai.chat/Cookies",
             responsibleIdentity: spoof
         ))
+    }
+
+    func testResponsibleAppStoreRequiresValidatedSameTeamHelper() {
+        let app = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.openai.chat", teamID: "APPTEAM",
+            signingValidated: true, isApplePlatform: false
+        )
+        let path = "/Users/test/Library/HTTPStorages/com.openai.chat/Cookies"
+        for (team, validated, expectsFinding) in [
+            ("APPTEAM", true, false), ("APPTEAM", false, true), ("OTHERTEAM", true, true)
+        ] {
+            let helper = CredentialAccessPolicy.ValidatedIdentity(
+                bundleID: "com.openai.codex.service", teamID: team,
+                signingValidated: validated, isApplePlatform: false
+            )
+            XCTAssertEqual(CredentialAccessPolicy.findingForOpen(
+                path: path, responsibleIdentity: app, actorIdentity: helper
+            ) != nil, expectsFinding)
+        }
     }
 
     func testValidatedHelperOwnsItsStoreWhenResponsibleAppDiffers() {
@@ -532,6 +627,7 @@ final class CredentialAccessPolicyTests: XCTestCase {
             if let finding = CredentialAccessPolicy.findingForOpen(
                 path: "/Users/test/Library/HTTPStorages/com.openai.chat/Cookies",
                 responsibleIdentity: chatGPT,
+                actorIdentity: chatGPT,
                 actorIdentityValidated: true
             ) { findings.append(finding) }
         }

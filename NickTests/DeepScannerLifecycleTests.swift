@@ -8,6 +8,21 @@ private actor ScanInvocationCounter {
 
 @MainActor
 final class DeepScannerLifecycleTests: XCTestCase {
+    func testNotarizationFallbackIsScopedToInstalledFrameworks() {
+        XCTAssertEqual(
+            DeepScanner.installedFrameworkAppPath(
+                "/Applications/Example.app/Contents/Frameworks/Any.framework/Versions/A/Any"
+            ),
+            "/Applications/Example.app"
+        )
+        XCTAssertNil(DeepScanner.installedFrameworkAppPath(
+            "/Users/test/Downloads/Example.app/Contents/Frameworks/Any.framework/Versions/A/Any"
+        ))
+        XCTAssertNil(DeepScanner.installedFrameworkAppPath(
+            "/Applications/Example.app/Contents/Resources/Any.framework/Versions/A/Any"
+        ))
+    }
+
     func test_validatedCodeSoftensOnlyBroadBehaviorWithoutRiskyOrigin() {
         let behavior = YARAMatch(
             ruleName: "broad_behavior",
@@ -811,6 +826,26 @@ final class DeepScannerLifecycleTests: XCTestCase {
         XCTAssertEqual(scanner.resultVerdicts[DeepScanner.matchKey(for: ignoredBehavior)], .suspicious)
         XCTAssertEqual(scanner.resultVerdicts[DeepScanner.matchKey(for: concrete)], .threat)
         XCTAssertEqual(scanner.threatsFound, 1)
+    }
+
+    func test_scanPersistsOneIncidentWithBothActionableFiles() async throws {
+        let engine = SecurityEngine()
+        let snapshot = IncidentStoreSnapshot(incidents: [], dismissalTombstones: [], expectedCooldowns: [:])
+        try engine.installPrivilegedIncidentStore(
+            payload: JSONEncoder().encode(snapshot),
+            persistence: { _, _, _ in },
+            authorizer: { _, _ in .approved(IncidentActionApproval(authorizationExternalForm: nil)) },
+            removeLegacyState: false
+        )
+        let paths = ["/private/tmp/nick-fixture-a", "/private/tmp/nick-fixture-b"]
+        engine.deepScanner.start(onlyOnPower: false, candidateFiles: paths) { path in
+            [YARAMatch(ruleName: "fixture_family", tags: [], filePath: path,
+                       metadata: ["class": "signature", "severity": "high"])]
+        }
+        await waitUntil { engine.deepScanner.hasCompletedScan }
+        XCTAssertEqual(engine.alerts.count, 1)
+        XCTAssertEqual(Set(engine.alerts.flatMap(\.contributingSignals).compactMap { $0.fileInfo?.path }),
+                       Set(paths))
     }
 
     func test_candidateDecisionDefersContentChecksToWorkers() {

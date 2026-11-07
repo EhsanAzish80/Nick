@@ -67,6 +67,7 @@ struct ResponsibleAppIdentity: Equatable, Sendable {
     let teamID: String?
     let signing: Signing
     let path: String
+    var executableSigningID: String? = nil
 }
 
 struct ResponsibleAppAttribution: Equatable, Sendable {
@@ -171,7 +172,8 @@ final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentit
             bundleID: bundle?.bundleIdentifier ?? identifier,
             teamID: teamID,
             signing: signing,
-            path: appURL?.path ?? path
+            path: appURL?.path ?? path,
+            executableSigningID: identifier
         )
     }
 
@@ -224,6 +226,16 @@ final class ProcessTree: @unchecked Sendable {
 
     // MARK: - Types
 
+    struct ProcessCodeIdentity: Codable, Sendable, Equatable {
+        let teamID: String?
+        let signingID: String?
+        let codesigningFlags: UInt32
+        let isPlatformBinary: Bool
+        var isValidIdentitySignature: Bool {
+            codesigningFlags & 1 != 0 && codesigningFlags & 2 == 0
+        }
+    }
+
     /// A single node in the process tree.
     struct ProcessNode: Codable, Sendable {
         let pid: Int32
@@ -238,6 +250,8 @@ final class ProcessTree: @unchecked Sendable {
         var networkConnections: [NetworkConn]
         /// Marked `true` when a downstream detector flags this process.
         var isThreat: Bool
+        var codeIdentity: ProcessCodeIdentity? = nil
+        var codeHash: Data? = nil
 
         struct FileAccess: Codable, Sendable {
             let path: String
@@ -282,14 +296,15 @@ final class ProcessTree: @unchecked Sendable {
     // MARK: - Record Events
 
     /// Records an `exec` event. Called from `ES_EVENT_TYPE_NOTIFY_EXEC`.
-    func recordExec(pid: Int32, ppid: Int32, path: String, args: [String]) {
+    func recordExec(pid: Int32, ppid: Int32, path: String, args: [String],
+                    identity: ProcessCodeIdentity? = nil, codeHash: Data? = nil) {
         lock.withLock {
             evictOldestBenignNodeIfNeeded()
             let node = ProcessNode(
                 pid: pid, ppid: ppid, path: path, args: Self.boundedArguments(args),
                 startTime: Date(), exitTime: nil, exitCode: nil,
                 childPids: [], filesAccessed: [], networkConnections: [],
-                isThreat: false
+                isThreat: false, codeIdentity: identity, codeHash: codeHash
             )
             nodes[pid] = node
             nodes[ppid]?.childPids.append(pid)
@@ -305,6 +320,12 @@ final class ProcessTree: @unchecked Sendable {
             // metadata before exit. Release the potentially large argv now.
             nodes[pid]?.args.removeAll(keepingCapacity: false)
         }
+    }
+
+    /// AUTH_OPEN classifiers share this queue; release argv only after their
+    /// snapshots have been evaluated, even if the process already exited.
+    func recordExit(pid: Int32, exitCode: Int32, afterPendingWorkOn queue: DispatchQueue) {
+        queue.async { [weak self] in self?.recordExit(pid: pid, exitCode: exitCode) }
     }
 
     /// Records a file-access event for the given process.

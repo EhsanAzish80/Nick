@@ -132,7 +132,8 @@ extension ThreatAlert {
 
     var isBlockedTamperEvidence: Bool {
         contributingSignals.contains {
-            $0.metadata["reason"] == "endpoint_tamper_observed"
+            ($0.metadata["reason"] == "endpoint_tamper_observed"
+                || $0.metadata["reason"] == "nick_signal_denied")
                 && $0.metadata["tamperDisposition"] == "blocked"
         }
     }
@@ -422,7 +423,9 @@ final class SecurityEngine {
     /// Consumer-facing alerts that still have actionable evidence.
     var activeActionableAlerts: [ThreatAlert] {
         _ = incidentPresentationRevision
-        return alerts.filter { displayStatus(for: $0).contributesToProtectionStatus }
+        return alerts.filter { alert in
+            incident(for: alert)?.requiresAttention ?? displayStatus(for: alert).contributesToProtectionStatus
+        }
     }
 
     /// Observable projection for views that need incident metadata in addition
@@ -938,7 +941,8 @@ final class SecurityEngine {
     func ingestLiveFinding(
         _ signal: ThreatSignal,
         score: Double,
-        recommendedAction: String
+        recommendedAction: String,
+        notify: Bool = true
     ) async -> IncidentIngestOutcome {
         var alert = ThreatAlert(
             score: score,
@@ -966,6 +970,8 @@ final class SecurityEngine {
         let outcome = result.outcomes[0]
         switch outcome {
         case .persisted(let generation), .coalesced(let generation):
+            // Keep historical evidence and review state while skipping startup banners.
+            guard notify else { break }
             durableIncidentNotifications.stage(result.newlyActionable, for: generation)
             if result.newlyActionable.isEmpty {
                 networkIngestLogger.info(
@@ -991,11 +997,13 @@ final class SecurityEngine {
     /// Adds a single alert from the real-time pipeline. Repeat evidence updates
     /// the existing incident rather than creating another card.
     @MainActor
-    func addAlert(_ alert: ThreatAlert) {
+    @discardableResult
+    func addAlert(_ alert: ThreatAlert) -> [ThreatAlert] {
         configureIncidentStore()
         let result = incidentStore.ingest([alert])
         alerts = result.visibleAlerts
         rebuildUserFacingAlerts()
+        return result.newlyActionable
     }
 
     /// Merges new alerts from the real-time pipeline by stable incident identity.

@@ -267,7 +267,7 @@ private struct EventRow: View {
     private var iconName: String {
         switch event.eventType {
         case .authExec:    return event.decision == .deny ? "xmark.circle.fill"       : "play.circle"
-        case .authOpen:    return event.decision == .deny ? "nosign"                  : "folder"
+        case .authOpen, .authCopyFile, .authRename:    return event.decision == .deny ? "nosign"                  : "folder"
         case .notifyWrite: return "pencil.circle"
         case .notifyFork:  return "arrow.branch"
         case .notifyExit:  return "stop.circle"

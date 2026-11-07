@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         category: "ESIngest"
     )
     private let launchUptime = ProcessInfo.processInfo.systemUptime
+    private let launchDate = Date()
     private var receivedUpdateCheckResult = false
     /// Sparkle must be allowed to terminate Nick after the user accepts an
     /// update, even when Nick's main window is hidden. Otherwise the installer
@@ -286,7 +287,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return await self.engine.ingestLiveFinding(
                 finding.signal,
                 score: finding.score,
-                recommendedAction: finding.recommendedAction
+                recommendedAction: finding.recommendedAction,
+                notify: finding.signal.timestamp >= self.launchDate.addingTimeInterval(-5 * 60)
             )
         }
         esIngestLogger.info(
@@ -702,7 +704,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if event.type == .rightMouseUp {
             showContextMenu()
         } else {
-            toggleMainWindow()
+            openMainWindow()
         }
     }
 
@@ -736,18 +738,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = nil
     }
 
-    /// One click shows Nick in front; the next click hides it again.
-    /// Hides only when the window is on screen and Nick is the active app, so a
-    /// click while Nick is behind other apps brings it forward instead.
-    @objc private func toggleMainWindow() {
-        if let window = NSApp.nickMainWindow,
-           window.isVisible, !window.isMiniaturized, NSApp.isActive {
-            window.orderOut(nil)
-            NSApp.setActivationPolicy(.accessory)
-        } else {
-            openMainWindow()
-        }
-    }
+    // Left-click is a show/focus action. App activation can change during a
+    // status-item click, so isActive cannot reliably decide whether to hide.
 
     /// Attaches `mainWindowDelegate` to the main window.
     ///

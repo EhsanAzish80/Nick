@@ -7,6 +7,22 @@ import XCTest
 
 final class FileIntegrityPathPolicyTests: XCTestCase {
 
+    @MainActor
+    func testReviewGroupsOnlySamePathAndChangeAndPreservesEvidenceIDs() throws {
+        func violation(_ path: String, _ type: IntegrityViolation.ViolationType, _ time: TimeInterval) -> IntegrityViolation {
+            IntegrityViolation(path: path, violationType: type, expectedHash: nil,
+                               actualHash: nil, timestamp: Date(timeIntervalSince1970: time))
+        }
+        let first = violation("/a", .created, 1)
+        let second = violation("/a", .created, 2)
+        let deleted = violation("/a", .deleted, 3)
+        let other = violation("/b", .created, 4)
+        let groups = IntegrityReviewGroup.group([second, other, first, deleted])
+
+        XCTAssertEqual(groups.map(\.latest.id), [other.id, deleted.id, second.id])
+        XCTAssertEqual(try XCTUnwrap(groups.last).violations.map(\.id), [second.id, first.id])
+    }
+
     func testUnacknowledgedCreatedThenDeletedProducesDeletionEvidence() throws {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("com.example.transient.plist").path
@@ -159,6 +175,6 @@ final class FileIntegrityPathPolicyTests: XCTestCase {
         XCTAssertTrue(source.contains(
             "Review and acknowledge pending changes before rebuilding."
         ))
-        XCTAssertTrue(source.contains(".disabled(isRebuildingFIM)"))
+        XCTAssertTrue(source.contains(".disabled(isRebuildingFIM || acknowledgingFIM)"))
     }
 }

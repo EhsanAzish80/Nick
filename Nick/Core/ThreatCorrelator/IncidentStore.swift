@@ -1040,6 +1040,10 @@ final class IncidentStore {
     }
 
     static func incidentKey(for alert: ThreatAlert) -> String {
+        if let scanID = alert.contributingSignals.first?.metadata["deepScanID"],
+           alert.contributingSignals.allSatisfy({ $0.metadata["deepScanID"] == scanID }) {
+            return "deep-scan|\(scanID)"
+        }
         if let launchSignal = alert.contributingSignals.first(where: {
             ["background-item-added", "background-item-removed"].contains($0.metadata["appleEvent"])
         }) {

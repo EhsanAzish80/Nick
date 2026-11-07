@@ -1,8 +1,32 @@
 # Nick Security Audit Record
 
-## Current status: Nick 4.6.3 (October 5, 2026)
+## Candidate review: Nick 5.1.1 build 5101 (November 7, 2026)
 
-This table is the current public capability summary. The detailed sections
+The signed/notarized candidate passed 995 Swift tests, 52 Python tests and six
+installed synthetic prevention cases. This is a patch-release review, not an
+independent malware-effectiveness certification; see
+[the final checklist](../5.1.1-CHECKLIST.md) for evidence boundaries.
+
+- Credential AUTH_OPEN protection is opt-in and requires a high-confidence rule
+  authorized by valid signed intelligence. Validated own-store readers and
+  Nick's exact validated read-only browser scanner are scoped exceptions;
+  unknown cross-app readers remain eligible for denial. Identity validation
+  runs off the AUTH callback with a deadline-budgeted allow fallback.
+- Strict Keychain-copy and ransomware-style rename paths record prevention
+  only after a successful ES response. The rename gate requires a correlated
+  burst, same-owner user files, same-directory renames and a narrow extension
+  set. These are bounded scenarios, not comprehensive ransomware prevention.
+- Emergency stop disables enforcement while observation remains active. No
+  new entitlements or remote data collection were added.
+- New/actionable incidents cross the durable snapshot barrier; routine
+  informational repeats remain batched. Descriptor-validated prefix reads
+  reject pipes/symlinks; ordinary-file filesystem I/O has no hard timeout.
+- Scoped maintenance exemptions require validated identity and expected paths;
+  broad behavior heuristics cannot override a concrete family signature.
+
+## Historical baseline: Nick 4.6.3 (October 5, 2026)
+
+This table records the historical baseline capability summary. The detailed sections
 below are a chronological audit record and may describe older release states.
 Open vulnerability details are maintained in a private security tracker and
 are not published before remediation. Report new issues through the private

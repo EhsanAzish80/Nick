@@ -29,7 +29,10 @@ enum IncidentDisplayStatus: String, Equatable, Sendable {
             self = .remediationNeeded
         } else if incident?.actions.contains(where: { $0.action == .quarantined }) == true {
             self = .quarantined
-        } else if alert.isBlockedTamperEvidence {
+        } else if alert.isBlockedTamperEvidence || alert.contributingSignals.contains(where: {
+            $0.metadata["detectionKind"] == "credential-access"
+                && $0.metadata["endpointDecision"] == "deny"
+        }) {
             self = .blocked
         } else if let incident,
                   incident.state != .new || !incident.isVisible {
@@ -61,6 +64,12 @@ enum IncidentDisplayStatus: String, Equatable, Sendable {
 extension SecurityIncident {
     /// The canonical user-visible lifecycle for this incident. All surfaces
     /// consume this value instead of reinterpreting severity or evidence state.
+    /// Acknowledgment clears attention, never the recorded enforcement outcome.
+    var requiresAttention: Bool {
+        if displayStatus == .remediationNeeded { return true }
+        return displayStatus.contributesToProtectionStatus && state != .reviewed
+    }
+
     var displayStatus: IncidentDisplayStatus {
         IncidentDisplayStatus(alert: alert, incident: self)
     }
@@ -97,15 +106,22 @@ struct BehaviorIncidentPresentation: Equatable, Sendable {
         let rawChain = metadata["responsibleChain"].flatMap(Self.nonEmpty)
             ?? metadata["chain"].flatMap(Self.nonEmpty)
         let rawChainParts = rawChain?.components(separatedBy: " → ").compactMap(Self.namedComponent) ?? []
-        responsibleAppName = metadata["responsibleAppName"].flatMap(Self.namedComponent)
+        let serviceRole: String?
+        if metadata["responsibleAppName"].flatMap(Self.namedComponent) == nil,
+           let process = signal?.processInfo,
+           case .signed(let team, let identifier) = process.signingStatus,
+           team == "APPLE_PLATFORM" {
+            serviceRole = AppleSyncRenamePolicy.displayRole(signingID: identifier)
+        } else { serviceRole = nil }
+        responsibleAppName = serviceRole ?? metadata["responsibleAppName"].flatMap(Self.namedComponent)
             ?? signal?.processInfo?.parentName.flatMap(Self.namedComponent)
             ?? rawChainParts.dropLast().last
             ?? "Unknown app"
         bundleID = metadata["responsibleAppBundleID"].flatMap(Self.nonEmpty)
         teamID = metadata["responsibleAppTeamID"].flatMap(Self.nonEmpty)
-        signing = metadata["responsibleAppSigning"].flatMap(Self.nonEmpty) ?? "Unknown"
+        signing = serviceRole != nil ? "Apple platform" : (metadata["responsibleAppSigning"].flatMap(Self.nonEmpty) ?? "Unknown")
         appPath = metadata["responsibleAppPath"].flatMap(Self.nonEmpty)
-        chain = rawChain ?? "Unknown app"
+        chain = serviceRole ?? rawChain ?? "Unknown app"
         let chainParts = chain.components(separatedBy: " → ").filter { !$0.isEmpty }
         responsibleLine = chainParts.count > 1
             ? "\(responsibleAppName) ran this · via \(chainParts.dropFirst().joined(separator: " → "))"

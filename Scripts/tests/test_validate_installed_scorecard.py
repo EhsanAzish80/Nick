@@ -22,6 +22,14 @@ SPEC.loader.exec_module(MODULE)
 
 
 class PrivilegedStoreDecodeTests(unittest.TestCase):
+    def test_prevention_requires_matching_path_or_durable_denial(self):
+        records = {"event": {"kind": "AUTH deny", "target": "/tmp/unrelated"}}
+        self.assertIsNone(MODULE.matching_prevention({}, records, {"paths": []}))
+        self.assertEqual(
+            MODULE.matching_prevention({}, {}, {"paths": ["/tmp/fixture"], "endpointDenied": True})["kind"],
+            "AUTH deny",
+        )
+
     def test_plain_snapshot_is_rejected(self):
         with self.assertRaises(ValueError):
             MODULE.decode_privileged_store(b'{"incidents":[]}')
@@ -246,6 +254,17 @@ class PrivilegedStoreDecodeTests(unittest.TestCase):
             record["correlationValues"],
             ["NICK_CANARY_WEB", "com.3nsofts.fixture"],
         )
+
+    def test_strict_wait_does_not_stop_at_detection_before_durable_denial(self):
+        detected = {"rename:1:new": {"reasons": ["mass_file_rename"], "tiers": ["protected"], "paths": ["/tmp/fixture"]}}
+        denied = {"rename:2:new": {"reasons": ["mass_file_rename"], "tiers": ["protected"], "paths": ["/tmp/fixture"], "endpointDenied": True}}
+        with mock.patch.object(MODULE, "load_incident_fingerprints", side_effect=[detected, denied]), \
+             mock.patch.object(MODULE, "prevention_fingerprints", return_value={}), \
+             mock.patch.object(MODULE.time, "sleep"):
+            after, matches = MODULE.wait_for_matching_incidents({}, {"mass_file_rename"}, {"protected"},
+                timeout=1, poll_interval=0, require_prevention=True, prevention_before={})
+        self.assertEqual(after, denied)
+        self.assertTrue(matches[0][1]["endpointDenied"])
 
     def test_wait_polls_until_delayed_expected_evidence_arrives(self):
         before = {"old:1:new": {"reasons": ["process_discovery"], "tiers": ["review"]}}

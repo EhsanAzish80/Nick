@@ -20,6 +20,24 @@ struct SimpleActivityView: View {
 
     private var items: [SimpleActivityItem] {
         let actionable = Set(engine.activeActionableAlerts.map(\.id))
+        let representedDenialIDs = Set(engine.alerts.flatMap(\.contributingSignals).filter {
+            $0.metadata["detectionKind"] == "credential-access"
+                && $0.metadata["endpointDecision"] == "deny"
+        }.map(\.id))
+        // A grouped incident keeps only the newest signal ID. Older denied
+        // opens in that exact actor/target/time window are already represented.
+        let groupedDenialIDs = Set(xpcClient.events.filter { event in
+            guard event.decision == .deny,
+                  event.metadata?["detectionKind"] == "credential-access" else { return false }
+            return engine.alerts.contains { alert in
+                event.timestamp >= alert.firstSeen && event.timestamp <= alert.lastSeen
+                    && alert.contributingSignals.contains { signal in
+                        signal.metadata["endpointDecision"] == "deny"
+                            && signal.processInfo?.path == event.processPath
+                            && signal.fileInfo?.path == event.filePath
+                    }
+            }
+        }.map(\.id))
         return SimpleActivityFeed.items(
             alerts: SimpleActivityFeed.alertInputs(
                 from: engine.alerts,
@@ -29,7 +47,8 @@ struct SimpleActivityView: View {
             quarantine: xpcClient.quarantineRecords,
             blocked: SimpleActivityFeed.blockedInputs(
                 from: xpcClient.events,
-                failedThreatEventIDs: xpcClient.failedThreatEventIDs
+                failedThreatEventIDs: xpcClient.failedThreatEventIDs,
+                representedDenialIDs: representedDenialIDs.union(groupedDenialIDs)
             )
         )
     }

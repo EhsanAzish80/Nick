@@ -3,6 +3,7 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+import Darwin
 
 /// Content-based file typing for scan scheduling.
 ///
@@ -135,5 +136,23 @@ enum ScanCandidatePolicy {
         modificationNanoseconds: Int
     ) -> String {
         "completed-write:\(device):\(inode):\(size):\(modificationSeconds):\(modificationNanoseconds)"
+    }
+}
+
+/// A bounded prefix read must never wait for a pipe writer or follow a symlink.
+/// Validate the opened descriptor, avoiding a path-check/open race.
+enum RegularFilePrefixReader {
+    static func read(path: String, maximumBytes: Int) -> Data? {
+        guard maximumBytes > 0, maximumBytes <= 65_536 else { return nil }
+        let descriptor = Darwin.open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        defer { Darwin.close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG) else { return nil }
+        var bytes = [UInt8](repeating: 0, count: maximumBytes)
+        let count = bytes.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, maximumBytes) }
+        guard count >= 0 else { return nil }
+        return Data(bytes.prefix(count))
     }
 }

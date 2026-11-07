@@ -1,7 +1,6 @@
 #!/bin/sh
 set -eu
-root="${HOME}/Documents/NickScorecard"
-mkdir -p "$root"
+root="$(mktemp -d "${HOME}/Documents/NickScorecard.XXXXXXXX")"
 trap 'rm -rf "$root"' EXIT
 i=1
 while [ "$i" -le 200 ]; do

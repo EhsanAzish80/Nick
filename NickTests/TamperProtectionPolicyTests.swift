@@ -404,6 +404,23 @@ final class TamperProtectionPolicyTests: XCTestCase {
         ))
     }
 
+    func testStartupGapCoversPairedObservationButNotAnOutageAfterHealthyRecovery() {
+        let start = Date(timeIntervalSince1970: 100)
+        let end = Date(timeIntervalSince1970: 130)
+        func covers(_ observed: TimeInterval, healthy: TimeInterval?) -> Bool {
+            ProtectionContinuityPolicy.startupTransitionCovers(
+                .init(id: UUID(), observedAt: Date(timeIntervalSince1970: observed),
+                      lastHealthyAt: healthy.map(Date.init(timeIntervalSince1970:)), reason: "XPC interrupted"),
+                startedAt: start, endedAt: end
+            )
+        }
+        XCTAssertTrue(covers(125, healthy: 100))
+        XCTAssertTrue(covers(135, healthy: 100))
+        XCTAssertFalse(covers(135, healthy: 132))
+        XCTAssertFalse(covers(99, healthy: nil))
+        XCTAssertFalse(covers(151, healthy: nil))
+    }
+
     func test_continuityHeartbeatSequenceRejectsRollbackAndReplay() {
         XCTAssertTrue(ProtectionContinuityPolicy.acceptsSequence(current: nil, proposed: 1))
         XCTAssertTrue(ProtectionContinuityPolicy.acceptsSequence(current: 41, proposed: 42))

@@ -325,6 +325,15 @@ final class UserFacingAlertBuilder: Sendable {
             let via = chain.dropFirst().dropLast().last
             let context = via.map { "\(actor), via \($0)" } ?? actor
             let chainText = chain.isEmpty ? "an unknown chain" : chain.joined(separator: " → ")
+            if credential.metadata["endpointDecision"] == "deny" {
+                return AlertPattern(
+                    headline: "Blocked access to \(storeName) (\(context))",
+                    explanation: "Nick stopped \(actor) from opening the credential store.",
+                    assessment: "Blocked",
+                    recommendedAction: "Review the process if you did not expect this attempt.",
+                    actions: [.showDetails, .dismiss]
+                )
+            }
             let trigger: String = switch reason {
             case "keychain_store_transfer": "a Keychain transfer outside its protected folder"
             case "keychain_command_correlation": "a recent hidden password prompt in the same responsible chain"
@@ -690,7 +699,8 @@ final class UserFacingAlertBuilder: Sendable {
         case "hidden_password_prompt":
             return "requested a hidden password"
         case "credential_store_access":
-            return "opened \(credentialStoreAccessTitle(storeName).lowercased())"
+            let title = credentialStoreAccessTitle(storeName)
+            return title.prefix(1).lowercased() + title.dropFirst()
         default:
             return "accessed credential data"
         }

@@ -7,6 +7,17 @@ import XCTest
 
 /// Policies shared by the app and the Endpoint Security extension.
 final class DetectionPolicyTests: XCTestCase {
+    func testQuarantineProvenanceUsesOnlyScriptOperand() {
+        let media = "/Users/test/Downloads/movie.mp4"
+        XCTAssertNil(ExecutionTrustPolicy.scriptOperand(executablePath: "/bin/zsh", arguments: ["zsh", "-c", "python3 - movie", media]))
+        XCTAssertNil(ExecutionTrustPolicy.scriptOperand(executablePath: "/usr/bin/python3", arguments: ["python3", "-", media]))
+        XCTAssertNil(ExecutionTrustPolicy.scriptOperand(executablePath: "/usr/bin/python3", arguments: ["python3", "-c", "print(1)", media]))
+        XCTAssertEqual(ExecutionTrustPolicy.scriptOperand(executablePath: "/usr/bin/python3", arguments: ["python3", "/tmp/read.py", media]), "/tmp/read.py")
+        XCTAssertEqual(ExecutionTrustPolicy.scriptOperand(executablePath: "/bin/sh", arguments: ["sh", "--", "/tmp/payload", media]), "/tmp/payload")
+        XCTAssertNil(ExecutionTrustPolicy.scriptOperand(executablePath: "/usr/bin/xcrun", arguments: ["xcrun", media]))
+        XCTAssertEqual(ExecutionTrustPolicy.scriptOperand(executablePath: "/bin/sh", arguments: ["sh", "/tmp/disguised.mp4"]), "/tmp/disguised.mp4")
+    }
+
 
     // MARK: - YARAVerdictPolicy
 

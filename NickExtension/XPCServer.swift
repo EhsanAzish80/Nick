@@ -531,6 +531,10 @@ extension ESXPCServer: NickExtensionXPCProtocol {
             reply(false)
             return
         }
+        if ledger.startupTransitionCovers(observation) {
+            reply(true)
+            return
+        }
         guard ledger.ingestAppObservation(observation) else {
             reply(false)
             return
@@ -550,7 +554,7 @@ extension ESXPCServer: NickExtensionXPCProtocol {
                     "observationID": observation.id.uuidString,
                     "observedAt": ISO8601DateFormatter().string(from: observation.observedAt),
                     "reason": String(observation.reason.prefix(160)),
-                    "ruleTier": "protected",
+                    "ruleTier": "observed",
                     "deliveryLevel": "inform"
                 ]
             )
@@ -635,10 +639,18 @@ extension ESXPCServer: NickExtensionXPCProtocol {
     ) {
         if incidentStoreReduction(from: incidentStore.load(), to: payload),
            !verifyProtectionAuthorization(authorizationExternalForm) {
+            Self.logger.error("Incident snapshot rejected: protection authorization required")
             reply(false, incidentStore.load())
             return
         }
         let result = incidentStore.replace(payload: payload, expectedRevision: expectedRevision)
+        if !result.accepted {
+            if result.record.isEmpty {
+                Self.logger.error("Incident snapshot rejected: store validation or write failed")
+            } else {
+                Self.logger.error("Incident snapshot rejected: revision changed")
+            }
+        }
         reply(result.accepted, result.record)
     }
 

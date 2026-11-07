@@ -19,9 +19,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EhsanAzish80/Nick/releases/latest"><strong>Download Nick</strong></a>
+  <a href="https://3nsofts.com/nick"><strong>Website and screenshots</strong></a>
   ·
-  <a href="https://3nsofts.com/nick">Website</a>
+  <a href="https://github.com/EhsanAzish80/Nick/releases/latest">Download Nick</a>
+  ·
+  <a href="#first-run-and-permissions">First-run guide</a>
   ·
   <a href="Documentation/README.md">Documentation</a>
   ·
@@ -36,11 +38,8 @@ Extension frameworks with YARA malware scanning, behavioral correlation,
 system-hardening checks, email attachment inspection, quarantine, and
 human-readable alerts.
 
-Detection and analysis run locally on the Mac. Nick has no hosted detection
-service and does not automatically upload browsing history, file contents,
-process activity, or security telemetry. Network access is limited to explicit
-functions: Sparkle update checks, an optional webhook configured by the user,
-links the user opens, and files the user manually exports and chooses to share.
+Detection and analysis run on your Mac. Nick has no hosted detection service.
+See [what stays on your Mac](#what-stays-on-your-mac) for the data and network details.
 
 Unlike a simple scanner, Nick correlates app-level signals from process,
 persistence, system, capture-device, filesystem, and connection monitors. The
@@ -55,6 +54,49 @@ the Mac before and after a restart, installation, removal, MDM migration, VPN
 change, or security configuration change. It compares stable evidence rather
 than raw PIDs and timestamps, reports missing sensor visibility explicitly, and
 exports sanitized Markdown or JSON support bundles.
+
+<a id="first-run-and-permissions"></a>
+
+## What to expect in the first five minutes
+
+![Nick’s System Integrity Audit view in Advanced mode](Documentation/images/nick-system-audit.webp)
+
+This is an example of Nick after setup. See more app screenshots on the
+[Nick product page](https://3nsofts.com/nick).
+
+On a fresh install, the walkthrough shows the approvals still needed. macOS
+may skip prompts you already approved.
+
+1. **Notifications.** Click **Get Started** on the welcome screen. macOS may
+   ask whether Nick can show alerts. You can decline and review findings in
+   **Activity**.
+2. **Endpoint Security.** Follow Nick’s setup prompt and approve
+   **NickExtension** in System Settings. This enables real-time process and
+   file monitoring.
+3. **Full Disk Access.** Open the pane from Nick’s walkthrough and turn on
+   **Nick** and **NickExtension**. This lets Nick scan protected locations,
+   including supported Apple Mail and Outlook attachment folders for Email
+   Guard. Email Guard uses this approval for protected mail access. macOS
+   may ask you to quit and reopen Nick.
+4. **Network Filter (optional).** If you enable Network Protection, approve
+   **NickNetFilter** when macOS asks. It checks destinations on your Mac and
+   shows findings in **Network Activity**. Traffic continues normally.
+5. **Check your setup.** Open **Home** to see which protections are active or
+   still need attention. Run **Scan → Quick Check** for a first look at
+   common security settings and startup items.
+
+If setup does not complete, see [Support](SUPPORT.md). If Nick flags something
+you recognize, use the dedicated
+[false-positive report](https://github.com/EhsanAzish80/Nick/issues/new?template=false_positive.yml).
+
+## What stays on your Mac
+
+| Feature | Where the data goes |
+|---|---|
+| File and attachment scanning, process and destination analysis, findings, and quarantine | Processing and evidence stay on your Mac by default. Nick does not automatically upload file or attachment contents, browsing history, process activity, or security telemetry. |
+| App and protection updates | Nick makes download requests for Sparkle updates and signed protection intelligence. These requests do not include scan results or incident history. |
+| Optional webhook | If you configure a webhook, Nick sends eligible alert details to the endpoint you choose. |
+| Exports and external links | Exported reports stay local until you share them. Opening an external link connects to that site in your browser. |
 
 ## Start simple, go deeper when needed
 
@@ -247,32 +289,6 @@ The current stable release is **Nick 5.1.0 (build 5085)** for macOS 26 and later
    run Quick Check.
 
 Sparkle updates use the same signed package directly.
-
-### What to expect in the first five minutes
-
-1. macOS asks you to approve Nick's Endpoint Security system extension.
-2. Nick explains why Full Disk Access is needed before opening the correct
-   System Settings pane.
-3. Network Protection remains optional and observation-only.
-4. Home shows exactly which protection still needs attention.
-5. Quick Check verifies common startup, download, and application locations.
-
-If setup does not complete, see [Support](SUPPORT.md). If Nick flags something
-you recognize, use the dedicated
-[false-positive report](https://github.com/EhsanAzish80/Nick/issues/new?template=false_positive.yml)
-instead of deleting the file immediately.
-
-### Permissions
-
-| Approval | Used by | Purpose |
-|---|---|---|
-| Endpoint Security system extension | NickExtension | Real-time process and file monitoring |
-| Network Extension | NickNetFilter | Optional Scam Guardian destination monitoring |
-| Full Disk Access | Nick and NickExtension | Protected system and mail attachment locations |
-| Notifications | Nick | User-facing threat notifications |
-
-Nick cannot silently grant these approvals. The setup walkthrough opens the
-correct macOS pane and waits for verified component health.
 
 ## Building from source
 

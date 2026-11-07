@@ -4,6 +4,26 @@
 
 import SwiftUI
 
+struct IntegrityReviewGroup: Identifiable {
+    struct Key: Hashable {
+        let path: String
+        let change: String
+    }
+
+    let id: Key
+    let violations: [IntegrityViolation]
+    var latest: IntegrityViolation { violations[0] }
+
+    static func group(_ violations: [IntegrityViolation]) -> [Self] {
+        let byChange = Dictionary(grouping: violations) {
+            Key(path: $0.path, change: $0.violationType.rawValue)
+        }
+        return byChange.map { key, records in
+            Self(id: key, violations: records.sorted { $0.timestamp > $1.timestamp })
+        }.sorted { $0.latest.timestamp > $1.latest.timestamp }
+    }
+}
+
 // MARK: - IntegrityView
 
 /// Displays File Integrity Monitor violations detected by the extension.
@@ -14,6 +34,9 @@ struct IntegrityView: View {
     @Environment(ExtensionXPCClient.self) private var xpcClient
     @State private var baselineStatus: String?
     @State private var acknowledgementFailed = false
+    @State private var pendingAcknowledgements: [UUID] = []
+    @State private var confirmAcknowledgement = false
+    @State private var isAcknowledging = false
 
     var body: some View {
         Group {
@@ -24,15 +47,11 @@ struct IntegrityView: View {
                     description: Text("Unexpected changes to monitored system paths will appear here.")
                 )
             } else {
-                List(xpcClient.integrityViolations) { violation in
-                    IntegrityRowView(violation: violation) {
-                        xpcClient.acknowledgeFIMViolation(id: violation.id) { accepted in
-                            guard !accepted else { return }
-                            Task { @MainActor in
-                                acknowledgementFailed = true
-                            }
-                        }
+                List(IntegrityReviewGroup.group(xpcClient.integrityViolations)) { group in
+                    IntegrityRowView(violation: group.latest, count: group.violations.count) {
+                        prepareAcknowledgement(group.violations)
                     }
+                    .disabled(isAcknowledging)
                 }
             }
         }
@@ -46,6 +65,12 @@ struct IntegrityView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Button("Acknowledge Reviewed…") {
+                    prepareAcknowledgement(xpcClient.integrityViolations)
+                }
+                .disabled(isAcknowledging || xpcClient.integrityViolations.isEmpty)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button("Rebuild Baseline") {
                     xpcClient.requestRebuildFIMBaseline { accepted in
                         Task { @MainActor in
@@ -58,6 +83,18 @@ struct IntegrityView: View {
                 .help("Clears the current FIM baseline and rebuilds it from the current system state.")
             }
         }
+        .confirmationDialog("Acknowledge reviewed changes?", isPresented: $confirmAcknowledgement) {
+            Button("Acknowledge \(pendingAcknowledgements.count) Changes") {
+                let ids = pendingAcknowledgements
+                isAcknowledging = true
+                xpcClient.acknowledgeFIMViolations(ids: ids) { count in
+                    isAcknowledging = false
+                    acknowledgementFailed = count != ids.count
+                }
+            }
+        } message: {
+            Text("Continue only after reviewing the selected changes. Nick updates the baseline for accepted changes and leaves unaccepted records pending.")
+        }
         .safeAreaInset(edge: .bottom) {
             if let baselineStatus {
                 Text(baselineStatus)
@@ -67,6 +104,11 @@ struct IntegrityView: View {
             }
         }
     }
+
+    private func prepareAcknowledgement(_ violations: [IntegrityViolation]) {
+        pendingAcknowledgements = violations.map(\.id)
+        confirmAcknowledgement = true
+    }
 }
 
 // MARK: - IntegrityRowView
@@ -74,6 +116,7 @@ struct IntegrityView: View {
 private struct IntegrityRowView: View {
 
     let violation: IntegrityViolation
+    let count: Int
     let acknowledge: () -> Void
 
     private static let dateFormatter: DateFormatter = {
@@ -107,6 +150,11 @@ private struct IntegrityRowView: View {
                     Text(Self.dateFormatter.string(from: violation.timestamp))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if count > 1 {
+                        Text("\(count) occurrences")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 // Show hash delta when available

@@ -2,6 +2,29 @@ import XCTest
 @testable import Nick
 
 final class ProtectionStatusTests: XCTestCase {
+    func testReviewedBlockPreservesOutcomeWithoutKeepingProtectionRed() throws {
+        let alert = makeAlert(metadata: ["reason": "credential_store_access", "detectionKind": "credential-access", "endpointDecision": "deny"])
+        let incident = SecurityIncident(key: "blocked", alert: alert, evidence: [], state: .reviewed)
+        XCTAssertEqual(incident.displayStatus, .blocked)
+        XCTAssertFalse(incident.requiresAttention)
+        XCTAssertEqual(ProtectionStatus.evaluate(actionableAlerts: [], incidents: [incident],
+            auditIssueCount: 0, sensorRunning: true).state, .protected)
+        let restored = try JSONDecoder().decode(SecurityIncident.self, from: JSONEncoder().encode(incident))
+        XCTAssertFalse(restored.requiresAttention)
+        XCTAssertEqual(restored.displayStatus, .blocked)
+    }
+
+    func testSilentObservedReclassificationDoesNotRetainStaleReviewSeverity() {
+        let old = makeAlert(metadata: ["reason": "system_discovery", "ruleTier": "review"])
+        let current = makeAlert(metadata: ["reason": "system_discovery", "ruleTier": "observed", "deliveryLevel": "silent"], severity: .info)
+        let merged = old.mergingOccurrence(current)
+        XCTAssertEqual(merged.severity, .info)
+        XCTAssertEqual(merged.score, current.score)
+        XCTAssertEqual(merged.occurrenceCount, 2)
+        let protected = makeAlert(metadata: ["ruleTier": "protected"], severity: .critical)
+        XCTAssertEqual(protected.mergingOccurrence(current).severity, .critical)
+    }
+
     func test_everyViewModelProducesIdenticalPresentationForEveryState() {
         let cases: [(ProtectionStatus.State, Int, String, String?)] = [
             (.protected, 0, "Protected", nil),

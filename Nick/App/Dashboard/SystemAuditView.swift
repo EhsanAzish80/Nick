@@ -23,7 +23,9 @@ struct SystemAuditView: View {
     @State private var isExporting   = false
     @State private var exportMessage: String?
     @State private var fimActionMessage: String?
-    @State private var acknowledgingFIM: Set<UUID> = []
+    @State private var acknowledgingFIM = false
+    @State private var pendingFIMAcknowledgements: [UUID] = []
+    @State private var confirmFIMAcknowledgement = false
     @State private var isRebuildingFIM = false
 
     // Separate XProtect result from the rest so it gets its own section.
@@ -469,11 +471,16 @@ struct SystemAuditView: View {
                     .foregroundStyle(Color.textTertiary)
                     .tracking(0.5)
                 Spacer()
+                Button("Acknowledge Reviewed…") {
+                    prepareFIMAcknowledgement(xpcClient.integrityViolations)
+                }
+                .buttonStyle(.link)
+                .disabled(acknowledgingFIM || isRebuildingFIM || xpcClient.integrityViolations.isEmpty)
                 Button("Rebuild Baseline") {
                     rebuildFIMBaseline()
                 }
                 .buttonStyle(.link)
-                .disabled(isRebuildingFIM)
+                .disabled(isRebuildingFIM || acknowledgingFIM)
                 .help("Rebuilds the baseline only when all pending integrity changes have been reviewed.")
                 .accessibilityLabel("Rebuild file integrity baseline")
             }
@@ -487,8 +494,10 @@ struct SystemAuditView: View {
                     .padding(.bottom, 24)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(xpcClient.integrityViolations.enumerated()), id: \.element.id) { idx, v in
+                    ForEach(Array(IntegrityReviewGroup.group(xpcClient.integrityViolations).enumerated()),
+                            id: \.element.id) { idx, group in
                         if idx > 0 { Divider().padding(.leading, 44) }
+                        let v = group.latest
                         let createdOrModifiedIcon = v.violationType == .created ? "plus.circle" : "pencil"
                         let violationIcon = v.violationType == .deleted ? "trash" : createdOrModifiedIcon
                         HStack(spacing: 10) {
@@ -505,6 +514,11 @@ struct SystemAuditView: View {
                                 Text(v.violationType.rawValue.capitalized)
                                     .font(.system(size: 11))
                                     .foregroundStyle(Color.textSecondary)
+                                if group.violations.count > 1 {
+                                    Text("\(group.violations.count) occurrences")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(Color.textSecondary)
+                                }
                             }
                             Spacer()
                             VStack(alignment: .trailing, spacing: 4) {
@@ -512,18 +526,10 @@ struct SystemAuditView: View {
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(Color.textTertiary)
                                 Button("Acknowledge") {
-                                    acknowledgingFIM.insert(v.id)
-                                    xpcClient.acknowledgeFIMViolation(id: v.id) { accepted in
-                                        Task { @MainActor in
-                                            acknowledgingFIM.remove(v.id)
-                                            fimActionMessage = accepted
-                                                ? "Change acknowledged and baseline advanced."
-                                                : "The file changed again. Review it and retry."
-                                        }
-                                    }
+                                    prepareFIMAcknowledgement(group.violations)
                                 }
                                 .buttonStyle(.link)
-                                .disabled(acknowledgingFIM.contains(v.id))
+                                .disabled(acknowledgingFIM || isRebuildingFIM)
                                 .accessibilityLabel("Acknowledge integrity change for \(v.path)")
                             }
                         }
@@ -549,6 +555,23 @@ struct SystemAuditView: View {
             }
             Spacer().frame(height: 24)
         }
+        .confirmationDialog("Acknowledge reviewed changes?", isPresented: $confirmFIMAcknowledgement) {
+            Button("Acknowledge \(pendingFIMAcknowledgements.count) Changes") {
+                let ids = pendingFIMAcknowledgements
+                acknowledgingFIM = true
+                xpcClient.acknowledgeFIMViolations(ids: ids) { count in
+                    acknowledgingFIM = false
+                    fimActionMessage = "Acknowledged \(count) of \(ids.count) changes."
+                }
+            }
+        } message: {
+            Text("Continue only after reviewing the selected changes. Nick updates the baseline for accepted changes and leaves unaccepted records pending.")
+        }
+    }
+
+    private func prepareFIMAcknowledgement(_ violations: [IntegrityViolation]) {
+        pendingFIMAcknowledgements = violations.map(\.id)
+        confirmFIMAcknowledgement = true
     }
 
     private func rebuildFIMBaseline() {

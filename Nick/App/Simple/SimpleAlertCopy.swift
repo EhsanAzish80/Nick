@@ -35,6 +35,9 @@ struct SimpleAlertCopy: Equatable {
         now: Date = Date()
     ) -> SimpleAlertCopy {
         let when = HomeFormatting.dayAndTime(alert.lastSeen, now: now)
+        let isRenameBurst = alert.contributingSignals.contains { $0.metadata["reason"] == "mass_file_rename" }
+        let processState = isRenameBurst ? "Rename activity recorded"
+            : (alert.evidenceState() == .processActive ? "Still running" : "The command has finished")
         let behavior = BehaviorIncidentPresentation(alert: alert, incident: incident)
 
         let status = isQuarantined ? IncidentDisplayStatus.quarantined : behavior.status
@@ -49,14 +52,14 @@ struct SimpleAlertCopy: Equatable {
         case (false, .needsReview, _):
             tone = .danger
             title = user.headline
-            reassurance = alert.evidenceState() == .processActive ? "Still running" : "The command has finished"
+            reassurance = processState
         case (false, _, .critical):
             tone = .danger
             title = user.headline
             reassurance = behavior.isBehavior
-                ? (alert.evidenceState() == .processActive ? "Still running" : "The command has finished")
+                ? (processState)
                 : (alert.detectedFilePath == nil
-                    ? (alert.evidenceState() == .processActive ? "Still running" : "The command has finished")
+                    ? (processState)
                     : (fileStillPresent ? "Take a look now" : "It’s no longer on your Mac"))
         case (false, _, .warning):
             tone = .warning

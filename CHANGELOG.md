@@ -8,6 +8,17 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+### Fixed — 5.1.1 candidate (5101)
+
+- Scope routine maintenance/updater findings using validated identity and paths.
+- Preserve Git signing context and prevent Nick scanner self-blocking.
+- Reject special files before extension prefix reads to avoid stalled reporting.
+- Persist new findings and actionable recurrences promptly, including scanner findings without raw tier metadata.
+- Record successful AUTH denials accurately for Strict Mode credential, tamper and ransomware protection.
+- Correct menu-bar activation, alert review, rename wording and history confirmation.
+- Improve validated nested-code scanning and first-run/privacy documentation.
+
+
 ## [5.1.0] - 2026-11-02
 
 ### Added
