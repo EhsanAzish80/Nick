@@ -1,6 +1,8 @@
 # Nick 5.1.1 — clearer alerts and more reliable reporting
 
-Release candidate: build 5101. Publication pending.
+Release: **5.1.1 (5101)** for macOS 26 and later.
+
+Download the signed/notarized `.pkg` installer, or the branded `.dmg` containing the same installer. Existing installations receive the update through Check for Updates once the update feed is deployed.
 
 - Reduce false alerts for validated app updates, iCloud/File Provider staging, GeoServices cache refreshes and Codex session compression, using scoped identity and path checks.
 - Preserve short-lived Git/SSH signing context and allow Nick's validated scanner to inspect browser stores without blocking itself.
