@@ -210,6 +210,63 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         XCTAssertFalse(routine(downloadSource, downloadDestination.replacingOccurrences(of: "DownloadStage", with: "Documents")))
     }
 
+    func testPost511MaintenancePathsRequirePlatformIdentityAndPairedScope() {
+        let cases: [(String, String, String)] = [
+            ("com.apple.system_installd", "/Library/Apple/System/Library/InstallerSandboxes/.PKInstallSandboxManager-SystemSoftware/5F8D1DCE-B691-4024-BECF-4728060BC515.activeSandbox/Root/System/Library/CoreServices/CoreTypes.bundle/Contents/Library/MobileDevices.bundle/Contents/Resources/.BC.T_8ny0VL", "/Library/Apple/System/Library/InstallerSandboxes/.PKInstallSandboxManager-SystemSoftware/5F8D1DCE-B691-4024-BECF-4728060BC515.activeSandbox/Root/System/Library/CoreServices/CoreTypes.bundle/Contents/Library/MobileDevices.bundle/Contents/Resources/com.apple.ipod-touch-5-red.icns"),
+            ("com.apple.bird", "/Users/test/Library/Application Support/FileProvider/EC428E58-1A69-4DFA-A6EA-AF1072C33F5A/wharf/wharf/propagate/250276388", "/Users/test/Library/Application Support/CloudDocs/session/i/f4406f1.flat"),
+            ("com.apple.fileproviderd", "/Users/test/Library/Application Support/FileProvider/EC428E58-1A69-4DFA-A6EA-AF1072C33F5A/wharf/wharf/propagate/250494727", "/Users/test/Library/Mobile Documents/57T9237FN3~net~whatsapp~WhatsApp/Accounts/123456/backup/ExtChatDatabase.sqlite.enc"),
+            ("com.apple.geod", "/Users/test/Library/Containers/com.apple.geod/Data/tmp/36CB068B-29C3-4D37-A300-25B6BF9855BF", "/Users/test/Library/Caches/GeoServices/RegionalResources/Localized_Poi_SAU_Icons-180.icondatapack"),
+            ("com.apple.mobileassetd", "/Users/test/Library/Developer/CoreSimulator/Devices/89610D74-A885-432E-8BF1-042910CB40F0/data/private/var/MobileAsset/AssetsV2/staging/com_apple_MobileAsset_UAF_Siri_DialogAssets.a4e2f2d074e261163833250d8270a78a9483c206.auto.C7062A3F-78E6-41C6-BD37-ADCCD9C11A9A", "/Users/test/Library/Developer/CoreSimulator/Devices/89610D74-A885-432E-8BF1-042910CB40F0/data/private/var/MobileAsset/AssetsV2/com_apple_MobileAsset_UAF_Siri_DialogAssets/purpose_auto/a4e2f2d074e261163833250d8270a78a9483c206.asset"),
+            ("com.apple.springboard", "/Users/test/Library/Developer/CoreSimulator/Devices/6346F9F0-4CF2-4F51-831C-98147E907AFE/data/tmp/Maps@@en_TR_4622584849121354893_17269488712151774796__sz113.3x87.7B24CV11@@.cpbitmap.U2nlO8", "/Users/test/Library/Developer/CoreSimulator/Devices/6346F9F0-4CF2-4F51-831C-98147E907AFE/data/Library/Caches/MappedImageCache/com.apple.springboard-LegibilityCache_en_TR_DefaultCache/Maps@@en_TR_4622584849121354893_17269488712151774796__sz113.3x87.7B24CV11@@.cpbitmap")
+        ]
+        for (signer, source, destination) in cases {
+            func routine(_ src: String, _ dst: String, valid: Bool = true, id: String? = nil) -> Bool {
+                AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: valid,
+                    signingID: id ?? signer, source: src, destination: dst)
+            }
+            XCTAssertTrue(routine(source, destination), signer)
+            XCTAssertFalse(routine(source, destination, valid: false), signer)
+            XCTAssertFalse(routine(source, destination, id: "com.example.fake"), signer)
+            XCTAssertFalse(routine(source, destination + ".locked"), signer)
+            XCTAssertFalse(routine(source, "/Users/test/Documents/document.locked"), signer)
+            XCTAssertFalse(routine("/Users/test/Documents/document.txt", destination), signer)
+            if source.hasPrefix("/Users/test/") {
+                XCTAssertFalse(routine(source, destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/")), signer)
+            }
+        }
+    }
+
+    func testWhatsAppStagedResourceRequiresValidatedBundleAndDitto() {
+        let root = "/Users/test/Library/Caches/net.whatsapp.WhatsApp/org.sparkle-project.Sparkle/Installation/slot/WhatsApp.app/Contents/Resources/Model.momd/"
+        func routine(_ src: String, _ dst: String, apple: Bool = true, team: String? = "57T9237FN3") -> Bool {
+            ScopedUpdaterRenamePolicy.matchesWhatsAppStagedResourceRename(actorIsAppleDitto: apple,
+                validatedBundleTeam: team, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(root + ".BC.T_temp", root + "model.mom"))
+        XCTAssertFalse(routine(root + ".BC.T_temp", root + "model.mom", apple: false))
+        XCTAssertFalse(routine(root + ".BC.T_temp", root + "model.mom", team: nil))
+        XCTAssertFalse(routine(root + ".BC.T_temp", root + "model.mom", team: "SPOOF"))
+        XCTAssertFalse(routine(root + ".BC.T_temp", root + "model.locked"))
+        XCTAssertFalse(routine("/Users/test/Documents/.BC.T_temp", "/Users/test/Documents/model.mom"))
+    }
+
+    func testFileProviderNextOutputHydrationRequiresPrivateStagingAndSameUser() {
+        let source = "/Users/test/Library/Application Support/FileProvider/EC428E58-1A69-4DFA-A6EA-AF1072C33F5A/wharf/wharf/propagate/247228491"
+        let destination = "/Users/test/Documents/Websites/site/.next/server/app/services/ai-integration 2.rsc"
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.fileproviderd") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: signer, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.apple.bird"))
+        XCTAssertFalse(routine(source, destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/")))
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "247228491", with: "not-a-slot"), destination))
+        XCTAssertFalse(routine("/Users/test/Documents/input.rsc", destination))
+        XCTAssertFalse(routine(source, "/Users/test/Documents/file.rsc"))
+        XCTAssertFalse(routine(source, destination + ".locked"))
+    }
+
     func testGeoServicesResourceRefreshRequiresObservedContainerAndCacheScope() {
         let source = "/Users/test/Library/Containers/com.apple.geod/Data/tmp/D5F22F84-7F03-4991-BB9B-38AB4404EA3B"
         for (folder, file) in [("Resources", "globe-default-iosmac-7420@2x.styl"),

@@ -557,7 +557,8 @@ extension ESXPCServer: NickExtensionXPCProtocol {
                     "ruleTier": "observed",
                     "deliveryLevel": "inform"
                 ]
-            )
+            ),
+            timestamp: observation.observedAt
         )
         if let data = try? JSONEncoder().encode(event) { sendThreatToApp(data) }
         reply(true)

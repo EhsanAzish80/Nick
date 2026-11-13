@@ -72,7 +72,8 @@ enum ProtectionContinuityPolicy {
         previousObservedExtensionBuild: String? = nil,
         recentUpdate: ProtectionCompletedUpdate? = nil,
         now: Date = Date(),
-        extensionRestarted: Bool = true
+        extensionRestarted: Bool = true,
+        hasObservedRuntimeGap: Bool = false
     ) -> Decision? {
         // Sleep and wake do not restart the extension. Treating a long wall-clock
         // interval alone as a gap would turn every normal sleep into an alert.
@@ -103,7 +104,9 @@ enum ProtectionContinuityPolicy {
                 transitionKey: "gap:\(previous.bootSessionUUID):\(previous.sequence)"
             )
         }
-        let kind: ProtectionContinuityIncident.Kind = previous.wallTime < bootTime.addingTimeInterval(-120)
+        // A different boot session includes time when the machine was off.
+        // Elapsed wall time alone cannot establish a runtime protection gap.
+        let kind: ProtectionContinuityIncident.Kind = hasObservedRuntimeGap
             ? .interrupted : .resumedAfterRestart
         return Decision(
             kind: kind,

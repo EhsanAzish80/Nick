@@ -6,6 +6,19 @@ import XCTest
 @testable import Nick
 
 final class UserFacingAlertBuilderTests: XCTestCase {
+    func testExpectedRestartIsInformationalWithoutSuspiciousLanguage() {
+        let signal = ThreatSignal(source: .endpointSecurity, severity: .medium,
+            title: "Protection resumed after restart", description: "Protection resumed.",
+            context: .init(metadata: ["reason": "protection_continuity", "threatFamily": "protection-continuity",
+                "unobservedWindow": "false", "ruleTier": "review", "deliveryLevel": "silent"]))
+        let alert = ThreatAlert(score: 0.35, content: .init(title: signal.title, description: signal.description,
+            severity: .medium, recommendedAction: "Review"), contributingSignals: [signal])
+        let user = UserFacingAlertBuilder.shared.build(from: alert)
+        XCTAssertEqual(user.severity, .safe)
+        XCTAssertEqual(IncidentDisplayStatus(alert: alert), .observed)
+        XCTAssertFalse(user.explanation.lowercased().contains("suspicious"))
+        XCTAssertNil(TrustedProcessList.eligibleProcess(in: alert))
+    }
 
     func testStandaloneDecoderUsesObservedNaturalPresentation() {
         let signal = ThreatSignal(

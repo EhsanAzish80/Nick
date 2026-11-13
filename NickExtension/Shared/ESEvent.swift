@@ -107,10 +107,11 @@ public struct ESEvent: Codable, Identifiable, Sendable {
         parentPid: Int32,
         filePath: String? = nil,
         decision: ESDecision,
-        threat: ThreatContext = .none
+        threat: ThreatContext = .none,
+        timestamp: Date = Date()
     ) {
         self.id = UUID()
-        self.timestamp = Date()
+        self.timestamp = timestamp
         self.eventType = eventType
         self.processPath = processPath
         self.pid = pid

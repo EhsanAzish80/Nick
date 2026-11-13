@@ -279,7 +279,7 @@ if let continuityIncident = protectionContinuityLedger.evaluateStart(
         "trust": "root-observed",
         "endedAt": ISO8601DateFormatter().string(from: continuityIncident.endedAt),
         "unobservedWindow": isGap ? "true" : "false",
-        "ruleTier": isGap ? "protected" : "review",
+        "ruleTier": isGap ? "protected" : "observed",
         "deliveryLevel": isGap ? "interrupt" : "silent",
         "continuityCause": continuityIncident.detail
     ]

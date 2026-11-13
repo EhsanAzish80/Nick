@@ -53,6 +53,17 @@ final class DeveloperIDTrustValidator: @unchecked Sendable {
         lock.withLock { distributionCache[cdhash] }
     }
 
+    func validatedDistributionTeam(path: String) -> String? {
+        guard isValidatedDistribution(path: path) else { return nil }
+        var code: SecStaticCode?
+        var information: CFDictionary?
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+              let code,
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let info = information as? [String: Any] else { return nil }
+        return info[kSecCodeInfoTeamIdentifier as String] as? String
+    }
+
     /// Own-store authorization also accepts Apple's Mac App Store distribution
     /// certificate, not merely Developer ID. Kernel IDs are compared separately.
     func isValidatedDistribution(path: String) -> Bool {

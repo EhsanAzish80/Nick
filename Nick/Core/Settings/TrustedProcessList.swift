@@ -189,6 +189,8 @@ struct TrustedProcessList {
         // Parent/context signals may carry other signed processes, but persistent
         // trust must never fall through from an ineligible actor to that context.
         guard let primarySignal = alert.contributingSignals.first,
+              primarySignal.metadata["threatFamily"] != "protection-continuity",
+              primarySignal.metadata["reason"] != "protection_continuity",
               primarySignal.source != .avCapture
                 || primarySignal.metadata["attributionConfidence"] == "authoritative",
               let process = primarySignal.processInfo,
