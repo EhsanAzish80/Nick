@@ -234,6 +234,16 @@ enum LOLBinExecutionPolicy {
         return destination.hasPrefix(contents) && FileManager.default.fileExists(atPath: destination)
     }
 
+    static func isScopedChromeQuarantineRemoval(
+        arguments: [String], validatedTargetTeam: String?
+    ) -> Bool {
+        guard validatedTargetTeam == "EQHXZ8M8AV", arguments.count == 5,
+              arguments[1] == "-d", arguments[2] == "-r",
+              arguments[3] == "com.apple.quarantine",
+              arguments[4] == "/Applications/Google Chrome.app" else { return false }
+        return URL(fileURLWithPath: arguments[4]).resolvingSymlinksInPath().path == arguments[4]
+    }
+
     /// Extracts the command supplied to a shell's command flag. A shell with no
     /// captured command is not evidence of download-to-shell execution.
     private static func shellCommand(in arguments: [String]) -> String? {
@@ -500,6 +510,10 @@ enum CredentialAccessPolicy {
             profileNames = ["Slack"]
         default: profileNames = []
         }
+        if identity.teamID == "EQHXZ8M8AV", bundleID == "com.google.Chrome",
+           containsSequence(["Library", "Application Support", "Google", "Chrome"]) {
+            return true
+        }
         if profileNames.contains(where: { containsSequence(["Library", "Application Support", $0]) }) {
             return true
         }
@@ -548,8 +562,15 @@ enum CredentialAccessPolicy {
         actorIsAppleKeygen: Bool, parentIsAppleGit: Bool
     ) -> Finding? {
         guard actorIsAppleKeygen, parentIsAppleGit, actorUID != 0, actorUID == fileUID,
-              sensitiveStore(at: keyPath) == .sshPrivateKey,
-              arguments.count == 7 || (arguments.count == 8 && arguments[7].hasPrefix("/")),
+              sensitiveStore(at: keyPath) == .sshPrivateKey else { return nil }
+        // Git may derive the public identity before signing when configured
+        // with a private-key path. Standalone key extraction never qualifies.
+        if Array(arguments.dropFirst()) == ["-y", "-f", keyPath] {
+            return Finding(title: "Read the public key identity for Git signing",
+                           reason: "ssh_git_signing", store: .sshPrivateKey,
+                           tier: "observed", severity: "info")
+        }
+        guard arguments.count == 7 || (arguments.count == 8 && arguments[7].hasPrefix("/")),
               Array(arguments[1...5]) == ["-Y", "sign", "-n", "git", "-f"],
               arguments[6] == keyPath else { return nil }
         return Finding(title: "Opened an SSH private key for Git signing",

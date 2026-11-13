@@ -1840,6 +1840,7 @@ struct ExtensionFinding: Sendable {
         let isProtectionContinuity = event.threatFamily == "protection-continuity"
         let isAppleReviewEvent = event.metadata?["ruleTier"] == "review"
         let isObservedEvent = event.metadata?["ruleTier"] == "observed"
+            || (isProtectionContinuity && event.metadata?["unobservedWindow"] == "false")
         let isTestIndicator = event.metadata?["category"] == "test"
         let isRansomwareBehavior = event.metadata?["detectionKind"] == "ransomware-behavior"
         let isLOLBinBehavior = event.metadata?["detectionKind"] == "lolbin-behavior"

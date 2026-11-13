@@ -93,6 +93,19 @@ enum BrowserDownloadRenamePolicy {
 /// stream of atomic renames. Identity validation happens before this policy;
 /// a copied binary or process using one of these names does not qualify.
 enum ScopedUpdaterRenamePolicy {
+    static func matchesWhatsAppStagedResourceRename(actorIsAppleDitto: Bool,
+                                                   validatedBundleTeam: String?,
+                                                   source: String, destination: String) -> Bool {
+        guard actorIsAppleDitto, validatedBundleTeam == "57T9237FN3",
+              (source as NSString).deletingLastPathComponent == (destination as NSString).deletingLastPathComponent,
+              (source as NSString).lastPathComponent.hasPrefix(".BC.T_"),
+              (destination as NSString).pathExtension == "mom" else { return false }
+        let p = URL(fileURLWithPath: destination).standardizedFileURL.pathComponents
+        return p.count > 12 && p[1] == "Users"
+            && p[3...7].elementsEqual(["Library", "Caches", "net.whatsapp.WhatsApp", "org.sparkle-project.Sparkle", "Installation"])
+            && !p[8].isEmpty && p[9...10].elementsEqual(["WhatsApp.app", "Contents"])
+            && p.contains("Resources") && p.contains(where: { $0.hasSuffix(".momd") })
+    }
     static func matchesWhatsAppResourceRename(
         actorIsAppleDitto: Bool, updaterValidated: Bool, updaterPath: String,
         updaterTeamID: String?, source: String, destination: String
@@ -167,6 +180,7 @@ enum AppleSyncRenamePolicy {
             let root = "/private/var/db/diagnostics/"
             return suffix == "tracev3" && source.hasPrefix(root) && destination.hasPrefix(root)
         case "com.apple.system_installd":
+            if isSystemIconInstallation(source, destination) { return true }
             let root = "/Applications/Xcode.app/Contents/"
             return suffix == "icns" && source.hasPrefix(root) && destination.hasPrefix(root)
         case "com.apple.mds_stores":
@@ -178,6 +192,8 @@ enum AppleSyncRenamePolicy {
                 source, destination, directory: "Library/Application Support/CloudDocs"
             )
         case "com.apple.fileproviderd":
+            if isCloudBackupHydration(source, destination) { return true }
+            if isNextBuildStagingTransfer(source, destination) { return true }
             return suffix == "meta" && sameUserMaintenanceDirectory(
                 source, destination, directory: "Library/Application Support/FileProvider"
             )
@@ -186,8 +202,12 @@ enum AppleSyncRenamePolicy {
             guard src.count == 9, src[1] == "Users", src[3...7].elementsEqual(["Library", "Containers", "com.apple.geod", "Data", "tmp"]),
                   UUID(uuidString: src[8]) != nil else { return false }
             let root = "/Users/\(src[2])/Library/Caches/GeoServices/"
-            let expected = suffix == "styl" ? "Resources" : (suffix == "iconconfigpack" ? "RegionalResources" : "")
+            let expected = suffix == "styl" ? "Resources" : (["iconconfigpack", "icondatapack"].contains(suffix) ? "RegionalResources" : "")
             return !expected.isEmpty && (destination as NSString).deletingLastPathComponent == root + expected
+        case "com.apple.mobileassetd":
+            return isSimulatorMaintenance(source, destination, asset: true)
+        case "com.apple.springboard":
+            return isSimulatorMaintenance(source, destination, asset: false)
         case "com.apple.parsec-fbf":
             return suffix == "processing" && sameUserMaintenanceDirectory(
                 source, destination, directory: "Library/Caches/com.apple.parsec-fbf"
@@ -195,6 +215,81 @@ enum AppleSyncRenamePolicy {
         default:
             return false
         }
+    }
+
+    private static func isSystemIconInstallation(_ source: String, _ destination: String) -> Bool {
+        let root = "/Library/Apple/System/Library/InstallerSandboxes/.PKInstallSandboxManager-SystemSoftware/"
+        guard source.hasPrefix(root), destination.hasPrefix(root),
+              (source as NSString).deletingLastPathComponent == (destination as NSString).deletingLastPathComponent,
+              (source as NSString).lastPathComponent.hasPrefix(".BC.T_"),
+              (destination as NSString).pathExtension == "icns" else { return false }
+        let relative = String(destination.dropFirst(root.count)).split(separator: "/").map(String.init)
+        guard let sandbox = relative.first, sandbox.hasSuffix(".activeSandbox"),
+              UUID(uuidString: String(sandbox.dropLast(".activeSandbox".count))) != nil else { return false }
+        return relative.dropFirst().dropLast().elementsEqual([
+            "Root", "System", "Library", "CoreServices", "CoreTypes.bundle", "Contents", "Library",
+            "MobileDevices.bundle", "Contents", "Resources"
+        ])
+    }
+
+    private static func fileProviderStagingUser(_ source: String) -> String? {
+        let p = URL(fileURLWithPath: source).pathComponents
+        guard p.count == 11, p[1] == "Users",
+              p[3...5].elementsEqual(["Library", "Application Support", "FileProvider"]),
+              UUID(uuidString: p[6]) != nil, p[7...9].elementsEqual(["wharf", "wharf", "propagate"]),
+              !p[10].isEmpty, p[10].allSatisfy(\.isNumber) else { return nil }
+        return p[2]
+    }
+
+    private static func isCloudBackupHydration(_ source: String, _ destination: String) -> Bool {
+        guard let user = fileProviderStagingUser(source) else { return false }
+        let root = "/Users/\(user)/Library/Mobile Documents/57T9237FN3~net~whatsapp~WhatsApp/Accounts/"
+        guard destination.hasPrefix(root) else { return false }
+        let p = String(destination.dropFirst(root.count)).split(separator: "/").map(String.init)
+        return p.count == 3 && !p[0].isEmpty && p[0].allSatisfy(\.isNumber)
+            && p[1] == "backup" && p[2] == "ExtChatDatabase.sqlite.enc"
+    }
+
+    private static func isSimulatorMaintenance(_ source: String, _ destination: String, asset: Bool) -> Bool {
+        let p = URL(fileURLWithPath: source).pathComponents
+        guard p.count > 8, p[1] == "Users",
+              p[3...6].elementsEqual(["Library", "Developer", "CoreSimulator", "Devices"]),
+              UUID(uuidString: p[7]) != nil, p[8] == "data" else { return false }
+        let root = "/" + p[1...8].joined(separator: "/") + "/"
+        guard destination.hasPrefix(root) else { return false }
+        if !asset {
+            let name = (destination as NSString).lastPathComponent
+            return (source as NSString).deletingLastPathComponent == root + "tmp"
+                && (source as NSString).lastPathComponent.hasPrefix(name + ".")
+                && (destination as NSString).pathExtension == "cpbitmap"
+                && destination.hasPrefix(root + "Library/Caches/MappedImageCache/com.apple.springboard-")
+        }
+        let assets = root + "private/var/MobileAsset/AssetsV2/"
+        guard source.hasPrefix(assets + "staging/"), destination.hasPrefix(assets),
+              (source as NSString).deletingLastPathComponent == assets + "staging" else { return false }
+        let relative = String(destination.dropFirst(assets.count)).split(separator: "/").map(String.init)
+        guard relative.count == 3, relative[0].hasPrefix("com_apple_MobileAsset_"),
+              relative[1] == "purpose_auto", relative[2].hasSuffix(".asset") else { return false }
+        let hash = String(relative[2].dropLast(".asset".count))
+        let prefix = relative[0] + "." + hash + ".auto."
+        let staged = (source as NSString).lastPathComponent
+        return hash.count == 40 && hash.allSatisfy(\.isHexDigit)
+            && staged.hasPrefix(prefix) && UUID(uuidString: String(staged.dropFirst(prefix.count))) != nil
+    }
+
+    private static func isNextBuildStagingTransfer(_ source: String, _ destination: String) -> Bool {
+        let parts = URL(fileURLWithPath: source).pathComponents
+        guard parts.count == 11, parts[1] == "Users",
+              parts[3...5].elementsEqual(["Library", "Application Support", "FileProvider"]),
+              UUID(uuidString: parts[6]) != nil,
+              parts[7...9].elementsEqual(["wharf", "wharf", "propagate"]),
+              !parts[10].isEmpty, parts[10].allSatisfy(\.isNumber) else { return false }
+        let root = "/Users/\(parts[2])/Documents/"
+        guard destination.hasPrefix(root), (destination as NSString).pathExtension == "rsc" else { return false }
+        let relative = String(destination.dropFirst(root.count))
+        // File Provider hydrates generated Next.js output through its private
+        // numeric staging slots. Do not exempt arbitrary document renames.
+        return relative.contains("/.next/server/app/")
     }
 
     private static func isCloudDocsStagingTransfer(_ source: String, _ destination: String) -> Bool {
@@ -209,7 +304,7 @@ enum AppleSyncRenamePolicy {
                relative[1...3].elementsEqual(["wharf", "wharf", "propagate"]),
                !relative[4].isEmpty, relative[4].allSatisfy(\.isNumber),
                (destination as NSString).deletingLastPathComponent == cloud + "i",
-               (destination as NSString).pathExtension == "pcm" { return true }
+               ["pcm", "flat", "meta"].contains((destination as NSString).pathExtension) { return true }
         }
         // A downloaded item moves from CloudDocs' private staging slot to
         // the same user's iCloud provider DownloadStage, preserving its name.
@@ -235,6 +330,8 @@ enum AppleSyncRenamePolicy {
         case "com.apple.fileproviderd": return "File Provider (fileproviderd)"
         case "com.apple.mds_stores": return "Spotlight indexing (mds_stores)"
         case "com.apple.geod": return "Apple Maps data (geod)"
+        case "com.apple.mobileassetd": return "Simulator asset service"
+        case "com.apple.springboard": return "Simulator SpringBoard"
         case "com.apple.parsec-fbf": return "Apple system data (parsec-fbf)"
         default:
             guard let signingID,

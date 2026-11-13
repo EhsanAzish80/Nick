@@ -69,6 +69,22 @@ final class UserFacingAlertBuilder: Sendable {
 
     private func detectPattern(from alert: ThreatAlert) -> AlertPattern {
         let signals   = alert.contributingSignals
+        if let continuity = signals.first(where: {
+            $0.metadata["threatFamily"] == "protection-continuity"
+                || $0.metadata["reason"] == "protection_continuity"
+        }) {
+            let gap = continuity.metadata["unobservedWindow"] != "false"
+            return AlertPattern(
+                headline: alert.title,
+                explanation: continuity.metadata["continuityCause"] ?? continuity.description,
+                assessment: gap ? "Protection interruption recorded" : "Protection status recorded",
+                recommendedAction: gap
+                    ? "Protection has reconnected. Review the recorded interval if the interruption was unexpected."
+                    : "Protection has reconnected. No action is needed for an expected restart.",
+                severity: gap ? .warning : .safe,
+                actions: [.showDetails, .dismiss]
+            )
+        }
         let monitors  = Set(signals.map(\.source))
         let features  = Set(signals.compactMap(\.processInfo).flatMap { (p: NickProcessInfo) -> [String] in
             var flags: [String] = []

@@ -2,6 +2,22 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+    func testRestartRecoveryAndRealGapRemainDistinctAndPreserveOriginalTime() throws {
+        let original = Date(timeIntervalSince1970: 1_800_000_000)
+        for gap in [false, true] {
+            let event = ESEvent(eventType: .notifyWrite, processPath: "/Applications/Nick.app/Contents/MacOS/Nick",
+                pid: 0, parentPid: 0, decision: .notApplicable,
+                threat: .init(threatName: gap ? "Protection interrupted" : "Protection resumed after restart",
+                    threatFamily: "protection-continuity", metadata: [
+                        "unobservedWindow": gap ? "true" : "false",
+                        "ruleTier": gap ? "protected" : "review",
+                        "reason": "protection_continuity"]), timestamp: original)
+            let decoded = try JSONDecoder().decode(ESEvent.self, from: JSONEncoder().encode(event))
+            let finding = try XCTUnwrap(ExtensionFinding(event: decoded))
+            XCTAssertEqual(finding.signal.timestamp, original)
+            XCTAssertEqual(finding.signal.severity, gap ? .high : .info)
+        }
+    }
     @MainActor
     func testOrdinaryCommandEventCrossesDurabilityBarrierWithoutAnotherEvent() async throws {
         let client = ExtensionXPCClient()

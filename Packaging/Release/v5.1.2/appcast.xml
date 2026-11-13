@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Nick Updates</title>
+    <link>https://3nsofts.com/nick/appcast.xml</link>
+    <description>Nick macOS security app updates</description>
+    <language>en</language>
+
+    <item>
+      <title>Nick 5.1.2</title>
+      <pubDate>Fri, 13 Nov 2026 14:03:03 GMT</pubDate>
+      <sparkle:version>5103</sparkle:version>
+      <sparkle:shortVersionString>5.1.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <h2>Nick 5.1.2 — quieter maintenance alerts and clearer recovery</h2>
+        <ul>
+          <li>Fixes validated Chrome profile ownership and GoogleUpdater maintenance alerts</li>
+          <li>Scopes cloud, installer, simulator and app-update rename activity</li>
+          <li>Clarifies restart recovery and preserves runtime interruption evidence</li>
+          <li>Improves Loom provenance, Git signing context and permission attribution</li>
+        </ul>
+      ]]></description>
+      <enclosure url="https://github.com/EhsanAzish80/Nick/releases/download/v5.1.2/Nick-5.1.2-build-5103.pkg"
+        length="18712932" type="application/octet-stream"
+        sparkle:edSignature="IoErBDIR4/sPnP8y1EEVNduoU5yYaEeygW8deeABW7xo2+omxVm4yzS4fj7cx1XFP+vOygCtOgqbtwY5u6TlBQ==" />
+    </item>
+
+    <item>
+      <title>Nick 5.1.1</title>
+      <pubDate>Sat, 07 Nov 2026 13:30:00 +0000</pubDate>
+      <sparkle:version>5101</sparkle:version>
+      <sparkle:shortVersionString>5.1.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <h2>Nick 5.1.1 — clearer alerts and more reliable reporting</h2>
+        <ul>
+          <li>Reduces scoped maintenance and updater false positives</li>
+          <li>Fixes scanner self-blocking and preserves Git signing context</li>
+          <li>Hardens extension reporting against special-file reads</li>
+          <li>Improves menu-bar activation and alert review controls</li>
+        </ul>
+      ]]></description>
+      <enclosure url="https://github.com/EhsanAzish80/Nick/releases/download/v5.1.1/Nick-5.1.1-build-5101.pkg"
+        length="18694164" type="application/octet-stream"
+        sparkle:edSignature="YgNA3wPvhBKQAjHQdsDuo2ARs1k6i6o0/1MGXGU1UgWqU8Jwkx7Xr81IXyAS83yciC8lER/NqLvFO/sMCv4sCw==" />
+    </item>
+
+    <item>
+      <title>Nick 5.1</title>
+      <pubDate>Mon, 02 Nov 2026 11:24:00 +0000</pubDate>
+      <sparkle:version>5085</sparkle:version>
+      <sparkle:shortVersionString>5.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <h2>Nick 5.1 — Broader evidence, quieter operation</h2>
+        <ul>
+          <li>Adds signed protection-intelligence updates with rollback and expiry safeguards</li>
+          <li>Broadens credential, shell-pipeline, persistence, ransomware and file-change evidence</li>
+          <li>Redesigns Settings while preserving existing approvals and controls</li>
+          <li>Improves Endpoint Security delivery, continuity reporting and disk-write efficiency</li>
+          <li>Adds harmless canaries and installed replay tools for transparent local validation</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/EhsanAzish80/Nick/releases/download/v5.1.0/Nick-5.1.0-build-5085.pkg"
+        length="18585710"
+        type="application/octet-stream"
+        sparkle:edSignature="ThPwehOG0ndIkyVN0bvo9F26Wl9JgumgJ05Yv6U+6yVJo7FSLTev8IiWW90YcdPVmE70fZzxFRL+fHabNK6iCg=="
+      />
+    </item>
+
+    <item>
+      <title>Nick 5.0</title>
+      <pubDate>Fri, 16 Oct 2026 10:49:29 +0000</pubDate>
+      <sparkle:version>5052</sparkle:version>
+      <sparkle:shortVersionString>5.0.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        <h2>Nick 5.0 — Clearer protection, stronger context</h2>
+        <ul>
+          <li>Adds Simple mode alongside the complete Advanced interface</li>
+          <li>Uses one consistent protection status across every major view</li>
+          <li>Explains responsible apps and command chains for behavior detections</li>
+          <li>Improves download-to-shell and ransomware detection precision</li>
+          <li>Makes remediation safer and failed actions clearer</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/EhsanAzish80/Nick/releases/download/v5.0.0/Nick-5.0.0-build-5052.pkg"
+        length="17846209"
+        type="application/octet-stream"
+        sparkle:edSignature="knS+BNHCm3bWUoHE7bckKfFN5W/r5GUyLH7NBMg1V4eoiVxtqwL46aWfTWMC17nXFjp0sH+KHaXpuyT5WVqRDw=="
+      />
+    </item>
+  </channel>
+</rss>
