@@ -296,7 +296,12 @@ final class TamperProtectionPolicyTests: XCTestCase {
             previous: .init(sequence: 9, wallTime: boot.addingTimeInterval(-300), bootSessionUUID: "A"),
             currentBootSessionUUID: "B", bootTime: boot
         )
-        XCTAssertEqual(preexistingGap?.kind, .interrupted)
+        XCTAssertEqual(preexistingGap?.kind, .resumedAfterRestart,
+                       "time powered off must not be called a runtime gap")
+        let corroborated = ProtectionContinuityPolicy.evaluate(
+            previous: .init(sequence: 9, wallTime: boot.addingTimeInterval(-300), bootSessionUUID: "A"),
+            currentBootSessionUUID: "B", bootTime: boot, hasObservedRuntimeGap: true)
+        XCTAssertEqual(corroborated?.kind, .interrupted)
 
         XCTAssertNil(ProtectionContinuityPolicy.evaluate(
             previous: .init(sequence: 10, wallTime: boot, bootSessionUUID: "A"),

@@ -115,7 +115,10 @@ final class ProtectionContinuityLedger: @unchecked Sendable {
                 currentExtensionBuild: currentExtensionBuild,
                 previousObservedExtensionBuild: previousObservedExtensionBuild,
                 recentUpdate: state.recentUpdate,
-                now: now
+                now: now,
+                hasObservedRuntimeGap: observations.contains {
+                    $0.observedAt >= previous.wallTime && $0.observedAt < bootTime
+                }
             ) else {
                 _ = persistLocked()
                 return nil

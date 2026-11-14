@@ -1082,6 +1082,15 @@ final class ESEventHandler {
                     destination: notifyDestPath
                 ) else { return }
                 if renameActorIsPlatform, renameSigningID == "com.apple.ditto",
+                   let appRange = notifyDestPath.range(of: "/WhatsApp.app/Contents/") {
+                    let stagedApp = String(notifyDestPath[..<appRange.lowerBound]) + "/WhatsApp.app"
+                    if ScopedUpdaterRenamePolicy.matchesWhatsAppStagedResourceRename(
+                        actorIsAppleDitto: true,
+                        validatedBundleTeam: DeveloperIDTrustValidator.shared.validatedDistributionTeam(path: stagedApp),
+                        source: notifySrcPath, destination: notifyDestPath
+                    ) { return }
+                }
+                if renameActorIsPlatform, renameSigningID == "com.apple.ditto",
                    let updater = SecCodeResponsibleProcessIdentityResolver.shared.identity(pid: parentPid, pathHint: nil),
                    ScopedUpdaterRenamePolicy.matchesWhatsAppResourceRename(
                     actorIsAppleDitto: true,
@@ -1586,8 +1595,10 @@ final class ESEventHandler {
             validateApplePath: Self.validatesTCCAppleCode(at:)
         )
         let affectsNick = appBundleID == "com.ehsanazish.nick" || appPath.contains("/Nick.app/")
-        let affectedName = affectsNick ? "Nick" : (identity?.name
-            ?? (appBundleID.isEmpty ? URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent : appBundleID))
+        let affectedName = affectsNick ? "Nick" : TCCAffectedClientTrustPolicy.affectedClientName(
+            appBundleID: appBundleID, appPath: appPath,
+            actorBundleID: identity?.bundleID, actorPath: identity?.path, actorName: identity?.name
+        )
 
         var metadata = [
             "appleEvent": "tcc-permission-modified",
@@ -1894,7 +1905,8 @@ final class ESEventHandler {
         let quarantineCandidate = Self.quarantinedExecutionCandidate(
             executablePath: targetPath,
             arguments: arguments,
-            executableHasTrustedSigner: trustedSigner
+            executableHasTrustedSigner: trustedSigner,
+            executableCodeHash: targetCodeHash
         )
         let candidateHasTrustedSigner = quarantineCandidate == targetPath ? trustedSigner : false
         let hasUntrustedQuarantineOrigin = quarantineCandidate != nil
@@ -2002,6 +2014,11 @@ final class ESEventHandler {
                         && attribution?.app.map {
                             LOLBinExecutionPolicy.isScopedGoogleUpdaterQuarantineRemoval(
                                 arguments: arguments, updaterExecutable: $0.path
+                            ) || LOLBinExecutionPolicy.isScopedChromeQuarantineRemoval(
+                                arguments: arguments,
+                                validatedTargetTeam: arguments.last == "/Applications/Google Chrome.app"
+                                    ? DeveloperIDTrustValidator.shared.validatedDistributionTeam(path: "/Applications/Google Chrome.app")
+                                    : nil
                             )
                         } == true
                     let effectiveTier = LOLBinExecutionPolicy.effectiveTier(
@@ -2561,9 +2578,12 @@ final class ESEventHandler {
     private static func quarantinedExecutionCandidate(
         executablePath: String,
         arguments: [String],
-        executableHasTrustedSigner: Bool
+        executableHasTrustedSigner: Bool,
+        executableCodeHash: Data
     ) -> String? {
-        if !executableHasTrustedSigner, hasQuarantineOrigin(at: executablePath) {
+        if !executableHasTrustedSigner, hasQuarantineOrigin(at: executablePath),
+           !(DeveloperIDTrustValidator.shared.isValidatedDistribution(path: executablePath)
+             && DeveloperIDTrustValidator.shared.cachedValidation(cdhash: executableCodeHash) == true) {
             return executablePath
         }
         guard let candidate = ExecutionTrustPolicy.scriptOperand(

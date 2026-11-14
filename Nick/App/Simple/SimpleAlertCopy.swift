@@ -36,7 +36,8 @@ struct SimpleAlertCopy: Equatable {
     ) -> SimpleAlertCopy {
         let when = HomeFormatting.dayAndTime(alert.lastSeen, now: now)
         let isRenameBurst = alert.contributingSignals.contains { $0.metadata["reason"] == "mass_file_rename" }
-        let processState = isRenameBurst ? "Rename activity recorded"
+        let isContinuity = alert.contributingSignals.contains { $0.metadata["threatFamily"] == "protection-continuity" }
+        let processState = isContinuity ? "Protection status recorded" : isRenameBurst ? "Rename activity recorded"
             : (alert.evidenceState() == .processActive ? "Still running" : "The command has finished")
         let behavior = BehaviorIncidentPresentation(alert: alert, incident: incident)
 
@@ -72,7 +73,9 @@ struct SimpleAlertCopy: Equatable {
         }
 
         let didText: String
-        if isQuarantined {
+        if isContinuity && !isQuarantined {
+            didText = "Recorded the protection status and reconnected."
+        } else if isQuarantined {
             didText = "Moved it to Quarantine, where it can’t open or change anything. Nothing was deleted."
         } else if !fileStillPresent, alert.isFileRemovalFinding {
             didText = "Noticed it and kept watching. The file has since been removed."

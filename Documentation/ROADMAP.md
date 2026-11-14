@@ -145,7 +145,28 @@ represented as a full 5101 run. Independent hash/behavior corpus results and ES
 p99/deadline measurements remain open effectiveness work. No 4/10 rating is
 claimed, and no additional soak is required for this patch release.
 
-## Version 5.2: expands local learning
+## Version 5.1.2: maintenance accuracy and recovery clarity
+
+Release candidate 5103 adds scoped Chrome/GoogleUpdater, cloud maintenance,
+installer, simulator and application-update fixes, clearer restart recovery,
+and verified nested-executable provenance. The user reported successful focused
+checks on a Mac Studio and M1 MacBook Pro. Final source validation: 1,003 Swift
+tests; 52 Python tests passed earlier in the patch cycle. No new soak or scorecard
+run was required. See the 5.1.2 release notes for measurement boundaries.
+
+Our internal maturity scale runs from **1 (best) to 10 (lowest)**. The current
+**4/10** milestone reflects substantial progress; the next 5.2 target is
+**3/10**, with **1/10** a longer-term goal. These are planning assessments,
+not measured malware-effectiveness ratings or independent certification.
+
+## Version 5.2: reliability, evaluation and local learning
+
+- Improve extension interruption diagnostics and collect bounded, explainable
+  health evidence; verify response deadlines and event latency separately.
+- Expand reproducible benign and malicious corpus evaluation and document
+  false-positive and detection limits before making effectiveness claims.
+- Pursue independent security review and broader multi-Mac validation.
+
 
 - Refine TCC severity policy for Automation and protected user-folder grants,
   keeping meaningful permission changes actionable without reintroducing

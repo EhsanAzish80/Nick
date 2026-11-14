@@ -34,6 +34,11 @@ enum IncidentDisplayStatus: String, Equatable, Sendable {
                 && $0.metadata["endpointDecision"] == "deny"
         }) {
             self = .blocked
+        } else if !alert.contributingSignals.isEmpty, alert.contributingSignals.allSatisfy({
+            $0.metadata["threatFamily"] == "protection-continuity"
+                && $0.metadata["unobservedWindow"] == "false"
+        }) {
+            self = .observed
         } else if let incident,
                   incident.state != .new || !incident.isVisible {
             // Automatic evidence cleanup (for example, a command ending) is

@@ -8,6 +8,15 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+## [5.1.2] - 2026-11-13
+
+### Fixed
+
+- Recognize validated Chrome profile ownership, scoped GoogleUpdater quarantine removal, and nested Loom executable provenance.
+- Present expected restart recovery as informational and preserve runtime-gap observation times.
+- Scope cloud, installer, GeoServices, simulator and WhatsApp updater rename maintenance by identity and paired paths.
+- Preserve verified Git public-key derivation context and identify the affected client in permission-change events.
+
 ## [5.1.1] - 2026-11-07
 
 ### Fixed

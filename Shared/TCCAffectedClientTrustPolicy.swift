@@ -8,6 +8,17 @@ import Foundation
 /// belongs to the client whose TCC record changed, not merely the process that
 /// caused the change.
 enum TCCAffectedClientTrustPolicy {
+    static func affectedClientName(appBundleID: String, appPath: String,
+                                   actorBundleID: String?, actorPath: String?, actorName: String?) -> String {
+        // The service making the change is not necessarily the affected client.
+        if !appBundleID.isEmpty {
+            return actorBundleID == appBundleID ? (actorName ?? appBundleID) : appBundleID
+        }
+        if !appPath.isEmpty {
+            return actorPath == appPath ? (actorName ?? appPath) : URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent
+        }
+        return "Unknown app"
+    }
     enum ChangeDisposition: Equatable {
         case timelineOnly
         case inform

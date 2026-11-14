@@ -2,6 +2,17 @@ import XCTest
 @testable import Nick
 
 final class CredentialAccessPolicyTests: XCTestCase {
+    func testChromeAUTHOwnershipAndValidatedContainingHelper() {
+        let chrome = CredentialAccessPolicy.ValidatedIdentity(bundleID: "com.google.Chrome", teamID: "EQHXZ8M8AV", signingValidated: true, isApplePlatform: false)
+        let helper = CredentialAccessPolicy.ValidatedIdentity(bundleID: "com.google.Chrome.helper", teamID: "EQHXZ8M8AV", signingValidated: true, isApplePlatform: false)
+        let path = "/Users/test/Library/Application Support/Google/Chrome/Default/Login Data"
+        XCTAssertTrue(CredentialAccessPolicy.ownsStore(path: path, identity: chrome))
+        XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: path, identity: helper), "helpers require validated containing-app ownership")
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(path: path, responsibleIdentity: chrome, actorIdentity: helper))
+        XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: "/Users/test/Library/Application Support/Claude/Cookies", identity: chrome))
+        XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: path, identity: .init(bundleID: "com.google.Chrome", teamID: "SPOOF", signingValidated: true, isApplePlatform: false)))
+        XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: path, identity: .init(bundleID: "com.google.Chrome", teamID: "EQHXZ8M8AV", signingValidated: false, isApplePlatform: false)))
+    }
     func testNickBrowserScanRequiresExactValidatedIdentityAndReadOnlyAccess() {
         func identity(_ id: String = "com.ehsanazish.nick", _ team: String = "UXGW5V3BY6", _ valid: Bool = true) -> CredentialAccessPolicy.ValidatedIdentity {
             .init(bundleID: id, teamID: team, signingValidated: valid, isApplePlatform: false)
@@ -50,7 +61,9 @@ final class CredentialAccessPolicyTests: XCTestCase {
         XCTAssertEqual(finding(sign)?.tier, "observed")
         XCTAssertNil(finding(sign, fileUID: 502))
         XCTAssertNil(finding(sign, appleGit: false))
-        XCTAssertNil(finding(["ssh-keygen", "-y", "-f", key]))
+        XCTAssertEqual(finding(["ssh-keygen", "-y", "-f", key])?.tier, "observed")
+        XCTAssertNil(finding(["ssh-keygen", "-y", "-f", key], appleGit: false))
+        XCTAssertNil(finding(["ssh-keygen", "-y", "-f", key], fileUID: 502))
     }
     func testSSHAgentAuthenticationRequiresExactOwnedKeyAndAppleIdentity() {
         let key = "/Users/test/.ssh/id_ed25519_signing"

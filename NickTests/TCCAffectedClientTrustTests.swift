@@ -2,6 +2,11 @@ import XCTest
 @testable import Nick
 
 final class TCCAffectedClientTrustTests: XCTestCase {
+    func testAffectedClientNeverUsesUnrelatedInstigatorName() {
+        XCTAssertEqual(TCCAffectedClientTrustPolicy.affectedClientName(appBundleID: "com.example.target", appPath: "", actorBundleID: "com.apple.tccd", actorPath: "/usr/libexec/tccd", actorName: "tccd"), "com.example.target")
+        XCTAssertEqual(TCCAffectedClientTrustPolicy.affectedClientName(appBundleID: "com.example.target", appPath: "", actorBundleID: "com.example.target", actorPath: nil, actorName: "Target"), "Target")
+        XCTAssertEqual(TCCAffectedClientTrustPolicy.affectedClientName(appBundleID: "", appPath: "/Applications/Target.app", actorBundleID: nil, actorPath: "/usr/libexec/tccd", actorName: "tccd"), "Target")
+    }
     func testValidatedAppleAffectedPathIsTimelineOnlyDespitePathSpellingMismatch() {
         XCTAssertTrue(TCCAffectedClientTrustPolicy.isValidatedAppleClient(
             appBundleID: "",

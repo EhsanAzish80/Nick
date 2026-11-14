@@ -107,6 +107,17 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
         ), finding.tier)
     }
 
+    func testChromeUpdaterRecursiveRemovalRequiresExactValidatedTarget() {
+        let command = ["xattr", "-d", "-r", "com.apple.quarantine", "/Applications/Google Chrome.app"]
+        XCTAssertTrue(LOLBinExecutionPolicy.isScopedChromeQuarantineRemoval(arguments: command, validatedTargetTeam: "EQHXZ8M8AV"))
+        for team in [nil, "OTHER"] {
+            XCTAssertFalse(LOLBinExecutionPolicy.isScopedChromeQuarantineRemoval(arguments: command, validatedTargetTeam: team))
+        }
+        for arguments in [Array(command.dropLast()) + ["/Applications/Other.app"], command + ["/tmp/other"], ["xattr", "-c", "/Applications/Google Chrome.app"]] {
+            XCTAssertFalse(LOLBinExecutionPolicy.isScopedChromeQuarantineRemoval(arguments: arguments, validatedTargetTeam: "EQHXZ8M8AV"))
+        }
+    }
+
     func test_shortLivedCurlPipeIsClassifiedAtExec() throws {
         let finding = try XCTUnwrap(LOLBinExecutionPolicy.finding(
             executablePath: "/bin/sh",
