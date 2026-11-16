@@ -60,6 +60,8 @@ final class BehaviorTracker {
         /// A recent temp file replaced a pre-existing non-encrypted file with
         /// high-entropy content that has no recognized file magic.
         var encryptedReplacement: Bool = false
+        /// Computed once at ingestion, never reclassified for every window scan.
+        var introducedRenameExtension: String? = nil
     }
 
     private struct RecentCreation {
@@ -239,13 +241,12 @@ final class BehaviorTracker {
         // finalization (`archive.tar.zst.tmp` -> `archive.tar.zst`) is a normal
         // atomic save even though the destination still has multiple suffixes.
         // Content evidence always overrides this exemption.
-        let destinationURL = URL(fileURLWithPath: destination)
-        let sourceURL = URL(fileURLWithPath: source)
+        let destinationStem = (destination as NSString).deletingPathExtension
         let isExactTemporaryFinalization = isAtomicSwap
-            && sourceURL.deletingPathExtension().standardizedFileURL.path
-                == destinationURL.standardizedFileURL.path
-        let appendsExtensionToNamedFile = !destinationURL.pathExtension.isEmpty
-            && !destinationURL.deletingPathExtension().pathExtension.isEmpty
+            && ESCallbackPath.normalize((source as NSString).deletingPathExtension)
+                == ESCallbackPath.normalize(destination)
+        let appendsExtensionToNamedFile = !(destination as NSString).pathExtension.isEmpty
+            && !(destinationStem as NSString).pathExtension.isEmpty
             && !isExactTemporaryFinalization
         let event = BehaviorEvent(
             timestamp: timestamp,
@@ -254,7 +255,8 @@ final class BehaviorTracker {
             source: source,
             countsTowardRenameBurst: !isAtomicSwap || appendsExtensionToNamedFile
                 || replacementEvidence?.indicatesEncryptedReplacement == true,
-            encryptedReplacement: replacementEvidence?.indicatesEncryptedReplacement == true
+            encryptedReplacement: replacementEvidence?.indicatesEncryptedReplacement == true,
+            introducedRenameExtension: Self.introducedExtension(source: source, destination: destination)
         )
         processTimelines[pid]?.events.append(event)
         if let burstScope {
@@ -344,10 +346,9 @@ final class BehaviorTracker {
         var directories: [String: Set<String>] = [:]
         for event in events where event.type == .fileRename
             && event.timestamp >= cutoff && event.countsTowardRenameBurst {
-            guard let source = event.source,
-                  let newExtension = event.encryptedReplacement
+            guard let newExtension = event.encryptedReplacement
                     ? "encrypted replacement"
-                    : Self.introducedExtension(source: source, destination: event.detail)
+                    : event.introducedRenameExtension
             else { continue }
             files[newExtension, default: []].insert(event.detail)
             directories[newExtension, default: []].insert((event.detail as NSString).deletingLastPathComponent)
@@ -429,8 +430,7 @@ final class BehaviorTracker {
             && event.timestamp >= cutoff && event.countsTowardRenameBurst {
             if event.encryptedReplacement {
                 introduced["encrypted replacement", default: 0] += 1
-            } else if let source = event.source,
-                      let ext = Self.introducedExtension(source: source, destination: event.detail) {
+            } else if let ext = event.introducedRenameExtension {
                 introduced[ext, default: 0] += 1
             }
         }

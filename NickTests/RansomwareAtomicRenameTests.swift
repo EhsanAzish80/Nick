@@ -3,6 +3,23 @@ import Darwin
 @testable import Nick
 
 final class RansomwareAtomicRenameTests: XCTestCase {
+    func testBusyRoutineRenameWindowStillDetectsSubsequentRansomware() {
+        let tracker = BehaviorTracker()
+        for index in 0..<5_000 {
+            tracker.recordRename(pid: 40, processGroupID: 30, processPath: "/backup",
+                source: "/Volumes/Backup/archive-\(index).tar.zst.tmp",
+                destination: "/Volumes/Backup/archive-\(index).tar.zst")
+            XCTAssertNil(tracker.extensionChangeBurst(pid: 40))
+        }
+        for index in 0..<8 {
+            tracker.recordRename(pid: 40, processGroupID: 30, processPath: "/backup",
+                source: "/Volumes/Backup/document-\(index).pdf",
+                destination: "/Volumes/Backup/document-\(index).pdf.locked")
+        }
+        XCTAssertEqual(tracker.extensionChangeBurst(pid: 40)?.fileCount, 8)
+        XCTAssertEqual(tracker.extensionChangeBurst(pid: 40)?.newExtension, "locked")
+    }
+
     func testPrefixReaderRejectsFIFOWithoutWaitingForWriter() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

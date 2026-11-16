@@ -5,9 +5,6 @@
 import Foundation
 import CryptoKit
 
-/// Pure, allocation-bounded command classifier shared by the Endpoint Security
-/// exec path and the app tests. It records evidence only; blocking and incident
-/// policy remain outside this type.
 enum LOLBinExecutionPolicy {
     enum Tier: String, Equatable, Sendable { case observed, review, protected }
     struct Finding: Equatable, Sendable {
@@ -491,7 +488,7 @@ enum CredentialAccessPolicy {
               identity.signingValidated,
               let bundleID = identity.bundleID?.trimmingCharacters(in: .whitespacesAndNewlines),
               !bundleID.isEmpty else { return false }
-        let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        let components = ["/"] + ESCallbackPath.normalize(path).split(separator: "/").map(String.init)
         func containsSequence(_ sequence: [String]) -> Bool {
             guard components.count >= sequence.count else { return false }
             return (0...(components.count - sequence.count)).contains { offset in
@@ -772,15 +769,14 @@ enum CredentialAccessPolicy {
     }
 
     static func isInsideKeychainsDirectory(_ rawPath: String) -> Bool {
-        let components = URL(fileURLWithPath: rawPath)
-            .standardizedFileURL.pathComponents.map { $0.lowercased() }
+        let components = ESCallbackPath.normalize(rawPath).split(separator: "/").map { $0.lowercased() }
         guard let library = components.lastIndex(of: "library"),
               components.indices.contains(library + 1) else { return false }
         return components[library + 1] == "keychains"
     }
 
     static func sensitiveStore(at rawPath: String) -> Store? {
-        let path = URL(fileURLWithPath: rawPath).standardizedFileURL.path
+        let path = ESCallbackPath.normalize(rawPath)
         let lower = path.lowercased()
         if lower.hasSuffix("/cookies.binarycookies") || lower.hasSuffix("/cookies")
             || lower.contains("/cookies.sqlite") {
@@ -796,7 +792,7 @@ enum CredentialAccessPolicy {
         }
         if lower.contains("/.ssh/"), !lower.hasSuffix(".pub"),
            !lower.hasSuffix("/known_hosts"), !lower.hasSuffix("/config"),
-           URL(fileURLWithPath: lower).lastPathComponent.hasPrefix("id_") {
+           ESCallbackPath.basename(lower).hasPrefix("id_") {
             return .sshPrivateKey
         }
         let walletMarkers = [

@@ -243,7 +243,7 @@ enum NickUpdateLeasePolicy {
     }
 
     static func containsProtectedUpdateDestination(_ path: String) -> Bool {
-        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        let standardized = ESCallbackPath.normalize(path)
         return standardized == applicationPath
             || standardized.hasPrefix(applicationPath + "/")
     }
@@ -254,10 +254,10 @@ enum NickUpdateLeasePolicy {
         operation: NickUpdateLeaseOperation
     ) -> Bool {
         guard operation == .rename else { return false }
-        let destination = URL(fileURLWithPath: destinationPath).standardizedFileURL.path
+        let destination = ESCallbackPath.normalize(destinationPath)
         guard destination == applicationPath else { return false }
         guard let sourcePath else { return true }
-        return URL(fileURLWithPath: sourcePath).standardizedFileURL.path != applicationPath
+        return ESCallbackPath.normalize(sourcePath) != applicationPath
     }
 
     static func isEligibleInstallerActor(
@@ -270,7 +270,7 @@ enum NickUpdateLeasePolicy {
             return nickUpdateIdentityValidated
         }
         guard identity.isPlatformBinary else { return false }
-        let standardized = URL(fileURLWithPath: actorPath).standardizedFileURL.path
+        let standardized = ESCallbackPath.normalize(actorPath)
         return standardized.hasPrefix("/System/Library/PrivateFrameworks/PackageKit.framework/")
             || standardized.hasPrefix("/System/Library/CoreServices/Installer.app/")
             || standardized == "/usr/sbin/installer"
@@ -350,7 +350,7 @@ enum TamperProtectionPolicy {
     }
 
     private static func standardized(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardizedFileURL.path
+        ESCallbackPath.normalize(path)
     }
 
     static let nickMaintenanceSigningIDs: Set<String> = [

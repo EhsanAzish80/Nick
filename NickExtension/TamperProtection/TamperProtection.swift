@@ -534,9 +534,9 @@ final class TamperProtection: @unchecked Sendable {
     // MARK: - Private
 
     private func isProtected(path: String) -> Bool {
-        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+        let standardized = ESCallbackPath.normalize(path)
         return protectedPaths.contains { protected in
-            let root = URL(fileURLWithPath: protected).standardizedFileURL.path
+            let root = ESCallbackPath.normalize(protected)
             return standardized == root || standardized.hasPrefix(root + "/")
         }
     }

@@ -230,7 +230,7 @@ final class IncidentStorePersistenceTests: XCTestCase {
         XCTAssertTrue(store.hasUnconfirmedChanges)
 
         let replay = store.ingest([alert])
-        XCTAssertEqual(replay.outcomes, [.coalesced(2)])
+        XCTAssertEqual(replay.outcomes, [.persisted(2)], "Unconfirmed actionable evidence must be urgent")
         XCTAssertEqual(writes, [1, 2])
         XCTAssertTrue(store.hasUnconfirmedChanges)
 
@@ -440,7 +440,7 @@ final class IncidentStorePersistenceTests: XCTestCase {
         }
         queue.stage(first.newlyActionable, for: firstGeneration)
         let retry = store.ingest([alert])
-        guard case .coalesced(let retryGeneration) = retry.outcomes.first else {
+        guard case .persisted(let retryGeneration) = retry.outcomes.first else {
             return XCTFail("Expected retry persistence")
         }
         queue.stage(retry.newlyActionable, for: retryGeneration)
@@ -486,6 +486,7 @@ final class IncidentStorePersistenceTests: XCTestCase {
         )
         let result = store.ingest([repeatAlert])
         XCTAssertTrue(result.newlyActionable.isEmpty)
+        XCTAssertEqual(result.outcomes, [.coalesced(2)], "Routine recurrences remain eligible for batching")
         XCTAssertEqual(store.incidents.first?.state, .new)
         XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 2)
     }

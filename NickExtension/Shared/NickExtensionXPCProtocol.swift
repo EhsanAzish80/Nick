@@ -89,7 +89,9 @@ final class StorageOperationRegistry: @unchecked Sendable {
         }
     }
 
-    func permits(pid: Int32, pidVersion: Int32, event: Event) -> Bool {
+    /// ES supplies the resolved vnode path; never resolve symlinks again while
+    /// an authorization deadline is pending. Registration remains canonicalized.
+    func permits(pid: Int32, pidVersion: Int32, event: Event, kernelResolvedPaths: Bool = false) -> Bool {
         lock.withLock {
             guard let active else { return false }
             guard active.request.expiresAt > now() else {
@@ -99,9 +101,16 @@ final class StorageOperationRegistry: @unchecked Sendable {
             guard active.request.actorPID == pid,
                   active.request.actorPIDVersion == pidVersion else { return false }
 
+            func resolve(_ path: String) -> String? {
+                if kernelResolvedPaths {
+                    guard path.hasPrefix("/"), path.utf8.count <= 4_096 else { return nil }
+                    return ESCallbackPath.normalize(path)
+                }
+                return Self.resolvedPath(path)
+            }
             switch (active.request.kind, event) {
             case (.sizeScan, .metadataRead(let path)):
-                guard let resolved = Self.resolvedPath(path),
+                guard let resolved = resolve(path),
                       Self.isNeverSuppressPath(resolved) == false else { return false }
                 return active.scopes.contains { Self.contains(resolved, scope: $0) }
             case (.readOnlySecurityScan, .metadataRead(let path)):
@@ -109,11 +118,11 @@ final class StorageOperationRegistry: @unchecked Sendable {
                 // explicitly selected scan roots is the operation itself.
                 // Other processes never reach this branch, so the hard
                 // never-suppress policy continues to apply to them.
-                guard let resolved = Self.resolvedPath(path) else { return false }
+                guard let resolved = resolve(path) else { return false }
                 return active.scopes.contains { Self.contains(resolved, scope: $0) }
             case (.trashCleanup, .trashRename(let source, let destination)):
-                guard let resolvedSource = Self.resolvedPath(source),
-                      let resolvedDestination = Self.resolvedPath(destination),
+                guard let resolvedSource = resolve(source),
+                      let resolvedDestination = resolve(destination),
                       Self.isNeverSuppressPath(resolvedSource) == false,
                       Self.isNeverSuppressPath(resolvedDestination) == false,
                       Self.isUserTrashPath(resolvedDestination) else { return false }

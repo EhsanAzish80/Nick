@@ -36,6 +36,15 @@ final class StorageOperationApprovalTests: XCTestCase {
         ))
     }
 
+    func testKernelResolvedPathsKeepScopeAndExactProcessChecks() {
+        let registry = StorageOperationRegistry(now: { Date(timeIntervalSince1970: 100) })
+        XCTAssertTrue(registry.register(request(kind: .sizeScan, scopes: ["/private/tmp/NickStorage/cache"]), authenticatedPID: pid, authenticatedPIDVersion: pidVersion))
+        XCTAssertTrue(registry.permits(pid: pid, pidVersion: pidVersion, event: .metadataRead(path: "/private/tmp/NickStorage/cache/item"), kernelResolvedPaths: true))
+        XCTAssertFalse(registry.permits(pid: pid, pidVersion: pidVersion + 1, event: .metadataRead(path: "/private/tmp/NickStorage/cache/item"), kernelResolvedPaths: true))
+        XCTAssertFalse(registry.permits(pid: pid, pidVersion: pidVersion, event: .metadataRead(path: "/private/tmp/NickStorage/cache/../outside"), kernelResolvedPaths: true))
+        XCTAssertFalse(registry.permits(pid: pid, pidVersion: pidVersion, event: .metadataRead(path: "relative"), kernelResolvedPaths: true))
+    }
+
     func testExpiredOperationAndReusedIDAreRejected() {
         let clock = TestClock(Date(timeIntervalSince1970: 100))
         let registry = StorageOperationRegistry(now: { clock.now() })
