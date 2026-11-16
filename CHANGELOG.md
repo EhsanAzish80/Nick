@@ -8,6 +8,15 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+## [5.1.3] - 2026-11-16
+
+### Fixed
+
+- Remove filesystem-aware path construction from high-frequency Endpoint Security authorization checks.
+- Bound callback and deferred-work temporary-object lifetime with autorelease pools.
+- Batch routine incident recurrences while preserving immediate durable handling of new and actionable security evidence.
+- Address reliability issues identified in Backblaze burst-load report #122 without excluding backup apps. Exact workload confirmation remains pending.
+
 ## [5.1.2] - 2026-11-13
 
 ### Fixed

@@ -76,7 +76,8 @@ final class ESEventHandler {
     /// Offloads scanning and XPC delivery off the ES callback queue.
     let dispatchQueue = DispatchQueue(
         label: "com.ehsanazish.nick.NickExtension.eventhandler",
-        qos: .userInitiated
+        qos: .userInitiated,
+        autoreleaseFrequency: .workItem
     )
 
     private let encoder = JSONEncoder()
@@ -95,6 +96,10 @@ final class ESEventHandler {
     // MARK: - Public Entry Point
 
     func handle(message: UnsafePointer<es_message_t>) {
+        autoreleasepool { handleWithinPool(message: message) }
+    }
+
+    private func handleWithinPool(message: UnsafePointer<es_message_t>) {
         ESCallbackSafetyGuard.enter()
         defer { ESCallbackSafetyGuard.leave() }
         var msg = message.pointee
@@ -244,8 +249,8 @@ final class ESEventHandler {
                execArguments.count == 3,
                execArguments[1].hasPrefix("/"), execArguments[2].hasPrefix("/"),
                fileScanner?.allowsStrictRule("keychain_store_transfer") == true {
-                let source = URL(fileURLWithPath: execArguments[1]).standardizedFileURL.path
-                let destination = URL(fileURLWithPath: execArguments[2]).standardizedFileURL.path
+                let source = ESCallbackPath.normalize(execArguments[1])
+                let destination = ESCallbackPath.normalize(execArguments[2])
                 if CredentialAccessPolicy.shouldReportKeychainTransfer(
                     sourcePath: source, destinationPath: destination
                 ) {
@@ -401,9 +406,10 @@ final class ESEventHandler {
                 signingValidated: credentialActorValidated,
                 isApplePlatform: process.is_platform_binary
             )
-            let ownsCredentialStore = CredentialAccessPolicy.ownsStore(path: filePath, identity: credentialActor)
+            let ownsCredentialStore = credentialStore != nil && (
+                CredentialAccessPolicy.ownsStore(path: filePath, identity: credentialActor)
                 || CredentialAccessPolicy.ownsStore(path: filePath,
-                    identity: DeveloperIDTrustValidator.shared.cachedOwningApp(cdhash: credentialActorHash))
+                    identity: DeveloperIDTrustValidator.shared.cachedOwningApp(cdhash: credentialActorHash)))
             let nickBrowserScan = CredentialAccessPolicy.isNickBrowserScan(
                 identity: credentialActor, store: credentialStore, readOnly: isReadOpen && !isWriteOpen)
             let strictCredentialRule = "credential_store_access"
@@ -418,7 +424,7 @@ final class ESEventHandler {
                 && xpcServer?.storageOperationRegistry.permits(
                     pid: pid,
                     pidVersion: processIdentity.pidVersion,
-                    event: .metadataRead(path: filePath)
+                    event: .metadataRead(path: filePath), kernelResolvedPaths: true
                 ) == true
 
             let responseAccepted = esClient?.respond(to: message, allow: !shouldBlock) == true
@@ -919,7 +925,7 @@ final class ESEventHandler {
             if xpcServer?.storageOperationRegistry.permits(
                 pid: pid,
                 pidVersion: processIdentity.pidVersion,
-                event: .trashRename(source: srcPath, destination: destinationPath)
+                event: .trashRename(source: srcPath, destination: destinationPath), kernelResolvedPaths: true
             ) == true {
                 esClient?.respond(to: message, allow: true)
                 fileScanner?.cache.invalidate(path: srcPath)
@@ -1052,7 +1058,7 @@ final class ESEventHandler {
             if xpcServer?.storageOperationRegistry.permits(
                 pid: pid,
                 pidVersion: processIdentity.pidVersion,
-                event: .trashRename(source: notifySrcPath, destination: notifyDestPath)
+                event: .trashRename(source: notifySrcPath, destination: notifyDestPath), kernelResolvedPaths: true
             ) == true {
                 fileScanner?.cache.invalidate(path: notifySrcPath)
                 fileScanner?.cache.invalidate(path: notifyDestPath)
@@ -1431,7 +1437,7 @@ final class ESEventHandler {
                     "itemURL": itemURL,
                     "persistencePath": itemPath,
                     "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,
-                    "instigatorName": URL(fileURLWithPath: actorPath).lastPathComponent,
+                    "instigatorName": ESCallbackPath.basename(actorPath),
                     "appURL": appURL,
                     "btmAppName": normalizedBTMAppName(appURL),
                     "executablePath": esString(event.executable_path),
@@ -1471,7 +1477,7 @@ final class ESEventHandler {
                     "itemURL": itemURL,
                     "persistencePath": itemPath,
                     "launchItemLabel": URL(fileURLWithPath: itemPath).deletingPathExtension().lastPathComponent,
-                    "instigatorName": URL(fileURLWithPath: actorPath).lastPathComponent,
+                    "instigatorName": ESCallbackPath.basename(actorPath),
                     "appURL": appURL,
                     "btmAppName": normalizedBTMAppName(appURL),
                     "managed": item.managed ? "true" : "false",
@@ -1755,7 +1761,8 @@ final class ESEventHandler {
     private let preLaunchQueue = DispatchQueue(
         label: "com.ehsanazish.nick.NickExtension.prelaunch",
         qos: .userInteractive,
-        attributes: .concurrent
+        attributes: .concurrent,
+        autoreleaseFrequency: .workItem
     )
 
     /// Use the same deadline budget as pre-launch hashing. On timeout allow
@@ -2470,7 +2477,7 @@ final class ESEventHandler {
     }
 
     private static func isInterpreter(_ path: String) -> Bool {
-        let name = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        let name = ESCallbackPath.basename(path).lowercased()
         return ["sh", "bash", "zsh", "ksh", "fish", "python", "python3", "node", "perl", "ruby", "osascript"].contains(name)
     }
 
@@ -2537,7 +2544,7 @@ final class ESEventHandler {
             metadata.merge(attribution) { _, attributedValue in attributedValue }
         }
         if let writerPath = actorPath ?? writer?.path {
-            metadata["fimWriterName"] = URL(fileURLWithPath: writerPath).lastPathComponent
+            metadata["fimWriterName"] = ESCallbackPath.basename(writerPath)
             metadata["fimWriterPath"] = writerPath
         }
         if Self.isShellProfile(path) {
@@ -2569,7 +2576,7 @@ final class ESEventHandler {
     }
 
     private static func isShellProfile(_ path: String) -> Bool {
-        let name = URL(fileURLWithPath: path).lastPathComponent.lowercased()
+        let name = ESCallbackPath.basename(path).lowercased()
         return [".zshrc", ".zprofile", ".zshenv", ".bash_profile", ".bashrc", ".profile",
                 "zshrc", "zprofile", "zshenv", "bashrc", "profile"].contains(name)
             || name.hasPrefix("zshrc_")
@@ -2833,8 +2840,7 @@ final class ESEventHandler {
     /// executable or document-borne payloads. Databases, journals, logs,
     /// caches, media and other high-churn data are left to manual/deep scans.
     private func shouldDeepScanModifiedFile(at path: String) -> Bool {
-        let url = URL(fileURLWithPath: path)
-        let ext = url.pathExtension.lowercased()
+        let ext = (ESCallbackPath.basename(path) as NSString).pathExtension.lowercased()
         let candidateExtensions: Set<String> = [
             "app", "applescript", "bin", "bundle", "command", "dylib", "exe", "framework",
             "jar", "js", "macho", "mpkg", "pkg", "plugin", "py", "scpt", "sh", "tool", "zsh",
@@ -2894,7 +2900,7 @@ final class ESEventHandler {
         filePath: String
     ) -> Bool {
         guard actorIsPlatformBinary else { return false }
-        let actor = URL(fileURLWithPath: actorPath).lastPathComponent.lowercased()
+        let actor = ESCallbackPath.basename(actorPath).lowercased()
         let trustedActors: Set<String> = [
             "xcode", "xcbuild", "xcodebuild", "swbbuildservice",
             "swift", "swiftc", "swift-frontend", "clang", "clang++", "ld"
@@ -3029,7 +3035,7 @@ final class ESEventHandler {
         } else {
             path = value
         }
-        let component = URL(fileURLWithPath: path).lastPathComponent
+        let component = ESCallbackPath.basename(path)
         return component.hasSuffix(".app") ? String(component.dropLast(4)) : component
     }
 

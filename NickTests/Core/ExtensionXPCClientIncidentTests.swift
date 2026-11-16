@@ -35,9 +35,9 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
 
     func testOrdinaryFindingDurabilityDoesNotWaitForUnrelatedQuarantineEvent() {
         XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: true, tier: "observed", reason: "process_discovery"))
-        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "review", reason: "shell_profile_modification"))
+        XCTAssertFalse(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "review", reason: "shell_profile_modification"))
         XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "protected", reason: "file_integrity_deleted"))
-        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "review", reason: "download_pipe_interpreter"))
+        XCTAssertFalse(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "review", reason: "download_pipe_interpreter"))
         XCTAssertFalse(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "observed", reason: "process_discovery"))
     }
     func testScannerRecurrenceUsesNormalizedProtectedTierWithoutRawTier() throws {

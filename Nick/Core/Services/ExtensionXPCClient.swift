@@ -1513,7 +1513,10 @@ public final class ExtensionXPCClient: NSObject {
     nonisolated static func requiresImmediateOrdinaryFindingSnapshot(
         isNew: Bool, tier: String?, reason: String?
     ) -> Bool {
-        isNew || tier == "review" || tier == "protected" || reason == "quarantine_executable"
+        // New incidents and actionable escalations are returned as persisted by
+        // IncidentStore. Unchanged review-tier recurrences stay journal-backed
+        // until the existing routine batch; protected evidence remains urgent.
+        isNew || tier == "protected" || reason == "quarantine_executable"
     }
 
     private func deliver(_ finding: ExtensionFinding) {

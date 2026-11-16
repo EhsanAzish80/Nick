@@ -2,6 +2,23 @@ import XCTest
 @testable import Nick
 
 final class PerformanceSafetyTests: XCTestCase {
+    func testCallbackPathsNormalizeLexicallyWithoutExistingFiles() {
+        XCTAssertEqual(ESCallbackPath.normalize("/never-existing/a/../b//./file"), "/never-existing/b/file")
+        XCTAssertEqual(ESCallbackPath.normalize("/../../"), "/")
+        XCTAssertEqual(ESCallbackPath.basename("/folder/文件"), "文件")
+        XCTAssertEqual(CredentialAccessPolicy.sensitiveStore(at: "/Users/test/a/../.ssh/id_ed25519"), .sshPrivateKey)
+        XCTAssertNil(CredentialAccessPolicy.sensitiveStore(at: "/Users/test/.ssh/../ordinary"))
+    }
+
+    func testBackupSizedOpenBurstPreservesCredentialClassification() {
+        // A bounded replay of classification work, not an installed ES benchmark.
+        for index in 0..<50_000 {
+            XCTAssertNil(CredentialAccessPolicy.sensitiveStore(at: "/Volumes/Backup/project/dir/asset-\(index).dat"))
+        }
+        XCTAssertEqual(CredentialAccessPolicy.sensitiveStore(at: "/Users/test/Library/Keychains/login.keychain-db"), .keychain)
+        XCTAssertEqual(CredentialAccessPolicy.sensitiveStore(at: "/Users/test/Library/Application Support/Google/Chrome/Default/Cookies"), .browserCookies)
+    }
+
 
     func test_fseventsQueueCoalescesAndReportsOverflow() {
         var queue = BoundedPathQueue(capacity: 2)

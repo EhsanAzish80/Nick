@@ -756,7 +756,8 @@ final class IncidentStore {
         outcomes = outcomes.map { outcome in
             switch outcome {
             case .persisted: .persisted(generation)
-            case .coalesced: .coalesced(generation)
+            // Escalation/reopening must not wait for a routine recurrence batch.
+            case .coalesced: newlyActionable.isEmpty ? .coalesced(generation) : .persisted(generation)
             case .suppressedByPolicy, .failed: outcome
             }
         }

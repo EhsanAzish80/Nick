@@ -76,7 +76,7 @@ enum MuteManager {
         guard process.is_platform_binary else { return }
         let token = process.executable.pointee.path
         let path = token.data.map { String(decoding: UnsafeRawBufferPointer(start: $0, count: token.length), as: UTF8.self) } ?? ""
-        let name = URL(fileURLWithPath: path).lastPathComponent
+        let name = ESCallbackPath.basename(path)
         guard let entry = measuredProcessMutes.first(where: { $0.executableName == name }) else { return }
         let pid = audit_token_to_pid(process.audit_token)
         let shouldMute = mutedPIDs.withLock { $0.insert(pid).inserted }

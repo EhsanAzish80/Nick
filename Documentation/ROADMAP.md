@@ -203,3 +203,12 @@ not measured malware-effectiveness ratings or independent certification.
 - Automatic deletion based solely on a heuristic or model score.
 - A dedicated DNS proxy when the content filter already provides the required
   hostname enforcement.
+
+## Version 5.1.3: emergency extension reliability
+
+Build 5104 removes filesystem-aware URL construction from frequent file-open
+checks, drains temporary objects per callback/work item, and batches unchanged
+routine incident recurrences. New/actionable and protected evidence stays urgent.
+Issue #122 supplied the Backblaze burst-load diagnostics; the exact workload is
+not locally reproduced. See the 5.1.3 release notes for bounded test results and
+remaining confirmation. This is a reliability patch, not a new effectiveness score.
