@@ -11,20 +11,20 @@
     <item>
       <title>Nick 5.1.3</title>
       <pubDate>Mon, 16 Nov 2026 07:01:09 GMT</pubDate>
-      <sparkle:version>5104</sparkle:version>
+      <sparkle:version>5105</sparkle:version>
       <sparkle:shortVersionString>5.1.3</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
       <description><![CDATA[
         <h2>Nick 5.1.3 — emergency extension reliability fix</h2>
         <ul>
-          <li>Removes filesystem-aware path construction from frequent authorization checks</li>
+          <li>Caches rename classification and removes filesystem-aware path construction from frequent authorization checks</li>
           <li>Drains callback temporary objects and batches routine incident recurrences</li>
           <li>Keeps new actionable and protected evidence urgent without backup-app exclusions</li>
         </ul>
       ]]></description>
-      <enclosure url="https://github.com/EhsanAzish80/Nick/releases/download/v5.1.3/Nick-5.1.3-build-5104.pkg"
-        length="18714712" type="application/octet-stream"
-        sparkle:edSignature="ErEIJu9L47GyMIW3XpSIVdNcOxaTi56IK5sXXWs7DibLDNYyFrHZvXSYpcEUYqLpuqyIhPT7N6ck4j0bSrqcDw==" />
+      <enclosure url="https://github.com/EhsanAzish80/Nick/releases/download/v5.1.3/Nick-5.1.3-build-5105.pkg"
+        length="18715355" type="application/octet-stream"
+        sparkle:edSignature="BlT71ywXFhLr7fnpvOBoZRUf0go2CyJMPuH9YxS8otu8cSWCMiVaM9qOCvElVyImXMSjQmjeWXy7HLEjAQSZBQ==" />
     </item>
 
     <item>

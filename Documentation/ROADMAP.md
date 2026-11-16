@@ -206,7 +206,7 @@ not measured malware-effectiveness ratings or independent certification.
 
 ## Version 5.1.3: emergency extension reliability
 
-Build 5104 removes filesystem-aware URL construction from frequent file-open
+Build 5105 caches rename classification at ingestion and removes filesystem-aware URL construction from frequent file-open
 checks, drains temporary objects per callback/work item, and batches unchanged
 routine incident recurrences. New/actionable and protected evidence stays urgent.
 Issue #122 supplied the Backblaze burst-load diagnostics; the exact workload is

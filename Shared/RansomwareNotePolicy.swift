@@ -1,6 +1,26 @@
 import Darwin
 import Foundation
 
+/// Lexical normalization for kernel-supplied ES paths. Never constructs a file
+/// URL (whose directory inference can call lstat) or follows a symlink.
+enum ESCallbackPath {
+    static func normalize(_ path: String) -> String {
+        guard path.hasPrefix("/") else { return path }
+        var parts: [Substring] = []
+        for part in path.split(separator: "/") {
+            if part == "." { continue }
+            if part == ".." { if !parts.isEmpty { parts.removeLast() }; continue }
+            parts.append(part)
+        }
+        return "/" + parts.joined(separator: "/")
+    }
+
+    static func basename(_ path: String) -> String {
+        String(path.split(separator: "/").last ?? "")
+    }
+}
+
+
 struct ProcessInstanceIdentity: Equatable, Hashable, Sendable {
     let pid: Int32
     let startSeconds: UInt64
@@ -439,8 +459,8 @@ enum RansomwareRenamePolicy {
         // BehaviorTracker and still overrides this path-only exemption.
         let sourceWithoutTemporarySuffix = (source as NSString).deletingPathExtension
         if temporaryExtensions.contains(sourceExtension),
-           URL(fileURLWithPath: sourceWithoutTemporarySuffix).standardizedFileURL.path
-               == URL(fileURLWithPath: destination).standardizedFileURL.path {
+           ESCallbackPath.normalize(sourceWithoutTemporarySuffix)
+               == ESCallbackPath.normalize(destination) {
             return nil
         }
         // A temporary/hidden file renamed over `document.ext.locked` is the

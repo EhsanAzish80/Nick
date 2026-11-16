@@ -5,25 +5,6 @@
 import Foundation
 import CryptoKit
 
-/// Lexical normalization for kernel-supplied ES paths. Never constructs a file
-/// URL (whose directory inference can call lstat) or follows a symlink.
-enum ESCallbackPath {
-    static func normalize(_ path: String) -> String {
-        guard path.hasPrefix("/") else { return path }
-        var parts: [Substring] = []
-        for part in path.split(separator: "/") {
-            if part == "." { continue }
-            if part == ".." { if !parts.isEmpty { parts.removeLast() }; continue }
-            parts.append(part)
-        }
-        return "/" + parts.joined(separator: "/")
-    }
-
-    static func basename(_ path: String) -> String {
-        String(path.split(separator: "/").last ?? "")
-    }
-}
-
 enum LOLBinExecutionPolicy {
     enum Tier: String, Equatable, Sendable { case observed, review, protected }
     struct Finding: Equatable, Sendable {

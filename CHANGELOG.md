@@ -12,6 +12,7 @@ monotonically increasing macOS bundle build number.
 
 ### Fixed
 
+- Cache rename classification once per event instead of repeating filesystem-aware work across a busy window under the behavior-tracker lock.
 - Remove filesystem-aware path construction from high-frequency Endpoint Security authorization checks.
 - Bound callback and deferred-work temporary-object lifetime with autorelease pools.
 - Batch routine incident recurrences while preserving immediate durable handling of new and actionable security evidence.
