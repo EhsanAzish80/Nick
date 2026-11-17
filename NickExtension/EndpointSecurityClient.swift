@@ -117,11 +117,7 @@ final class EndpointSecurityClient {
     func respond(to message: UnsafePointer<es_message_t>, allow: Bool) -> Bool {
         guard let client, message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return false }
 
-        Self.healthMetrics.recordAuthResponse(messageMachTime: message.pointee.mach_time)
         let missedDeadline = mach_absolute_time() >= message.pointee.deadline
-        if missedDeadline {
-            Self.healthMetrics.recordDeadlineMiss()
-        }
         let ret: es_respond_result_t
         if message.pointee.event_type == ES_EVENT_TYPE_AUTH_OPEN {
             // AUTH_OPEN is the one authorization event that requires a flags
@@ -136,10 +132,14 @@ final class EndpointSecurityClient {
             let authResult: es_auth_result_t = allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY
             ret = es_respond_auth_result(client, message, authResult, false)
         }
+        let completedAt = mach_absolute_time()
+        Self.healthMetrics.recordAuthResponse(messageMachTime: message.pointee.mach_time, nowMachTime: completedAt)
+        Self.healthMetrics.recordResponseResult(
+            pastDeadline: missedDeadline || completedAt >= message.pointee.deadline,
+            errorCode: ret == ES_RESPOND_RESULT_SUCCESS ? nil : ret.rawValue,
+            eventType: message.pointee.event_type
+        )
         if ret != ES_RESPOND_RESULT_SUCCESS {
-            if !missedDeadline {
-                Self.healthMetrics.recordDeadlineMiss()
-            }
             Self.logger.warning(
                 "Endpoint Security response returned \(ret.rawValue) for event \(message.pointee.event_type.rawValue) — operation was not answered"
             )
@@ -253,8 +253,7 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
     private struct State {
         var startedAt = Date()
         var eventCounts: [String: UInt64] = [:]
-        var deadlineMisses: UInt64 = 0
-        var lastDeadlineMissAt: Date?
+        var authResponses = AuthResponseDiagnostics()
         var credentialOpenEvaluations: UInt64 = 0
         var credentialOpenFindings: UInt64 = 0
         var nickProtectedPathMaintenance: UInt64 = 0
@@ -278,10 +277,10 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         lock.withLock { state.eventCounts[Self.name(eventType), default: 0] += 1 }
     }
 
-    func recordDeadlineMiss() {
+    func recordResponseResult(pastDeadline: Bool, errorCode: UInt32?, eventType: es_event_type_t) {
         lock.withLock {
-            state.deadlineMisses += 1
-            state.lastDeadlineMissAt = Date()
+            state.authResponses.record(pastDeadline: pastDeadline, errorCode: errorCode,
+                                       event: Self.name(eventType), at: Date())
         }
     }
 
@@ -336,21 +335,25 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
         diskWriteCounts: [String: UInt64],
         diskWriteBytes: [String: UInt64],
         diskWriteMeasurementSeconds: Double,
-        projectedDiskBytesPerDay: [String: Double]
+        projectedDiskBytesPerDay: [String: Double],
+        responseDiagnostics: AuthResponseDiagnostics,
+        authResponseMaximumMilliseconds: Double?,
+        authResponseRetainedSampleCount: Int
     ) {
         let eventSnapshot = lock.withLock {
             let elapsed = max(Date().timeIntervalSince(state.startedAt), 1)
             let rates = state.eventCounts.mapValues { Double($0) / elapsed }
             return (
                 rates,
-                state.deadlineMisses,
-                state.lastDeadlineMissAt,
+                state.authResponses.lateResponseAttemptCount,
+                state.authResponses.lastLateResponseAt,
                 state.credentialOpenEvaluations,
                 state.credentialOpenFindings,
                 state.nickProtectedPathMaintenance,
                 state.diskWriteCounts,
                 state.diskWriteBytes,
-                elapsed
+                elapsed,
+                state.authResponses
             )
         }
         let latencySnapshot = authLatencyWindow.snapshot()
@@ -368,7 +371,10 @@ final class ExtensionHealthMetrics: @unchecked Sendable {
             eventSnapshot.6,
             eventSnapshot.7,
             eventSnapshot.8,
-            eventSnapshot.7.mapValues { Double($0) / eventSnapshot.8 * 86_400 }
+            eventSnapshot.7.mapValues { Double($0) / eventSnapshot.8 * 86_400 },
+            eventSnapshot.9,
+            latencySnapshot.maximumObservedMilliseconds,
+            latencySnapshot.sampleCount
         )
     }
 

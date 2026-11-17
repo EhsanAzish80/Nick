@@ -28,6 +28,7 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         XCTAssertEqual(mkfifo(fifo, 0o600), 0)
         let start = Date()
         XCTAssertNil(RegularFilePrefixReader.read(path: fifo, maximumBytes: 1024))
+        XCTAssertEqual(ScanCandidatePolicy.kind(atPath: fifo), .other)
         XCTAssertLessThan(Date().timeIntervalSince(start), 1)
         let file = root.appendingPathComponent("regular")
         try Data("abcdef".utf8).write(to: file)
@@ -35,6 +36,7 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         let link = root.appendingPathComponent("link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
         XCTAssertNil(RegularFilePrefixReader.read(path: link.path, maximumBytes: 3))
+        XCTAssertEqual(ScanCandidatePolicy.kind(atPath: link.path), .other)
         XCTAssertNil(RegularFilePrefixReader.read(path: root.path, maximumBytes: 3))
     }
     func test_cmakeStyleRecentCreatesRenamedToFinalAcrossEightFoldersDoNotCount() {

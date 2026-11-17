@@ -212,3 +212,12 @@ routine incident recurrences. New/actionable and protected evidence stays urgent
 Issue #122 supplied the Backblaze burst-load diagnostics; the exact workload is
 not locally reproduced. See the 5.1.3 release notes for bounded test results and
 remaining confirmation. This is a reliability patch, not a new effectiveness score.
+
+## Version 5.1.4: reader-path and persistence follow-up
+
+Build 5106 indexes exact shell-profile targets before ES starts, rejects special
+files before header reads, separates notification retries from urgent incident
+mutations and clarifies local deadline/response-error diagnostics. Matching 5105
+crash reports identify the reader realpath call. Local tests do not establish
+resolution of the reported later memory peak or every deadline failure; #122
+remains open for workload confirmation.

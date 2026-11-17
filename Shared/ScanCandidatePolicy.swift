@@ -81,9 +81,7 @@ enum ScanCandidatePolicy {
 
     /// Reads at most `headerLength` bytes. Returns `.other` for unreadable files.
     static func kind(atPath path: String) -> Kind {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return .other }
-        defer { try? handle.close() }
-        guard let header = try? handle.read(upToCount: headerLength) else { return .other }
+        guard let header = RegularFilePrefixReader.read(path: path, maximumBytes: headerLength) else { return .other }
         return kind(ofHeader: header)
     }
 
@@ -155,4 +153,18 @@ enum RegularFilePrefixReader {
         guard count >= 0 else { return nil }
         return Data(bytes.prefix(count))
     }
+}
+
+/// Built from canonical configuration before ES starts. Lookups accept kernel
+/// vnode paths, without path resolution, file URLs or filesystem queries.
+struct KernelExactPathIndex {
+    private let paths: Set<String>
+
+    init(canonicalPaths: [String], directoryFlags: [Bool], allowedNames: Set<String>) {
+        paths = Set(zip(canonicalPaths, directoryFlags).compactMap { path, directory in
+            !directory && allowedNames.contains((path as NSString).lastPathComponent.lowercased()) ? path : nil
+        })
+    }
+
+    func contains(_ kernelPath: String) -> Bool { paths.contains(kernelPath) }
 }

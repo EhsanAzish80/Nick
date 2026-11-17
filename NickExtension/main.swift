@@ -24,12 +24,18 @@ let scanCache    = ScanCache()
 /// process replaces it. Build 5058 and earlier heartbeats did not persist the
 /// build number, so this preserves correct update attribution across that
 /// one-time schema transition.
-let previouslyObservedExtensionBuild: String? = {
-    guard let data = FileManager.default.contents(atPath: healthPath),
+let previousExtensionHealth: [String: Any]? = {
+    guard let data = RegularFilePrefixReader.read(path: healthPath, maximumBytes: 64 * 1_024),
           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return nil }
-    return object["version"] as? String
+    return object
 }()
+let previouslyObservedExtensionBuild = previousExtensionHealth?["version"] as? String
+let extensionHealthStartedUptime = ProcessInfo.processInfo.systemUptime
+let extensionHealthSession = ExtensionHealthSession(
+    processID: getpid(), bootSessionUUID: ProtectionBootIdentity.sessionUUID(),
+    previousHealth: previousExtensionHealth
+)
 
 /// Publishes a deliberately short-lived proof that the Endpoint Security client
 /// is running. The container app treats this as stale after 30 seconds, so a
@@ -77,6 +83,11 @@ func writeExtensionHealth() {
         "diskWriteDailyTargetBytes": ExtensionDiskWriteBudget.dailyTargetBytes,
         "diskWriteBudgetExceeded": projectedDiskBytesPerDay > Double(ExtensionDiskWriteBudget.dailyTargetBytes)
     ]
+    health.merge(extensionHealthSession.fields) { _, new in new }
+    health.merge(esMetrics.responseDiagnostics.healthFields) { _, new in new }
+    let uptime = ProcessInfo.processInfo.systemUptime
+    health["processUptimeSeconds"] = max(0, uptime - extensionHealthStartedUptime)
+    health["systemUptimeSeconds"] = uptime
     if let (_, provenance) = signedIntelligenceStore.loadBestAvailable() {
         health["threatBundleVersion"] = provenance.version
         health["threatBundleSource"] = provenance.source
@@ -92,6 +103,10 @@ func writeExtensionHealth() {
     }
     if let p99 = esMetrics.authResponseP99Milliseconds {
         health["authResponseP99Milliseconds"] = p99
+    }
+    health["authResponseRetainedSampleCount"] = esMetrics.authResponseRetainedSampleCount
+    if let maximum = esMetrics.authResponseMaximumMilliseconds {
+        health["authResponseMaximumMilliseconds"] = maximum
     }
     if let p99 = esMetrics.forkDescriptorP99Milliseconds {
         health["forkDescriptorP99Milliseconds"] = p99

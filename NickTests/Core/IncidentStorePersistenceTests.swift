@@ -2,6 +2,20 @@ import XCTest
 @testable import Nick
 
 final class IncidentStorePersistenceTests: XCTestCase {
+    @MainActor
+    func testUrgentFirstFindingSurvivesOlderSnapshotConfirmationButNotificationRetriesBatch() throws {
+        let store = try privilegedStore()
+        let first = store.ingest([try tamperAlert(operation: .unlink)])
+        XCTAssertEqual(first.outcomes, [.persisted(1)])
+        XCTAssertEqual(store.ingest([try tamperAlert(operation: .unlink)]).outcomes, [.persisted(2)])
+        store.confirmDurablePersistence(generation: 1)
+        XCTAssertEqual(store.ingest([try tamperAlert(operation: .unlink)]).outcomes, [.persisted(3)])
+        store.confirmDurablePersistence(generation: 3)
+        let recurrence = store.ingest([try tamperAlert(operation: .unlink)])
+        XCTAssertFalse(recurrence.newlyActionable.isEmpty, "A notification can remain eligible without inventing new incident state")
+        XCTAssertEqual(recurrence.outcomes, [.coalesced(4)])
+    }
+
     func test_scorecardRecorderReadsProductionEncodedIncidentStore() throws {
         let signal = ThreatSignal(
             source: .persistence,

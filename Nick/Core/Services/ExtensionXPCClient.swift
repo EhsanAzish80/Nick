@@ -274,6 +274,8 @@ public final class ExtensionXPCClient: NSObject {
     /// Deterministic persistence completion seam used by unit tests. Production
     /// always uses the privileged XPC write/reply path.
     var incidentPersistenceOverride: ((UInt64) async -> (UInt64, Bool)?)?
+    /// Transport seam; production uses the authenticated XPC proxy.
+    var incidentStoreWriteOverride: ((Data, UInt64, Data?, @escaping @Sendable (Bool, Data) -> Void) -> Void)?
     var threatAcknowledgementOverride: ((UUID) -> Void)?
 
     // MARK: - Public API
@@ -914,8 +916,8 @@ public final class ExtensionXPCClient: NSObject {
 
     /// Coalesces routine whole-snapshot updates for fifteen minutes. Confirmed
     /// extension findings already live in the root-owned, synchronized event
-    /// journal while they wait. New incidents and protected findings force an
-    /// immediate snapshot; repeated low-risk occurrences are acknowledged only
+    /// journal while they wait. New incidents and enforcement evidence force an
+    /// immediate snapshot; unchanged observation recurrences are acknowledged only
     /// after this bounded batch lands in the incident store.
     private func scheduleIncidentStoreDrain(immediate: Bool = false, retryUrgentWrite: Bool = false) {
         guard !incidentWriteInFlight else { return }
@@ -949,8 +951,9 @@ public final class ExtensionXPCClient: NSObject {
         guard !incidentWriteInFlight,
               let payload = pendingIncidentPayload,
               let generation = pendingIncidentGeneration,
-              let revision = incidentRevision,
-              let proxy = extensionProxy() else { return }
+              let revision = incidentRevision else { return }
+        let proxy = extensionProxy()
+        guard proxy != nil || incidentStoreWriteOverride != nil else { return }
         pendingIncidentPayload = nil
         pendingIncidentGeneration = nil
         let writeWasUrgent = pendingIncidentWriteIsUrgent
@@ -986,12 +989,16 @@ public final class ExtensionXPCClient: NSObject {
             }
         }
         let xpcReply: @Sendable (Bool, Data) -> Void = { completion.resolve(($0, $1)) }
-        proxy.replaceIncidentStore(
-            payload,
-            expectedRevision: revision,
-            authorizationExternalForm: authorization,
-            reply: xpcReply
-        )
+        if let incidentStoreWriteOverride {
+            incidentStoreWriteOverride(payload, revision, authorization, xpcReply)
+        } else {
+            proxy?.replaceIncidentStore(
+                payload,
+                expectedRevision: revision,
+                authorizationExternalForm: authorization,
+                reply: xpcReply
+            )
+        }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
             completion.resolve((false, Data()))
         }
@@ -1010,7 +1017,7 @@ public final class ExtensionXPCClient: NSObject {
             return nil
         }
         if let result = incidentWriteResults[generation] { return (generation, result) }
-        guard connection != nil, incidentRevision != nil else { return nil }
+        guard (connection != nil || incidentStoreWriteOverride != nil), incidentRevision != nil else { return nil }
         let result = await withCheckedContinuation { continuation in
             incidentWriteWaiters.append((generation, continuation))
             // Register the waiter before deciding whether to force the write,
@@ -1055,6 +1062,16 @@ public final class ExtensionXPCClient: NSObject {
     }
 
 #if DEBUG
+    func configureIncidentStoreTransportForTesting(revision: UInt64) {
+        incidentRevision = revision
+    }
+
+    func flushRoutineIncidentStoreForTesting() {
+        incidentWriteDrainTask?.cancel()
+        incidentWriteDrainTask = nil
+        drainIncidentStoreWrites()
+    }
+
     /// Test seam for exercising latest-wins write completion without XPC.
     func completeIncidentWriteForTesting(through generation: UInt64, succeeded: Bool) {
         completeIncidentWrite(through: generation, succeeded: succeeded)
@@ -1372,13 +1389,9 @@ public final class ExtensionXPCClient: NSObject {
             case .persisted:
                 requiresImmediateSnapshot = true
             case .coalesced:
-                // Scanner findings can omit raw tier metadata (including EICAR).
-                // Use the same normalized policy that was persisted by the handler.
-                requiresImmediateSnapshot = Self.requiresImmediateOrdinaryFindingSnapshot(
-                    isNew: false,
-                    tier: finding.signal.metadata["ruleTier"],
-                    reason: finding.signal.metadata["reason"]
-                ) || finding.signal.severity >= .high
+                // First findings and state changes were identified by the store.
+                // Repeated observation severity alone must not force a snapshot.
+                requiresImmediateSnapshot = Self.requiresImmediateFindingSnapshot(isNew: false, metadata: finding.signal.metadata)
             default:
                 requiresImmediateSnapshot = true
             }
@@ -1510,13 +1523,21 @@ public final class ExtensionXPCClient: NSObject {
         if values.count > maxEventCount { values.removeLast(values.count - maxEventCount) }
     }
 
-    nonisolated static func requiresImmediateOrdinaryFindingSnapshot(
-        isNew: Bool, tier: String?, reason: String?
+    nonisolated static func requiresImmediateFindingSnapshot(
+        isNew: Bool, metadata: [String: String]
     ) -> Bool {
-        // New incidents and actionable escalations are returned as persisted by
-        // IncidentStore. Unchanged review-tier recurrences stay journal-backed
-        // until the existing routine batch; protected evidence remains urgent.
-        isNew || tier == "protected" || reason == "quarantine_executable"
+        // The incident store promotes new findings, actionable escalations and
+        // reopenings to persisted. A repeated observation must not defeat the
+        // routine batch merely because its rule is protected/high severity.
+        // Actual enforcement evidence still forces a durable snapshot now.
+        isNew || isEnforcementEvidence(metadata)
+    }
+
+    nonisolated static func isEnforcementEvidence(_ metadata: [String: String]) -> Bool {
+        metadata["endpointDecision"] == "deny"
+            || metadata["tamperDisposition"] == "blocked"
+            || ["blocked", "denied", "auth-deny", "killed", "quarantined"].contains(metadata["response"] ?? "")
+            || metadata["remediationStatus"] != nil
     }
 
     private func deliver(_ finding: ExtensionFinding) {
@@ -1528,11 +1549,7 @@ public final class ExtensionXPCClient: NSObject {
             guard let generation = outcome.generation else { return }
             let isNew: Bool
             if case .persisted = outcome { isNew = true } else { isNew = false }
-            let urgent = Self.requiresImmediateOrdinaryFindingSnapshot(
-                isNew: isNew,
-                tier: finding.signal.metadata["ruleTier"],
-                reason: finding.signal.metadata["reason"]
-            )
+            let urgent = Self.requiresImmediateFindingSnapshot(isNew: isNew, metadata: finding.signal.metadata)
             if let override = self?.incidentPersistenceOverride {
                 _ = await override(generation)
             } else {
