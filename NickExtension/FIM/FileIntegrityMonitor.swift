@@ -92,6 +92,7 @@ final class FileIntegrityMonitor {
     private let pendingViolationsPath: String
     private let monitoredPaths: [String]
     private let monitoredDirectoryPaths: Set<String>
+    private let exactShellProfileKernelPaths: KernelExactPathIndex
     private let lock = NSLock()
 
     var baselineCount: Int {
@@ -117,12 +118,16 @@ final class FileIntegrityMonitor {
         let directoryFlags = standardizedPaths.map { path in
             defaultDirectories.contains(path) || Self.pathIsDirectory(path)
         }
-        self.monitoredPaths = standardizedPaths.map {
+        let canonicalPaths = standardizedPaths.map {
             EndpointSecurityPath.canonical($0) ?? $0
         }
-        self.monitoredDirectoryPaths = Set(zip(self.monitoredPaths, directoryFlags).compactMap {
+        self.monitoredPaths = canonicalPaths
+        self.monitoredDirectoryPaths = Set(zip(canonicalPaths, directoryFlags).compactMap {
             $0.1 ? $0.0 : nil
         })
+        self.exactShellProfileKernelPaths = KernelExactPathIndex(
+            canonicalPaths: canonicalPaths, directoryFlags: directoryFlags, allowedNames: Self.shellProfileNames
+        )
         loadBaselines()
         loadPendingViolations()
     }
@@ -229,6 +234,12 @@ final class FileIntegrityMonitor {
             "recordShellProfileEvent persisted path=\(expanded, privacy: .public) inserted=\(violation != nil)"
         )
         return violation
+    }
+
+    /// ES already supplies a resolved vnode path. Never resolve it again on
+    /// the reader thread: even after answering this event, I/O stalls the next.
+    func isExactShellProfileKernelPath(_ path: String) -> Bool {
+        exactShellProfileKernelPaths.contains(path)
     }
 
     func isExactShellProfile(_ path: String) -> Bool {

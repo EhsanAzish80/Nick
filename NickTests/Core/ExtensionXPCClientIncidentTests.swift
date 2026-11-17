@@ -2,6 +2,104 @@ import XCTest
 @testable import Nick
 
 final class ExtensionXPCClientIncidentTests: XCTestCase {
+    func testEnforcementRemainsUrgentForAnExistingIncident() {
+        for metadata in [["endpointDecision": "deny"], ["response": "blocked"],
+                         ["tamperDisposition": "blocked"], ["remediationStatus": "quarantined"]] {
+            XCTAssertTrue(ExtensionXPCClient.isEnforcementEvidence(metadata))
+            XCTAssertTrue(ExtensionXPCClient.requiresImmediateFindingSnapshot(isNew: false, metadata: metadata))
+        }
+        XCTAssertFalse(ExtensionXPCClient.isEnforcementEvidence(["response": "alert-only"]))
+        XCTAssertFalse(ExtensionXPCClient.requiresImmediateFindingSnapshot(
+            isNew: false, metadata: ["ruleTier": "protected", "reason": "quarantine_executable"]))
+    }
+
+    @MainActor
+    func testProtectedObservationFloodWithoutDeliveredNotificationsBatchesRealSnapshotWrites() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rootStore = PrivilegedIncidentFileStore(fileURL: directory.appendingPathComponent("state/incidents.json"))
+        let empty = try JSONEncoder().encode(IncidentStoreSnapshot(incidents: [], dismissalTombstones: [], expectedCooldowns: [:]))
+        let migrated = rootStore.migrate(payload: empty)
+        let initial = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: migrated.record)
+        let client = ExtensionXPCClient()
+        client.configureIncidentStoreTransportForTesting(revision: initial.revision)
+        let store = IncidentStore(persistOnInit: false)
+        try store.installPrivilegedSnapshot(empty) { payload, generation in
+            client.persistIncidentStore(payload, generation: generation)
+        }
+        client.incidentStoreWriteOverride = { payload, revision, _, reply in
+            let result = rootStore.replace(payload: payload, expectedRevision: revision)
+            reply(result.accepted, result.record)
+        }
+        client.incidentPersistenceConfirmationHandler = { store.confirmDurablePersistence(generation: $0) }
+        client.incidentStoreReadyProvider = { true }
+        var ingested = 0
+        let floodIngested = expectation(description: "all observations ingested")
+        client.findingHandler = { finding in
+            let alert = ThreatAlert(score: finding.score,
+                content: AlertContent(title: finding.signal.title, description: finding.signal.description,
+                                      severity: finding.signal.severity, recommendedAction: finding.recommendedAction),
+                contributingSignals: [finding.signal], timestamp: finding.signal.timestamp)
+            let result = store.ingest([alert])
+            ingested += 1
+            if ingested == 121 { floodIngested.fulfill() }
+            return result.outcomes[0]
+        }
+        func event(decision: ESDecision = .allow) -> ESEvent {
+            ESEvent(eventType: .authExec, processPath: "/usr/bin/true", pid: 42, parentPid: 1,
+                    decision: decision,
+                    threat: .init(threatName: "Quarantined untrusted code executed", threatFamily: "execution",
+                                  teamID: "APPLE_PLATFORM", signingID: "com.apple.true", metadata: ["reason": "quarantine_executable", "ruleTier": "protected"]))
+        }
+        let first = event()
+        let firstAck = expectation(description: "first incident durable before ack")
+        let batchAcknowledged = expectation(description: "batched events acknowledged after durability")
+        batchAcknowledged.expectedFulfillmentCount = 120
+        let enforcementAcknowledged = expectation(description: "enforcement forces durability without routine flush")
+        enforcementAcknowledged.expectedFulfillmentCount = 2
+        var testingEnforcement = false
+        var acknowledgements: Set<UUID> = []
+        client.threatAcknowledgementOverride = { id in
+            acknowledgements.insert(id)
+            if id == first.id { firstAck.fulfill() }
+            else if testingEnforcement { enforcementAcknowledged.fulfill() }
+            else { batchAcknowledged.fulfill() }
+        }
+        client.reportThreat(try JSONEncoder().encode(first))
+        await fulfillment(of: [firstAck], timeout: 3)
+        let afterFirst = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: rootStore.load())
+        XCTAssertEqual(afterFirst.revision, initial.revision + 1)
+        for _ in 0..<120 { client.reportThreat(try JSONEncoder().encode(event())) }
+        await fulfillment(of: [floodIngested], timeout: 5)
+        await Task.yield()
+        let beforeBatch = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: rootStore.load())
+        XCTAssertEqual(beforeBatch.revision, afterFirst.revision, "No per-recurrence full-file rewrites")
+        XCTAssertEqual(acknowledgements.count, 1, "Undurable routine updates must remain unacknowledged")
+        let flushed = expectation(description: "batched snapshot confirmed")
+        client.incidentPersistenceConfirmationHandler = { generation in
+            store.confirmDurablePersistence(generation: generation)
+            flushed.fulfill()
+        }
+        client.flushRoutineIncidentStoreForTesting()
+        await fulfillment(of: [flushed], timeout: 3)
+        await fulfillment(of: [batchAcknowledged], timeout: 3)
+        let afterBatch = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: rootStore.load())
+        XCTAssertEqual(afterBatch.revision, afterFirst.revision + 1)
+        XCTAssertEqual(acknowledgements.count, 121)
+        let snapshot = try JSONDecoder().decode(IncidentStoreSnapshot.self, from: afterBatch.payload)
+        XCTAssertEqual(snapshot.incidents.first?.alert.occurrenceCount, 121)
+
+        // A repeated observation may batch; an actual AUTH deny must not.
+        testingEnforcement = true
+        client.incidentPersistenceConfirmationHandler = { store.confirmDurablePersistence(generation: $0) }
+        for _ in 0..<2 { client.reportThreat(try JSONEncoder().encode(event(decision: .deny))) }
+        await fulfillment(of: [enforcementAcknowledged], timeout: 3)
+        let afterEnforcement = try JSONDecoder().decode(PrivilegedIncidentStoreRecord.self, from: rootStore.load())
+        XCTAssertGreaterThan(afterEnforcement.revision, afterBatch.revision)
+        XCTAssertEqual(acknowledgements.count, 123)
+        XCTAssertEqual(client.pendingIncidentWriteWaiterCount, 0)
+    }
+
     func testRestartRecoveryAndRealGapRemainDistinctAndPreserveOriginalTime() throws {
         let original = Date(timeIntervalSince1970: 1_800_000_000)
         for gap in [false, true] {
@@ -34,13 +132,13 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     }
 
     func testOrdinaryFindingDurabilityDoesNotWaitForUnrelatedQuarantineEvent() {
-        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: true, tier: "observed", reason: "process_discovery"))
-        XCTAssertFalse(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "review", reason: "shell_profile_modification"))
-        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "protected", reason: "file_integrity_deleted"))
-        XCTAssertFalse(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "review", reason: "download_pipe_interpreter"))
-        XCTAssertFalse(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(isNew: false, tier: "observed", reason: "process_discovery"))
+        XCTAssertTrue(ExtensionXPCClient.requiresImmediateFindingSnapshot(isNew: true, metadata: ["ruleTier": "observed", "reason": "process_discovery"]))
+        XCTAssertFalse(ExtensionXPCClient.requiresImmediateFindingSnapshot(isNew: false, metadata: ["ruleTier": "review", "reason": "shell_profile_modification"]))
+        XCTAssertFalse(ExtensionXPCClient.requiresImmediateFindingSnapshot(isNew: false, metadata: ["ruleTier": "protected", "reason": "file_integrity_deleted"]))
+        XCTAssertFalse(ExtensionXPCClient.requiresImmediateFindingSnapshot(isNew: false, metadata: ["ruleTier": "review", "reason": "download_pipe_interpreter"]))
+        XCTAssertFalse(ExtensionXPCClient.requiresImmediateFindingSnapshot(isNew: false, metadata: ["ruleTier": "observed", "reason": "process_discovery"]))
     }
-    func testScannerRecurrenceUsesNormalizedProtectedTierWithoutRawTier() throws {
+    func testScannerObservationRecurrenceCanBatchWithoutLosingProtectedClassification() throws {
         let event = ESEvent(
             eventType: .notifyWrite, processPath: "/bin/sh", pid: 42,
             parentPid: 1, decision: .allow,
@@ -50,10 +148,7 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         XCTAssertNil(event.metadata?["ruleTier"])
         let finding = try XCTUnwrap(ExtensionFinding(event: event))
         XCTAssertEqual(finding.signal.metadata["ruleTier"], "protected")
-        XCTAssertTrue(ExtensionXPCClient.requiresImmediateOrdinaryFindingSnapshot(
-            isNew: false, tier: finding.signal.metadata["ruleTier"],
-            reason: finding.signal.metadata["reason"]
-        ))
+        XCTAssertFalse(ExtensionXPCClient.requiresImmediateFindingSnapshot(isNew: false, metadata: finding.signal.metadata), "An unchanged observation is already journal-backed; enforcement is tested separately")
     }
 
     func testStandaloneDecoderIsObservedAndDoesNotClaimInterpreterExecution() throws {

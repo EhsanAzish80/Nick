@@ -6,6 +6,18 @@ import XCTest
 @testable import Nick
 
 final class FileIntegrityPathPolicyTests: XCTestCase {
+    func testKernelProfileLookupUsesOnlyPreconfiguredCanonicalPaths() {
+        let index = KernelExactPathIndex(canonicalPaths: ["/private/etc/zshrc", "/Users/test/.zshrc", "/Users/test/.profile"],
+            directoryFlags: [false, false, true], allowedNames: ["zshrc", ".zshrc", ".profile"])
+        for _ in 0..<50_000 {
+            XCTAssertTrue(index.contains("/private/etc/zshrc"))
+            XCTAssertFalse(index.contains("/unmonitored/.zshrc"))
+        }
+        XCTAssertTrue(index.contains("/Users/test/.zshrc"))
+        XCTAssertFalse(index.contains("/Users/test/.profile"), "Directories cannot become exact file targets")
+        XCTAssertFalse(index.contains("/etc/zshrc"), "Caller must supply the resolved kernel path")
+    }
+
 
     @MainActor
     func testReviewGroupsOnlySamePathAndChangeAndPreservesEvidenceIDs() throws {

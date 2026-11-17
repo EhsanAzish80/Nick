@@ -8,6 +8,15 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+## [5.1.4] - 2026-11-17
+
+### Fixed
+
+- Replace reader-thread shell-profile realpath checks with a precomputed exact-path index.
+- Reject special files and symlinks before worker header classification.
+- Separate incident persistence urgency from notification retries and unchanged observations, retaining urgent enforcement and durable acknowledgements.
+- Clarify local deadline observations, response errors, process restarts and latency sampling limits.
+
 ## [5.1.3] - 2026-11-16
 
 ### Fixed

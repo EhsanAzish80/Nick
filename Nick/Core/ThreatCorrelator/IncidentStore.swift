@@ -391,6 +391,8 @@ final class IncidentStore {
     private(set) var lastQueuedGeneration: UInt64 = 0
     private(set) var lastDurablyConfirmedGeneration: UInt64 = 0
     private var pendingNotificationSignalIDs: Set<UUID> = []
+    private var pendingUrgentIncidentIDs: Set<UUID> = []
+    private var urgentIncidentIDsByGeneration: [UInt64: Set<UUID>] = [:]
     private var notificationSignalIDsByGeneration: [UInt64: Set<UUID>] = [:]
     private var pendingNotificationIncidentIDs: Set<UUID> = []
     private var notificationIncidentIDsByGeneration: [UInt64: Set<UUID>] = [:]
@@ -464,12 +466,16 @@ final class IncidentStore {
         migrateLegacyDismissals()
         boundInMemory()
         privilegedPersistence = persistence
+        pendingUrgentIncidentIDs.removeAll()
+        urgentIncidentIDsByGeneration.removeAll()
         lastPrivilegedPayload = try encodedSnapshot()
     }
 
     func confirmDurablePersistence(generation: UInt64) {
         guard generation <= lastQueuedGeneration else { return }
         lastDurablyConfirmedGeneration = max(lastDurablyConfirmedGeneration, generation)
+        urgentIncidentIDsByGeneration = urgentIncidentIDsByGeneration.filter { $0.key > generation }
+        pendingUrgentIncidentIDs = Set(urgentIncidentIDsByGeneration.values.flatMap { $0 })
         for key in Array(notificationSignalIDsByGeneration.keys) where key <= generation {
             pendingNotificationSignalIDs.subtract(notificationSignalIDsByGeneration.removeValue(forKey: key) ?? [])
         }
@@ -547,6 +553,8 @@ final class IncidentStore {
         var newlyActionable: [ThreatAlert] = []
         var outcomes: [IncidentIngestOutcome] = []
         var forcePersistence = false
+        var requiresImmediateCoalescedPersistence = false
+        var urgentIncidentIDs: Set<UUID> = []
         var notificationSignalIDs: Set<UUID> = []
         var notificationIncidentIDs: Set<UUID> = []
 
@@ -601,6 +609,7 @@ final class IncidentStore {
                     incident.isVisible = true
                     incidents.append(incident)
                     dismissalTombstones.removeAll { $0.incidentKey == tombstone.incidentKey }
+                    urgentIncidentIDs.insert(reopened.id)
                     newlyActionable.append(reopened)
                     notificationIncidentIDs.insert(reopened.id)
                     notificationSignalIDs.formUnion(reopened.contributingSignals.map(\.id))
@@ -624,6 +633,10 @@ final class IncidentStore {
                 : nil
             if let index = exactIndex ?? relatedLaunchItemIndex ?? relatedShellProfileIndex {
                 let prior = incidents[index]
+                if pendingUrgentIncidentIDs.contains(prior.alert.id) {
+                    requiresImmediateCoalescedPersistence = true
+                    urgentIncidentIDs.insert(prior.alert.id)
+                }
                 let mergesRelatedLaunchItemEvidence = Self.shouldMergeLaunchItemEvidence(prior.alert, candidate)
                     || Self.shouldAttachLaunchItemRemoval(prior.alert, candidate)
                 let priorSignalIDs = Set(prior.alert.contributingSignals.map(\.id))
@@ -642,6 +655,8 @@ final class IncidentStore {
                     continue
                 }
                 let escalated = candidate.severity > prior.alert.severity
+                requiresImmediateCoalescedPersistence = requiresImmediateCoalescedPersistence || escalated
+                if escalated { urgentIncidentIDs.insert(prior.alert.id) }
                 let mergedAlert: ThreatAlert
                 if isCaptureInactive {
                     mergedAlert = prior.alert.mergingLifecycleTransition(candidate)
@@ -676,6 +691,8 @@ final class IncidentStore {
                         currentTime.timeIntervalSince($0) >= 600
                     } ?? true
                     if shouldReopen {
+                        requiresImmediateCoalescedPersistence = true
+                        urgentIncidentIDs.insert(prior.alert.id)
                         incidents[index].reopenedAfterState = prior.state == .allowed
                             ? .allowed
                             : (wasHidden ? .hidden : Self.reopenState(for: prior.state))
@@ -708,6 +725,8 @@ final class IncidentStore {
                     }
                     recordAction(.reopened, actor: .automatic, at: index)
                     if learnedConfirmationCount < 2, !Self.isSilentReview(candidate) {
+                        requiresImmediateCoalescedPersistence = true
+                        urgentIncidentIDs.insert(prior.alert.id)
                         newlyActionable.append(incidents[index].alert)
                         notificationIncidentIDs.insert(incidents[index].alert.id)
                         notificationSignalIDs.formUnion(candidateSignalIDs)
@@ -736,6 +755,7 @@ final class IncidentStore {
                     notificationIncidentIDs.insert(candidate.id)
                 }
                 incidents.append(incident)
+                urgentIncidentIDs.insert(incident.alert.id)
                 outcomes.append(.persisted(0))
                 if (candidate.severity != .info || Self.requiresVisibleNotification(candidate))
                     && !Self.isSilentReview(candidate) {
@@ -745,6 +765,10 @@ final class IncidentStore {
         }
 
         let generation = persist(force: forcePersistence)
+        if generation > lastDurablyConfirmedGeneration, !urgentIncidentIDs.isEmpty {
+            urgentIncidentIDsByGeneration[generation, default: []].formUnion(urgentIncidentIDs)
+            pendingUrgentIncidentIDs.formUnion(urgentIncidentIDs)
+        }
         if generation > lastDurablyConfirmedGeneration, !notificationSignalIDs.isEmpty {
             pendingNotificationSignalIDs.formUnion(notificationSignalIDs)
             notificationSignalIDsByGeneration[generation, default: []].formUnion(notificationSignalIDs)
@@ -756,8 +780,9 @@ final class IncidentStore {
         outcomes = outcomes.map { outcome in
             switch outcome {
             case .persisted: .persisted(generation)
-            // Escalation/reopening must not wait for a routine recurrence batch.
-            case .coalesced: newlyActionable.isEmpty ? .coalesced(generation) : .persisted(generation)
+            // Notification retries/recurrence reminders are not new evidence.
+            // Only a new state transition or an unconfirmed first finding is urgent.
+            case .coalesced: requiresImmediateCoalescedPersistence ? .persisted(generation) : .coalesced(generation)
             case .suppressedByPolicy, .failed: outcome
             }
         }

@@ -430,7 +430,7 @@ final class ESEventHandler {
             let responseAccepted = esClient?.respond(to: message, allow: !shouldBlock) == true
 
             if isWriteOpen {
-                let isExactProfile = fileIntegrityMonitor?.isExactShellProfile(filePath) == true
+                let isExactProfile = fileIntegrityMonitor?.isExactShellProfileKernelPath(filePath) == true
                 if isExactProfile {
                     Self.logger.info("Shell profile AUTH_OPEN received path=\(filePath, privacy: .public)")
                     dispatchQueue.async { [weak self] in
@@ -725,7 +725,7 @@ final class ESEventHandler {
 
         case ES_EVENT_TYPE_NOTIFY_WRITE:
             let filePath = esString(msg.event.write.target.pointee.path)
-            let isExactProfile = fileIntegrityMonitor?.isExactShellProfile(filePath) == true
+            let isExactProfile = fileIntegrityMonitor?.isExactShellProfileKernelPath(filePath) == true
             guard isExactProfile else { break }
             Self.logger.info("Shell profile ES NOTIFY_WRITE received path=\(filePath, privacy: .public)")
             dispatchQueue.async { [weak self] in
@@ -814,7 +814,7 @@ final class ESEventHandler {
                 if self.fileIntegrityMonitor?.shouldCheck(filePath) == true {
                     self.reportIntegrityViolation(
                         at: filePath,
-                        eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(filePath) == true,
+                        eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfileKernelPath(filePath) == true,
                         actorPID: pid, responsiblePID: responsiblePid,
                         actorPath: processPath
                     )
@@ -1076,7 +1076,7 @@ final class ESEventHandler {
                 where self.fileIntegrityMonitor?.shouldCheck(path) == true {
                     self.reportIntegrityViolation(
                         at: path,
-                        eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfile(path) == true,
+                        eventDrivenShellProfile: self.fileIntegrityMonitor?.isExactShellProfileKernelPath(path) == true,
                         actorPID: pid, responsiblePID: responsiblePid,
                         actorPath: processPath
                     )
