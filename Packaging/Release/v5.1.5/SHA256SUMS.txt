@@ -1,0 +1,2 @@
+8c7f807daffc7bc4aea866cdbd27b1f40863a66ec1d5f71be774dc8230ddab6d  Nick-5.1.5-build-5107.pkg
+1671e48c948788c2f6078d9e1c2fc2a80f63952214dff76048de1eddfe7985db  Nick-5.1.5-build-5107.dmg

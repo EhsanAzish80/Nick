@@ -34,8 +34,7 @@ final class FilterDataProvider: NEFilterDataProvider {
         label: "com.ehsanazish.nick.network-event-writer",
         qos: .utility
     )
-    private let observationLock = NSLock()
-    private var observationTimestamps: [String: Date] = [:]
+    private let observationThrottle = NetworkObservationThrottle()
     private var healthTimer: DispatchSourceTimer?
     /// Resolving a source audit token through Security.framework is relatively
     /// expensive and can emit trust errors for unsigned/system-generated flows.
@@ -226,19 +225,9 @@ final class FilterDataProvider: NEFilterDataProvider {
         let throttleKey = "\(appID)|\(reason.rawValue)|\(normalizedHost)"
         let throttleInterval: TimeInterval = reason == .knownThreat ? 600 : 300
         let now = Date()
-        let shouldRecord = observationLock.withLock {
-            if let previous = observationTimestamps[throttleKey],
-               now.timeIntervalSince(previous) < throttleInterval {
-                return false
-            }
-            observationTimestamps[throttleKey] = now
-            if observationTimestamps.count > 1_024 {
-                observationTimestamps = observationTimestamps.filter {
-                    now.timeIntervalSince($0.value) < 600
-                }
-            }
-            return true
-        }
+        let shouldRecord = observationThrottle.shouldRecord(
+            key: throttleKey, now: now, interval: throttleInterval
+        )
         guard shouldRecord else { return }
 
         let event = NetworkBlockEvent(
@@ -335,44 +324,4 @@ final class FilterDataProvider: NEFilterDataProvider {
         return dictionary[kSecCodeInfoIdentifier] as? String
     }
 
-}
-
-private final class NetworkBlockEventStore: @unchecked Sendable {
-    private let lock = NSLock()
-
-    func append(_ event: NetworkBlockEvent) {
-        guard let url = NetworkProtectionSharedStore.eventsURL() else { return }
-        lock.withLock {
-            do {
-                try FileManager.default.createDirectory(
-                    at: url.deletingLastPathComponent(),
-                    withIntermediateDirectories: true,
-                    attributes: [.posixPermissions: 0o755]
-                )
-                var events = (try? Data(contentsOf: url))
-                    .flatMap { try? JSONDecoder().decode([NetworkBlockEvent].self, from: $0) }
-                    ?? []
-                events.removeAll {
-                    $0.host == event.host
-                        && $0.appIdentifier == event.appIdentifier
-                        && $0.decision == event.decision
-                        && $0.reason == event.reason
-                        && event.timestamp.timeIntervalSince($0.timestamp) < 300
-                }
-                events.insert(event, at: 0)
-                if events.count > NetworkProtectionSharedStore.maximumEventCount {
-                    events.removeLast(events.count - NetworkProtectionSharedStore.maximumEventCount)
-                }
-                let data = try JSONEncoder().encode(events)
-                try data.write(to: url, options: .atomic)
-                try FileManager.default.setAttributes(
-                    [.posixPermissions: 0o644],
-                    ofItemAtPath: url.path
-                )
-            } catch {
-                // Filtering must remain deterministic even if observability is
-                // unavailable. Never change a verdict because logging failed.
-            }
-        }
-    }
 }

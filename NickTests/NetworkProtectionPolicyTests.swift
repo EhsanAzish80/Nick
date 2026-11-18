@@ -1309,7 +1309,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         delivered.expectedFulfillmentCount = 2
         var notificationCandidates: [ThreatAlert] = []
 
-        manager.incidentPersistenceHandler = { generation in (generation, true) }
+        manager.incidentPersistenceHandler = { generation, _ in (generation, true) }
         manager.activateDurableCursor(deliveredEventIDs: [])
         manager.findingHandler = { finding in
             let alert = ThreatAlert(
@@ -1361,7 +1361,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             baselinePersisted.fulfill()
             return eventIDs
         }
-        manager.incidentPersistenceHandler = { generation in (generation, true) }
+        manager.incidentPersistenceHandler = { generation, _ in (generation, true) }
         manager.findingHandler = { finding in
             XCTAssertEqual(finding.signal.id, event.id)
             deliveryCount += 1
@@ -1404,7 +1404,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
         var deliveryCount = 0
         var persistedGeneration: UInt64?
 
-        manager.incidentPersistenceHandler = { generation in (generation, true) }
+        manager.incidentPersistenceHandler = { generation, _ in (generation, true) }
         manager.activateDurableCursor(deliveredEventIDs: [])
         manager.findingHandler = { finding in
             deliveryCount += 1
@@ -1486,7 +1486,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             submitted.fulfill()
             return .persisted(UInt64(submissionCount))
         }
-        manager.incidentPersistenceHandler = { generation in
+        manager.incidentPersistenceHandler = { generation, _ in
             persistenceAttempt += 1
             return (generation, persistenceAttempt > 1)
         }
@@ -1553,7 +1553,7 @@ final class Step9NetworkIncidentPolicyTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(100))
             return .persisted(1)
         }
-        manager.incidentPersistenceHandler = { generation in (generation, true) }
+        manager.incidentPersistenceHandler = { generation, _ in (generation, true) }
 
         manager.ingestEvents([event])
         manager.ingestEvents([event])

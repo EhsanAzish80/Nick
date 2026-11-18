@@ -9,12 +9,14 @@
 /* Begin PBXBuildFile section */
 		8805B7A42FCC246600AA4FBA /* libEndpointSecurity.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 8805B7A32FCC246600AA4FBA /* libEndpointSecurity.tbd */; };
 		8805B7AC2FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A17A7E000000000000000002 /* AuthLatencyWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17A7E000000000000000001 /* AuthLatencyWindow.swift */; };
 		AA11223344556677AABB0011 /* ESEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0001 /* ESEvent.swift */; };
 		AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */; };
 		AA11223344556677AABB0013 /* NickExtensionConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0003 /* NickExtensionConstants.swift */; };
 		AA11223344556677AABB0014 /* QuarantineTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0004 /* QuarantineTypes.swift */; };
 		AA11223344556677AABB0015 /* YARAEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0005 /* YARAEngine.swift */; };
 		AA11223344556677AABB0016 /* YARAMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0006 /* YARAMatch.swift */; };
+		BACC00000000000000000001 /* Backup load fixture (test only) in Sources */ = {isa = PBXBuildFile; fileRef = BACC00000000000000000002 /* Backup load fixture (test only) */; };
 		BB55CC11DDEEFF00AA220061 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */; };
 		BB55CC11DDEEFF00AA220062 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */; };
 		BB55CC11DDEEFF00AA220063 /* com.ehsanazish.nick.NickNetFilter.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = BB55CC11DDEEFF00AA220001 /* com.ehsanazish.nick.NickNetFilter.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -30,8 +32,6 @@
 		E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000100 /* YARAVerdictPolicy.swift */; };
 		E40000000000000000000201 /* ExecutionTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000200 /* ExecutionTrustPolicy.swift */; };
 		E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000200 /* ExecutionTrustPolicy.swift */; };
-		E40000000000000000000A01 /* TCCAffectedClientTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000A00 /* TCCAffectedClientTrustPolicy.swift */; };
-		E40000000000000000000A02 /* TCCAffectedClientTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000A00 /* TCCAffectedClientTrustPolicy.swift */; };
 		E40000000000000000000301 /* ScanCandidatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000300 /* ScanCandidatePolicy.swift */; };
 		E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000300 /* ScanCandidatePolicy.swift */; };
 		E40000000000000000000401 /* BundledHashCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000400 /* BundledHashCatalog.swift */; };
@@ -47,6 +47,8 @@
 		E40000000000000000000803 /* SignedThreatIntelligenceBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */; };
 		E40000000000000000000901 /* StrictBlockingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000900 /* StrictBlockingPolicy.swift */; };
 		E40000000000000000000902 /* StrictBlockingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000900 /* StrictBlockingPolicy.swift */; };
+		E40000000000000000000A01 /* TCCAffectedClientTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000A00 /* TCCAffectedClientTrustPolicy.swift */; };
+		E40000000000000000000A02 /* TCCAffectedClientTrustPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000A00 /* TCCAffectedClientTrustPolicy.swift */; };
 		F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */; };
 		F60000000000000000000001 /* QuarantineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000003 /* QuarantineManager.swift */; };
 		F60000000000000000000002 /* QuarantineDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60000000000000000000004 /* QuarantineDatabase.swift */; };
@@ -54,7 +56,6 @@
 		F70000000000000000000003 /* BehaviorTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000004 /* BehaviorTracker.swift */; };
 		F70000000000000000000005 /* RansomwareDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000006 /* RansomwareDetector.swift */; };
 		F70000000000000000000007 /* UserHomeDirectoryResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000008 /* UserHomeDirectoryResolver.swift */; };
-		A17A7E000000000000000002 /* AuthLatencyWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17A7E000000000000000001 /* AuthLatencyWindow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -85,6 +86,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 8805B7A02FCC246600AA4FBA;
 			remoteInfo = NickExtension;
+		};
+		88D0770730ACD07D009D452D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A7B63905B7F834888F9EACCE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BACC00000000000000000005;
+			remoteInfo = NickBackupLoadFixture;
 		};
 		BB55CC11DDEEFF00AA220030 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -135,12 +143,15 @@
 		8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.ehsanazish.nick.NickExtension.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		8805B7A32FCC246600AA4FBA /* libEndpointSecurity.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libEndpointSecurity.tbd; path = usr/lib/libEndpointSecurity.tbd; sourceTree = SDKROOT; };
 		8B8901B2276260484B8A6A0C /* Nick.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nick.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A17A7E000000000000000001 /* AuthLatencyWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AuthLatencyWindow.swift; path = Nick/Core/Metrics/AuthLatencyWindow.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0001 /* ESEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ESEvent.swift; path = NickExtension/Shared/ESEvent.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionXPCProtocol.swift; path = NickExtension/Shared/NickExtensionXPCProtocol.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0003 /* NickExtensionConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionConstants.swift; path = NickExtension/Shared/NickExtensionConstants.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0004 /* QuarantineTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineTypes.swift; path = NickExtension/Shared/QuarantineTypes.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0005 /* YARAEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAEngine.swift; path = Nick/Core/YARAEngine/YARAEngine.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0006 /* YARAMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAMatch.swift; path = Nick/Core/YARAEngine/YARAMatch.swift; sourceTree = SOURCE_ROOT; };
+		BACC00000000000000000002 /* Backup load fixture (test only) */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = "Backup load fixture (test only)"; path = NickBackupLoadFixture/main.c; sourceTree = SOURCE_ROOT; };
+		BACC00000000000000000003 /* NickBackupLoadFixture */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; path = NickBackupLoadFixture; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB55CC11DDEEFF00AA220001 /* com.ehsanazish.nick.NickNetFilter.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = com.ehsanazish.nick.NickNetFilter.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB55CC11DDEEFF00AA220060 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		D10000000000000000000002 /* Nick Uninstaller.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Nick Uninstaller.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -149,14 +160,14 @@
 		E40000000000000000000005 /* RansomwareNotePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RansomwareNotePolicy.swift; path = Shared/RansomwareNotePolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000100 /* YARAVerdictPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YARAVerdictPolicy.swift; path = Shared/YARAVerdictPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000200 /* ExecutionTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ExecutionTrustPolicy.swift; path = Shared/ExecutionTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
-		E40000000000000000000A00 /* TCCAffectedClientTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TCCAffectedClientTrustPolicy.swift; path = Shared/TCCAffectedClientTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000300 /* ScanCandidatePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScanCandidatePolicy.swift; path = Shared/ScanCandidatePolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000400 /* BundledHashCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BundledHashCatalog.swift; path = Shared/BundledHashCatalog.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000500 /* TamperProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TamperProtectionPolicy.swift; path = Shared/TamperProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000600 /* LOLBinExecutionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LOLBinExecutionPolicy.swift; path = Shared/LOLBinExecutionPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = InteractiveShellPipelinePolicy.swift; path = Shared/InteractiveShellPipelinePolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SignedThreatIntelligenceBundle.swift; path = Shared/SignedThreatIntelligenceBundle.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000900 /* StrictBlockingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StrictBlockingPolicy.swift; path = Shared/StrictBlockingPolicy.swift; sourceTree = SOURCE_ROOT; };
-		E40000000000000000000300 /* ScanCandidatePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ScanCandidatePolicy.swift; path = Shared/ScanCandidatePolicy.swift; sourceTree = SOURCE_ROOT; };
-		E40000000000000000000400 /* BundledHashCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BundledHashCatalog.swift; path = Shared/BundledHashCatalog.swift; sourceTree = SOURCE_ROOT; };
-		E40000000000000000000500 /* TamperProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TamperProtectionPolicy.swift; path = Shared/TamperProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
+		E40000000000000000000A00 /* TCCAffectedClientTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TCCAffectedClientTrustPolicy.swift; path = Shared/TCCAffectedClientTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
 		F50000000000000000000001 /* PrivilegedIncidentFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PrivilegedIncidentFileStore.swift; path = Nick/Core/ThreatCorrelator/PrivilegedIncidentFileStore.swift; sourceTree = SOURCE_ROOT; };
 		F60000000000000000000003 /* QuarantineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineManager.swift; path = NickExtension/Quarantine/QuarantineManager.swift; sourceTree = SOURCE_ROOT; };
 		F60000000000000000000004 /* QuarantineDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = QuarantineDatabase.swift; path = NickExtension/Quarantine/QuarantineDatabase.swift; sourceTree = SOURCE_ROOT; };
@@ -164,7 +175,6 @@
 		F70000000000000000000004 /* BehaviorTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BehaviorTracker.swift; path = NickExtension/Behavioral/BehaviorTracker.swift; sourceTree = SOURCE_ROOT; };
 		F70000000000000000000006 /* RansomwareDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RansomwareDetector.swift; path = NickExtension/Ransomware/RansomwareDetector.swift; sourceTree = SOURCE_ROOT; };
 		F70000000000000000000008 /* UserHomeDirectoryResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = UserHomeDirectoryResolver.swift; path = NickExtension/Shared/UserHomeDirectoryResolver.swift; sourceTree = SOURCE_ROOT; };
-		A17A7E000000000000000001 /* AuthLatencyWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AuthLatencyWindow.swift; path = Nick/Core/Metrics/AuthLatencyWindow.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -325,6 +335,7 @@
 				1E8F435E967C1E411C4372EE /* NickTests.xctest */,
 				8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */,
 				D10000000000000000000002 /* Nick Uninstaller.app */,
+				BACC00000000000000000003 /* NickBackupLoadFixture */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -368,6 +379,7 @@
 				F70000000000000000000004 /* BehaviorTracker.swift */,
 				F70000000000000000000006 /* RansomwareDetector.swift */,
 				F70000000000000000000008 /* UserHomeDirectoryResolver.swift */,
+				A17A7E000000000000000001 /* AuthLatencyWindow.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -375,6 +387,7 @@
 		BCABA6CBA60235CC5F3E0F78 = {
 			isa = PBXGroup;
 			children = (
+				BACC00000000000000000002 /* Backup load fixture (test only) */,
 				885ADC512FBFAF9E00664E7B /* Nick */,
 				885ADC752FBFAFA200664E7B /* NickHelper */,
 				885ADC792FBFAFA600664E7B /* NickIntegrationTests */,
@@ -465,6 +478,21 @@
 			productReference = 8B8901B2276260484B8A6A0C /* Nick.app */;
 			productType = "com.apple.product-type.application";
 		};
+		BACC00000000000000000005 /* NickBackupLoadFixture */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BACC00000000000000000006 /* Build configuration list for PBXNativeTarget "NickBackupLoadFixture" */;
+			buildPhases = (
+				BACC00000000000000000004 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NickBackupLoadFixture;
+			productName = NickBackupLoadFixture;
+			productReference = BACC00000000000000000003 /* NickBackupLoadFixture */;
+			productType = "com.apple.product-type.tool";
+		};
 		BB55CC11DDEEFF00AA220020 /* NickNetFilter */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = BB55CC11DDEEFF00AA220040 /* Build configuration list for PBXNativeTarget "NickNetFilter" */;
@@ -541,6 +569,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				BACC00000000000000000009 /* PBXTargetDependency */,
 				A058580EB3C27AE81DAEAE0A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
@@ -585,6 +614,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				BACC00000000000000000005 /* NickBackupLoadFixture */,
 				A7068781809A7A01D520A3F7 /* Nick */,
 				34AB00A397D4C574D27D4777 /* NickHelper */,
 				EFAE930A65D7BB016CE44088 /* NickIntegrationTests */,
@@ -780,6 +810,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BACC00000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BACC00000000000000000001 /* Backup load fixture (test only) in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BB55CC11DDEEFF00AA220010 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -856,6 +894,11 @@
 			isa = PBXTargetDependency;
 			target = A7068781809A7A01D520A3F7 /* Nick */;
 			targetProxy = 48A832D3FA3AB4C7031A0EE0 /* PBXContainerItemProxy */;
+		};
+		BACC00000000000000000009 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BACC00000000000000000005 /* NickBackupLoadFixture */;
+			targetProxy = 88D0770730ACD07D009D452D /* PBXContainerItemProxy */;
 		};
 		BB55CC11DDEEFF00AA220031 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1288,6 +1331,32 @@
 			};
 			name = Release;
 		};
+		BACC00000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				ENABLE_HARDENED_RUNTIME = NO;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		BACC00000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				ENABLE_HARDENED_RUNTIME = NO;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 		BB55CC11DDEEFF00AA220041 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1491,6 +1560,15 @@
 			buildConfigurations = (
 				8805B7AE2FCC246600AA4FBA /* Debug */,
 				8805B7AF2FCC246600AA4FBA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BACC00000000000000000006 /* Build configuration list for PBXNativeTarget "NickBackupLoadFixture" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BACC00000000000000000007 /* Debug */,
+				BACC00000000000000000008 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

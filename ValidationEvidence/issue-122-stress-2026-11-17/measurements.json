@@ -1,0 +1,65 @@
+{
+  "testExecution": "Xcode UI, Nick scheme, My Mac",
+  "testsPassed": 1029,
+  "testsFailed": 0,
+  "installedAppBuild": "5103",
+  "patchedInstalledExtensionsVerified": false,
+  "originalDeadlineTerminationReproduced": false,
+  "nativeWorkload": {
+    "workers": 4,
+    "files": 2048,
+    "reads": 98304,
+    "writes": 3072,
+    "renames": 1024,
+    "failures": 0,
+    "seconds": 5.5196
+  },
+  "persistencePhases": [
+    {
+      "endpointCompactionBytesWritten": 1145,
+      "endpointJournalBytesWritten": 1211875,
+      "networkBytesWritten": 239773,
+      "phase": 0,
+      "testHostRSSBytes": 181796864
+    },
+    {
+      "endpointCompactionBytesWritten": 2290,
+      "endpointJournalBytesWritten": 2423754,
+      "networkBytesWritten": 480643,
+      "phase": 1,
+      "testHostRSSBytes": 182976512
+    },
+    {
+      "endpointCompactionBytesWritten": 3435,
+      "endpointJournalBytesWritten": 3635633,
+      "networkBytesWritten": 721534,
+      "phase": 2,
+      "testHostRSSBytes": 184385536
+    },
+    {
+      "endpointCompactionBytesWritten": 4580,
+      "endpointJournalBytesWritten": 4847506,
+      "networkBytesWritten": 962440,
+      "phase": 3,
+      "testHostRSSBytes": 185630720
+    },
+    {
+      "endpointCompactionBytesWritten": 5725,
+      "endpointJournalBytesWritten": 6059403,
+      "networkBytesWritten": 1323751,
+      "phase": 4,
+      "testHostRSSBytes": 186155008
+    }
+  ],
+  "testHostRSSGrowthBytes": 4358144,
+  "limitations": [
+    "Native workload is a 5.52-second burst, not a full Backblaze pass.",
+    "RSS samples belong to the XCTest host, not NickExtension.",
+    "Synthetic network records use production persistence code; no external network traffic is generated.",
+    "Protected installed health file was unavailable without administrator authorization.",
+    "Host OS differs from the reporter; this is not a matched installed A/B comparison."
+  ],
+  "xcresult": "Test-Nick-2026.11.17_21-14-28-+0300.xcresult",
+  "testHostOS": "macOS 27.2.1",
+  "reporterOS": "macOS 27.0.1"
+}

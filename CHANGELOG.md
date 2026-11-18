@@ -8,6 +8,20 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+## [5.1.5] - 2026-11-18
+
+### Fixed
+
+- Journal endpoint acknowledgements instead of rewriting full snapshots, and skip absent or repeated IDs.
+- Enforce journal checkpoints using the actual writer offset rather than cached file-size metadata.
+- Journal network observations, preserve restart recovery and bounded retention, and batch unchanged network incidents without delaying enforcement.
+- Bound the network telemetry throttle during unique-host churn.
+
+### Validation
+
+- 1,029 Xcode tests passed; two installed 5107 workload runs completed 196,608 synthetic file reads without observed extension restarts or new actionable alerts.
+- The original multi-hour Backblaze workload remains unverified; issue #122 stays open.
+
 ## [5.1.4] - 2026-11-17
 
 ### Fixed

@@ -1,0 +1,25 @@
+{
+  "package": "/private/tmp/NickBuild-5107/Nick-5.1.5-build-5107.pkg",
+  "sha256": "8c7f807daffc7bc4aea866cdbd27b1f40863a66ec1d5f71be774dc8230ddab6d",
+  "notarySubmissionID": "7b7e2949-3c7d-4afa-adb3-87d576c37772",
+  "notarization": "Accepted",
+  "stapledAndValidated": true,
+  "gatekeeper": "accepted Notarized Developer ID",
+  "components": {
+    "com.ehsanazish.nick": {
+      "version": "5.1.5",
+      "build": "5107"
+    },
+    "com.ehsanazish.nick.NickExtension": {
+      "version": "5.1.5",
+      "build": "5107"
+    },
+    "com.ehsanazish.nick.NickNetFilter": {
+      "version": "5.1.5",
+      "build": "5107"
+    }
+  },
+  "published": false,
+  "installedAndActiveVerified": true,
+  "installedVerificationEvidence": "ValidationEvidence/issue-122-installed-5107-2026-11-18/results.json"
+}

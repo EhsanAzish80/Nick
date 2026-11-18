@@ -1,0 +1,13 @@
+{"workers":4,"files":2048,"reads":98304,"writes":3072,"renames":1024,"failures":0,"seconds":4.911980}
+fixture worker=0 phase=0 seconds=1.361
+fixture worker=3 phase=0 seconds=1.359
+fixture worker=1 phase=0 seconds=1.361
+fixture worker=2 phase=0 seconds=1.364
+fixture worker=3 phase=1 seconds=1.688
+fixture worker=0 phase=1 seconds=1.689
+fixture worker=2 phase=1 seconds=1.688
+fixture worker=1 phase=1 seconds=1.692
+fixture worker=3 phase=2 seconds=1.566
+fixture worker=0 phase=2 seconds=1.571
+fixture worker=2 phase=2 seconds=1.569
+fixture worker=1 phase=2 seconds=1.569

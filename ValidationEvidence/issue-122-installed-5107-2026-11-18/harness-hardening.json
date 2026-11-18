@@ -1,0 +1,12 @@
+{
+  "change": "Require owner-only scratch directories; validate the opened descriptor and nonce before file operations.",
+  "shippingBinaryChanged": false,
+  "testExecution": "Xcode UI, BackupWorkloadStressTests class, My Mac",
+  "testsPassed": 2,
+  "testsFailed": 0,
+  "cases": [
+    "Concurrent native backup traffic and production persistence churn",
+    "Reject unmarked, publicly accessible and wrong-nonce directories"
+  ],
+  "observedLocalTime": "2026-11-18 17:38 Europe/Istanbul"
+}

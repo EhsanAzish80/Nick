@@ -1,0 +1,119 @@
+{
+  "execution": "Focused XCTest selected and run twice through Xcode UI, My Mac",
+  "appBuild": "5107",
+  "activeEndpointBuild": "5107",
+  "activeNetworkBuild": "5107",
+  "hostOS": "macOS 27.2.1",
+  "runs": [
+    {
+      "xcresult": "Test-Nick-2026.11.18_17-17-07-+0300.xcresult",
+      "passed": true,
+      "nativeWorkload": {
+        "workers": 4,
+        "files": 2048,
+        "reads": 98304,
+        "writes": 3072,
+        "renames": 1024,
+        "failures": 0,
+        "seconds": 4.700373
+      },
+      "persistenceLastPhase": {
+        "endpointCompactionBytesWritten": 5724,
+        "endpointJournalBytesWritten": 6059393,
+        "networkBytesWritten": 1323750,
+        "phase": 4,
+        "testHostRSSBytes": 118849536
+      }
+    },
+    {
+      "xcresult": "Test-Nick-2026.11.18_17-17-47-+0300.xcresult",
+      "passed": true,
+      "nativeWorkload": {
+        "workers": 4,
+        "files": 2048,
+        "reads": 98304,
+        "writes": 3072,
+        "renames": 1024,
+        "failures": 0,
+        "seconds": 4.91198
+      },
+      "persistenceLastPhase": {
+        "endpointCompactionBytesWritten": 5725,
+        "endpointJournalBytesWritten": 6059420,
+        "networkBytesWritten": 1323799,
+        "phase": 4,
+        "testHostRSSBytes": 109445120
+      }
+    }
+  ],
+  "processSampling": {
+    "NickExtension": {
+      "processIDs": [
+        23068
+      ],
+      "sampledRSSMinKiB": 25456,
+      "sampledRSSMaxKiB": 121648,
+      "lastSampleRSSKiB": 26288
+    },
+    "NickNetFilter": {
+      "processIDs": [
+        23069
+      ],
+      "sampledRSSMinKiB": 13888,
+      "sampledRSSMaxKiB": 20448,
+      "lastSampleRSSKiB": 20448
+    }
+  },
+  "installedDiagnostics": {
+    "before": {
+      "healthUpdatedLocal": "2026-11-18 17:15:47 Europe/Istanbul",
+      "endpointPID": 23068,
+      "processStartedLocal": "2026-11-18 17:14:17 Europe/Istanbul",
+      "authP50Milliseconds": 0.11,
+      "authP99Milliseconds": 1.9,
+      "authLifetimeMaxMilliseconds": 574.51,
+      "observedLateAttempts": 0,
+      "responseErrors": 0,
+      "ackWithoutPersistence": 0,
+      "appQueueDrops": 0,
+      "projectedWritesMBPerDay": 15,
+      "measurementSeconds": 90
+    },
+    "after": {
+      "healthUpdatedLocal": "2026-11-18 17:18:47 Europe/Istanbul",
+      "endpointPID": 23068,
+      "processStartedLocal": "2026-11-18 17:14:17 Europe/Istanbul",
+      "authP50Milliseconds": 0.06,
+      "authP99Milliseconds": 0.37,
+      "authLifetimeMaxMilliseconds": 574.51,
+      "observedLateAttempts": 0,
+      "responseErrors": 0,
+      "ackWithoutPersistence": 0,
+      "appQueueDrops": 0,
+      "projectedWritesMBPerDay": 25.6,
+      "dailyWriteTargetMB": 52.4,
+      "measurementSeconds": 270,
+      "reportedWriterTotals": {
+        "eventJournal": {
+          "writes": 45,
+          "displayedKB": 56
+        },
+        "health": {
+          "writes": 9,
+          "displayedKB": 24
+        }
+      },
+      "actionableAlerts": 0
+    }
+  },
+  "matchingLaunchdOrKernelEvents": 0,
+  "limitations": [
+    "Two short synthetic bursts, not the original multi-hour Backblaze workload.",
+    "Process RSS sampled every two seconds; this is not peak physical footprint.",
+    "Health percentiles cover recent retained samples and may miss brief workload peaks.",
+    "Disk-write projection is preliminary and includes ordinary background activity.",
+    "Synthetic network persistence is exercised in XCTest; no external backup transmission is performed.",
+    "No original kernel deadline termination was reproduced; the issue is not proven eliminated."
+  ],
+  "published": false
+}

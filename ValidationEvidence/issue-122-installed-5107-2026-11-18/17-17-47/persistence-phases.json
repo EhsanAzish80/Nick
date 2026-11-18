@@ -1,0 +1,37 @@
+[
+  {
+    "endpointCompactionBytesWritten" : 1145,
+    "endpointJournalBytesWritten" : 1211906,
+    "networkBytesWritten" : 239779,
+    "phase" : 0,
+    "testHostRSSBytes" : 118046720
+  },
+  {
+    "endpointCompactionBytesWritten" : 2290,
+    "endpointJournalBytesWritten" : 2423776,
+    "networkBytesWritten" : 480666,
+    "phase" : 1,
+    "testHostRSSBytes" : 119209984
+  },
+  {
+    "endpointCompactionBytesWritten" : 3435,
+    "endpointJournalBytesWritten" : 3635672,
+    "networkBytesWritten" : 721566,
+    "phase" : 2,
+    "testHostRSSBytes" : 119848960
+  },
+  {
+    "endpointCompactionBytesWritten" : 4580,
+    "endpointJournalBytesWritten" : 4847546,
+    "networkBytesWritten" : 962457,
+    "phase" : 3,
+    "testHostRSSBytes" : 112295936
+  },
+  {
+    "endpointCompactionBytesWritten" : 5725,
+    "endpointJournalBytesWritten" : 6059420,
+    "networkBytesWritten" : 1323799,
+    "phase" : 4,
+    "testHostRSSBytes" : 109445120
+  }
+]
