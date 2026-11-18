@@ -15,7 +15,7 @@ final class IOWriteAmplificationTests: XCTestCase {
         let store = EndpointEventStore(path: root.appendingPathComponent("events.json").path,
             legacyPath: root.appendingPathComponent("legacy.json").path,
             writeObserver: { writer, _ in if writer == "endpoint-event-compaction" { compactions += 1 } })
-        let event = ESEvent(eventType: .authExec, processPath: "/fixture", pid: 42, parentPid: 1,
+        let event = ESEvent(eventType: .authExec, processPath: root.appendingPathComponent("fixture").path, pid: 42, parentPid: 1,
                             decision: .deny, threat: .init(threatName: "Synthetic deny", threatFamily: "test"))
         store.appendSynchronously(.init(kind: .threat, payload: try JSONEncoder().encode(event)))
         for _ in 0..<50 { store.removeThreats(eventIDs: [UUID()]) }

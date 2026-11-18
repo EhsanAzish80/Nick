@@ -14,7 +14,7 @@ No backup-app exclusion or protection-rule relaxation was added. The native back
 
 ## Validation
 
-- Xcode reported **1,029 tests passed**, including persistence, checkpoint/restart, retention, failed-write, urgent-enforcement and memory-bound regressions.
+- Xcode reported **1,029 tests passed**, including persistence, checkpoint/restart, retention, failed-write, urgent-enforcement and memory-bound regressions. Subsequent test-only fixture hardening and rejection of unsafe scratch directories passed two focused Xcode tests.
 - A native four-worker synthetic workload performed 98,304 file reads, 3,072 writes and 1,024 renames while exercising 5,000 endpoint evidence/acknowledgement cycles and 5,000 network records. Recorded endpoint compaction writes were about 5.7 KB, rather than a full snapshot per acknowledgement.
 - After installing 5107 locally, two focused Xcode runs completed **196,608 file reads** in total. The app and both active extensions were verified at 5107; sampled extension process identities stayed unchanged, locally observed late attempts and response errors remained zero, and no matching launchd/kernel termination entries were returned for the checked interval. No new actionable alerts appeared.
 - The preliminary live write projection was **25.6 MB/day against a 52.4 MB/day target** over a four-and-a-half-minute measurement window. It includes ordinary background activity and is not a sustained Backblaze measurement.

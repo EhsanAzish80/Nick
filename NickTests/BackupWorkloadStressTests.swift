@@ -6,8 +6,9 @@ import Darwin
 /// credentials, backup service, external network, or installed-policy changes.
 final class BackupWorkloadStressTests: XCTestCase {
     func testConcurrentBackupTrafficAndPersistenceChurnRemainBounded() async throws {
-        let root = URL(fileURLWithPath: "/private/tmp/NickBackupStress-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NickBackupStress-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: root) }
         let nonce = UUID().uuidString
         try Data(nonce.utf8).write(to: root.appendingPathComponent(".nick-backup-stress-fixture"))
@@ -16,7 +17,8 @@ final class BackupWorkloadStressTests: XCTestCase {
         let process = Process()
         process.executableURL = helper
         process.arguments = [root.path, nonce]
-        let output = Pipe(), diagnostics = Pipe()
+        let output = Pipe()
+        let diagnostics = Pipe()
         process.standardOutput = output
         process.standardError = diagnostics
         try process.run()
@@ -48,8 +50,36 @@ final class BackupWorkloadStressTests: XCTestCase {
         XCTAssertEqual(result["failures"] as? Int, 0)
     }
 
+    func testNativeFixtureRejectsUnmarkedPublicAndWrongNonceDirectories() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("NickBackupStress-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helper = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("NickBackupLoadFixture")
+        let nonce = UUID().uuidString
+        func reject() throws {
+            let child = Process()
+            child.executableURL = helper
+            child.arguments = [root.path, nonce]
+            try child.run()
+            child.waitUntilExit()
+            XCTAssertEqual(child.terminationStatus, 65)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("worker-0").path))
+        }
+        try reject() // No marker, even though the directory is private.
+        let marker = root.appendingPathComponent(".nick-backup-stress-fixture")
+        try Data(nonce.utf8).write(to: marker)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+        try reject() // A public directory must never be used for the workload.
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        try Data("wrong-nonce".utf8).write(to: marker)
+        try reject()
+    }
+
     private static func exercisePersistence(in root: URL) throws -> String {
-        var endpointBytes = 0, compactionBytes = 0, networkBytes = 0
+        var endpointBytes = 0
+        var compactionBytes = 0
+        var networkBytes = 0
         let endpointURL = root.appendingPathComponent("events/events.json")
         let endpoint = EndpointEventStore(path: endpointURL.path,
             legacyPath: root.appendingPathComponent("legacy.json").path,
@@ -61,13 +91,14 @@ final class BackupWorkloadStressTests: XCTestCase {
         let network = NetworkBlockEventStore(url: networkURL, writeObserver: { networkBytes += $0 })
         let throttle = NetworkObservationThrottle()
         let tracker = BehaviorTracker()
+        let syntheticPath = root.appendingPathComponent("synthetic").path
         var report: [[String: Any]] = []
         var warmRSS: UInt64 = 0
         for phase in 0..<5 {
             for index in 0..<1_000 {
                 try autoreleasepool {
                     let sequence = phase * 1_000 + index
-                    let event = ESEvent(eventType: .authExec, processPath: "/synthetic/fixture", pid: 4242,
+                    let event = ESEvent(eventType: .authExec, processPath: syntheticPath + "/fixture", pid: 4242,
                         parentPid: 1, decision: .deny,
                         threat: .init(threatName: "Synthetic durable evidence", threatFamily: "test",
                             metadata: ["fixture": String(repeating: "x", count: 512)]))
@@ -77,9 +108,9 @@ final class BackupWorkloadStressTests: XCTestCase {
                     network.append(NetworkBlockEvent(host: "host-\(sequence).invalid", appIdentifier: "fixture",
                         decision: .observed, reason: "synthetic", reasonTitle: "Synthetic network observation"))
                     _ = throttle.shouldRecord(key: "host-\(sequence)", now: Date(), interval: 300)
-                    tracker.recordRename(pid: 4242, processGroupID: 4242, processPath: "/synthetic/fixture",
-                        source: "/synthetic/archive-\(sequence).tar.zst.tmp",
-                        destination: "/synthetic/archive-\(sequence).tar.zst")
+                    tracker.recordRename(pid: 4242, processGroupID: 4242, processPath: syntheticPath + "/fixture",
+                        source: syntheticPath + "/archive-\(sequence).tar.zst.tmp",
+                        destination: syntheticPath + "/archive-\(sequence).tar.zst")
                     XCTAssertNil(tracker.extensionChangeBurst(pid: 4242))
                 }
             }
