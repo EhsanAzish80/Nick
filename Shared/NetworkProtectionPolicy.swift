@@ -546,3 +546,134 @@ enum NetworkRuleVersionPolicy {
         return candidateVersion >= highestAcceptedVersion
     }
 }
+
+/// One writer in NickNetFilter; readers in the app replay the bounded journal.
+/// Flow decisions never wait for this store (the provider uses eventWriteQueue).
+final class NetworkBlockEventStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private let url: URL?
+    private let writeObserver: ((Int) -> Void)?
+    private let maximumJournalBytes: Int
+    private var cached: [NetworkBlockEvent]?
+    private var tailChecked = false
+
+    init(url: URL? = NetworkProtectionSharedStore.eventsURL(),
+         maximumJournalBytes: Int = 1_024 * 1_024,
+         writeObserver: ((Int) -> Void)? = nil) {
+        self.url = url
+        self.maximumJournalBytes = maximumJournalBytes
+        self.writeObserver = writeObserver
+    }
+
+    static func readEvents(at url: URL) -> [NetworkBlockEvent] {
+        readValidatedEvents(at: url) ?? []
+    }
+
+    static func readValidatedEvents(at url: URL) -> [NetworkBlockEvent]? {
+        // Read the journal first: if a checkpoint replaces the snapshot while
+        // reading, it already contains these records. UUID dedup makes that safe.
+        let journalURL = URL(fileURLWithPath: url.path + ".journal")
+        let journalData = try? Data(contentsOf: journalURL)
+        let snapshotData = try? Data(contentsOf: url)
+        guard journalData != nil || snapshotData != nil else { return nil }
+        var events: [NetworkBlockEvent] = []
+        if let snapshotData {
+            guard let decoded = try? JSONDecoder().decode([NetworkBlockEvent].self, from: snapshotData) else { return nil }
+            events = decoded
+        } else if FileManager.default.fileExists(atPath: url.path) { return nil }
+        if journalData == nil, FileManager.default.fileExists(atPath: journalURL.path) { return nil }
+        let journal = journalData ?? Data()
+        var seen = Set(events.map(\.id))
+        for line in journal.split(separator: 0x0A) {
+            guard let event = try? JSONDecoder().decode(NetworkBlockEvent.self, from: Data(line)),
+                  seen.insert(event.id).inserted else { continue }
+            events.append(event)
+        }
+        // A truncated/corrupt journal alone is not a valid empty bootstrap.
+        if snapshotData == nil, !journal.isEmpty, events.isEmpty { return nil }
+        return Array(events.sorted { $0.timestamp > $1.timestamp }
+            .prefix(NetworkProtectionSharedStore.maximumEventCount))
+    }
+
+    func append(_ event: NetworkBlockEvent) {
+        guard let url else { return }
+        lock.withLock {
+            do {
+                let journalURL = URL(fileURLWithPath: url.path + ".journal")
+                var events = cached ?? Self.readEvents(at: url)
+                guard !events.contains(where: { $0.id == event.id }) else { return }
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+                if !FileManager.default.fileExists(atPath: journalURL.path) {
+                    FileManager.default.createFile(atPath: journalURL.path, contents: nil,
+                                                  attributes: [.posixPermissions: 0o644])
+                }
+                let handle = try FileHandle(forWritingTo: journalURL)
+                defer { try? handle.close() }
+                if !tailChecked {
+                    if let data = try? Data(contentsOf: journalURL), let last = data.last, last != 0x0A {
+                        let end = data.lastIndex(of: 0x0A).map { $0 + 1 } ?? 0
+                        if (try? JSONSerialization.jsonObject(with: Data(data.suffix(from: end)))) != nil {
+                            try handle.seekToEnd()
+                            try handle.write(contentsOf: Data([0x0A]))
+                        } else {
+                            try handle.truncate(atOffset: UInt64(end))
+                        }
+                    }
+                    tailChecked = true
+                }
+                var line = try JSONEncoder().encode(event)
+                line.append(0x0A)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: line)
+                try handle.synchronize()
+                writeObserver?(line.count)
+                events.insert(event, at: 0)
+                events = Array(events.prefix(NetworkProtectionSharedStore.maximumEventCount))
+                cached = events
+                let bytes = try handle.offset()
+                if bytes >= maximumJournalBytes {
+                    let checkpoint = try JSONEncoder().encode(events)
+                    try checkpoint.write(to: url, options: .atomic)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+                    let snapshotHandle = try FileHandle(forWritingTo: url)
+                    try snapshotHandle.synchronize()
+                    try snapshotHandle.close()
+                    writeObserver?(checkpoint.count)
+                    try handle.truncate(atOffset: 0)
+                    try handle.synchronize()
+                }
+            } catch {
+                tailChecked = false
+                // Observability failure never changes the provider's verdict.
+            }
+        }
+    }
+}
+
+/// Fixed-capacity telemetry debounce. Unique-host churn cannot grow its memory.
+/// Eviction only allows an observation to be recorded again; it never exempts a
+/// flow from inspection or changes the network verdict.
+final class NetworkObservationThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timestamps: [String: Date] = [:]
+    private var keys: [String?]
+    private var nextSlot = 0
+
+    init(capacity: Int = 1_024) { keys = Array(repeating: nil, count: max(1, capacity)) }
+
+    var retainedCount: Int { lock.withLock { timestamps.count } }
+
+    func shouldRecord(key: String, now: Date, interval: TimeInterval) -> Bool {
+        lock.withLock {
+            if let previous = timestamps[key], now.timeIntervalSince(previous) < interval { return false }
+            if timestamps[key] == nil {
+                if let evicted = keys[nextSlot] { timestamps.removeValue(forKey: evicted) }
+                keys[nextSlot] = key
+                nextSlot = (nextSlot + 1) % keys.count
+            }
+            timestamps[key] = now
+            return true
+        }
+    }
+}

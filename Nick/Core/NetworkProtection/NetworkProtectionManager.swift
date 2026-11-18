@@ -35,7 +35,7 @@ final class NetworkProtectionManager {
     /// Confirms that the root-owned incident-store snapshot covering a live
     /// finding was durably accepted. Network events are not claimed until this
     /// succeeds, matching the Endpoint Security delivery contract.
-    var incidentPersistenceHandler: ((UInt64) async -> (UInt64, Bool)?)?
+    var incidentPersistenceHandler: ((UInt64, Bool) async -> (UInt64, Bool)?)?
     /// Creates the durable first-run baseline after the shared event store has
     /// been decoded successfully. A failed or missing read must never create an
     /// empty cursor, because doing so would replay historical events later.
@@ -275,13 +275,8 @@ final class NetworkProtectionManager {
             blockEvents = []
             return
         }
-        guard let data = try? Data(contentsOf: url) else {
-            logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=read-failed")
-            blockEvents = []
-            return
-        }
-        guard let decoded = Self.decodeEvents(data) else {
-            logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=decode-failed")
+        guard let decoded = NetworkBlockEventStore.readValidatedEvents(at: url) else {
+            logger.error("store reload skipped trigger=\(trigger, privacy: .public) reason=read-or-decode-failed")
             blockEvents = []
             return
         }
@@ -342,7 +337,7 @@ final class NetworkProtectionManager {
             )
             Task {
                 let outcome = await findingHandler(finding)
-                await self.finishDelivery(outcome: outcome, eventID: event.id)
+                await self.finishDelivery(outcome: outcome, eventID: event.id, enforcement: event.decision == .blocked)
             }
         }
     }
@@ -391,11 +386,13 @@ final class NetworkProtectionManager {
         loadEvents(trigger: trigger)
     }
 
-    private func finishDelivery(outcome: IncidentIngestOutcome, eventID: UUID) async {
+    private func finishDelivery(outcome: IncidentIngestOutcome, eventID: UUID, enforcement: Bool) async {
         defer { inFlightEventIDs.remove(eventID) }
         switch outcome {
         case .persisted(let generation), .coalesced(let generation):
-            let persistence = await incidentPersistenceHandler?(generation)
+            let urgent: Bool
+            if case .persisted = outcome { urgent = true } else { urgent = enforcement }
+            let persistence = await incidentPersistenceHandler?(generation, urgent)
             guard let (confirmedGeneration, succeeded) = persistence,
                   confirmedGeneration == generation,
                   succeeded else {
