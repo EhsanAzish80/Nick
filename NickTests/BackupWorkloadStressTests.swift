@@ -5,7 +5,7 @@ import Darwin
 /// Bounded reproduction, launched from Xcode. Synthetic files only; no real
 /// credentials, backup service, external network, or installed-policy changes.
 final class BackupWorkloadStressTests: XCTestCase {
-    func testConcurrentBackupTrafficAndPersistenceChurnRemainBounded() async throws {
+    func testConcurrentBackupTrafficAndPersistenceChurnRemainBounded() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("NickBackupStress-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
                                                 attributes: [.posixPermissions: 0o700])
@@ -27,10 +27,10 @@ final class BackupWorkloadStressTests: XCTestCase {
         DispatchQueue.global().asyncAfter(deadline: .now() + 90, execute: watchdog)
         defer { watchdog.cancel(); if process.isRunning { process.terminate(); process.waitUntilExit() } }
 
-        let report = try await Task.detached(priority: .utility) {
-            try Self.exercisePersistence(in: root)
-        }.value
-        await Task.detached { process.waitUntilExit() }.value
+        // Process.run starts the native readers concurrently. Keep persistence
+        // on the test thread so older Swift isolation checkers can compile it.
+        let report = try Self.exercisePersistence(in: root)
+        process.waitUntilExit()
         let stdout = output.fileHandleForReading.readDataToEndOfFile()
         let stderr = diagnostics.fileHandleForReading.readDataToEndOfFile()
         let attachment = XCTAttachment(data: stdout + stderr, uniformTypeIdentifier: "public.plain-text")
