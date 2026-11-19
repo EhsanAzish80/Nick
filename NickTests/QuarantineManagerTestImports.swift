@@ -52,3 +52,8 @@ enum QuarantineRestorePolicy {
         Nick.QuarantineRestorePolicy.restoredPermissions(storedPermissions)
     }
 }
+
+// Attribution source is compiled into NickTests as well as the extension.
+typealias CredentialAuthDiagnostics = Nick.CredentialAuthDiagnostics
+typealias AuthLatencyWindow = Nick.AuthLatencyWindow
+typealias BoundedAttributionCache<Key: Hashable, Value> = Nick.BoundedAttributionCache<Key, Value>

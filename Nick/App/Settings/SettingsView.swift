@@ -1519,7 +1519,7 @@ struct SettingsView: View {
     // MARK: Footer
 
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        PrivateDiagnosticBuild.version(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown")
     }
 
     private var appBuild: String {

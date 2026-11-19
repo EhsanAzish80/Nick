@@ -110,9 +110,16 @@ final class USBScanner {
         }
 
         var scannedCount = 0
+        var enumeratedCount = 0
+        let diagnosticRun = ScanWorkDiagnostics.shared.usbStarted()
+        defer { ScanWorkDiagnostics.shared.usbProgress(diagnosticRun, enumerated: enumeratedCount, scanned: scannedCount, finished: true) }
         var threatsFound = 0
 
         for case let fileURL as URL in enumerator {
+            enumeratedCount += 1
+            if enumeratedCount % 256 == 0 {
+                ScanWorkDiagnostics.shared.usbProgress(diagnosticRun, enumerated: enumeratedCount, scanned: scannedCount)
+            }
             guard isMounted(volumePath: path),
                   scannedCount < Self.maximumFilesPerMount else {
                 Self.logger.info("USB scan stopped or reached its file limit: \(path)")
