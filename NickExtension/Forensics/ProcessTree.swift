@@ -3,6 +3,9 @@
 // Licensed under AGPL-3.0. See LICENSE for details.
 
 import Foundation
+#if NICK_UNIT_TESTS
+@testable import Nick
+#endif
 import Security
 
 enum ESCallbackSafetyGuard {
@@ -116,7 +119,92 @@ struct ResponsibleLiveProcess: Equatable, Sendable {
 final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentityResolving, @unchecked Sendable {
     static let shared = SecCodeResponsibleProcessIdentityResolver()
 
+    struct KernelImage: Hashable, Sendable {
+        let process: ProcessInstanceIdentity
+        let audit: Data
+        let hash: Data
+        let path: String
+        let teamID: String?
+        let signingID: String?
+        let flags: UInt32
+        let platform: Bool
+    }
+    private struct FileStamp: Hashable {
+        let device: Int64, inode: UInt64, size: Int64
+        let modified: Int, modifiedNS: Int, changed: Int, changedNS: Int
+        init?(path: String) {
+            var s = stat()
+            guard stat(path, &s) == 0 else { return nil }
+            device = Int64(s.st_dev); inode = UInt64(s.st_ino); size = s.st_size
+            modified = s.st_mtimespec.tv_sec; modifiedNS = s.st_mtimespec.tv_nsec
+            changed = s.st_ctimespec.tv_sec; changedNS = s.st_ctimespec.tv_nsec
+        }
+    }
+    private struct CacheKey: Hashable {
+        let image: KernelImage
+        let executable: FileStamp
+        let bundleInfo: FileStamp?
+    }
+    private let imageLock = NSLock()
+    private var images: [Int32: KernelImage] = [:]
+    private var imageOrder: [Int32] = []
+    private let identityCache = BoundedAttributionCache<CacheKey, ResponsibleAppIdentity>()
+    private let identityLatencies = AuthLatencyWindow(capacity: 256)
+
+    /// Kernel identity is evidence for the cache key, never certificate trust.
+    /// No Security API, process query, or filesystem lookup runs here.
+    func remember(_ image: KernelImage) {
+        imageLock.withLock {
+            if images[image.process.pid] == nil {
+                if images.count >= 4096 { images.removeValue(forKey: imageOrder.removeFirst()) }
+                imageOrder.append(image.process.pid)
+            }
+            images[image.process.pid] = image
+        }
+    }
+    private func cacheKey(pid: Int32) -> CacheKey? {
+        guard let image = imageLock.withLock({ images[pid] }),
+              let current = ProcessInstanceIdentity.capture(pid: pid),
+              current.startSeconds == image.process.startSeconds,
+              current.startMicroseconds == image.process.startMicroseconds,
+              executablePath(pid: pid) == image.path,
+              let executable = FileStamp(path: image.path) else { return nil }
+        let bundleInfo = Self.appBundleURL(for: image.path).flatMap {
+            FileStamp(path: $0.appendingPathComponent("Contents/Info.plist").path)
+        }
+        return CacheKey(image: image, executable: executable, bundleInfo: bundleInfo)
+    }
     func identity(pid: Int32, pathHint: String?) -> ResponsibleAppIdentity? {
+        ESCallbackSafetyGuard.requireOffCallbackThread("cached responsible identity")
+        let began = CredentialAuthDiagnostics.shared.begin(.responsibleIdentity)
+        defer {
+            let now = CredentialAuthDiagnostics.now
+            CredentialAuthDiagnostics.shared.end(.responsibleIdentity, since: began, now: now)
+            identityLatencies.record(milliseconds: Double(now >= began ? now - began : 0) / 1e6)
+        }
+        // Older processes without observed ES identity retain the existing
+        // validation path. Never cache a trusted result by PID/path alone.
+        guard let key = cacheKey(pid: pid) else { return resolveIdentityUncached(pid: pid, pathHint: pathHint) }
+        switch identityCache.lookupOrReserve(key, now: CredentialObservationGate.now) {
+        case .hit(let result): return cacheKey(pid: pid) == key ? result : nil
+        case .busy: return nil // Unknown attribution, never fabricated trust.
+        case .load:
+            let result = resolveIdentityUncached(pid: pid, pathHint: pathHint, expectedImage: key.image)
+            let unchanged = cacheKey(pid: pid) == key
+            identityCache.complete(key, value: result, cache: unchanged, now: CredentialObservationGate.now)
+            return unchanged ? result : nil
+        }
+    }
+    func diagnosticSnapshot() -> [String: Any] {
+        let timing = identityLatencies.snapshot()
+        return ["cache": identityCache.snapshot(), "observedKernelImages": imageLock.withLock { images.count },
+                "identityP99Milliseconds": timing.p99Milliseconds ?? 0,
+                "identityMaximumMilliseconds": timing.maximumObservedMilliseconds ?? 0,
+                "cacheScope": "validated attribution only; ES identity, process start, file mtime/ctime and bounded TTL"]
+    }
+
+
+    private func resolveIdentityUncached(pid: Int32, pathHint: String?, expectedImage: KernelImage? = nil) -> ResponsibleAppIdentity? {
         ESCallbackSafetyGuard.requireOffCallbackThread("SecCodeCopyGuest/proc_pidpath")
         let path = executablePath(pid: pid) ?? pathHint
         guard let path, !path.isEmpty else { return nil }
@@ -138,12 +226,17 @@ final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentit
         var staticCode: SecStaticCode?
         let staticStatus = SecCodeCopyStaticCode(code, [], &staticCode)
         var information: CFDictionary?
-        let infoStatus = staticCode.map {
-            SecCodeCopySigningInformation(
-                $0, SecCSFlags(rawValue: kSecCSSigningInformation), &information
-            )
+        let infoStatus = staticCode.map { staticCode in
+            let began = CredentialAuthDiagnostics.shared.begin(.responsibleSigningInformation)
+            let status = SecCodeCopySigningInformation(
+                staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
+            CredentialAuthDiagnostics.shared.end(.responsibleSigningInformation, since: began, status: status)
+            return status
         } ?? errSecCSUnsigned
-        let valid = SecCodeCheckValidity(code, [], nil) == errSecSuccess
+        let validityBegan = CredentialAuthDiagnostics.shared.begin(.responsibleValidity)
+        let validityStatus = SecCodeCheckValidity(code, [], nil)
+        CredentialAuthDiagnostics.shared.end(.responsibleValidity, since: validityBegan, status: validityStatus)
+        let valid = validityStatus == errSecSuccess
         guard staticStatus == errSecSuccess,
               infoStatus == errSecSuccess,
               let info = information as? [String: Any] else {
@@ -154,6 +247,10 @@ final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentit
         }
         let identifier = info[kSecCodeInfoIdentifier as String] as? String
         let teamID = info[kSecCodeInfoTeamIdentifier as String] as? String
+        if let expectedImage {
+            guard info[kSecCodeInfoUnique as String] as? Data == expectedImage.hash,
+                  identifier == expectedImage.signingID, teamID == expectedImage.teamID else { return nil }
+        }
         let flags = (info[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
         let platformFlag = UInt32(0x0400_0000) // CS_PLATFORM_BINARY
         let signing: ResponsibleAppIdentity.Signing
@@ -181,7 +278,10 @@ final class SecCodeResponsibleProcessIdentityResolver: ResponsibleProcessIdentit
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess,
               let requirement else { return false }
-        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+        let began = CredentialAuthDiagnostics.shared.begin(.responsibleAppleAnchor)
+        let status = SecCodeCheckValidity(code, [], requirement)
+        CredentialAuthDiagnostics.shared.end(.responsibleAppleAnchor, since: began, status: status)
+        return status == errSecSuccess
     }
 
     func liveProcess(pid: Int32) -> ResponsibleLiveProcess? {

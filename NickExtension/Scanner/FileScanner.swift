@@ -96,6 +96,8 @@ final class FileScanner {
     /// - Parameter filePath: Absolute path to the file.
     /// - Returns: `ScanResult` — never throws.
     func scan(filePath: String) -> ScanResult {
+        ScanWorkDiagnostics.shared.scanStarted()
+        defer { ScanWorkDiagnostics.shared.scanEnded() }
         // Identity is captured before reading so a concurrent rewrite produces
         // an identity mismatch (and a rescan) rather than a stale clean verdict.
         let identity = FileIdentity(path: filePath)
@@ -373,6 +375,7 @@ final class FileScanner {
                 chunk = handle.readData(ofLength: Self.chunkSize)
                 if chunk.isEmpty { break }
             }
+            ScanWorkDiagnostics.shared.hashed(bytes: chunk.count)
             hasher.update(data: chunk)
         }
         return hasher.finalize().hexString

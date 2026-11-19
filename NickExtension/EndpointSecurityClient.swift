@@ -20,12 +20,15 @@ import os
 /// All calls to ES APIs are serialised on `queue`. Do not call `start()`,
 /// `subscribe(to:)`, or `stop()` concurrently.
 ///
-/// - Important: AUTH events that are not explicitly responded to will be
-///   auto-allowed by the system after the deadline (~60 s). Never drop an
+/// - Important: Missing an AUTH deadline can terminate the ES client. Never drop an
 ///   AUTH message — always call `respond(to:allow:)`.
 final class EndpointSecurityClient {
 
     static let healthMetrics = ExtensionHealthMetrics()
+    static let pendingAuth = PendingAuthDiagnostics()
+    static func diagnosticKey(_ message: UnsafePointer<es_message_t>) -> PendingAuthDiagnostics.Key {
+        .init(address: UInt64(UInt(bitPattern: message)), machTime: message.pointee.mach_time)
+    }
 
     // MARK: - Private
 
@@ -62,6 +65,10 @@ final class EndpointSecurityClient {
         let result = es_new_client(&newClient) { [weak self] client, message in
             // This block runs on an ES-internal serial queue — keep it fast.
             autoreleasepool {
+                if message.pointee.action_type == ES_ACTION_TYPE_AUTH {
+                    Self.pendingAuth.received(Self.diagnosticKey(message), event: message.pointee.event_type.rawValue,
+                                              deadline: message.pointee.deadline)
+                }
                 Self.healthMetrics.record(eventType: message.pointee.event_type)
                 MuteManager.muteMeasuredProcessIfNeeded(
                     message.pointee.process.pointee,
@@ -117,6 +124,8 @@ final class EndpointSecurityClient {
     func respond(to message: UnsafePointer<es_message_t>, allow: Bool) -> Bool {
         guard let client, message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return false }
 
+        let diagnosticKey = Self.diagnosticKey(message)
+        Self.pendingAuth.responseStarted(diagnosticKey)
         let missedDeadline = mach_absolute_time() >= message.pointee.deadline
         let ret: es_respond_result_t
         if message.pointee.event_type == ES_EVENT_TYPE_AUTH_OPEN {
@@ -133,6 +142,7 @@ final class EndpointSecurityClient {
             ret = es_respond_auth_result(client, message, authResult, false)
         }
         let completedAt = mach_absolute_time()
+        Self.pendingAuth.responseReturned(diagnosticKey, accepted: ret == ES_RESPOND_RESULT_SUCCESS)
         Self.healthMetrics.recordAuthResponse(messageMachTime: message.pointee.mach_time, nowMachTime: completedAt)
         Self.healthMetrics.recordResponseResult(
             pastDeadline: missedDeadline || completedAt >= message.pointee.deadline,

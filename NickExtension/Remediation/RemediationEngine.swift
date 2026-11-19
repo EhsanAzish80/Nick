@@ -31,6 +31,8 @@ final class DeveloperIDTrustValidator: @unchecked Sendable {
     /// Bind a validated helper image to a containing app signed by the same
     /// distribution team. No filesystem or certificate work occurs on AUTH.
     func prepareOwningApp(path: String, actorHash: Data, actorTeam: String?) {
+        let diagnosticStarted = CredentialAuthDiagnostics.shared.begin(.owningApp)
+        defer { CredentialAuthDiagnostics.shared.end(.owningApp, since: diagnosticStarted) }
         lock.withLock { _ = preparedOwningApps.insert(actorHash) }
         guard let actorTeam, !actorTeam.isEmpty, cachedValidation(cdhash: actorHash) == true,
               let range = path.range(of: ".app/") else { return }
@@ -38,9 +40,9 @@ final class DeveloperIDTrustValidator: @unchecked Sendable {
         guard isValidatedDistribution(path: appPath) else { return }
         var code: SecStaticCode?
         var information: CFDictionary?
-        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: appPath) as CFURL, [], &code) == errSecSuccess,
+        guard diagnosticCreateCode(path: appPath, code: &code) == errSecSuccess,
               let code,
-              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              diagnosticSigningInformation(code, information: &information) == errSecSuccess,
               let info = information as? [String: Any],
               info[kSecCodeInfoTeamIdentifier as String] as? String == actorTeam,
               let identifier = info[kSecCodeInfoIdentifier as String] as? String else { return }
@@ -54,12 +56,14 @@ final class DeveloperIDTrustValidator: @unchecked Sendable {
     }
 
     func validatedDistributionTeam(path: String) -> String? {
+        let diagnosticStarted = CredentialAuthDiagnostics.shared.begin(.distributionTeam)
+        defer { CredentialAuthDiagnostics.shared.end(.distributionTeam, since: diagnosticStarted) }
         guard isValidatedDistribution(path: path) else { return nil }
         var code: SecStaticCode?
         var information: CFDictionary?
-        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+        guard diagnosticCreateCode(path: path, code: &code) == errSecSuccess,
               let code,
-              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              diagnosticSigningInformation(code, information: &information) == errSecSuccess,
               let info = information as? [String: Any] else { return nil }
         return info[kSecCodeInfoTeamIdentifier as String] as? String
     }
@@ -67,20 +71,26 @@ final class DeveloperIDTrustValidator: @unchecked Sendable {
     /// Own-store authorization also accepts Apple's Mac App Store distribution
     /// certificate, not merely Developer ID. Kernel IDs are compared separately.
     func isValidatedDistribution(path: String) -> Bool {
+        let diagnosticStarted = CredentialAuthDiagnostics.shared.begin(.distribution)
+        defer { CredentialAuthDiagnostics.shared.end(.distribution, since: diagnosticStarted) }
         var code: SecStaticCode?
         var information: CFDictionary?
-        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+        guard diagnosticCreateCode(path: path, code: &code) == errSecSuccess,
               let code,
-              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              diagnosticSigningInformation(code, information: &information) == errSecSuccess,
               let info = information as? [String: Any],
               let hash = info[kSecCodeInfoUnique as String] as? Data else { return false }
-        if let cached = cachedValidation(cdhash: hash) { return cached }
+        if let cached = cachedValidation(cdhash: hash) {
+            CredentialAuthDiagnostics.shared.count(.distributionCacheHit)
+            return cached
+        }
+        CredentialAuthDiagnostics.shared.count(.distributionCacheMiss)
         var requirement: SecRequirement?
         let text = "anchor apple generic and (certificate leaf[field.1.2.840.113635.100.6.1.13] exists or certificate leaf[field.1.2.840.113635.100.6.1.9] exists)"
         guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess,
               let requirement else { return false }
         let flags = UInt32(kSecCSDoNotValidateResources) | (UInt32(1) << 30) | (UInt32(1) << 31)
-        let valid = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: flags), requirement) == errSecSuccess
+        let valid = diagnosticCheckValidity(code, flags: SecCSFlags(rawValue: flags), requirement: requirement) == errSecSuccess
         lock.withLock { distributionCache[hash] = valid }
         return valid
     }
@@ -88,31 +98,39 @@ final class DeveloperIDTrustValidator: @unchecked Sendable {
     /// Verify an exited parent's exact captured image, without querying a PID
     /// that may have exited or been reused by the time queued work runs.
     func isAppleImage(path: String, expectedHash: Data) -> Bool {
+        let diagnosticStarted = CredentialAuthDiagnostics.shared.begin(.appleImage)
+        defer { CredentialAuthDiagnostics.shared.end(.appleImage, since: diagnosticStarted) }
         if let cached = lock.withLock({ appleImageCache[expectedHash] }) { return cached }
         var code: SecStaticCode?
         var information: CFDictionary?
         var requirement: SecRequirement?
-        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+        guard diagnosticCreateCode(path: path, code: &code) == errSecSuccess,
               let code,
-              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              diagnosticSigningInformation(code, information: &information) == errSecSuccess,
               let info = information as? [String: Any],
               info[kSecCodeInfoUnique as String] as? Data == expectedHash,
               SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess,
               let requirement else { return false }
-        let valid = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSDoNotValidateResources), requirement) == errSecSuccess
+        let valid = diagnosticCheckValidity(code, flags: SecCSFlags(rawValue: kSecCSDoNotValidateResources), requirement: requirement) == errSecSuccess
         lock.withLock { appleImageCache[expectedHash] = valid }
         return valid
     }
 
     func isValidated(path: String) -> Bool {
+        let diagnosticStarted = CredentialAuthDiagnostics.shared.begin(.validated)
+        defer { CredentialAuthDiagnostics.shared.end(.validated, since: diagnosticStarted) }
         var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code) == errSecSuccess,
+        guard diagnosticCreateCode(path: path, code: &code) == errSecSuccess,
               let code else { return false }
         var info: CFDictionary?
-        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+        guard diagnosticSigningInformation(code, information: &info) == errSecSuccess,
               let dict = info as? [String: Any],
               let cdhash = dict[kSecCodeInfoUnique as String] as? Data else { return false }
-        if let cached = lock.withLock({ cache[cdhash] }) { return cached }
+        if let cached = lock.withLock({ cache[cdhash] }) {
+            CredentialAuthDiagnostics.shared.count(.validatedCacheHit)
+            return cached
+        }
+        CredentialAuthDiagnostics.shared.count(.validatedCacheMiss)
 
         var requirement: SecRequirement?
         let text = "anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
@@ -125,10 +143,31 @@ final class DeveloperIDTrustValidator: @unchecked Sendable {
         let rawFlags = UInt32(kSecCSDoNotValidateResources)
             | enforceRevocation
             | considerExpiration
-        let valid = SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: rawFlags), requirement) == errSecSuccess
+        let valid = diagnosticCheckValidity(code, flags: SecCSFlags(rawValue: rawFlags), requirement: requirement) == errSecSuccess
         lock.withLock { cache[cdhash] = valid }
         return valid
     }
+    private func diagnosticCreateCode(path: String, code: inout SecStaticCode?) -> OSStatus {
+        let started = CredentialAuthDiagnostics.shared.begin(.staticCode)
+        let status = SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &code)
+        CredentialAuthDiagnostics.shared.end(.staticCode, since: started, status: status)
+        return status
+    }
+    private func diagnosticSigningInformation(_ code: SecStaticCode, information: inout CFDictionary?) -> OSStatus {
+        let started = CredentialAuthDiagnostics.shared.begin(.signingInformation)
+        let status = SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
+        CredentialAuthDiagnostics.shared.end(.signingInformation, since: started, status: status)
+        if status != errSecSuccess { CredentialAuthDiagnostics.shared.count(.signingInformationFailure) }
+        return status
+    }
+    private func diagnosticCheckValidity(_ code: SecStaticCode, flags: SecCSFlags, requirement: SecRequirement) -> OSStatus {
+        let started = CredentialAuthDiagnostics.shared.begin(.validity)
+        let status = SecStaticCodeCheckValidity(code, flags, requirement)
+        CredentialAuthDiagnostics.shared.end(.validity, since: started, status: status)
+        if status != errSecSuccess { CredentialAuthDiagnostics.shared.count(.validityFailure) }
+        return status
+    }
+
 }
 
 // MARK: - RemediationEngine

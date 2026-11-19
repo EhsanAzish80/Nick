@@ -10,6 +10,7 @@
 		8805B7A42FCC246600AA4FBA /* libEndpointSecurity.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 8805B7A32FCC246600AA4FBA /* libEndpointSecurity.tbd */; };
 		8805B7AC2FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = 8805B7A12FCC246600AA4FBA /* com.ehsanazish.nick.NickExtension.systemextension */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A17A7E000000000000000002 /* AuthLatencyWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17A7E000000000000000001 /* AuthLatencyWindow.swift */; };
+		A51110000000000000000002 /* RuntimeDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51110000000000000000001 /* RuntimeDiagnostics.swift */; };
 		AA11223344556677AABB0011 /* ESEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0001 /* ESEvent.swift */; };
 		AA11223344556677AABB0012 /* NickExtensionXPCProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */; };
 		AA11223344556677AABB0013 /* NickExtensionConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0003 /* NickExtensionConstants.swift */; };
@@ -144,6 +145,7 @@
 		8805B7A32FCC246600AA4FBA /* libEndpointSecurity.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libEndpointSecurity.tbd; path = usr/lib/libEndpointSecurity.tbd; sourceTree = SDKROOT; };
 		8B8901B2276260484B8A6A0C /* Nick.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nick.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A17A7E000000000000000001 /* AuthLatencyWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AuthLatencyWindow.swift; path = Nick/Core/Metrics/AuthLatencyWindow.swift; sourceTree = SOURCE_ROOT; };
+		A51110000000000000000001 /* RuntimeDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RuntimeDiagnostics.swift; path = Nick/Core/Metrics/RuntimeDiagnostics.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0001 /* ESEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ESEvent.swift; path = NickExtension/Shared/ESEvent.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0002 /* NickExtensionXPCProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionXPCProtocol.swift; path = NickExtension/Shared/NickExtensionXPCProtocol.swift; sourceTree = SOURCE_ROOT; };
 		AA11223344556677AABB0003 /* NickExtensionConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NickExtensionConstants.swift; path = NickExtension/Shared/NickExtensionConstants.swift; sourceTree = SOURCE_ROOT; };
@@ -380,6 +382,7 @@
 				F70000000000000000000006 /* RansomwareDetector.swift */,
 				F70000000000000000000008 /* UserHomeDirectoryResolver.swift */,
 				A17A7E000000000000000001 /* AuthLatencyWindow.swift */,
+				A51110000000000000000001 /* RuntimeDiagnostics.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -793,6 +796,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A17A7E000000000000000002 /* AuthLatencyWindow.swift in Sources */,
+				A51110000000000000000002 /* RuntimeDiagnostics.swift in Sources */,
 				F50000000000000000000002 /* PrivilegedIncidentFileStore.swift in Sources */,
 				E40000000000000000000302 /* ScanCandidatePolicy.swift in Sources */,
 				E40000000000000000000202 /* ExecutionTrustPolicy.swift in Sources */,
@@ -1484,6 +1488,7 @@
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) NICK_UNIT_TESTS";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
 			name = Release;
@@ -1512,6 +1517,7 @@
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) NICK_UNIT_TESTS";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nick.app/Contents/MacOS/Nick";
 			};
 			name = Debug;

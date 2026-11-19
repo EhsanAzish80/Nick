@@ -86,9 +86,18 @@ final class ESEventHandler {
         ProcessPipeResolver.evidence(pid: $0)
     }
     private let credentialReportLock = NSLock()
-    private var lastCredentialReport: [String: Date] = [:]
+    private struct CredentialFindingReportKey: Hashable {
+        let observation: CredentialObservationGate.Key
+        let reason: String
+    }
+    private var lastCredentialReport: [CredentialFindingReportKey: Date] = [:]
     private var recentKeychainCommands: [String: CredentialAccessPolicy.RecentHiddenPrompt] = [:]
-    private var keychainTransferFallback = KeychainTransferFallbackTracker()
+    private let keychainTransferFallback = KeychainTransferFallbackTracker()
+    private let credentialObservationGate = CredentialObservationGate()
+    var credentialObservationDiagnostics: [String: Any] {
+        ["admission": credentialObservationGate.snapshot(), "keychainCorrelation": keychainTransferFallback.diagnosticSnapshot(),
+         "attribution": SecCodeResponsibleProcessIdentityResolver.shared.diagnosticSnapshot()]
+    }
     private let tccEventLock = NSLock()
     private var recentTCCEvents: [String: Date] = [:]
     private static let credentialReportWindow: TimeInterval = 60
@@ -110,6 +119,9 @@ final class ESEventHandler {
         let pid         = audit_token_to_pid(process.audit_token)
         let parentPid   = audit_token_to_pid(process.parent_audit_token)
         let responsiblePid = audit_token_to_pid(process.responsible_audit_token)
+        if msg.event_type == ES_EVENT_TYPE_AUTH_EXEC || msg.event_type == ES_EVENT_TYPE_NOTIFY_EXEC {
+            rememberAttributionImage(msg.event.exec.target.pointee)
+        }
         // Never query another process from the ES callback queue. A process can
         // be suspended in AUTH_EXEC while the same queue is expected to answer
         // that authorization, turning getpgid/proc_pidinfo into a deadlock.
@@ -453,8 +465,50 @@ final class ESEventHandler {
                 isApprovedStorageMetadataRead: approvedStorageMetadataRead || nickBrowserScan
             ),
                let credentialStore {
-                dispatchQueue.async { [weak self] in
-                    self?.observeCredentialStoreOpen(
+                rememberAttributionImage(process)
+                var actorToken = process.audit_token
+                var responsibleToken = process.responsible_audit_token
+                var parentToken = process.parent_audit_token
+                let observationKey = CredentialObservationGate.Key(
+                    actorAudit: withUnsafeBytes(of: &actorToken) { Data($0) }, actorHash: credentialActorHash, actorPath: processPath,
+                    signingID: tamperActorIdentity.signingID, teamID: tamperActorIdentity.teamID,
+                    codeFlags: process.codesigning_flags,
+                    responsibleAudit: withUnsafeBytes(of: &responsibleToken) { Data($0) },
+                    parentAudit: withUnsafeBytes(of: &parentToken) { Data($0) },
+                    path: filePath, file: fileIdentity, owner: fileUID, store: credentialStore.rawValue)
+                // Correlation is independent of optional attribution admission.
+                // Preserve the latest exact source even for a coalesced read.
+                if credentialStore == .keychain {
+                    let chain = credentialObservationGate.chainKey(for: observationKey)
+                    let correlated = chain.map { key in
+                        credentialReportLock.withLock {
+                            recentKeychainCommands[key]?.matchesFollowUp(chainKey: key,
+                                processPID: processIdentity.pid, processPIDVersion: processIdentity.pidVersion,
+                                at: Date()) ?? false
+                        }
+                    } ?? false
+                    if !correlated { keychainTransferFallback.recordRead(sourcePath: filePath, process: processIdentity, at: Date()) }
+                }
+                let ticket: CredentialObservationGate.Ticket
+                switch credentialObservationGate.admit(observationKey) {
+                case .coalesced: break
+                case .pressure(let report):
+                    if report {
+                        dispatchQueue.async { [weak self] in
+                            self?.reportThreat(ESEvent(eventType: .authOpen, processPath: processPath,
+                                pid: pid, parentPid: parentPid, decision: .notApplicable,
+                                threat: .init(threatName: "Credential observation degraded under load", threatFamily: "protection-continuity",
+                                    metadata: ["rule": "credential_observation_pressure", "ruleTier": "review",
+                                               "deliveryLevel": "inform", "analysisDropped": "true", "enforcementUnchanged": "true"])))
+                        }
+                    }
+                case .admitted(let admittedTicket):
+                    ticket = admittedTicket
+                    dispatchQueue.async { [weak self] in
+                        guard let self else { return }
+                        self.credentialObservationGate.began(ticket)
+                        defer { self.credentialObservationGate.workEnded() }
+                        self.observeCredentialStoreOpen(
                         store: credentialStore,
                         path: filePath,
                         actorPath: processPath,
@@ -463,8 +517,10 @@ final class ESEventHandler {
                         responsiblePID: responsiblePid > 0 ? responsiblePid : nil,
                         processIdentity: processIdentity,
                         actorIdentity: tamperActorIdentity,
-                        sshReadOwner: isWriteOpen ? nil : (actorUID, fileUID)
+                        sshReadOwner: isWriteOpen ? nil : (actorUID, fileUID),
+                        observationTicket: ticket
                     )
+                    }
                 }
             }
             // Normal file opens are extremely high-volume and add no useful
@@ -1768,13 +1824,23 @@ final class ESEventHandler {
     /// Use the same deadline budget as pre-launch hashing. On timeout allow
     /// this operation; never turn unavailable validation into a false denial.
     private func deferCredentialAuthorization(message: UnsafePointer<es_message_t>, actorPath: String) {
-        let retained = RetainedMessage(message)
+        CredentialAuthDiagnostics.shared.count(.credentialDeferred)
+        let retained = RetainedMessage(message, diagnosticScope: .credentialRetained)
         let budget = Self.preLaunchBudgetNanoseconds(deadline: message.pointee.deadline)
-        preLaunchQueue.asyncAfter(deadline: .now() + .nanoseconds(Int(budget))) { [weak self] in
-            guard retained.claimResponse() else { return }
+        let watchdogDeadline = DispatchTime.now() + .nanoseconds(Int(budget))
+        CredentialAuthDiagnostics.shared.count(.credentialWatchdogScheduled)
+        preLaunchQueue.asyncAfter(deadline: watchdogDeadline) { [weak self] in
+            CredentialAuthDiagnostics.shared.count(.credentialWatchdogFired)
+            let now = CredentialAuthDiagnostics.now
+            CredentialAuthDiagnostics.shared.observe(.credentialWatchdogDelay, nanoseconds: now > watchdogDeadline.uptimeNanoseconds ? now - watchdogDeadline.uptimeNanoseconds : 0)
+            guard retained.claimResponse(watchdog: true) else { return }
             self?.esClient?.respond(to: retained.pointer, allow: true)
         }
+        let enqueuedAt = CredentialAuthDiagnostics.now
         preLaunchQueue.async { [weak self] in
+            let workStarted = CredentialAuthDiagnostics.shared.begin(.credentialWork)
+            CredentialAuthDiagnostics.shared.observe(.credentialQueueWait, nanoseconds: workStarted >= enqueuedAt ? workStarted - enqueuedAt : 0)
+            defer { CredentialAuthDiagnostics.shared.end(.credentialWork, since: workStarted) }
             _ = DeveloperIDTrustValidator.shared.isValidatedDistribution(path: actorPath)
             var hash = retained.pointer.pointee.process.pointee.cdhash
             let cdhash = withUnsafeBytes(of: &hash) { Data($0) }
@@ -1793,29 +1859,44 @@ final class ESEventHandler {
     /// Keeps an ES message alive across queues until it is answered.
     private final class RetainedMessage: @unchecked Sendable {
         let pointer: UnsafePointer<es_message_t>
-        private let lock = NSLock()
-        private var answered = false
+        private let responseClaim = AuthResponseClaim()
+        private let diagnosticScope: CredentialAuthDiagnostics.Scope
+        private let diagnosticStarted: UInt64
 
-        init(_ pointer: UnsafePointer<es_message_t>) {
+        init(_ pointer: UnsafePointer<es_message_t>, diagnosticScope: CredentialAuthDiagnostics.Scope) {
+            self.diagnosticScope = diagnosticScope
+            self.diagnosticStarted = CredentialAuthDiagnostics.shared.begin(diagnosticScope)
             self.pointer = pointer
+            EndpointSecurityClient.pendingAuth.phase(EndpointSecurityClient.diagnosticKey(pointer),
+                diagnosticScope == .credentialRetained ? .credentialValidation : .prelaunchHash)
             es_retain_message(pointer)
         }
 
-        deinit { es_release_message(pointer) }
+        deinit {
+            es_release_message(pointer)
+            CredentialAuthDiagnostics.shared.end(diagnosticScope, since: diagnosticStarted)
+        }
 
         /// Returns `true` exactly once.
-        func claimResponse() -> Bool {
-            lock.withLock {
-                guard !answered else { return false }
-                answered = true
-                return true
+        func claimResponse(watchdog: Bool = false) -> Bool {
+            let won = responseClaim.claim()
+            if won {
+                EndpointSecurityClient.pendingAuth.phase(EndpointSecurityClient.diagnosticKey(pointer),
+                    watchdog ? .watchdogClaimed : .workerClaimed)
             }
+            let credential = diagnosticScope == .credentialRetained
+            let event: CredentialAuthDiagnostics.Event
+            if !won { event = credential ? .credentialClaimLost : .prelaunchClaimLost }
+            else if watchdog { event = credential ? .credentialWatchdogWon : .prelaunchWatchdogWon }
+            else { event = credential ? .credentialWorkWon : .prelaunchWorkWon }
+            CredentialAuthDiagnostics.shared.count(event)
+            return won
         }
     }
 
     /// Answers AUTH_EXEC after a curated-hash lookup, or allows it when the
     /// lookup would use more than half of the remaining ES deadline (capped at
-    /// two seconds). The watchdog guarantees the deadline is never missed.
+    /// two seconds). The watchdog is scheduled on the worker queue; diagnostics measure dispatch delay.
     private func respondAfterPreLaunchHash(
         message: UnsafePointer<es_message_t>,
         path: String,
@@ -1823,7 +1904,8 @@ final class ESEventHandler {
         scanner: FileScanner,
         completion: @escaping (Bool, ScanCache.Entry?) -> Void
     ) {
-        let retained = RetainedMessage(message)
+        CredentialAuthDiagnostics.shared.count(.prelaunchDeferred)
+        let retained = RetainedMessage(message, diagnosticScope: .prelaunchRetained)
         let startedAt = DispatchTime.now().uptimeNanoseconds
         let budgetNanoseconds = Self.preLaunchBudgetNanoseconds(deadline: message.pointee.deadline)
         guard budgetNanoseconds > 50_000_000 else {
@@ -1833,15 +1915,24 @@ final class ESEventHandler {
             return
         }
 
-        preLaunchQueue.asyncAfter(deadline: .now() + .nanoseconds(Int(budgetNanoseconds))) { [weak self] in
-            guard retained.claimResponse() else { return }
+        let watchdogDeadline = DispatchTime.now() + .nanoseconds(Int(budgetNanoseconds))
+        CredentialAuthDiagnostics.shared.count(.prelaunchWatchdogScheduled)
+        preLaunchQueue.asyncAfter(deadline: watchdogDeadline) { [weak self] in
+            CredentialAuthDiagnostics.shared.count(.prelaunchWatchdogFired)
+            let now = CredentialAuthDiagnostics.now
+            CredentialAuthDiagnostics.shared.observe(.prelaunchWatchdogDelay, nanoseconds: now > watchdogDeadline.uptimeNanoseconds ? now - watchdogDeadline.uptimeNanoseconds : 0)
+            guard retained.claimResponse(watchdog: true) else { return }
             let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
             Self.logger.info("Pre-launch hash exceeded budget after \(elapsed / 1_000_000) ms; allowing \(path, privacy: .private)")
             self?.esClient?.respond(to: retained.pointer, allow: true)
             completion(false, nil)
         }
 
+        let enqueuedAt = CredentialAuthDiagnostics.now
         preLaunchQueue.async { [weak self] in
+            let workStarted = CredentialAuthDiagnostics.shared.begin(.prelaunchWork)
+            CredentialAuthDiagnostics.shared.observe(.prelaunchQueueWait, nanoseconds: workStarted >= enqueuedAt ? workStarted - enqueuedAt : 0)
+            defer { CredentialAuthDiagnostics.shared.end(.prelaunchWork, since: workStarted) }
             let match = scanner.preLaunchHashMatch(path: path, identity: identity)
             guard retained.claimResponse() else { return }
             let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt
@@ -2167,8 +2258,11 @@ final class ESEventHandler {
         responsiblePID: Int32?,
         processIdentity: ProcessInstanceIdentity,
         actorIdentity: TamperActorIdentity,
-        sshReadOwner: (actor: UInt32, file: UInt32)?
+        sshReadOwner: (actor: UInt32, file: UInt32)?,
+        observationTicket: CredentialObservationGate.Ticket
     ) {
+        var delayedReview = false
+        defer { if !delayedReview { credentialObservationGate.finish(observationTicket) } }
         EndpointSecurityClient.healthMetrics.recordCredentialOpenEvaluation()
         let attribution = processTree?.responsibleApp(
             actorPID: actorPID,
@@ -2185,6 +2279,7 @@ final class ESEventHandler {
             } ?? false
         )
         let chainKey = credentialChainKey(attribution: attribution, actorPID: actorPID)
+        credentialObservationGate.setChainKey(chainKey, ticket: observationTicket)
         let hasRecentKeychainCommand = credentialReportLock.withLock { () -> Bool in
             let now = Date()
             recentKeychainCommands = recentKeychainCommands.filter {
@@ -2246,44 +2341,19 @@ final class ESEventHandler {
             hasRecentKeychainCommand: store == .keychain && hasRecentKeychainCommand
         )
 
-        let pendingKeychainRead: KeychainTransferFallbackTracker.PendingRead?
-        if store == .keychain, finding?.reason != "keychain_command_correlation" {
-            pendingKeychainRead = keychainTransferFallback.recordRead(
-                sourcePath: path,
-                process: processIdentity,
-                at: Date()
-            )
-        } else {
-            pendingKeychainRead = nil
+        if store == .keychain, finding?.reason == "keychain_command_correlation" {
+            keychainTransferFallback.cancel(process: processIdentity, sourcePath: path)
         }
         guard let finding else { return }
-
-        // A plain unvalidated read may be the first half of cp/ditto/manual
-        // byte copying. Briefly defer its review item so a following external
-        // create/write can replace it with one protected transfer incident.
         if store == .keychain, finding.reason == "credential_store_access" {
-            dispatchQueue.asyncAfter(deadline: .now() + 30.1) { [weak self] in
-                guard let self,
-                      let pendingKeychainRead,
-                      self.keychainTransferFallback.hasPendingRead(
-                          process: processIdentity,
-                          matching: pendingKeychainRead
-                      )
-                else { return }
-                self.keychainTransferFallback.cancel(process: processIdentity)
-                self.reportCredentialOpenFinding(
-                    finding,
-                    path: path,
-                    actorPath: actorPath,
-                    actorPID: actorPID,
-                    parentPID: parentPID,
-                    attribution: attribution,
-                    actorIdentity: actorIdentity
-                )
+            delayedReview = true
+            scheduleCredentialReview(ticket: observationTicket, process: processIdentity, path: path) { [weak self] in
+                self?.reportCredentialOpenFinding(finding, path: path, actorPath: actorPath,
+                    actorPID: actorPID, parentPID: parentPID, attribution: attribution,
+                    actorIdentity: actorIdentity, processIdentity: processIdentity, observationKey: observationTicket.key)
             }
             return
         }
-
         reportCredentialOpenFinding(
             finding,
             path: path,
@@ -2291,8 +2361,30 @@ final class ESEventHandler {
             actorPID: actorPID,
             parentPID: parentPID,
             attribution: attribution,
-            actorIdentity: actorIdentity
+            actorIdentity: actorIdentity, processIdentity: processIdentity, observationKey: observationTicket.key
         )
+    }
+
+    /// One delayed review per admitted target, not one timer per read. Later
+    /// reads refresh correlation without retaining additional closures.
+    private func scheduleCredentialReview(ticket: CredentialObservationGate.Ticket,
+        process: ProcessInstanceIdentity, path: String, report: @escaping () -> Void) {
+        guard let pending = keychainTransferFallback.latestRead(process: process, sourcePath: path) else {
+            credentialObservationGate.finish(ticket); return
+        }
+        let delay = max(0.1, keychainTransferFallback.window - Date().timeIntervalSince(pending.recordedAt) + 0.1)
+        dispatchQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            guard let current = self.keychainTransferFallback.latestRead(process: process, sourcePath: path) else {
+                self.credentialObservationGate.finish(ticket); return
+            }
+            if Date().timeIntervalSince(current.recordedAt) < self.keychainTransferFallback.window {
+                self.scheduleCredentialReview(ticket: ticket, process: process, path: path, report: report)
+                return
+            }
+            if self.keychainTransferFallback.cancelIfMatching(process: process, pending: current) { report() }
+            self.credentialObservationGate.finish(ticket)
+        }
     }
 
     private func reportCredentialOpenFinding(
@@ -2302,12 +2394,14 @@ final class ESEventHandler {
         actorPID: Int32,
         parentPID: Int32,
         attribution: ResponsibleAppAttribution?,
-        actorIdentity: TamperActorIdentity
+        actorIdentity: TamperActorIdentity,
+        processIdentity: ProcessInstanceIdentity,
+        observationKey: CredentialObservationGate.Key
     ) {
 
         // High-volume stores may be opened repeatedly. Coalesce at the sensor
         // boundary as well as in Core so a noisy reader cannot flood delivery.
-        let key = "\(actorPID)|\(finding.store.rawValue)|\(finding.reason)"
+        let key = CredentialFindingReportKey(observation: observationKey, reason: finding.reason)
         let now = Date()
         let shouldReport = credentialReportLock.withLock { () -> Bool in
             if let previous = lastCredentialReport[key],
@@ -2318,6 +2412,10 @@ final class ESEventHandler {
             if lastCredentialReport.count > 1_024 {
                 let cutoff = now.addingTimeInterval(-Self.credentialReportWindow)
                 lastCredentialReport = lastCredentialReport.filter { $0.value >= cutoff }
+                if lastCredentialReport.count > 1_024,
+                   let oldest = lastCredentialReport.min(by: { $0.value < $1.value })?.key {
+                    lastCredentialReport.removeValue(forKey: oldest)
+                }
             }
             return true
         }
@@ -2918,6 +3016,19 @@ final class ESEventHandler {
             filePath.contains("/.build/") ||
             filePath.contains("/Build/Products/") ||
             filePath.contains("/Developer/Xcode/UserData/Previews/")
+    }
+
+    private func rememberAttributionImage(_ process: es_process_t) {
+        var audit = process.audit_token
+        var hash = process.cdhash
+        SecCodeResponsibleProcessIdentityResolver.shared.remember(.init(
+            process: ProcessInstanceIdentity(pid: audit_token_to_pid(audit),
+                startSeconds: UInt64(process.start_time.tv_sec), startMicroseconds: UInt64(process.start_time.tv_usec),
+                pidVersion: Int32(audit_token_to_pidversion(audit))),
+            audit: withUnsafeBytes(of: &audit) { Data($0) }, hash: withUnsafeBytes(of: &hash) { Data($0) },
+            path: esString(process.executable.pointee.path), teamID: esOptionalString(process.team_id),
+            signingID: esOptionalString(process.signing_id), flags: process.codesigning_flags,
+            platform: process.is_platform_binary))
     }
 
     private func actorHasTrustedSigner(_ process: es_process_t) -> Bool {
