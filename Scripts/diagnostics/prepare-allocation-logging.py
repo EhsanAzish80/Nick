@@ -22,7 +22,7 @@ if not re.fullmatch(pattern,str(exe)) or not exe.is_file() or exe.stat().st_uid!
 info=subprocess.run(['/usr/bin/codesign','-dv','--verbose=2',str(exe)],capture_output=True,text=True,check=True,timeout=10).stderr
 if 'Identifier=com.ehsanazish.nick.NickExtension\n' not in info or 'TeamIdentifier=UXGW5V3BY6\n' not in info:raise SystemExit('Unexpected code identity; nothing changed')
 subprocess.run(['/usr/bin/codesign','--verify','--strict',str(exe)],check=True,timeout=15)
-logs=pathlib.Path('/private/tmp/NickAllocationLogging')
+logs=pathlib.Path('/Library/Logs/NickAllocationLogging')
 command=['/bin/launchctl','debug',a.target,'--environment','MallocStackLogging=1','MallocStackLoggingNoCompact=1','MallocStackLoggingDirectory='+str(logs)]
 print(json.dumps({'nextLaunchOnly':True,'target':a.target,'command':command,'limits':'Opt-in allocation logging is NOT disk-bounded by this helper. Do not enable on reporter machine until a bounded collection procedure is validated.','noRestart':True,'status':'configuration preview; logging activation not proven'},indent=2))
 if not a.enable_next_launch:raise SystemExit(0)
