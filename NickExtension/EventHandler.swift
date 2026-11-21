@@ -1570,7 +1570,12 @@ final class ESEventHandler {
             let mountPoint: String = withUnsafeBytes(of: msg.event.mount.statfs.pointee.f_mntonname) { ptr in
                 String(cString: ptr.baseAddress!.assumingMemoryBound(to: CChar.self))
             }
-            usbScanner?.handleMount(volumePath: mountPoint)
+            let mountDiagnosticID = USBMountDiagnostics.shared.received(path: mountPoint)
+            if let usbScanner {
+                usbScanner.handleMount(volumePath: mountPoint, diagnosticID: mountDiagnosticID)
+            } else {
+                USBMountDiagnostics.shared.update(mountDiagnosticID, stage: "scanner-unavailable", finished: true)
+            }
 
         case ES_EVENT_TYPE_NOTIFY_UNMOUNT:
             let mountPoint: String = withUnsafeBytes(of: msg.event.unmount.statfs.pointee.f_mntonname) { ptr in

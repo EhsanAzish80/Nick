@@ -83,9 +83,10 @@ final class RuntimeDiagnosticMonitor: @unchecked Sendable {
         var result = lock.withLock { fields }
         result["pendingAuthDiagnostics"] = EndpointSecurityClient.pendingAuth.snapshot(now: mach_absolute_time())
         result["scanWorkDiagnostics"] = ScanWorkDiagnostics.shared.snapshot()
+        result["mountStartupDiagnostics"] = USBMountDiagnostics.shared.snapshot()
         result["allocationLoggingEnvironmentPresent"] = getenv("MallocStackLogging") != nil
         result["allocationLoggingStatus"] = "environment observation only; not proof logging is active; never attaches or changes launch settings"
-        result["diagnosticBuildPurpose"] = "trust/create fixes; remaining memory and deadline causes unproven"
+        result["diagnosticBuildPurpose"] = "5112 mount startup tracing; remaining memory and deadline causes unproven"
         return result
     }
     private func inspectReports() {

@@ -66,14 +66,21 @@ final class USBScanner {
     /// If the volume is external, a background scan is started immediately.
     /// Safe to call from the ES callback queue — the scan itself is dispatched
     /// asynchronously and the mount point string is captured by value.
-    func handleMount(volumePath: String) {
-        guard isExternalVolumePath(volumePath) else { return }
+    func handleMount(volumePath: String, diagnosticID: UInt64? = nil) {
+        USBMountDiagnostics.shared.update(diagnosticID, stage: "handler-entered")
+        guard isExternalVolumePath(volumePath, diagnosticID: diagnosticID) else { return }
 
         lock.withLock { _ = mountedVolumes.insert(volumePath) }
         Self.logger.notice("External volume mounted — starting background scan: \(volumePath)")
 
+        USBMountDiagnostics.shared.update(diagnosticID, stage: "queued")
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            self?.scanVolume(path: volumePath)
+            guard let self else {
+                USBMountDiagnostics.shared.update(diagnosticID, stage: "scanner-deallocated", finished: true)
+                return
+            }
+            USBMountDiagnostics.shared.update(diagnosticID, stage: "worker-entered")
+            self.scanVolume(path: volumePath, diagnosticID: diagnosticID)
         }
     }
 
@@ -94,7 +101,8 @@ final class USBScanner {
 
     // MARK: - Private Helpers
 
-    private func scanVolume(path: String) {
+    private func scanVolume(path: String, diagnosticID: UInt64?) {
+        USBMountDiagnostics.shared.update(diagnosticID, stage: "enumerator-requested")
         let fm = FileManager.default
         // Hidden files are included: removable-media payloads usually hide.
         // Only content that can run is hashed and YARA-scanned, so a photo or
@@ -105,14 +113,22 @@ final class USBScanner {
                                          .isDirectoryKey, .isExecutableKey],
             options: []
         ) else {
+            USBMountDiagnostics.shared.update(diagnosticID, stage: "enumerator-unavailable", finished: true)
             Self.logger.warning("Cannot enumerate volume: \(path)")
             return
         }
 
+        USBMountDiagnostics.shared.update(diagnosticID, stage: "enumerator-ready")
         var scannedCount = 0
         var enumeratedCount = 0
         let diagnosticRun = ScanWorkDiagnostics.shared.usbStarted()
-        defer { ScanWorkDiagnostics.shared.usbProgress(diagnosticRun, enumerated: enumeratedCount, scanned: scannedCount, finished: true) }
+        var endReason = "enumeration-ended" // No error handler: not proof of complete traversal.
+        USBMountDiagnostics.shared.update(diagnosticID, stage: "scan-started", fields: ["usbRunID": diagnosticRun.map { $0 as Any } ?? NSNull()])
+        defer {
+            ScanWorkDiagnostics.shared.usbProgress(diagnosticRun, enumerated: enumeratedCount, scanned: scannedCount, finished: true)
+            USBMountDiagnostics.shared.update(diagnosticID, stage: "scan-ended", finished: true,
+                fields: ["endReason": endReason, "enumerated": enumeratedCount, "scanned": scannedCount])
+        }
         var threatsFound = 0
 
         for case let fileURL as URL in enumerator {
@@ -120,8 +136,9 @@ final class USBScanner {
             if enumeratedCount % 256 == 0 {
                 ScanWorkDiagnostics.shared.usbProgress(diagnosticRun, enumerated: enumeratedCount, scanned: scannedCount)
             }
-            guard isMounted(volumePath: path),
-                  scannedCount < Self.maximumFilesPerMount else {
+            let stillMounted = isMounted(volumePath: path)
+            guard stillMounted, scannedCount < Self.maximumFilesPerMount else {
+                endReason = stillMounted ? "scanned-file-cap" : "unmounted"
                 Self.logger.info("USB scan stopped or reached its file limit: \(path)")
                 break
             }
@@ -205,21 +222,42 @@ final class USBScanner {
 
     /// Returns `true` only for a local removable/ejectable volume. Network
     /// shares often mount under `/Volumes` too and must not trigger a full scan.
-    private func isExternalVolumePath(_ path: String) -> Bool {
-        guard path.hasPrefix("/Volumes/") else { return false }
+    private func isExternalVolumePath(_ path: String, diagnosticID: UInt64?) -> Bool {
+        guard path.hasPrefix("/Volumes/") else {
+            USBMountDiagnostics.shared.update(diagnosticID, stage: "rejected-path-prefix", finished: true)
+            return false
+        }
         let keys: Set<URLResourceKey> = [
             .volumeIsLocalKey, .volumeIsRemovableKey, .volumeIsEjectableKey
         ]
-        guard let values = try? URL(fileURLWithPath: path).resourceValues(forKeys: keys),
-              values.volumeIsLocal == true,
-              values.volumeIsRemovable == true || values.volumeIsEjectable == true else {
+        USBMountDiagnostics.shared.update(diagnosticID, stage: "metadata-requested")
+        let values: URLResourceValues
+        do {
+            values = try URL(fileURLWithPath: path).resourceValues(forKeys: keys)
+        } catch {
+            let nsError = error as NSError
+            USBMountDiagnostics.shared.update(diagnosticID, stage: "rejected-metadata-error", finished: true,
+                fields: ["errorDomain": String(nsError.domain.prefix(80)), "errorCode": nsError.code])
             return false
         }
-        // Exclude boot disk aliases (typically "/Volumes/Macintosh HD" → "/"
-        // but may also appear under /Volumes/)
+        let metadata: [String: Any] = [
+            "volumeIsLocal": values.volumeIsLocal.map { $0 as Any } ?? NSNull(),
+            "volumeIsRemovable": values.volumeIsRemovable.map { $0 as Any } ?? NSNull(),
+            "volumeIsEjectable": values.volumeIsEjectable.map { $0 as Any } ?? NSNull()]
+        USBMountDiagnostics.shared.update(diagnosticID, stage: "metadata-returned", fields: metadata)
+        guard values.volumeIsLocal == true,
+              values.volumeIsRemovable == true || values.volumeIsEjectable == true else {
+            USBMountDiagnostics.shared.update(diagnosticID, stage: "rejected-volume-properties", finished: true)
+            return false
+        }
         let name = String(path.dropFirst("/Volumes/".count))
             .components(separatedBy: "/").first ?? ""
         let exclude: Set<String> = ["Macintosh HD", "Macintosh HD - Data", ""]
-        return !exclude.contains(name)
+        guard !exclude.contains(name) else {
+            USBMountDiagnostics.shared.update(diagnosticID, stage: "rejected-boot-alias", finished: true)
+            return false
+        }
+        USBMountDiagnostics.shared.update(diagnosticID, stage: "eligible")
+        return true
     }
 }

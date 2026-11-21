@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Diagnostic ownership primitive used by the real retained-AUTH paths. Winning
 /// a claim is NOT proof that an ES response was submitted or accepted.
@@ -74,6 +75,68 @@ final class PendingAuthDiagnostics: @unchecked Sendable {
                     "failedResponseReturns": failedResponses, "phaseCounts": phases,
                     "oldestMessageMachTime": oldest ?? 0, "observedMachTime": now,
                     "scope": "received AUTHs until successful ES response return; excludes messages not yet delivered; never evicts pending records"]
+        }
+    }
+}
+
+
+/// Mount-only diagnostics: no paths, credentials, file contents, retries or policy decisions.
+/// Tokens correlate identical mount paths within one process, never across sessions.
+final class USBMountDiagnostics: @unchecked Sendable {
+    static let shared = USBMountDiagnostics()
+    private let lock = NSLock()
+    private let salt = UUID().uuidString
+    private var nextID: UInt64 = 0
+    private var records: [UInt64: [String: Any]] = [:]
+    private var order: [UInt64] = []
+    private var receivedCount: UInt64 = 0, overflows: UInt64 = 0
+    private var stages: [String: UInt64] = [:]
+    let capacity: Int
+    init(capacity: Int = 16) { precondition(capacity > 0); self.capacity = capacity }
+
+    func received(path: String, at date: Date = Date()) -> UInt64? {
+        let token = SHA256.hash(data: Data((salt + path).utf8)).prefix(16)
+            .map { String(format: "%02x", $0) }.joined()
+        return lock.withLock {
+            receivedCount &+= 1
+            if records.count >= capacity {
+                guard let old = order.first(where: { records[$0]?["finished"] as? Bool == true })
+                else { overflows &+= 1; return nil }
+                records.removeValue(forKey: old); order.removeAll { $0 == old }
+            }
+            nextID &+= 1
+            records[nextID] = ["id": nextID, "mountToken": token,
+                "pathIsVolumesPrefix": path.hasPrefix("/Volumes/"), "pathByteCount": path.utf8.count,
+                "receivedAt": date.timeIntervalSince1970, "updatedAt": date.timeIntervalSince1970,
+                "stage": "received", "finished": false, "history": [["stage": "received", "at": date.timeIntervalSince1970]]]
+            order.append(nextID)
+            stages["received", default: 0] &+= 1
+            return nextID
+        }
+    }
+
+    func update(_ id: UInt64?, stage: String, finished: Bool = false,
+                fields: [String: Any] = [:], at date: Date = Date()) {
+        lock.withLock {
+            stages[stage, default: 0] &+= 1
+            guard let id, var record = records[id] else { return }
+            record["stage"] = stage; record["updatedAt"] = date.timeIntervalSince1970
+            record["finished"] = finished
+            for (key, value) in fields { record[key] = value }
+            var history = record["history"] as? [[String: Any]] ?? []
+            if history.count < 12 { history.append(["stage": stage, "at": date.timeIntervalSince1970]) }
+            record["history"] = history
+            records[id] = record
+        }
+    }
+
+    func snapshot() -> [String: Any] {
+        lock.withLock {
+            ["mountReceivedCount": receivedCount, "mountRecordCapacity": capacity,
+             "mountRecordOverflows": overflows, "mountStageCounts": stages,
+             "mountRecords": order.compactMap { records[$0] },
+             "mountTokenScope": "salted path token; current process only; not a volume UUID",
+             "diagnosticScope": "mount startup observations only; scanning policy unchanged"]
         }
     }
 }

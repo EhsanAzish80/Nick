@@ -1,0 +1,13 @@
+# Private diagnostic build 5112 — mount startup tracing
+
+Build 5112 adds bounded observation only to the 5111 mount/USB path. No automatic retry, deduplication, enumeration limit, timeout, autorelease, credential trust, AUTH fallback, signing entitlement, scanning-policy or detector false-positive fix is included. It does not claim to resolve #122.
+
+`mountStartupDiagnostics` in health records receipt before scanner dispatch, scanner availability, path eligibility, before/after existing Foundation metadata lookup, nullable local/removable/ejectable flags, sanitized NSError domain/code, rejection reason, queue and worker entry, enumerator request/creation failure/success, linked `usbRunID`, and scan termination reason (unmount, scanned-file cap, or enumeration ended). Enumeration ending does not prove full traversal: the pre-existing enumerator still has no error handler. The original Foundation lookup remains synchronous and unchanged; diagnostics add no new filesystem probe on that path.
+
+At most 16 records with 12 stage timestamps each are retained; unfinished records are not evicted for capacity. Aggregate stage/receipt counters and overflow remain explicit. No per-file diagnostic history. Salted mount-path tokens correlate mounts within the process; they are not a persistent volume identity or UUID and expose no raw path. Diagnostics cannot establish callback-time metadata values until a new installed 5112 run is captured. No scanner-unavailable, rejection or enumerator error is silently treated as a successful scan.
+
+Four Xcode regression tests cover receipt-before-decision visibility, null metadata and USB-run correlation, session-local tokens/path redaction, record capacity/unfinished retention and bounded history. These are diagnostics tests, not proof that a sustained volume scan starts or that its memory growth is fixed.
+
+The private archive uses `NICK_PRIVATE_DIAGNOSTICS` via external xcconfig. Exact binaries, dSYMs, source snapshot/hashes and test evidence must be preserved with the installer. Nothing is merged, publicly released, uploaded to GitHub Releases, or added to website/appcast by this build.
+
+After installing: verify app and both active extensions at 5112. The local harness defaults to expected build 5112, requires the new health field, and exports mount startup records in its private, read-only status summary. Reuse the retained LaCie fixture, with the same resource limits; compare `mountRecords` stages against USB counters. A missing scan is invalid evidence for a flat-memory pass. No preparation or load is automatically started by building this candidate.

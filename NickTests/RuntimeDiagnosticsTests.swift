@@ -52,6 +52,50 @@ final class RuntimeDiagnosticsTests: XCTestCase {
         XCTAssertEqual(d.snapshot()["peakScansActive"] as? Int, 2)
         XCTAssertEqual(d.snapshot()["streamingHashBytes"] as? UInt64, 1024)
     }
+    func testMountStartupRecordsPreserveUnknownPropertiesAndCorrelateUSBRun() throws {
+        let d = USBMountDiagnostics(), id = try XCTUnwrap(d.received(path: "/Volumes/Synthetic-Test"))
+        d.update(id, stage: "metadata-returned", fields: ["volumeIsLocal": true, "volumeIsRemovable": NSNull(), "volumeIsEjectable": true])
+        d.update(id, stage: "scan-started", fields: ["usbRunID": UInt64(7)])
+        d.update(id, stage: "scan-ended", finished: true, fields: ["endReason": "scanned-file-cap"])
+        let record = try XCTUnwrap((d.snapshot()["mountRecords"] as? [[String: Any]])?.first)
+        XCTAssertEqual(record["usbRunID"] as? UInt64, 7)
+        XCTAssertTrue(record["volumeIsRemovable"] is NSNull)
+        XCTAssertEqual(record["finished"] as? Bool, true)
+        let json = try JSONSerialization.data(withJSONObject: d.snapshot())
+        XCTAssertFalse(String(decoding: json, as: UTF8.self).contains("Synthetic-Test"))
+    }
+    func testMountTokensStableWithinSessionAndDifferentAcrossSessions() throws {
+        let first = USBMountDiagnostics(), second = USBMountDiagnostics()
+        _ = first.received(path: "/Volumes/Synthetic")
+        _ = first.received(path: "/Volumes/Synthetic")
+        _ = second.received(path: "/Volumes/Synthetic")
+        let records = try XCTUnwrap(first.snapshot()["mountRecords"] as? [[String: Any]])
+        let other = try XCTUnwrap((second.snapshot()["mountRecords"] as? [[String: Any]])?.first)
+        XCTAssertEqual(records[0]["mountToken"] as? String, records[1]["mountToken"] as? String)
+        XCTAssertNotEqual(records[0]["mountToken"] as? String, other["mountToken"] as? String)
+    }
+    func testMountDiagnosticsNeverEvictUnfinishedWorkAndCountOverflow() throws {
+        let d = USBMountDiagnostics(capacity: 2)
+        let first = try XCTUnwrap(d.received(path: "/Volumes/A"))
+        _ = d.received(path: "/Volumes/B")
+        XCTAssertNil(d.received(path: "/Volumes/C"))
+        XCTAssertEqual(d.snapshot()["mountRecordOverflows"] as? UInt64, 1)
+        d.update(first, stage: "rejected-metadata-error", finished: true,
+                 fields: ["errorDomain": "NSCocoaErrorDomain", "errorCode": 260])
+        XCTAssertNotNil(d.received(path: "/Volumes/D"))
+        XCTAssertEqual((d.snapshot()["mountRecords"] as? [[String: Any]])?.count, 2)
+        XCTAssertEqual(d.snapshot()["mountReceivedCount"] as? UInt64, 4)
+    }
+    func testMountReceiptVisibleBeforeEligibilityAndHistoryBounded() throws {
+        let d = USBMountDiagnostics(), id = try XCTUnwrap(d.received(path: "/private/tmp/preparation"))
+        var record = try XCTUnwrap((d.snapshot()["mountRecords"] as? [[String: Any]])?.first)
+        XCTAssertEqual(record["stage"] as? String, "received")
+        XCTAssertEqual(record["pathIsVolumesPrefix"] as? Bool, false)
+        for _ in 0..<100 { d.update(id, stage: "metadata-requested") }
+        record = try XCTUnwrap((d.snapshot()["mountRecords"] as? [[String: Any]])?.first)
+        XCTAssertEqual((record["history"] as? [[String: Any]])?.count, 12)
+        XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: d.snapshot()))
+    }
     private func report(namespace: String = "ENDPOINTSECURITY", code: Int = 2, bundle: String = "com.ehsanazish.nick.NickExtension") throws -> Data {
         let body: [String: Any] = ["incident": "B35E0200-3333-4444-8888-000000000001", "pid": 42,
             "procLaunch": "2026-11-19 10:00:00.000 +0000", "captureTime": "2026-11-19 10:10:00.000 +0000",
