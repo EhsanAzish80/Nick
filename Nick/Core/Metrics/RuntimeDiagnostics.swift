@@ -346,3 +346,93 @@ enum PrivateDiagnosticBuild {
         enabled ? version + " Diagnostic" : version
     }
 }
+/// Per ES client. Scalar-only bounded history; snapshot serialization never holds
+/// the callback lock. Full duration includes post-reply work and pool teardown,
+/// but excludes this diagnostic's final bookkeeping and the block-return epilogue.
+final class FullCallbackTimingDiagnostics: @unchecked Sendable {
+    private struct Timing {
+        let event: UInt32, auth: Bool, message: UInt64, entry: UInt64
+        var end: UInt64 = 0
+        var response: UInt64? = nil
+    }
+    private struct Record { let current: Timing; let previous: Timing? }
+    private let lock = NSLock()
+    private let factor: Double
+    private var active: Timing?
+    private var predecessor: Timing?
+    private var previous: Timing?
+    private var history: [Record?]
+    private var next = 0, count = 0
+    private var overwritten: UInt64 = 0, completed: UInt64 = 0, mismatches: UInt64 = 0
+    private var maximum: Record?
+    let capacity: Int
+    init(capacity: Int = 16, nanosecondsPerTick: Double) {
+        precondition(capacity > 0)
+        self.capacity = capacity; factor = nanosecondsPerTick / 1e6
+        history = Array(repeating: nil, count: capacity)
+    }
+    func begin(event: UInt32, auth: Bool, message: UInt64, entry: UInt64) {
+        lock.withLock {
+            if active != nil { mismatches &+= 1 }
+            predecessor = previous
+            active = Timing(event: event, auth: auth, message: message, entry: entry)
+        }
+    }
+    /// Deferred replies after callback completion are deliberately not assigned
+    /// to a different callback. Existing slow-response diagnostics retain them.
+    func responseReturned(callbackEntry: UInt64?, returned: UInt64) {
+        guard let callbackEntry else { return }
+        lock.withLock {
+            guard active?.entry == callbackEntry, returned >= callbackEntry else { return }
+            active?.response = returned
+        }
+    }
+    func finish(entry: UInt64, end: UInt64) {
+        lock.withLock {
+            guard var current = active, current.entry == entry, end >= entry else { mismatches &+= 1; return }
+            current.end = end; completed &+= 1
+            let record = Record(current: current, previous: predecessor)
+            if factor.isFinite && factor > 0 {
+                let duration = ms(entry, end)
+                let lag = current.auth && current.message <= entry ? ms(current.message, entry) : 0
+                if duration >= 10 || lag >= 100 {
+                    if count == capacity { overwritten &+= 1 }
+                    history[next] = record; next = (next + 1) % capacity; count = min(count + 1, capacity)
+                }
+                if maximum.map({ end - entry > $0.current.end - $0.current.entry }) ?? true { maximum = record }
+            }
+            previous = current; active = nil; predecessor = nil
+        }
+    }
+    func snapshot() -> [String: Any] {
+        let copy = lock.withLock { () -> ([Record], Record?, UInt64, UInt64, UInt64) in
+            ((0..<count).compactMap { history[(next - count + $0 + capacity) % capacity] }, maximum, overwritten, completed, mismatches)
+        }
+        return ["schemaVersion": 1, "capacity": capacity, "records": copy.0.map(fields),
+                "maximumCallback": copy.1.map(fields) as Any? ?? NSNull(), "overwritten": copy.2,
+                "completed": copy.3, "sequenceMismatches": copy.4,
+                "timebaseAvailable": factor.isFinite && factor > 0,
+                "scope": "per-client callback body including pool teardown; excludes diagnostic finish and return epilogue",
+                "thresholdMilliseconds": 10, "authEntryLagThresholdMilliseconds": 100,
+                "responseScope": "only responses returned while the matching callback is active; null is not evidence of missing AUTH reply"]
+    }
+    private func ms(_ a: UInt64, _ b: UInt64) -> Double { (b >= a ? Double(b-a) : -Double(a-b)) * factor }
+    private func timing(_ t: Timing) -> [String: Any] {
+        ["eventType": t.event, "isAuth": t.auth, "messageMachTime": t.message,
+         "entryMachTime": t.entry, "bodyEndMachTime": t.end,
+         "bodyMilliseconds": ms(t.entry,t.end),
+         "responseReturnMachTime": t.response.map { $0 as Any } ?? NSNull(),
+         "postResponseMilliseconds": t.response.flatMap { $0 <= t.end ? ms($0,t.end) : nil } as Any? ?? NSNull()]
+    }
+    private func fields(_ r: Record) -> [String: Any] {
+        let c = r.current
+        let p = r.previous
+        return ["callback": timing(c), "previousCallback": p.map(timing) as Any? ?? NSNull(),
+                "eventToEntryMilliseconds": c.message <= c.entry ? ms(c.message,c.entry) as Any : NSNull(),
+                "gapAfterPreviousBodyMilliseconds": p.map { ms($0.end,c.entry) } as Any? ?? NSNull(),
+                "previousBodyOverlapWithEventToEntryMilliseconds": p.map {
+                    let start = max(c.message,$0.entry), end = min(c.entry,$0.end)
+                    return end > start ? ms(start,end) : 0.0
+                } as Any? ?? NSNull()]
+    }
+}

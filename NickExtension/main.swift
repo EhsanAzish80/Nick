@@ -116,6 +116,10 @@ func writeExtensionHealth() {
     }
     health["authResponseRetainedSampleCount"] = esMetrics.authResponseRetainedSampleCount
     health["slowAuthResponseDiagnostics"] = EndpointSecurityClient.slowAuthResponses.snapshot()
+    health["fullCallbackTimingDiagnostics"] = [
+        "primary": EndpointSecurityClient.primaryCallbackTimings.snapshot(),
+        "shellProfileWrite": EndpointSecurityClient.shellCallbackTimings.snapshot()
+    ]
     if let maximum = esMetrics.authResponseMaximumMilliseconds {
         health["authResponseMaximumMilliseconds"] = maximum
     }
@@ -245,7 +249,7 @@ let emailAttachmentMonitor = EmailAttachmentMonitor()
 let eventHandler = ESEventHandler()
 let xpcServer    = ESXPCServer()
 let esClient     = EndpointSecurityClient(eventHandler: eventHandler)
-let shellProfileWriteClient = EndpointSecurityClient(eventHandler: eventHandler)
+let shellProfileWriteClient = EndpointSecurityClient(eventHandler: eventHandler, callbackTimings: EndpointSecurityClient.shellCallbackTimings)
 
 strictBlockingPolicy.update(settingsRecord: xpcServer.currentSecuritySettingsRecord())
 xpcServer.securitySettingsDidChange = { record in

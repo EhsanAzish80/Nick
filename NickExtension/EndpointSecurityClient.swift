@@ -31,6 +31,14 @@ final class EndpointSecurityClient {
         guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom != 0 else { return 0 }
         return Double(timebase.numer) / Double(timebase.denom)
     }())
+    private static let callbackTimebase: Double = {
+        var t = mach_timebase_info_data_t()
+        guard mach_timebase_info(&t) == KERN_SUCCESS, t.denom != 0 else { return 0 }
+        return Double(t.numer) / Double(t.denom)
+    }()
+    static let primaryCallbackTimings = FullCallbackTimingDiagnostics(nanosecondsPerTick: callbackTimebase)
+    static let shellCallbackTimings = FullCallbackTimingDiagnostics(nanosecondsPerTick: callbackTimebase)
+    private let callbackTimings: FullCallbackTimingDiagnostics
     static func diagnosticKey(_ message: UnsafePointer<es_message_t>) -> PendingAuthDiagnostics.Key {
         .init(address: UInt64(UInt(bitPattern: message)), machTime: message.pointee.mach_time)
     }
@@ -54,7 +62,8 @@ final class EndpointSecurityClient {
     // MARK: - Init
 
     /// - Parameter eventHandler: Receives every decoded ES message for dispatch.
-    init(eventHandler: ESEventHandler) {
+    init(eventHandler: ESEventHandler, callbackTimings: FullCallbackTimingDiagnostics = EndpointSecurityClient.primaryCallbackTimings) {
+        self.callbackTimings = callbackTimings
         self.eventHandler = eventHandler
     }
 
@@ -68,7 +77,12 @@ final class EndpointSecurityClient {
         var newClient: OpaquePointer?
 
         let result = es_new_client(&newClient) { [weak self] client, message in
-            let callbackEnteredAt = message.pointee.action_type == ES_ACTION_TYPE_AUTH ? mach_absolute_time() : 0
+            let callbackEnteredAt = mach_absolute_time()
+            let timings = self?.callbackTimings
+            timings?.begin(event: message.pointee.event_type.rawValue,
+                           auth: message.pointee.action_type == ES_ACTION_TYPE_AUTH,
+                           message: message.pointee.mach_time, entry: callbackEnteredAt)
+            defer { timings?.finish(entry: callbackEnteredAt, end: mach_absolute_time()) }
             // This block runs on an ES-internal serial queue — keep it fast.
             autoreleasepool {
                 if message.pointee.action_type == ES_ACTION_TYPE_AUTH {
@@ -151,6 +165,7 @@ final class EndpointSecurityClient {
             ret = es_respond_auth_result(client, message, authResult, false)
         }
         let completedAt = mach_absolute_time()
+        callbackTimings.responseReturned(callbackEntry: responseContext?.callbackMachTime, returned: completedAt)
         Self.slowAuthResponses.record(event: message.pointee.event_type.rawValue, result: ret.rawValue,
                                       allowed: allow, message: message.pointee.mach_time,
                                       context: responseContext, apiStart: responseAPIBeganAt,
