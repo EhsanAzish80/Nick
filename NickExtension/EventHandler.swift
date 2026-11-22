@@ -1845,6 +1845,8 @@ final class ESEventHandler {
             CredentialAuthDiagnostics.shared.observe(.credentialQueueWait, nanoseconds: workStarted >= enqueuedAt ? workStarted - enqueuedAt : 0)
             defer { CredentialAuthDiagnostics.shared.end(.credentialWork, since: workStarted) }
             guard !retained.isFinished else { return }
+            pauseSyntheticWorker(message: retained.pointer, scope: .credential)
+            guard !retained.isFinished else { return }
             _ = DeveloperIDTrustValidator.shared.isValidatedDistribution(path: actorPath)
             var hash = retained.pointer.pointee.process.pointee.cdhash
             let cdhash = withUnsafeBytes(of: &hash) { Data($0) }
@@ -1965,10 +1967,29 @@ final class ESEventHandler {
             CredentialAuthDiagnostics.shared.observe(.prelaunchQueueWait, nanoseconds: started >= enqueuedAt ? started - enqueuedAt : 0)
             defer { CredentialAuthDiagnostics.shared.end(.prelaunchWork, since: started) }
             guard !retained.isFinished else { return }
+            self.pauseSyntheticWorker(message: retained.pointer, scope: .prelaunch)
+            guard !retained.isFinished else { return }
             let match = scanner.preLaunchHashMatch(path: path, identity: identity)
             let blocked = match != nil && scanner.allowsAnyBlocking
             _ = retained.submit(allow: !blocked)
         }
+    }
+
+    private func pauseSyntheticWorker(message: UnsafePointer<es_message_t>, scope: SyntheticWorkerDelay.Scope) {
+#if NICK_PRIVATE_DIAGNOSTICS
+        let process = scope == .credential ? message.pointee.process.pointee : message.pointee.event.exec.target.pointee
+        guard esOptionalString(process.signing_id) == SyntheticWorkerDelay.helperID,
+              esOptionalString(process.team_id) == "UXGW5V3BY6" else { return }
+        var hash = process.cdhash
+        let cdhash = withUnsafeBytes(of: &hash) { $0.map { String(format: "%02x", $0) }.joined() }
+        let helperPath = esString(process.executable.pointee.path)
+        let target = scope == .credential ? esString(message.pointee.event.open.file.pointee.path) : helperPath
+        PrivateWorkerDelay.shared.pauseIfRequested(.init(
+            build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
+            signingID: esOptionalString(process.signing_id), teamID: esOptionalString(process.team_id), cdhash: cdhash,
+            identityValid: process.codesigning_flags & 0x1 != 0 && process.codesigning_flags & 0x20000 != 0 && process.codesigning_flags & 0x2 == 0,
+            helperPath: helperPath, targetPath: target, scope: scope))
+#endif
     }
 
     /// Converts the ES deadline (mach absolute time) into the time this

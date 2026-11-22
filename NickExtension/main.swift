@@ -85,6 +85,7 @@ func writeExtensionHealth() {
         "diskWriteDailyTargetBytes": ExtensionDiskWriteBudget.dailyTargetBytes,
         "diskWriteBudgetExceeded": projectedDiskBytesPerDay > Double(ExtensionDiskWriteBudget.dailyTargetBytes)
     ]
+    if PrivateDiagnosticBuild.enabled { health["syntheticWorkerDelayDiagnostics"] = PrivateWorkerDelay.shared.snapshot() }
     health["credentialAuthDiagnostics"] = CredentialAuthDiagnostics.shared.snapshot()
     health["credentialObservationDiagnostics"] = eventHandler.credentialObservationDiagnostics
     var taskInfo = proc_taskinfo()

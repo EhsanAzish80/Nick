@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Darwin
 
 /// No ES pointers, paths, arguments or credentials retained. The callback only
 /// changes bounded scalar state; snapshots and warning selection run elsewhere.
@@ -358,14 +359,27 @@ final class FullCallbackTimingDiagnostics: @unchecked Sendable {
     private var next = 0, count = 0
     private var overwritten: UInt64 = 0, completed: UInt64 = 0, mismatches: UInt64 = 0
     private var maximum: Record?
+    private struct CallbackThread { var first: UInt64; var last: UInt64; var callbacks: UInt64 }
+    private var threadRecords: [UInt64: CallbackThread] = [:]
+    private var threadOrder: [UInt64] = []
+    private var threadEvictions: UInt64 = 0, threadLookupFailures: UInt64 = 0
     let capacity: Int
     init(capacity: Int = 16, nanosecondsPerTick: Double) {
         precondition(capacity > 0)
         self.capacity = capacity; factor = nanosecondsPerTick / 1e6
         history = Array(repeating: nil, count: capacity)
     }
-    func begin(event: UInt32, auth: Bool, message: UInt64, entry: UInt64) {
+    func begin(event: UInt32, auth: Bool, message: UInt64, entry: UInt64, threadID: UInt64? = nil) {
         lock.withLock {
+            if let id = threadID {
+                if id == 0 { threadLookupFailures &+= 1 }
+                else if var record = threadRecords[id] {
+                    record.last = entry; record.callbacks &+= 1; threadRecords[id] = record
+                } else {
+                    if threadOrder.count == 16 { threadRecords.removeValue(forKey: threadOrder.removeFirst()); threadEvictions &+= 1 }
+                    threadOrder.append(id); threadRecords[id] = CallbackThread(first: entry, last: entry, callbacks: 1)
+                }
+            }
             if active != nil { mismatches &+= 1 }
             predecessor = previous
             active = Timing(event: event, auth: auth, message: message, entry: entry)
@@ -398,10 +412,14 @@ final class FullCallbackTimingDiagnostics: @unchecked Sendable {
         }
     }
     func snapshot() -> [String: Any] {
-        let copy = lock.withLock { () -> ([Record], Record?, UInt64, UInt64, UInt64) in
-            ((0..<count).compactMap { history[(next - count + $0 + capacity) % capacity] }, maximum, overwritten, completed, mismatches)
+        let copy = lock.withLock { () -> ([Record], Record?, UInt64, UInt64, UInt64, [[String: UInt64]], UInt64, UInt64) in
+            ((0..<count).compactMap { history[(next - count + $0 + capacity) % capacity] }, maximum, overwritten, completed, mismatches, threadOrder.compactMap { id in
+                threadRecords[id].map { ["threadID": id, "firstEntryMachTime": $0.first, "lastEntryMachTime": $0.last, "callbacks": $0.callbacks] }
+            }, threadEvictions, threadLookupFailures)
         }
-        return ["schemaVersion": 1, "capacity": capacity, "records": copy.0.map(fields),
+        return ["callbackThreads": copy.5, "callbackThreadCapacity": 16, "callbackThreadEvictions": copy.6, "callbackThreadLookupFailures": copy.7,
+                "threadIdentityScope": "kernel thread IDs observed in this client callback; shared-thread CPU is not exclusively callback CPU",
+                "schemaVersion": 1, "capacity": capacity, "records": copy.0.map(fields),
                 "maximumCallback": copy.1.map(fields) as Any? ?? NSNull(), "overwritten": copy.2,
                 "completed": copy.3, "sequenceMismatches": copy.4,
                 "timebaseAvailable": factor.isFinite && factor > 0,
@@ -549,4 +567,110 @@ final class AuthWatchdogScheduler: @unchecked Sendable {
             else { _ = wake.wait(timeout: deadline) }
         }
     }
+}
+
+/// Pure, bounded admission policy shared with tests. Production supplies kernel
+/// identity and a root-owned config; it never selects an enforcement decision.
+final class SyntheticWorkerDelay: @unchecked Sendable {
+    enum Scope: String, Codable, Sendable { case credential, prelaunch }
+    struct Config: Codable, Sendable {
+        let build: String, nonce: String, cdhash: String
+        let createdAt: TimeInterval, expiresAt: TimeInterval
+        let delayMilliseconds: Int
+        let scope: Scope
+    }
+    struct Candidate: Sendable {
+        let build: String, signingID: String?, teamID: String?, cdhash: String
+        let identityValid: Bool, helperPath: String, targetPath: String
+        let scope: Scope
+    }
+    static let root = "/Library/Logs/NickPrivateDiagnostics"
+    static let helperID = "com.3nsofts.diagnostics.Watchdog5117"
+    static let credentialSuffix = "/Library/Keychains/synthetic.keychain-db"
+    private let lock = NSLock()
+    private var consumed: Set<String> = []
+    private var active = false
+    private var completed: UInt64 = 0
+    static func eligible(_ c: Candidate) -> Bool {
+        c.build == "5117" && c.identityValid && c.signingID == helperID
+            && c.teamID == "UXGW5V3BY6" && c.helperPath.hasPrefix(root + "/Fixtures/")
+            && c.helperPath.hasSuffix("/WatchdogReader")
+    }
+    func claim(_ config: Config, candidate c: Candidate, now: TimeInterval, enabled: Bool) -> Bool {
+        guard enabled, Self.eligible(c), config.build == c.build, config.scope == c.scope,
+              let uuid = UUID(uuidString: config.nonce), uuid.uuidString == config.nonce,
+              config.createdAt.isFinite, config.expiresAt.isFinite, now.isFinite,
+              config.createdAt <= now, now < config.expiresAt,
+              config.expiresAt > config.createdAt, config.expiresAt - config.createdAt <= 600,
+              config.delayMilliseconds == 3000,
+              config.cdhash.count == 40, config.cdhash == c.cdhash,
+              config.cdhash.allSatisfy({ "0123456789abcdef".contains($0) }) else { return false }
+        let base = Self.root + "/Fixtures/" + config.nonce
+        guard c.helperPath == base + "/WatchdogReader",
+              c.targetPath == base + (c.scope == .credential ? Self.credentialSuffix : "/WatchdogReader") else { return false }
+        return lock.withLock {
+            guard !active, consumed.count < 16, !consumed.contains(config.nonce) else { return false }
+            consumed.insert(config.nonce); active = true; return true
+        }
+    }
+    func finish() { lock.withLock { if active { active = false; completed &+= 1 } } }
+    func snapshot() -> [String: Any] {
+        lock.withLock { ["injected": consumed.count, "completed": completed, "inFlight": active ? 1 : 0,
+                        "maximumInjectionsPerProcess": 16, "fixedDelayMilliseconds": 3000,
+                        "enabledInBuild": PrivateDiagnosticBuild.enabled,
+                        "scope": "explicit root-configured synthetic workers only; no enforcement decisions"] }
+    }
+}
+
+/// Configuration I/O and sleeping occur only after a synthetic kernel-identity
+/// filter, on the deferred worker. Public builds compile out the entire hook.
+final class PrivateWorkerDelay: Sendable {
+    static let shared = PrivateWorkerDelay()
+    private let admission = SyntheticWorkerDelay()
+    func snapshot() -> [String: Any] { admission.snapshot() }
+    func pauseIfRequested(_ candidate: SyntheticWorkerDelay.Candidate) {
+#if NICK_PRIVATE_DIAGNOSTICS || DEBUG
+        guard PrivateDiagnosticBuild.enabled, SyntheticWorkerDelay.eligible(candidate),
+              let config = readConfig(),
+              Self.safeFixture(config: config, candidate: candidate),
+              admission.claim(config, candidate: candidate, now: Date().timeIntervalSince1970, enabled: true) else { return }
+        defer { admission.finish() }
+        Thread.sleep(forTimeInterval: 3)
+#endif
+    }
+#if NICK_PRIVATE_DIAGNOSTICS || DEBUG
+    private static func secure(_ path: String, directory: Bool) -> Bool {
+        var value = stat()
+        guard lstat(path, &value) == 0, value.st_uid == 0, value.st_mode & 0o022 == 0 else { return false }
+        return directory ? value.st_mode & S_IFMT == S_IFDIR
+            : value.st_mode & S_IFMT == S_IFREG && value.st_nlink == 1
+    }
+    private func readConfig() -> SyntheticWorkerDelay.Config? {
+        let root = SyntheticWorkerDelay.root
+        guard Self.secure(root, directory: true) else { return nil }
+        let fd = open(root + "/worker-delay.json", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }; defer { close(fd) }
+        var metadata = stat()
+        guard fstat(fd, &metadata) == 0, metadata.st_uid == 0,
+              metadata.st_mode & S_IFMT == S_IFREG, metadata.st_mode & 0o077 == 0,
+              metadata.st_nlink == 1, metadata.st_size > 0, metadata.st_size <= 4096 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: Int(metadata.st_size))
+        let size = bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+        guard size == bytes.count else { return nil }
+        return try? JSONDecoder().decode(SyntheticWorkerDelay.Config.self, from: Data(bytes))
+    }
+    private static func safeFixture(config: SyntheticWorkerDelay.Config, candidate: SyntheticWorkerDelay.Candidate) -> Bool {
+        // Validate the nonce before using it as a path component.
+        guard let uuid = UUID(uuidString: config.nonce), uuid.uuidString == config.nonce else { return false }
+        let root = SyntheticWorkerDelay.root
+        let base = root + "/Fixtures/" + config.nonce
+        if candidate.scope == .credential {
+            guard secure(base + "/Library", directory: true), secure(base + "/Library/Keychains", directory: true) else { return false }
+        }
+        return secure(root + "/Fixtures", directory: true)
+            && secure(root + "/Fixtures/" + config.nonce, directory: true)
+            && secure(candidate.helperPath, directory: false)
+            && secure(candidate.targetPath, directory: false)
+    }
+#endif
 }

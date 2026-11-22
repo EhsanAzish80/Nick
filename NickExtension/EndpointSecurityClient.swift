@@ -79,9 +79,15 @@ final class EndpointSecurityClient {
         let result = es_new_client(&newClient) { [weak self] client, message in
             let callbackEnteredAt = mach_absolute_time()
             let timings = self?.callbackTimings
+            var callbackThreadID: UInt64? = nil
+#if NICK_PRIVATE_DIAGNOSTICS
+            var observedThreadID: UInt64 = 0
+            if timings != nil { _ = pthread_threadid_np(nil, &observedThreadID) }
+            callbackThreadID = observedThreadID
+#endif
             timings?.begin(event: message.pointee.event_type.rawValue,
                            auth: message.pointee.action_type == ES_ACTION_TYPE_AUTH,
-                           message: message.pointee.mach_time, entry: callbackEnteredAt)
+                           message: message.pointee.mach_time, entry: callbackEnteredAt, threadID: callbackThreadID)
             defer { timings?.finish(entry: callbackEnteredAt, end: mach_absolute_time()) }
             // This block runs on an ES-internal serial queue — keep it fast.
             autoreleasepool {
