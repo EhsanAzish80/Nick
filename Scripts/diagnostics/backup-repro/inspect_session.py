@@ -3,12 +3,13 @@
 import argparse
 import json
 from pathlib import Path
+from private_paths import validate_directory
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('session')
 a=p.parse_args()
-root=Path(a.session).resolve(strict=True)
-if root.parent!=Path('/private/tmp') or not root.name.startswith('NickBackupRepro-'):
-    raise SystemExit('Expected a harness evidence session in /private/tmp')
+root=validate_directory(Path(a.session)).resolve(strict=True)
+if not root.name.startswith('NickBackupRepro-'):
+    raise SystemExit('Expected a root-private harness evidence session')
 def selected(h):
     return {k:h.get(k) for k in ['version','processID','updatedAt','active','authResponseErrorCount',
         'authResponseMaximumMilliseconds','eventsPerSecond','scanWorkDiagnostics','mountStartupDiagnostics']}

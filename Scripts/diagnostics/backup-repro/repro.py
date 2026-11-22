@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import uuid
+from private_paths import EVIDENCE_ROOT, prepare_root, new_status_directory
 
 HEALTH = Path('/Library/Application Support/com.ehsanazish.nick/extension_health.json')
 SETTINGS = Path('/Library/Application Support/com.ehsanazish.nick/state/settings.json')
@@ -153,6 +154,7 @@ class Experiment:
     def start(self):
         if os.geteuid() != 0:
             raise RuntimeError('Use sudo only for an explicit prepare/run action')
+        prepare_root()
         self.session.mkdir(mode=0o700, parents=True, exist_ok=False)
         os.chmod(self.session, 0o700)
         self.h = read_health()
@@ -175,8 +177,7 @@ class Experiment:
         (self.session / 'extensions.txt').write_text(extensions)
         emit(self.session / 'before-health.json', self.h)
         emit(self.session / 'plan.json', vars(self.a))
-        self.status_root = Path(tempfile.mkdtemp(prefix='NickBackupRepro-status-', dir='/private/tmp'))
-        os.chmod(self.status_root, 0o755)
+        self.status_root, self.status_gid = new_status_directory()
         print('Read-only status:', self.status_root / 'status.json', flush=True)
         self.initial_reports = self.reports()
         emit(self.session / 'reports-before.json', self.initial_reports)
@@ -219,7 +220,8 @@ class Experiment:
                    'mountStartupDiagnostics': row['health'].get('mountStartupDiagnostics', {})}
         tmp = self.status_root / 'status.next'
         emit(tmp, payload)
-        os.chmod(tmp, 0o644)
+        os.chown(tmp, 0, self.status_gid)
+        os.chmod(tmp, 0o640)
         tmp.replace(self.status_root / 'status.json')
 
     def collect(self):
@@ -459,7 +461,7 @@ def parser():
     p.add_argument('action', choices=['plan', 'prepare', 'run'], nargs='?', default='plan')
     p.add_argument('--execute', action='store_true', help='Explicitly authorize local prepare/run; no automatic start')
     p.add_argument('--expected-build', default='5112')
-    p.add_argument('--session', default='/private/tmp/NickBackupRepro-' + time.strftime('%Y%m%d-%H%M%S'))
+    p.add_argument('--session', default=str(EVIDENCE_ROOT / ('NickBackupRepro-' + time.strftime('%Y%m%d-%H%M%S'))))
     p.add_argument('--backing', help='Existing disposable parent folder, local/USB or already mounted SMB')
     p.add_argument('--fixture', help='Prepared NickReproFixture-* folder')
     p.add_argument('--profile', choices=PROFILES, default='small')
