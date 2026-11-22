@@ -1,14 +1,6 @@
 import Foundation
 import CryptoKit
 
-/// Diagnostic ownership primitive used by the real retained-AUTH paths. Winning
-/// a claim is NOT proof that an ES response was submitted or accepted.
-final class AuthResponseClaim: @unchecked Sendable {
-    private let lock = NSLock()
-    private var claimed = false
-    func claim() -> Bool { lock.withLock { if claimed { return false }; claimed = true; return true } }
-}
-
 /// No ES pointers, paths, arguments or credentials retained. The callback only
 /// changes bounded scalar state; snapshots and warning selection run elsewhere.
 final class PendingAuthDiagnostics: @unchecked Sendable {
@@ -27,7 +19,7 @@ final class PendingAuthDiagnostics: @unchecked Sendable {
     }
     private let lock = NSLock()
     private var entries: [Key: Entry] = [:]
-    private var overflow: UInt64 = 0, duplicateAttempts: UInt64 = 0, failedResponses: UInt64 = 0
+    private var overflow: UInt64 = 0, duplicateAttempts: UInt64 = 0, failedResponses: UInt64 = 0, retryAttempts: UInt64 = 0
     private var peak = 0
     let capacity: Int
     init(capacity: Int = 4096) { precondition(capacity > 0); self.capacity = capacity }
@@ -42,11 +34,12 @@ final class PendingAuthDiagnostics: @unchecked Sendable {
     }
     func phase(_ key: Key, _ phase: Phase) { lock.withLock { entries[key]?.phase = phase } }
     @discardableResult
-    func responseStarted(_ key: Key) -> ResponseContext? {
+    func responseStarted(_ key: Key, isRetry: Bool = false) -> ResponseContext? {
         lock.withLock {
             guard var entry = entries[key] else { return nil }
             let context = ResponseContext(callbackMachTime: entry.callbackMachTime, phaseBeforeResponse: entry.phase)
-            if entry.attempts > 0 { duplicateAttempts &+= 1 }
+            if isRetry { retryAttempts &+= 1 }
+            else if entry.attempts > 0 { duplicateAttempts &+= 1 }
             entry.attempts += 1; entry.phase = .responseAPI; entries[key] = entry
             return context
         }
@@ -81,7 +74,7 @@ final class PendingAuthDiagnostics: @unchecked Sendable {
             let phases = Dictionary(grouping: entries.values, by: { $0.phase.rawValue }).mapValues(\.count)
             return ["pending": entries.count, "peakPending": peak, "capacity": capacity,
                     "untrackedCapacityOverflows": overflow, "duplicateAttemptsWhilePending": duplicateAttempts,
-                    "failedResponseReturns": failedResponses, "phaseCounts": phases,
+                    "failedResponseReturns": failedResponses, "retryAttempts": retryAttempts, "phaseCounts": phases,
                     "oldestMessageMachTime": oldest ?? 0, "observedMachTime": now,
                     "scope": "received AUTHs until successful ES response return; excludes messages not yet delivered; never evicts pending records"]
         }
@@ -434,5 +427,126 @@ final class FullCallbackTimingDiagnostics: @unchecked Sendable {
                     let start = max(c.message,$0.entry), end = min(c.entry,$0.end)
                     return end > start ? ms(start,end) : 0.0
                 } as Any? ?? NSNull()]
+    }
+}
+
+/// Arbitrate only at submission, never while computing policy. The API body is
+/// outside the lock; an in-flight ES call cannot safely be preempted.
+final class DeferredAuthReply: @unchecked Sendable {
+    enum Source { case worker, watchdog }
+    enum Result { case accepted, communicationFailure, terminalFailure }
+    struct Attempt {
+        let allow: Bool, accepted: Bool, final: Bool
+        let source: Source
+    }
+    private enum State { case ready, submitting, retry(Bool), finished }
+    private let lock = NSLock()
+    private var state = State.ready
+    private var attempts = 0
+    var isFinished: Bool { lock.withLock { if case .finished = state { return true }; return false } }
+    func submit(source: Source, allow proposed: Bool,
+                body: (Bool, Int) -> Result) -> Attempt? {
+        let reservation: (Bool, Int)? = lock.withLock {
+            let allow: Bool
+            switch state {
+            case .ready: allow = proposed
+            case .retry(let original):
+                guard source == .watchdog else { return nil }
+                allow = original // Never turn a failed deny into an allow.
+            case .submitting, .finished: return nil
+            }
+            attempts += 1; state = .submitting
+            return (allow, attempts)
+        }
+        guard let (allow, number) = reservation else { return nil }
+        let result = body(allow, number)
+        return lock.withLock {
+            let final = result != .communicationFailure || number >= 2
+            state = final ? .finished : .retry(allow)
+            return Attempt(allow: allow, accepted: result == .accepted, final: final, source: source)
+        }
+    }
+}
+
+/// Monotonic timers on one dedicated thread, independent of GCD worker-pool
+/// availability. Timer bodies must only submit replies and enqueue observation.
+/// One cancellable entry per deferred request; stale heap slots are compacted.
+final class AuthWatchdogScheduler: @unchecked Sendable {
+    static let shared = AuthWatchdogScheduler()
+    private struct Job { let deadline: UInt64; let body: () -> Void }
+    private struct Slot { let deadline: UInt64; let id: UInt64 }
+    private let lock = NSLock(), wake = DispatchSemaphore(value: 0)
+    private var jobs: [UInt64: Job] = [:], heap: [Slot] = []
+    private var nextID: UInt64 = 0
+    private var stopped = false
+    private var thread: Thread?
+    init() {
+        let t = Thread { [self] in run() }
+        thread = t; t.name = "Nick AUTH watchdog"; t.qualityOfService = .userInteractive; t.start()
+    }
+    @discardableResult
+    func schedule(at deadline: DispatchTime, body: @escaping () -> Void) -> UInt64? {
+        let id: UInt64? = lock.withLock {
+            guard !stopped else { return nil }
+            nextID &+= 1; let id = nextID
+            jobs[id] = Job(deadline: deadline.uptimeNanoseconds, body: body)
+            heap.append(Slot(deadline: deadline.uptimeNanoseconds, id: id))
+            var i = heap.count - 1
+            while i > 0 {
+                let p = (i-1)/2
+                guard heap[i].deadline < heap[p].deadline else { break }
+                heap.swapAt(i,p); i = p
+            }
+            return id
+        }
+        wake.signal(); return id
+    }
+    func cancel(_ id: UInt64?) {
+        guard let id else { return }
+        // Release closure captures outside the scheduler lock.
+        let removed = lock.withLock { () -> Job? in
+            let removed = jobs.removeValue(forKey: id)
+            if heap.count > max(64, jobs.count * 2) {
+                heap = jobs.map { Slot(deadline: $0.value.deadline, id: $0.key) }.sorted { $0.deadline < $1.deadline }
+            }
+            return removed
+        }
+        withExtendedLifetime(removed) {}; wake.signal()
+    }
+    func stop() {
+        let removed = lock.withLock { () -> [UInt64: Job] in
+            stopped = true; let old = jobs; jobs = [:]; heap = []; thread = nil; return old
+        }
+        withExtendedLifetime(removed) {}; wake.signal()
+    }
+    var pendingCount: Int { lock.withLock { jobs.count } }
+    private func pop() -> Slot {
+        let first = heap[0], last = heap.removeLast()
+        if !heap.isEmpty {
+            heap[0] = last; var i = 0
+            while i*2+1 < heap.count {
+                var c = i*2+1
+                if c+1 < heap.count && heap[c+1].deadline < heap[c].deadline { c += 1 }
+                guard heap[c].deadline < heap[i].deadline else { break }
+                heap.swapAt(c,i); i = c
+            }
+        }
+        return first
+    }
+    private func run() {
+        while true {
+            var due: Job?, deadline = DispatchTime.distantFuture
+            lock.lock()
+            if stopped { lock.unlock(); return }
+            while let first = heap.first, jobs[first.id] == nil { _ = pop() }
+            if let first = heap.first {
+                if first.deadline <= DispatchTime.now().uptimeNanoseconds {
+                    _ = pop(); due = jobs.removeValue(forKey: first.id)
+                } else { deadline = DispatchTime(uptimeNanoseconds: first.deadline) }
+            }
+            lock.unlock()
+            if let due { autoreleasepool { due.body() } }
+            else { _ = wake.wait(timeout: deadline) }
+        }
     }
 }

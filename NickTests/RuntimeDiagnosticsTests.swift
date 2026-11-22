@@ -3,10 +3,10 @@ import XCTest
 
 final class RuntimeDiagnosticsTests: XCTestCase {
     func testActualResponseClaimHasExactlyOneWinnerUnderRace() {
-        let claim = AuthResponseClaim(), lock = NSLock()
+        let reply = DeferredAuthReply(), lock = NSLock()
         var winners = 0
         DispatchQueue.concurrentPerform(iterations: 1000) { _ in
-            if claim.claim() { lock.lock(); winners += 1; lock.unlock() }
+            if reply.submit(source: .worker, allow: false, body: { _, _ in .accepted }) != nil { lock.lock(); winners += 1; lock.unlock() }
         }
         XCTAssertEqual(winners, 1)
     }

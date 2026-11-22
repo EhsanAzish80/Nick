@@ -142,10 +142,14 @@ final class EndpointSecurityClient {
     /// - Note: Calling this on a NOTIFY event is a no-op (guarded by action-type check).
     @discardableResult
     func respond(to message: UnsafePointer<es_message_t>, allow: Bool) -> Bool {
-        guard let client, message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return false }
+        respondResult(to: message, allow: allow) == ES_RESPOND_RESULT_SUCCESS
+    }
+
+    func respondResult(to message: UnsafePointer<es_message_t>, allow: Bool, isRetry: Bool = false) -> es_respond_result_t? {
+        guard let client, message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return nil }
 
         let diagnosticKey = Self.diagnosticKey(message)
-        let responseContext = Self.pendingAuth.responseStarted(diagnosticKey)
+        let responseContext = Self.pendingAuth.responseStarted(diagnosticKey, isRetry: isRetry)
         let missedDeadline = mach_absolute_time() >= message.pointee.deadline
         let ret: es_respond_result_t
         let responseAPIBeganAt: UInt64
@@ -182,7 +186,7 @@ final class EndpointSecurityClient {
                 "Endpoint Security response returned \(ret.rawValue) for event \(message.pointee.event_type.rawValue) — operation was not answered"
             )
         }
-        return ret == ES_RESPOND_RESULT_SUCCESS
+        return ret
     }
 
     /// Unsubscribes from all events and destroys the ES client.
