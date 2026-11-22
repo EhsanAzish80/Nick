@@ -8,6 +8,22 @@ monotonically increasing macOS bundle build number.
 
 ## [Unreleased]
 
+## [5.1.6] - 2026-11-22
+
+### Fixed
+
+- Coalesce credential observations before expensive identity validation to stop repeated trust work.
+- Replace repeated creation-history pruning/sorting with bounded heap/path-index tracking while preserving atomic-save behavior.
+- Release temporary read allocations per streaming-hash chunk to keep long scans bounded.
+- Keep deferred AUTH response ownership at submission and run watchdogs independently of worker work, with bounded same-verdict recovery for an internal response communication failure.
+
+### Diagnostics and validation
+
+- Add bounded pending-AUTH, scan, mount, slow-response and callback diagnostics; private synthetic delay hooks stay disabled in the public build.
+- 1,091 local Xcode tests passed. Fresh PR CI, both Sonar checks and Codecov patch passed on the merged source.
+- Installed private 5118 completed the retained SMB fixture (552 files in 277 seconds) below 101 MiB sampled footprint, with no new termination reports or response errors. Both synthetic worker-delay watchdog checks passed.
+- These focused results do not establish the cause of historical kernel terminations or full reporter-workload resolution; issue #122 remains open. Existing protection/trust decisions are unchanged.
+
 ## [5.1.5] - 2026-11-18
 
 ### Fixed
