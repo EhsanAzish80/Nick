@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml"><img src="https://github.com/EhsanAzish80/Nick/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
-  <a href="https://github.com/EhsanAzish80/Nick/releases/tag/v5.1.5"><img src="https://img.shields.io/badge/release-v5.1.5-blue" alt="Latest release: v5.1.5"></a>
+  <a href="https://github.com/EhsanAzish80/Nick/releases/tag/v5.1.6"><img src="https://img.shields.io/badge/release-v5.1.6-blue" alt="Latest release: v5.1.6"></a>
   <a href="https://codecov.io/gh/EhsanAzish80/Nick"><img src="https://codecov.io/gh/EhsanAzish80/Nick/branch/main/graph/badge.svg" alt="Code coverage"></a>
   <a href="https://sonarcloud.io/summary/new_code?id=EhsanAzish80_Nick"><img src="https://sonarcloud.io/api/project_badges/measure?project=EhsanAzish80_Nick&metric=alert_status" alt="SonarCloud quality gate"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-blue" alt="AGPL-3.0-only license"></a>
@@ -277,7 +277,7 @@ For implementation details and trust boundaries, see
 
 ### Published release
 
-The current stable release is **Nick 5.1.5 (build 5107)** for macOS 26 and later.
+The current stable release is **Nick 5.1.6 (build 5119)** for macOS 26 and later.
 
 1. Download the notarized Nick installer package from
    [the latest GitHub release](https://github.com/EhsanAzish80/Nick/releases/latest).
@@ -341,8 +341,8 @@ The production release pipeline is documented in
 - The appcast enclosure must reference the exact, unmodified signed package.
 - Manual website and GitHub downloads may use the disk image.
 
-Version 5.1.5 release notes are in
-[Packaging/Release/v5.1.5/RELEASE_NOTES.md](Packaging/Release/v5.1.5/RELEASE_NOTES.md).
+Version 5.1.6 release notes are in
+[Packaging/Release/v5.1.6/RELEASE_NOTES.md](Packaging/Release/v5.1.6/RELEASE_NOTES.md).
 
 ## Quality gates
 
@@ -391,7 +391,7 @@ state and does not mean the extension remains installed.
 
 ## Project status
 
-Nick 5.1.5 (build 5107) is the current production release. Every future release
+Nick 5.1.6 (build 5119) is the current production release. Every future release
 remains gated on clean-Mac validation of Endpoint Security, Email Guard, Scam
 Guardian, updates, Storage, quarantine, and uninstall behavior.
 
