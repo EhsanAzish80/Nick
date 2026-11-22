@@ -1987,7 +1987,7 @@ final class ESEventHandler {
         PrivateWorkerDelay.shared.pauseIfRequested(.init(
             build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
             signingID: esOptionalString(process.signing_id), teamID: esOptionalString(process.team_id), cdhash: cdhash,
-            identityValid: process.codesigning_flags & 0x1 != 0 && process.codesigning_flags & 0x20000 != 0 && process.codesigning_flags & 0x2 == 0,
+            identityValid: SyntheticWorkerDelay.hasValidSignedIdentity(process.codesigning_flags),
             helperPath: helperPath, targetPath: target, scope: scope))
 #endif
     }

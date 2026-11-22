@@ -585,14 +585,21 @@ final class SyntheticWorkerDelay: @unchecked Sendable {
         let scope: Scope
     }
     static let root = "/Library/Logs/NickPrivateDiagnostics"
-    static let helperID = "com.3nsofts.diagnostics.Watchdog5117"
+    static let helperID = "com.3nsofts.diagnostics.Watchdog5118"
+    // XNU cs_blobs.h: CS_SIGNED is distinct from CS_LINKER_SIGNED (0x00020000).
+    static func hasValidSignedIdentity(_ flags: UInt32) -> Bool {
+        let csValid: UInt32 = 0x00000001
+        let csAdhoc: UInt32 = 0x00000002
+        let csSigned: UInt32 = 0x20000000
+        return flags & csValid != 0 && flags & csSigned != 0 && flags & csAdhoc == 0
+    }
     static let credentialSuffix = "/Library/Keychains/synthetic.keychain-db"
     private let lock = NSLock()
     private var consumed: Set<String> = []
     private var active = false
     private var completed: UInt64 = 0
     static func eligible(_ c: Candidate) -> Bool {
-        c.build == "5117" && c.identityValid && c.signingID == helperID
+        c.build == "5118" && c.identityValid && c.signingID == helperID
             && c.teamID == "UXGW5V3BY6" && c.helperPath.hasPrefix(root + "/Fixtures/")
             && c.helperPath.hasSuffix("/WatchdogReader")
     }

@@ -4,16 +4,25 @@ import XCTest
 final class SyntheticWorkerDelayTests: XCTestCase {
     private let nonce = "D641EA58-DA69-40DF-A57C-E0C526711D89"
     private let expectedHash = String(repeating: "a", count: 40)
-    private func config(nonce: String? = nil, build: String = "5117", scope: SyntheticWorkerDelay.Scope = .credential,
+    private func config(nonce: String? = nil, build: String = "5118", scope: SyntheticWorkerDelay.Scope = .credential,
                         created: Double = 990, expires: Double = 1100, delay: Int = 3000, hash: String? = nil) -> SyntheticWorkerDelay.Config {
         .init(build: build, nonce: nonce ?? self.nonce, cdhash: hash ?? self.expectedHash, createdAt: created, expiresAt: expires, delayMilliseconds: delay, scope: scope)
     }
-    private func candidate(nonce: String? = nil, build: String = "5117", scope: SyntheticWorkerDelay.Scope = .credential,
+    private func candidate(nonce: String? = nil, build: String = "5118", scope: SyntheticWorkerDelay.Scope = .credential,
                            id: String? = SyntheticWorkerDelay.helperID, team: String? = "UXGW5V3BY6", valid: Bool = true,
                            target: String? = nil, helper: String? = nil, hash: String? = nil) -> SyntheticWorkerDelay.Candidate {
         let base = SyntheticWorkerDelay.root + "/Fixtures/" + (nonce ?? self.nonce)
         return .init(build: build, signingID: id, teamID: team, cdhash: hash ?? self.expectedHash, identityValid: valid,
                      helperPath: helper ?? base + "/WatchdogReader", targetPath: target ?? base + (scope == .credential ? SyntheticWorkerDelay.credentialSuffix : "/WatchdogReader"), scope: scope)
+    }
+    func testKernelSigningFlagsDistinguishSignedFromLinkerSigned() {
+        // Observed on the installed Developer ID helper; linker-signed is absent.
+        XCTAssertTrue(SyntheticWorkerDelay.hasValidSignedIdentity(0x22011311))
+        XCTAssertTrue(SyntheticWorkerDelay.hasValidSignedIdentity(0x20000001))
+        XCTAssertFalse(SyntheticWorkerDelay.hasValidSignedIdentity(0x00020001))
+        XCTAssertFalse(SyntheticWorkerDelay.hasValidSignedIdentity(0x20000000))
+        XCTAssertFalse(SyntheticWorkerDelay.hasValidSignedIdentity(0x20000003))
+        XCTAssertFalse(SyntheticWorkerDelay.hasValidSignedIdentity(0))
     }
     func testOffByDefaultAndBothSyntheticScopesAdmitOnlyOnce() {
         for scope in [SyntheticWorkerDelay.Scope.credential, .prelaunch] {
@@ -37,7 +46,7 @@ final class SyntheticWorkerDelayTests: XCTestCase {
     func testExpiredFutureMalformedAndUnboundedConfigurationsNeverAdmit() {
         let bad = [config(expires: 1000), config(created: 1001), config(created: 0, expires: 1001),
                    config(created: .nan), config(expires: .infinity), config(delay: 3001), config(delay: 0),
-                   config(nonce: "../real"), config(build: "5118"), config(hash: String(repeating: "x", count: 40))]
+                   config(nonce: "../real"), config(build: "5117"), config(hash: String(repeating: "x", count: 40))]
         for cfg in bad { XCTAssertFalse(SyntheticWorkerDelay().claim(cfg, candidate: candidate(), now: 1000, enabled: true)) }
         XCTAssertFalse(SyntheticWorkerDelay().claim(config(), candidate: candidate(), now: .nan, enabled: true))
     }
