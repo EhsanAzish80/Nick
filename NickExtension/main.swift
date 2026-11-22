@@ -37,6 +37,8 @@ let extensionHealthSession = ExtensionHealthSession(
     previousHealth: previousExtensionHealth
 )
 
+let runtimeDiagnosticMonitor = RuntimeDiagnosticMonitor(previous: previousExtensionHealth)
+
 /// Publishes a deliberately short-lived proof that the Endpoint Security client
 /// is running. The container app treats this as stale after 30 seconds, so a
 /// crashed or stopped extension can never leave Smart Scan falsely green.
@@ -83,8 +85,17 @@ func writeExtensionHealth() {
         "diskWriteDailyTargetBytes": ExtensionDiskWriteBudget.dailyTargetBytes,
         "diskWriteBudgetExceeded": projectedDiskBytesPerDay > Double(ExtensionDiskWriteBudget.dailyTargetBytes)
     ]
+    if PrivateDiagnosticBuild.enabled { health["syntheticWorkerDelayDiagnostics"] = PrivateWorkerDelay.shared.snapshot() }
+    health["credentialAuthDiagnostics"] = CredentialAuthDiagnostics.shared.snapshot()
+    health["credentialObservationDiagnostics"] = eventHandler.credentialObservationDiagnostics
+    var taskInfo = proc_taskinfo()
+    let taskInfoSize = Int32(MemoryLayout<proc_taskinfo>.size)
+    if proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &taskInfo, taskInfoSize) == taskInfoSize {
+        health["processThreadCount"] = taskInfo.pti_threadnum
+    }
     health.merge(extensionHealthSession.fields) { _, new in new }
     health.merge(esMetrics.responseDiagnostics.healthFields) { _, new in new }
+    health.merge(runtimeDiagnosticMonitor.snapshot()) { _, new in new }
     let uptime = ProcessInfo.processInfo.systemUptime
     health["processUptimeSeconds"] = max(0, uptime - extensionHealthStartedUptime)
     health["systemUptimeSeconds"] = uptime
@@ -105,6 +116,11 @@ func writeExtensionHealth() {
         health["authResponseP99Milliseconds"] = p99
     }
     health["authResponseRetainedSampleCount"] = esMetrics.authResponseRetainedSampleCount
+    health["slowAuthResponseDiagnostics"] = EndpointSecurityClient.slowAuthResponses.snapshot()
+    health["fullCallbackTimingDiagnostics"] = [
+        "primary": EndpointSecurityClient.primaryCallbackTimings.snapshot(),
+        "shellProfileWrite": EndpointSecurityClient.shellCallbackTimings.snapshot()
+    ]
     if let maximum = esMetrics.authResponseMaximumMilliseconds {
         health["authResponseMaximumMilliseconds"] = maximum
     }
@@ -234,7 +250,7 @@ let emailAttachmentMonitor = EmailAttachmentMonitor()
 let eventHandler = ESEventHandler()
 let xpcServer    = ESXPCServer()
 let esClient     = EndpointSecurityClient(eventHandler: eventHandler)
-let shellProfileWriteClient = EndpointSecurityClient(eventHandler: eventHandler)
+let shellProfileWriteClient = EndpointSecurityClient(eventHandler: eventHandler, callbackTimings: EndpointSecurityClient.shellCallbackTimings)
 
 strictBlockingPolicy.update(settingsRecord: xpcServer.currentSecuritySettingsRecord())
 xpcServer.securitySettingsDidChange = { record in
@@ -566,6 +582,7 @@ guard shellProfileWriteClient.start(),
 // MARK: Mute high-volume trusted paths (reduces noise ~80%)
 MuteManager.applyMutes(to: esClient)
 
+runtimeDiagnosticMonitor.start()
 writeExtensionHealth()
 _ = protectionContinuityLedger.recordHeartbeat(
     now: Date(), bootSessionUUID: ProtectionBootIdentity.sessionUUID(),

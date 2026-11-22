@@ -830,62 +830,68 @@ enum CredentialAccessPolicy {
 /// Correlates the ordinary OPEN + CREATE/WRITE sequence used by tools which
 /// copy bytes in user space instead of asking the kernel for COPYFILE/CLONE.
 /// Process-instance identity prevents PID reuse from joining unrelated I/O.
-struct KeychainTransferFallbackTracker: Sendable {
+final class KeychainTransferFallbackTracker: @unchecked Sendable {
     struct PendingRead: Equatable, Sendable {
         let sourcePath: String
         let recordedAt: Date
     }
-
+    private let lock = NSLock()
     private var reads: [ProcessInstanceIdentity: PendingRead] = [:]
+    private var lastPrune = Date.distantPast
+    private var evicted: UInt64 = 0
     let window: TimeInterval
-
-    init(window: TimeInterval = 30) {
-        self.window = window
+    let capacity: Int
+    init(window: TimeInterval = 30, capacity: Int = 4096) {
+        precondition(capacity > 0)
+        self.window = window; self.capacity = capacity
     }
-
     @discardableResult
-    mutating func recordRead(
-        sourcePath: String,
-        process: ProcessInstanceIdentity,
-        at date: Date
-    ) -> PendingRead? {
+    func recordRead(sourcePath: String, process: ProcessInstanceIdentity, at date: Date) -> PendingRead? {
         guard CredentialAccessPolicy.sensitiveStore(at: sourcePath) == .keychain else { return nil }
-        prune(at: date)
-        let pending = PendingRead(sourcePath: sourcePath, recordedAt: date)
-        reads[process] = pending
-        return pending
-    }
-
-    mutating func pendingReadForExternalClose(
-        destinationPath: String,
-        process: ProcessInstanceIdentity,
-        at date: Date
-    ) -> PendingRead? {
-        prune(at: date)
-        guard !CredentialAccessPolicy.isInsideKeychainsDirectory(destinationPath),
-              let pending = reads[process],
-              date.timeIntervalSince(pending.recordedAt) >= 0,
-              date.timeIntervalSince(pending.recordedAt) <= window
-        else { return nil }
-        return pending
-    }
-
-    mutating func cancel(process: ProcessInstanceIdentity) {
-        reads.removeValue(forKey: process)
-    }
-
-    func hasPendingRead(
-        process: ProcessInstanceIdentity,
-        matching pending: PendingRead
-    ) -> Bool {
-        reads[process] == pending
-    }
-
-    private mutating func prune(at date: Date) {
-        reads = reads.filter {
-            date.timeIntervalSince($0.value.recordedAt) >= 0
-                && date.timeIntervalSince($0.value.recordedAt) <= window
+        return lock.withLock {
+            prune(at: date)
+            if reads[process] == nil, reads.count >= capacity,
+               let oldest = reads.min(by: { $0.value.recordedAt < $1.value.recordedAt })?.key {
+                reads.removeValue(forKey: oldest); evicted &+= 1
+            }
+            let pending = PendingRead(sourcePath: sourcePath, recordedAt: date)
+            reads[process] = pending
+            return pending
         }
+    }
+    func pendingReadForExternalClose(destinationPath: String, process: ProcessInstanceIdentity, at date: Date) -> PendingRead? {
+        lock.withLock {
+            prune(at: date)
+            guard !CredentialAccessPolicy.isInsideKeychainsDirectory(destinationPath),
+                  let pending = reads[process], date >= pending.recordedAt,
+                  date.timeIntervalSince(pending.recordedAt) <= window else { return nil }
+            return pending
+        }
+    }
+    func cancel(process: ProcessInstanceIdentity) { lock.withLock { _ = reads.removeValue(forKey: process) } }
+    func cancel(process: ProcessInstanceIdentity, sourcePath: String) {
+        lock.withLock { if reads[process]?.sourcePath == sourcePath { reads.removeValue(forKey: process) } }
+    }
+    func latestRead(process: ProcessInstanceIdentity, sourcePath: String) -> PendingRead? {
+        lock.withLock { reads[process]?.sourcePath == sourcePath ? reads[process] : nil }
+    }
+    @discardableResult
+    func cancelIfMatching(process: ProcessInstanceIdentity, pending: PendingRead) -> Bool {
+        lock.withLock {
+            guard reads[process] == pending else { return false }
+            reads.removeValue(forKey: process); return true
+        }
+    }
+    func hasPendingRead(process: ProcessInstanceIdentity, matching pending: PendingRead) -> Bool {
+        lock.withLock { reads[process] == pending }
+    }
+    func diagnosticSnapshot() -> [String: Any] {
+        lock.withLock { ["pendingProcesses": reads.count, "capacity": capacity, "capacityEvictions": evicted] }
+    }
+    private func prune(at date: Date) {
+        guard date.timeIntervalSince(lastPrune) >= 1 || date < lastPrune else { return }
+        lastPrune = date
+        reads = reads.filter { date >= $0.value.recordedAt && date.timeIntervalSince($0.value.recordedAt) <= window }
     }
 }
 

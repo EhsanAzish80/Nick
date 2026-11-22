@@ -452,7 +452,7 @@ struct OverviewDetailView: View {
         let build = Bundle.main.object(
             forInfoDictionaryKey: kCFBundleVersionKey as String
         ) as? String ?? "Unknown"
-        return version + " (" + build + ")"
+        return PrivateDiagnosticBuild.version(version) + " (" + build + ")"
     }
 
     private var statusLine: String {

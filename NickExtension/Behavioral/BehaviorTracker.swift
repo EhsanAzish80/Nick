@@ -156,7 +156,7 @@ final class BehaviorTracker {
 
     private var processTimelines: [Int32: ProcessTimeline] = [:]
     private var scopedRenameEvents: [RenameBurstScope: [BehaviorEvent]] = [:]
-    private var recentCreations: [String: RecentCreation] = [:]
+    private var recentCreations = RecentCreationIndex<RecentCreation>()
     private var renameIntents: [String: RenameReplacementEvidence] = [:]
     private let lock = NSLock()
     private let thresholds: AlertThresholds
@@ -203,9 +203,9 @@ final class BehaviorTracker {
     ) {
         lock.lock()
         defer { lock.unlock() }
-        recentCreations[path] = RecentCreation(
+        recentCreations.update(path: path, value: RecentCreation(
             pid: pid, processGroupID: processGroupID, timestamp: timestamp
-        )
+        ), timestamp: timestamp)
         pruneRecentCreations(now: timestamp)
     }
 
@@ -468,21 +468,14 @@ final class BehaviorTracker {
         lock.lock()
         defer { lock.unlock() }
         processTimelines.removeValue(forKey: pid)
-        recentCreations = recentCreations.filter { $0.value.pid != pid }
+        recentCreations.removeAll { $0.pid == pid }
         let prefix = "\(pid)\u{0}"
         renameIntents = renameIntents.filter { !$0.key.hasPrefix(prefix) }
     }
 
     private func pruneRecentCreations(now: Date) {
-        let cutoff = now.addingTimeInterval(-thresholds.timelineWindowSeconds)
-        recentCreations = recentCreations.filter { $0.value.timestamp >= cutoff }
-        if recentCreations.count > thresholds.maxEventsPerProcess * 8 {
-            let excess = recentCreations.count - thresholds.maxEventsPerProcess * 8
-            for key in recentCreations.sorted(by: { $0.value.timestamp < $1.value.timestamp })
-                .prefix(excess).map(\.key) {
-                recentCreations.removeValue(forKey: key)
-            }
-        }
+        recentCreations.prune(before: now.addingTimeInterval(-thresholds.timelineWindowSeconds),
+                              capacity: thresholds.maxEventsPerProcess * 8)
     }
 
     private static func renameIntentKey(pid: Int32, source: String, destination: String) -> String {
@@ -510,4 +503,82 @@ struct BehaviorAnalysis {
 
     var isSuspicious: Bool { score >= 0.5 }
     var isMalicious:  Bool { score >= 0.8 }
+}
+
+
+/// Timestamp-ordered indexed min-heap for creation evidence. Callers hold the
+/// BehaviorTracker lock. Every path owns exactly one slot: refreshes repair that
+/// slot in place, so no stale generations or unbounded tombstones accumulate.
+/// Timestamp ties use path order; the previous dictionary sort did not specify
+/// which equally old path to evict. Maintenance is O(log n) per removed/updated
+/// record and O(n) storage, with no whole-map rebuild/sort on create or rename.
+struct RecentCreationIndex<Value> {
+    private struct Entry { let path: String; var value: Value; var timestamp: Date }
+    private var heap: [Entry] = []
+    private var positions: [String: Int] = [:]
+    var count: Int { heap.count }
+    subscript(path: String) -> Value? { positions[path].map { heap[$0].value } }
+
+    mutating func update(path: String, value: Value, timestamp: Date) {
+        if let i = positions[path] {
+            heap[i].value = value; heap[i].timestamp = timestamp
+            repair(i)
+        } else {
+            positions[path] = heap.count
+            heap.append(Entry(path: path, value: value, timestamp: timestamp))
+            siftUp(heap.count - 1)
+        }
+    }
+    @discardableResult mutating func removeValue(forKey path: String) -> Value? {
+        guard let i = positions[path] else { return nil }
+        let value = heap[i].value
+        positions.removeValue(forKey: path)
+        let last = heap.removeLast()
+        if i < heap.count {
+            heap[i] = last; positions[last.path] = i; repair(i)
+        }
+        return value
+    }
+    mutating func prune(before cutoff: Date, capacity: Int) {
+        precondition(capacity >= 0)
+        while let first = heap.first, first.timestamp < cutoff {
+            removeValue(forKey: first.path)
+        }
+        while heap.count > capacity, let first = heap.first {
+            removeValue(forKey: first.path)
+        }
+    }
+    /// Exit cleanup only; not called by per-create/rename maintenance.
+    mutating func removeAll(where predicate: (Value) -> Bool) {
+        let paths = heap.compactMap { predicate($0.value) ? $0.path : nil }
+        for path in paths { removeValue(forKey: path) }
+    }
+    private func less(_ a: Int, _ b: Int) -> Bool {
+        heap[a].timestamp == heap[b].timestamp
+            ? heap[a].path < heap[b].path : heap[a].timestamp < heap[b].timestamp
+    }
+    private mutating func exchange(_ a: Int, _ b: Int) {
+        heap.swapAt(a, b)
+        positions[heap[a].path] = a; positions[heap[b].path] = b
+    }
+    private mutating func repair(_ i: Int) {
+        if i > 0 && less(i, (i - 1) / 2) { siftUp(i) } else { siftDown(i) }
+    }
+    private mutating func siftUp(_ index: Int) {
+        var i = index
+        while i > 0 {
+            let parent = (i - 1) / 2
+            guard less(i, parent) else { break }
+            exchange(i, parent); i = parent
+        }
+    }
+    private mutating func siftDown(_ index: Int) {
+        var i = index
+        while i * 2 + 1 < heap.count {
+            let left = i * 2 + 1, right = left + 1
+            let child = right < heap.count && less(right, left) ? right : left
+            guard less(child, i) else { break }
+            exchange(i, child); i = child
+        }
+    }
 }
