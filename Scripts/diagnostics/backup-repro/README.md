@@ -88,3 +88,7 @@ sudo /usr/bin/python3 -B Scripts/diagnostics/backup-repro/summarize.py /private/
 LaCie was inspected as USB, non-solid-state, with roughly 1.5 TiB available. This is local HDD backing, not SMB. The separate Backup volume shares the physical device, so concurrent real backup I/O is a confound; do not change or stop it automatically.
 
 The `sustained` profile creates one image when used with `--images 1`: 40,000 synthetic 128 KiB documents plus 2,000 short scripts, depth 10, about 4.88 GiB document content inside a 12 GiB logical image. All candidates total below the existing 50,000 scan cap. No fixture script is executed. Preparation is capped at ten minutes; measured run keeps the previous two-minute hold/five-minute total limit. OS caches are not purged. A short scan remains an insufficient reproduction, not a pass for the reported long workload.
+
+## Evidence directory hardening after the 5116 run
+
+New default captures use `/Library/Logs/NickBackupRepro`, owned by root with no world access. Raw sessions remain root-private; scalar status files are readable only by root and the invoking user's primary group, with no group write. Owner, mode and symlink checks reject unsafe existing directories. Use the exact session/status paths printed by the harness for inspection and STOP markers; older `/private/tmp` examples describe retained historical captures. This diagnostic-tool change does not alter the installed 5116 binaries.
