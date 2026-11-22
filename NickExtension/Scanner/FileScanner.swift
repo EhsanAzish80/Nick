@@ -46,9 +46,6 @@ final class FileScanner {
     /// Files larger than this threshold are hashed via streaming.
     static let streamingThreshold: Int = 10 * 1_024 * 1_024   // 10 MB
 
-    /// Chunk size used during streaming hashing.
-    static let chunkSize: Int = 1_024 * 1_024                  // 1 MB
-
     // MARK: - Dependencies
 
     let cache: ScanCache
@@ -362,23 +359,9 @@ final class FileScanner {
     // MARK: - Hashing
 
     private func computeSHA256Streaming(path: String) -> String? {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.close() }
-
-        var hasher = SHA256()
-        while true {
-            let chunk: Data
-            if #available(macOS 10.15.4, *) {
-                guard let c = try? handle.read(upToCount: Self.chunkSize), !c.isEmpty else { break }
-                chunk = c
-            } else {
-                chunk = handle.readData(ofLength: Self.chunkSize)
-                if chunk.isEmpty { break }
-            }
-            ScanWorkDiagnostics.shared.hashed(bytes: chunk.count)
-            hasher.update(data: chunk)
+        StreamingFileHasher.sha256(path: path) { bytes in
+            ScanWorkDiagnostics.shared.hashed(bytes: bytes)
         }
-        return hasher.finalize().hexString
     }
 
 }

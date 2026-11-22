@@ -42,7 +42,9 @@
 		E40000000000000000000601 /* LOLBinExecutionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000600 /* LOLBinExecutionPolicy.swift */; };
 		E40000000000000000000602 /* LOLBinExecutionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000600 /* LOLBinExecutionPolicy.swift */; };
 		E40000000000000000000701 /* InteractiveShellPipelinePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */; };
+		E51130000000000000000101 /* StreamingFileHasher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E51130000000000000000100 /* StreamingFileHasher.swift */; };
 		E40000000000000000000702 /* InteractiveShellPipelinePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */; };
+		E51130000000000000000102 /* StreamingFileHasher.swift in Sources */ = {isa = PBXBuildFile; fileRef = E51130000000000000000100 /* StreamingFileHasher.swift */; };
 		E40000000000000000000801 /* SignedThreatIntelligenceBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */; };
 		E40000000000000000000802 /* SignedThreatIntelligenceBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */; };
 		E40000000000000000000803 /* SignedThreatIntelligenceBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */; };
@@ -167,6 +169,7 @@
 		E40000000000000000000500 /* TamperProtectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TamperProtectionPolicy.swift; path = Shared/TamperProtectionPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000600 /* LOLBinExecutionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LOLBinExecutionPolicy.swift; path = Shared/LOLBinExecutionPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = InteractiveShellPipelinePolicy.swift; path = Shared/InteractiveShellPipelinePolicy.swift; sourceTree = SOURCE_ROOT; };
+		E51130000000000000000100 /* StreamingFileHasher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StreamingFileHasher.swift; path = Shared/StreamingFileHasher.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SignedThreatIntelligenceBundle.swift; path = Shared/SignedThreatIntelligenceBundle.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000900 /* StrictBlockingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StrictBlockingPolicy.swift; path = Shared/StrictBlockingPolicy.swift; sourceTree = SOURCE_ROOT; };
 		E40000000000000000000A00 /* TCCAffectedClientTrustPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TCCAffectedClientTrustPolicy.swift; path = Shared/TCCAffectedClientTrustPolicy.swift; sourceTree = SOURCE_ROOT; };
@@ -369,6 +372,7 @@
 				E40000000000000000000A00 /* TCCAffectedClientTrustPolicy.swift */,
 				E40000000000000000000600 /* LOLBinExecutionPolicy.swift */,
 				E40000000000000000000700 /* InteractiveShellPipelinePolicy.swift */,
+				E51130000000000000000100 /* StreamingFileHasher.swift */,
 				E40000000000000000000800 /* SignedThreatIntelligenceBundle.swift */,
 				E40000000000000000000900 /* StrictBlockingPolicy.swift */,
 				E40000000000000000000100 /* YARAVerdictPolicy.swift */,
@@ -803,6 +807,7 @@
 				E40000000000000000000A02 /* TCCAffectedClientTrustPolicy.swift in Sources */,
 				E40000000000000000000602 /* LOLBinExecutionPolicy.swift in Sources */,
 				E40000000000000000000702 /* InteractiveShellPipelinePolicy.swift in Sources */,
+				E51130000000000000000102 /* StreamingFileHasher.swift in Sources */,
 				E40000000000000000000803 /* SignedThreatIntelligenceBundle.swift in Sources */,
 				E40000000000000000000902 /* StrictBlockingPolicy.swift in Sources */,
 				E40000000000000000000102 /* YARAVerdictPolicy.swift in Sources */,
@@ -861,6 +866,7 @@
 				E40000000000000000000A01 /* TCCAffectedClientTrustPolicy.swift in Sources */,
 				E40000000000000000000601 /* LOLBinExecutionPolicy.swift in Sources */,
 				E40000000000000000000701 /* InteractiveShellPipelinePolicy.swift in Sources */,
+				E51130000000000000000101 /* StreamingFileHasher.swift in Sources */,
 				E40000000000000000000801 /* SignedThreatIntelligenceBundle.swift in Sources */,
 				E40000000000000000000901 /* StrictBlockingPolicy.swift in Sources */,
 				E40000000000000000000101 /* YARAVerdictPolicy.swift in Sources */,
