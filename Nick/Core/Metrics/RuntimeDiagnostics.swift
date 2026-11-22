@@ -14,8 +14,13 @@ final class AuthResponseClaim: @unchecked Sendable {
 final class PendingAuthDiagnostics: @unchecked Sendable {
     struct Key: Hashable, Sendable { let address: UInt64; let machTime: UInt64 }
     enum Phase: String, Sendable { case callback, credentialValidation, prelaunchHash, workerClaimed, watchdogClaimed, responseAPI, responseFailed }
+    struct ResponseContext: Sendable {
+        let callbackMachTime: UInt64?
+        let phaseBeforeResponse: Phase
+    }
     private struct Entry {
         let event: UInt32; let received: UInt64; let deadline: UInt64
+        let callbackMachTime: UInt64?
         var phase: Phase = .callback
         var attempts = 0
         var warned = false
@@ -26,20 +31,24 @@ final class PendingAuthDiagnostics: @unchecked Sendable {
     private var peak = 0
     let capacity: Int
     init(capacity: Int = 4096) { precondition(capacity > 0); self.capacity = capacity }
-    func received(_ key: Key, event: UInt32, deadline: UInt64) {
+    func received(_ key: Key, event: UInt32, deadline: UInt64, callbackMachTime: UInt64? = nil) {
         lock.withLock {
             guard entries[key] == nil else { return }
             guard entries.count < capacity else { overflow &+= 1; return }
-            entries[key] = Entry(event: event, received: key.machTime, deadline: deadline)
+            entries[key] = Entry(event: event, received: key.machTime, deadline: deadline,
+                                 callbackMachTime: callbackMachTime)
             peak = max(peak, entries.count)
         }
     }
     func phase(_ key: Key, _ phase: Phase) { lock.withLock { entries[key]?.phase = phase } }
-    func responseStarted(_ key: Key) {
+    @discardableResult
+    func responseStarted(_ key: Key) -> ResponseContext? {
         lock.withLock {
-            guard var entry = entries[key] else { return }
+            guard var entry = entries[key] else { return nil }
+            let context = ResponseContext(callbackMachTime: entry.callbackMachTime, phaseBeforeResponse: entry.phase)
             if entry.attempts > 0 { duplicateAttempts &+= 1 }
             entry.attempts += 1; entry.phase = .responseAPI; entries[key] = entry
+            return context
         }
     }
     func responseReturned(_ key: Key, accepted: Bool) {
@@ -76,6 +85,85 @@ final class PendingAuthDiagnostics: @unchecked Sendable {
                     "oldestMessageMachTime": oldest ?? 0, "observedMachTime": now,
                     "scope": "received AUTHs until successful ES response return; excludes messages not yet delivered; never evicts pending records"]
         }
+    }
+}
+
+/// Rare completed AUTH outliers only. No paths, arguments, signatures or ES
+/// messages retained; normal replies do no allocation or extra lock here.
+final class SlowAuthResponseDiagnostics: @unchecked Sendable {
+    private struct Record {
+        let event: UInt32, result: UInt32
+        let allowed: Bool
+        let message: UInt64, callback: UInt64?, apiStart: UInt64, returned: UInt64, deadline: UInt64
+        let phase: PendingAuthDiagnostics.Phase?
+        let recordedAt: TimeInterval
+    }
+    private let lock = NSLock()
+    private var records: [Record?]
+    private var next = 0, count = 0
+    private var overwritten: UInt64 = 0
+    private var maximum: Record?
+    private let nanosecondsPerTick: Double
+    private let thresholdMilliseconds: Double
+    let capacity: Int
+
+    init(capacity: Int = 16, nanosecondsPerTick: Double = 1, thresholdMilliseconds: Double = 100) {
+        precondition(capacity > 0 && thresholdMilliseconds >= 0)
+        records = Array(repeating: nil, count: capacity)
+        self.capacity = capacity
+        self.nanosecondsPerTick = nanosecondsPerTick
+        self.thresholdMilliseconds = thresholdMilliseconds
+    }
+
+    func record(event: UInt32, result: UInt32, allowed: Bool, message: UInt64,
+                context: PendingAuthDiagnostics.ResponseContext?, apiStart: UInt64,
+                returned: UInt64, deadline: UInt64) {
+        guard nanosecondsPerTick.isFinite, nanosecondsPerTick > 0, returned >= message else { return }
+        let total = milliseconds(message, returned)
+        guard total >= thresholdMilliseconds || result != 0 || returned >= deadline else { return }
+        let record = Record(event: event, result: result, allowed: allowed, message: message,
+                            callback: context?.callbackMachTime, apiStart: apiStart, returned: returned,
+                            deadline: deadline, phase: context?.phaseBeforeResponse,
+                            recordedAt: Date().timeIntervalSince1970)
+        lock.withLock {
+            if count == records.count { overwritten &+= 1 }
+            records[next] = record; next = (next + 1) % records.count
+            count = min(count + 1, records.count)
+            if maximum.map({ returned - message > $0.returned - $0.message }) ?? true { maximum = record }
+        }
+    }
+
+    func snapshot() -> [String: Any] {
+        let copy = lock.withLock { () -> ([Record], UInt64, Record?) in
+            let ordered = (0..<count).compactMap { records[(next - count + $0 + records.count) % records.count] }
+            return (ordered, overwritten, maximum)
+        }
+        return ["schemaVersion": 1, "capacity": capacity, "retained": copy.0.count,
+                "timebaseAvailable": nanosecondsPerTick.isFinite && nanosecondsPerTick > 0,
+                "overwritten": copy.1, "thresholdMilliseconds": thresholdMilliseconds,
+                "scope": "current-process completed response attempts; excludes unanswered AUTHs",
+                "timestampMeaning": "recorded immediately after response return; exact monotonic return tick also retained",
+                "records": copy.0.map(fields), "maximumObserved": copy.2.map(fields) as Any? ?? NSNull()]
+    }
+
+    private func milliseconds(_ from: UInt64, _ to: UInt64) -> Double {
+        (to >= from ? Double(to - from) : -Double(from - to)) * nanosecondsPerTick / 1e6
+    }
+    private func fields(_ record: Record) -> [String: Any] {
+        let callbackValid = record.callback.map { record.message <= $0 && $0 <= record.apiStart } ?? false
+        let apiValid = record.message <= record.apiStart && record.apiStart <= record.returned
+        return ["eventType": record.event, "responseResult": record.result, "allowed": record.allowed,
+                "recordedAt": record.recordedAt, "messageMachTime": record.message,
+                "callbackMachTime": record.callback.map { $0 as Any } ?? NSNull(),
+                "responseAPIMachTime": record.apiStart, "responseReturnMachTime": record.returned,
+                "deadlineMachTime": record.deadline, "totalMilliseconds": milliseconds(record.message, record.returned),
+                "eventToCallbackMilliseconds": callbackValid ? milliseconds(record.message, record.callback!) as Any : NSNull(),
+                "callbackToAPIMilliseconds": callbackValid && apiValid ? milliseconds(record.callback!, record.apiStart) as Any : NSNull(),
+                "responseAPIMilliseconds": apiValid ? milliseconds(record.apiStart, record.returned) as Any : NSNull(),
+                "deadlineRemainingAtCallbackMilliseconds": callbackValid ? milliseconds(record.callback!, record.deadline) as Any : NSNull(),
+                "deadlineRemainingAtResponseMilliseconds": milliseconds(record.returned, record.deadline),
+                "pastDeadline": record.returned >= record.deadline,
+                "phaseBeforeResponse": record.phase?.rawValue as Any? ?? NSNull()]
     }
 }
 

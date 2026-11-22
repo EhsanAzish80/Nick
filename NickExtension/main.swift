@@ -115,6 +115,7 @@ func writeExtensionHealth() {
         health["authResponseP99Milliseconds"] = p99
     }
     health["authResponseRetainedSampleCount"] = esMetrics.authResponseRetainedSampleCount
+    health["slowAuthResponseDiagnostics"] = EndpointSecurityClient.slowAuthResponses.snapshot()
     if let maximum = esMetrics.authResponseMaximumMilliseconds {
         health["authResponseMaximumMilliseconds"] = maximum
     }

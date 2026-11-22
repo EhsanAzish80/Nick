@@ -26,6 +26,11 @@ final class EndpointSecurityClient {
 
     static let healthMetrics = ExtensionHealthMetrics()
     static let pendingAuth = PendingAuthDiagnostics()
+    static let slowAuthResponses = SlowAuthResponseDiagnostics(nanosecondsPerTick: {
+        var timebase = mach_timebase_info_data_t()
+        guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom != 0 else { return 0 }
+        return Double(timebase.numer) / Double(timebase.denom)
+    }())
     static func diagnosticKey(_ message: UnsafePointer<es_message_t>) -> PendingAuthDiagnostics.Key {
         .init(address: UInt64(UInt(bitPattern: message)), machTime: message.pointee.mach_time)
     }
@@ -63,11 +68,12 @@ final class EndpointSecurityClient {
         var newClient: OpaquePointer?
 
         let result = es_new_client(&newClient) { [weak self] client, message in
+            let callbackEnteredAt = message.pointee.action_type == ES_ACTION_TYPE_AUTH ? mach_absolute_time() : 0
             // This block runs on an ES-internal serial queue — keep it fast.
             autoreleasepool {
                 if message.pointee.action_type == ES_ACTION_TYPE_AUTH {
                     Self.pendingAuth.received(Self.diagnosticKey(message), event: message.pointee.event_type.rawValue,
-                                              deadline: message.pointee.deadline)
+                                              deadline: message.pointee.deadline, callbackMachTime: callbackEnteredAt)
                 }
                 Self.healthMetrics.record(eventType: message.pointee.event_type)
                 MuteManager.muteMeasuredProcessIfNeeded(
@@ -125,9 +131,10 @@ final class EndpointSecurityClient {
         guard let client, message.pointee.action_type == ES_ACTION_TYPE_AUTH else { return false }
 
         let diagnosticKey = Self.diagnosticKey(message)
-        Self.pendingAuth.responseStarted(diagnosticKey)
+        let responseContext = Self.pendingAuth.responseStarted(diagnosticKey)
         let missedDeadline = mach_absolute_time() >= message.pointee.deadline
         let ret: es_respond_result_t
+        let responseAPIBeganAt: UInt64
         if message.pointee.event_type == ES_EVENT_TYPE_AUTH_OPEN {
             // AUTH_OPEN is the one authorization event that requires a flags
             // response. Responding with `es_respond_auth_result` returns
@@ -136,12 +143,18 @@ final class EndpointSecurityClient {
             let authorizedFlags = allow
                 ? UInt32(bitPattern: message.pointee.event.open.fflag)
                 : 0
+            responseAPIBeganAt = mach_absolute_time()
             ret = es_respond_flags_result(client, message, authorizedFlags, false)
         } else {
             let authResult: es_auth_result_t = allow ? ES_AUTH_RESULT_ALLOW : ES_AUTH_RESULT_DENY
+            responseAPIBeganAt = mach_absolute_time()
             ret = es_respond_auth_result(client, message, authResult, false)
         }
         let completedAt = mach_absolute_time()
+        Self.slowAuthResponses.record(event: message.pointee.event_type.rawValue, result: ret.rawValue,
+                                      allowed: allow, message: message.pointee.mach_time,
+                                      context: responseContext, apiStart: responseAPIBeganAt,
+                                      returned: completedAt, deadline: message.pointee.deadline)
         Self.pendingAuth.responseReturned(diagnosticKey, accepted: ret == ES_RESPOND_RESULT_SUCCESS)
         Self.healthMetrics.recordAuthResponse(messageMachTime: message.pointee.mach_time, nowMachTime: completedAt)
         Self.healthMetrics.recordResponseResult(
