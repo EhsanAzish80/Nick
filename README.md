@@ -407,3 +407,13 @@ of the Objective-See Foundation and the wider macOS security community. Its
 small bundled macOS hash catalog includes ESET malware-ioc data under the
 BSD-2-Clause licence; the complete notice is shipped in the app and shown in
 Settings → Acknowledgements.
+
+### Community contributions
+
+Special thanks to [@prismatic7](https://github.com/prismatic7) for the detailed
+Backblaze reports, diagnostics, measurements, and technical feedback in
+[issue #122](https://github.com/EhsanAzish80/Nick/issues/122) and
+[PR #127](https://github.com/EhsanAzish80/Nick/pull/127). Their contribution
+helped us identify and address scan-memory retention, repeated credential
+attribution, creation-tracking CPU costs, and deferred authorization/watchdog
+weaknesses.
