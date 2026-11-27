@@ -218,6 +218,7 @@ enum AppleSyncRenamePolicy {
                 source, destination, directory: "Library/Application Support/FileProvider"
             )
         case "com.apple.geod":
+            if isSimulatorGeoServicesRefresh(source, destination, suffix: suffix) { return true }
             let src = URL(fileURLWithPath: source).pathComponents
             guard src.count == 9, src[1] == "Users", src[3...7].elementsEqual(["Library", "Containers", "com.apple.geod", "Data", "tmp"]),
                   UUID(uuidString: src[8]) != nil else { return false }
@@ -225,7 +226,8 @@ enum AppleSyncRenamePolicy {
             let expected = suffix == "styl" ? "Resources" : (["iconconfigpack", "icondatapack"].contains(suffix) ? "RegionalResources" : "")
             return !expected.isEmpty && (destination as NSString).deletingLastPathComponent == root + expected
         case "com.apple.mobileassetd":
-            return isSimulatorMaintenance(source, destination, asset: true)
+            return isHostAssetFinalization(source, destination)
+                || isSimulatorMaintenance(source, destination, asset: true)
         case "com.apple.springboard":
             return isSimulatorMaintenance(source, destination, asset: false)
         case "com.apple.parsec-fbf":
@@ -235,6 +237,19 @@ enum AppleSyncRenamePolicy {
         default:
             return false
         }
+    }
+
+    private static func isSimulatorGeoServicesRefresh(_ source: String, _ destination: String, suffix: String) -> Bool {
+        let p = ["/"] + source.split(separator: "/").map(String.init)
+        guard p.count == 11, p[1] == "Users", !p[2].isEmpty,
+              p[3...6].elementsEqual(["Library", "Developer", "CoreSimulator", "Devices"]),
+              UUID(uuidString: p[7]) != nil, p[8] == "data", p[9] == "tmp",
+              UUID(uuidString: p[10]) != nil else { return false }
+        let folder = suffix == "styl" ? "Resources"
+            : (["iconconfigpack", "icondatapack"].contains(suffix) ? "RegionalResources" : "")
+        guard !folder.isEmpty else { return false }
+        let root = "/" + p[1...8].joined(separator: "/") + "/Library/Caches/GeoServices/"
+        return (destination as NSString).deletingLastPathComponent == root + folder
     }
 
     private static func isSystemIconInstallation(_ source: String, _ destination: String) -> Bool {
@@ -267,15 +282,36 @@ enum AppleSyncRenamePolicy {
         guard destination.hasPrefix(root) else { return false }
         let p = String(destination.dropFirst(root.count)).split(separator: "/").map(String.init)
         return p.count == 3 && !p[0].isEmpty && p[0].allSatisfy(\.isNumber)
-            && p[1] == "backup" && p[2] == "ExtChatDatabase.sqlite.enc"
+            && p[1] == "backup"
+            && ["ExtChatDatabase.sqlite.enc", "BackedUpStorageDatabase.sqlite.enc"].contains(p[2])
+    }
+
+    private static func isHostAssetFinalization(_ source: String, _ destination: String) -> Bool {
+        let root = "/System/Library/AssetsV2/"
+        guard (source as NSString).deletingLastPathComponent == root + "staging",
+              destination.hasPrefix(root) else { return false }
+        let parts = destination.dropFirst(root.count).split(separator: "/").map(String.init)
+        guard parts.count == 2, parts[0].hasPrefix("com_apple_MobileAsset_"),
+              parts[0].count > "com_apple_MobileAsset_".count,
+              (parts[1] as NSString).pathExtension == "asset" else { return false }
+        let hash = (parts[1] as NSString).deletingPathExtension
+        return hash.count == 40 && hash.allSatisfy(\.isHexDigit)
+            && (source as NSString).lastPathComponent == parts[0] + "." + hash
     }
 
     private static func isSimulatorMaintenance(_ source: String, _ destination: String, asset: Bool) -> Bool {
         let p = URL(fileURLWithPath: source).pathComponents
-        guard p.count > 8, p[1] == "Users",
-              p[3...6].elementsEqual(["Library", "Developer", "CoreSimulator", "Devices"]),
-              UUID(uuidString: p[7]) != nil, p[8] == "data" else { return false }
-        let root = "/" + p[1...8].joined(separator: "/") + "/"
+        guard p.count > 7, p[1] == "Users", p[3] == "Library", p[4] == "Developer" else { return false }
+        let dataIndex: Int
+        if p.count > 8, p[5...6].elementsEqual(["CoreSimulator", "Devices"]),
+           UUID(uuidString: p[7]) != nil, p[8] == "data" {
+            dataIndex = 8
+        } else if !asset, p[5] == "XCTestDevices", UUID(uuidString: p[6]) != nil, p[7] == "data" {
+            // XCTest creates its own device root; only SpringBoard cache
+            // finalization qualifies, never generic assets or device activity.
+            dataIndex = 7
+        } else { return false }
+        let root = "/" + p[1...dataIndex].joined(separator: "/") + "/"
         guard destination.hasPrefix(root) else { return false }
         if !asset {
             let name = (destination as NSString).lastPathComponent
@@ -324,7 +360,7 @@ enum AppleSyncRenamePolicy {
                relative[1...3].elementsEqual(["wharf", "wharf", "propagate"]),
                !relative[4].isEmpty, relative[4].allSatisfy(\.isNumber),
                (destination as NSString).deletingLastPathComponent == cloud + "i",
-               ["pcm", "flat", "meta"].contains((destination as NSString).pathExtension) { return true }
+               ["pcm", "flat", "meta", "dia"].contains((destination as NSString).pathExtension) { return true }
         }
         // A downloaded item moves from CloudDocs' private staging slot to
         // the same user's iCloud provider DownloadStage, preserving its name.

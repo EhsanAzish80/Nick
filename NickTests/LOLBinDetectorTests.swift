@@ -266,4 +266,11 @@ final class LOLBinDetectorTests: XCTestCase {
         let signal = LOLBinDetector.evaluate(proc, parentName: nil)
         XCTAssertEqual(signal?.metadata["detector"], "LOLBinDetector")
     }
+    func testTemporaryPayloadSemanticsMatchSharedExecPolicy() {
+        let benign = makeProc(name: "bash", arguments: ["-c", "out=$(mktemp); git diff >$out; cat $out"])
+        XCTAssertNil(LOLBinDetector.evaluate(benign, parentName: "tool"))
+        let invocation = makeProc(name: "bash", arguments: ["-c", "payload=$(mktemp); bash $payload"])
+        XCTAssertEqual(LOLBinDetector.evaluate(invocation, parentName: "tool")?.metadata["reason"], "mktemp_execute")
+    }
+
 }

@@ -716,4 +716,28 @@ final class CredentialAccessPolicyTests: XCTestCase {
             responsibleIdentity: unknown
         ))
     }
+    func testSigningKeyWorkflowKeepsAmbiguousAndUnsupportedReadsVisible() {
+        let key = "/Users/test/.ssh/id_ed25519_signing"
+        let sign = ["/usr/bin/ssh-keygen", "-Y", "sign", "-n", "git", "-f", key]
+        func signing(_ args: [String], apple: Bool = true, git: Bool = true, uid: UInt32 = 501) -> CredentialAccessPolicy.Finding? {
+            CredentialAccessPolicy.gitSSHSigningFinding(arguments: args, keyPath: key,
+                actorUID: uid, fileUID: 501, actorIsAppleKeygen: apple, parentIsAppleGit: git)
+        }
+        XCTAssertEqual(signing(sign)?.reason, "ssh_git_signing")
+        XCTAssertEqual(signing(sign + ["/tmp/synthetic-message"])?.tier, "observed")
+        XCTAssertNil(signing([]))
+        XCTAssertNil(signing(sign, apple: false))
+        XCTAssertNil(signing(sign, git: false))
+        XCTAssertNil(signing(sign, uid: 0))
+        XCTAssertNil(signing(sign, uid: 502))
+        XCTAssertNil(signing(sign + ["--unsupported"]))
+        XCTAssertNil(signing(sign.map { $0 == "git" ? "file" : $0 }))
+        XCTAssertNil(signing(["ssh-keygen", "-p", "-f", key]))
+        XCTAssertNil(CredentialAccessPolicy.sshAddFinding(arguments: [], keyPath: key,
+            actorUID: 501, fileUID: 501, actorIsAppleSSHAdd: true))
+        // Missing command evidence falls back to a visible metadata-only finding.
+        XCTAssertEqual(CredentialAccessPolicy.findingForOpen(path: key, responsibleIdentity: nil)?.reason,
+                       "credential_store_access")
+    }
+
 }
