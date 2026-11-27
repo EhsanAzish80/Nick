@@ -531,4 +531,43 @@ final class RansomwareAtomicRenameTests: XCTestCase {
         XCTAssertFalse(routine(root + "Documents/" + name + ".tmp", destination))
     }
 
+    func testSimulatorGeoServicesRefreshUsesExactDeviceAndResourceKinds() {
+        let root = "/Users/test/Library/Developer/CoreSimulator/Devices/4242F10B-F3B4-462E-81B4-24045B0DEC08/data/"
+        let source = root + "tmp/16923CE1-9679-4C0B-9AE9-CF41AE07501C"
+        for (folder, filename) in [("Resources", "globe.styl"),
+                                   ("RegionalResources", "icons.iconconfigpack"),
+                                   ("RegionalResources", "Switzerland_Transit_Shields-193@3x.icondatapack")] {
+            XCTAssertTrue(AppleSyncRenamePolicy.isRoutineMaintenanceRename(
+                isPlatformBinary: true, signingID: "com.apple.geod", source: source,
+                destination: root + "Library/Caches/GeoServices/" + folder + "/" + filename
+            ))
+        }
+    }
+
+    func testSimulatorGeoServicesRefreshRejectsSpoofedActorsAndBoundaryChanges() {
+        let root = "/Users/test/Library/Developer/CoreSimulator/Devices/4242F10B-F3B4-462E-81B4-24045B0DEC08/data/"
+        let source = root + "tmp/16923CE1-9679-4C0B-9AE9-CF41AE07501C"
+        let destination = root + "Library/Caches/GeoServices/RegionalResources/resource.icondatapack"
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.geod") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(
+                isPlatformBinary: platform, signingID: signer, source: src, destination: dst
+            )
+        }
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.example.geod"))
+        for altered in [destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/"),
+                        destination.replacingOccurrences(of: "4242F10B-F3B4-462E-81B4-24045B0DEC08", with: UUID().uuidString),
+                        destination.replacingOccurrences(of: "RegionalResources/", with: "RegionalResources/nested/"),
+                        destination.replacingOccurrences(of: "RegionalResources", with: "Resources"),
+                        destination + ".locked", "/Users/test/Documents/resource.icondatapack"] {
+            XCTAssertFalse(routine(source, altered))
+        }
+        for altered in [source.replacingOccurrences(of: "16923CE1-9679-4C0B-9AE9-CF41AE07501C", with: "not-a-uuid"),
+                        source.replacingOccurrences(of: "4242F10B-F3B4-462E-81B4-24045B0DEC08", with: "not-a-device"),
+                        source.replacingOccurrences(of: "/tmp/", with: "/Documents/"),
+                        "/Users/test/Documents/input"] {
+            XCTAssertFalse(routine(altered, destination))
+        }
+    }
+
 }
