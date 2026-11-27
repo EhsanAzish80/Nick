@@ -115,11 +115,95 @@ enum LOLBinExecutionPolicy {
                 return Finding(title: "Added a cron job", reason: "cron_modification", severity: "medium", matchedCommand: nil)
             }
         }
-        if ["sh", "bash", "zsh"].contains(name), lowered.contains("mktemp"),
-           lowered.contains("&&") || lowered.contains(";") || lowered.contains("$(") {
+        if ["sh", "bash", "zsh"].contains(name), hasTemporaryPayloadExecution(arguments: arguments) {
             return Finding(title: "Shell creating and executing a temporary file", reason: "mktemp_execute", severity: "medium", matchedCommand: nil)
         }
         return nil
+    }
+
+    /// Recognizes explicit invocation of a mktemp result, not merely creation,
+    /// redirection, diffing or the presence of shell control operators. This is
+    /// intentionally a bounded syntax recognizer, not a shell interpreter.
+    static func hasTemporaryPayloadExecution(arguments: [String]) -> Bool {
+        guard let command = shellCommand(in: arguments) else { return false }
+        var temporaryVariables = Set<String>()
+        for words in shellStatements(command) {
+            var tokens = words
+            while let first = tokens.first, ["local", "export", "readonly"].contains(first) {
+                tokens.removeFirst()
+            }
+            while let first = tokens.first, let equal = first.firstIndex(of: "=") {
+                let key = String(first[..<equal])
+                guard key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else { break }
+                let value = String(first[first.index(after: equal)...])
+                if isMktempSubstitution(value) { temporaryVariables.insert(key) }
+                else { temporaryVariables.remove(key) }
+                tokens.removeFirst()
+            }
+            func isTemporaryReference(_ token: String) -> Bool {
+                let value = unquoteShellWord(token)
+                return temporaryVariables.contains { value == "$" + $0 || value == "${" + $0 + "}" }
+                    || isMktempSubstitution(value)
+            }
+            guard !tokens.isEmpty else { continue }
+            if tokens.first == "exec" { tokens.removeFirst() }
+            guard let executable = tokens.first else { continue }
+            if isTemporaryReference(executable) { return true }
+            let name = (unquoteShellWord(executable) as NSString).lastPathComponent
+            let interpreters = ["sh", "bash", "zsh", "dash", "ksh", "python", "python3", "ruby", "perl", ".", "source"]
+            guard interpreters.contains(name) else { continue }
+            let operands = tokens.dropFirst()
+            // -c/-e execute a command string, not the supplied temporary file.
+            guard !operands.contains(where: { $0 == "-c" || $0 == "-e" }) else { continue }
+            if let file = operands.first(where: { !$0.hasPrefix("-") }), isTemporaryReference(file) { return true }
+        }
+        return false
+    }
+
+    private static func unquoteShellWord(_ word: String) -> String {
+        guard word.count >= 2, word.first == "\"", word.last == "\"" else { return word }
+        return String(word.dropFirst().dropLast())
+    }
+
+    private static func isMktempSubstitution(_ word: String) -> Bool {
+        let value = unquoteShellWord(word)
+        return value.range(of: #"^\$\(\s*(?:/usr/bin/)?mktemp(?:\s[^\n]*)?\)$"#, options: .regularExpression) != nil
+            || value.range(of: #"^`\s*(?:/usr/bin/)?mktemp(?:\s[^\n]*)?`$"#, options: .regularExpression) != nil
+    }
+
+    private static func shellStatements(_ command: String) -> [[String]] {
+        var statements: [[String]] = [], words: [String] = []
+        var word = "", quote: Character?, escaped = false, substitutionDepth = 0
+        var comment = false
+        let chars = Array(command)
+        func finishWord() { if !word.isEmpty { words.append(word); word = "" } }
+        func finishStatement() { finishWord(); if !words.isEmpty { statements.append(words); words = [] } }
+        for (index, char) in chars.enumerated() {
+            if comment {
+                if char == "\n" { comment = false; finishStatement() }
+                continue
+            }
+            if escaped { word.append(char); escaped = false; continue }
+            if char == "\\", quote != "'" { word.append(char); escaped = true; continue }
+            if let current = quote {
+                word.append(char)
+                if char == current { quote = nil }
+                continue
+            }
+            if char == "'" || char == "\"" || char == "`" { quote = char; word.append(char); continue }
+            if char == "(", index > 0, chars[index - 1] == "$" { substitutionDepth += 1; word.append(char); continue }
+            if substitutionDepth > 0 {
+                if char == "(" { substitutionDepth += 1 }
+                if char == ")" { substitutionDepth -= 1 }
+                word.append(char); continue
+            }
+            if char == "#", word.isEmpty { comment = true; continue }
+            if char == ";" || char == "&" || char == "|" || char == "\n" { finishStatement() }
+            else if char.isWhitespace { finishWord() }
+            else { word.append(char) }
+        }
+        finishStatement()
+        return statements
     }
 
     private static func isStandaloneDecoder(name: String, arguments: [String]) -> Bool {

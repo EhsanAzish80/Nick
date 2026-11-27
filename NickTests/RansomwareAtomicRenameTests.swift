@@ -507,4 +507,162 @@ final class RansomwareAtomicRenameTests: XCTestCase {
             ))
         }
     }
+    func testXCTestSpringBoardFinalizationRequiresExactPairedScope() {
+        let root = "/Users/test/Library/Developer/XCTestDevices/E7F31F29-18A3-4CF6-841F-27ED91579EC5/data/"
+        let name = "Runner@@en_TR_cache.cpbitmap"
+        let source = root + "tmp/" + name + ".CBSxlg"
+        let destination = root + "Library/Caches/MappedImageCache/com.apple.springboard-ContentCache/" + name
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.springboard") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: signer, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.example.springboard"))
+        XCTAssertFalse(routine(source, destination, signer: "com.apple.mobileassetd"))
+        for dst in [destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/"),
+                    destination.replacingOccurrences(of: "E7F31F29-18A3-4CF6-841F-27ED91579EC5", with: UUID().uuidString),
+                    destination.replacingOccurrences(of: "com.apple.springboard-", with: "com.example."),
+                    destination + ".locked", "/Users/test/Documents/" + name] {
+            XCTAssertFalse(routine(source, dst))
+        }
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "E7F31F29-18A3-4CF6-841F-27ED91579EC5", with: "invalid"), destination))
+        XCTAssertFalse(routine(root + "tmp/unrelated.cpbitmap.tmp", destination))
+        XCTAssertFalse(routine(root + "Documents/" + name + ".tmp", destination))
+    }
+
+    func testSimulatorGeoServicesRefreshUsesExactDeviceAndResourceKinds() {
+        let root = "/Users/test/Library/Developer/CoreSimulator/Devices/4242F10B-F3B4-462E-81B4-24045B0DEC08/data/"
+        let source = root + "tmp/16923CE1-9679-4C0B-9AE9-CF41AE07501C"
+        for (folder, filename) in [("Resources", "globe.styl"),
+                                   ("RegionalResources", "icons.iconconfigpack"),
+                                   ("RegionalResources", "Switzerland_Transit_Shields-193@3x.icondatapack")] {
+            XCTAssertTrue(AppleSyncRenamePolicy.isRoutineMaintenanceRename(
+                isPlatformBinary: true, signingID: "com.apple.geod", source: source,
+                destination: root + "Library/Caches/GeoServices/" + folder + "/" + filename
+            ))
+        }
+    }
+
+    func testSimulatorGeoServicesRefreshRejectsSpoofedActorsAndBoundaryChanges() {
+        let root = "/Users/test/Library/Developer/CoreSimulator/Devices/4242F10B-F3B4-462E-81B4-24045B0DEC08/data/"
+        let source = root + "tmp/16923CE1-9679-4C0B-9AE9-CF41AE07501C"
+        let destination = root + "Library/Caches/GeoServices/RegionalResources/resource.icondatapack"
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.geod") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(
+                isPlatformBinary: platform, signingID: signer, source: src, destination: dst
+            )
+        }
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.example.geod"))
+        for altered in [destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/"),
+                        destination.replacingOccurrences(of: "4242F10B-F3B4-462E-81B4-24045B0DEC08", with: UUID().uuidString),
+                        destination.replacingOccurrences(of: "RegionalResources/", with: "RegionalResources/nested/"),
+                        destination.replacingOccurrences(of: "RegionalResources", with: "Resources"),
+                        destination + ".locked", "/Users/test/Documents/resource.icondatapack"] {
+            XCTAssertFalse(routine(source, altered))
+        }
+        for altered in [source.replacingOccurrences(of: "16923CE1-9679-4C0B-9AE9-CF41AE07501C", with: "not-a-uuid"),
+                        source.replacingOccurrences(of: "4242F10B-F3B4-462E-81B4-24045B0DEC08", with: "not-a-device"),
+                        source.replacingOccurrences(of: "/tmp/", with: "/Documents/"),
+                        "/Users/test/Documents/input"] {
+            XCTAssertFalse(routine(altered, destination))
+        }
+    }
+
+    func testFileProviderBackupDatabasePropagationRequiresExactNamesAndBoundaries() {
+        let source = "/Users/test/Library/Application Support/FileProvider/EC428E58-1A69-4DFA-A6EA-AF1072C33F5A/wharf/wharf/propagate/253740175"
+        let root = "/Users/test/Library/Mobile Documents/57T9237FN3~net~whatsapp~WhatsApp/Accounts/123456/backup/"
+        let destination = root + "BackedUpStorageDatabase.sqlite.enc"
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.fileproviderd") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: signer, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertTrue(routine(source, root + "ExtChatDatabase.sqlite.enc"))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.apple.bird"))
+        for dst in [destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/"),
+                    destination.replacingOccurrences(of: "57T9237FN3", with: "OTHERTEAM"),
+                    destination.replacingOccurrences(of: "123456", with: "not-an-account"),
+                    destination.replacingOccurrences(of: "/backup/", with: "/documents/"),
+                    root + "other.sqlite.enc", root + "nested/BackedUpStorageDatabase.sqlite.enc",
+                    destination + ".locked", "/Users/test/Documents/document.enc"] {
+            XCTAssertFalse(routine(source, dst))
+        }
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "253740175", with: "not-a-slot"), destination))
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "EC428E58-1A69-4DFA-A6EA-AF1072C33F5A", with: "invalid"), destination))
+        XCTAssertFalse(routine("/Users/test/Documents/document.txt", destination))
+    }
+
+    func testHostMobileAssetFinalizationRequiresMatchingTypeAndHash() {
+        let root = "/System/Library/AssetsV2/"
+        let type = "com_apple_MobileAsset_VideoAppsMusicAssets3"
+        let hash = "5d84dd6e091d3a5f0a9f48d2267bbde2e47bf6dd"
+        let source = root + "staging/" + type + "." + hash
+        let destination = root + type + "/" + hash + ".asset"
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.mobileassetd") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: signer, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.example.mobileassetd"))
+        for dst in [destination.replacingOccurrences(of: hash, with: String(repeating: "0", count: 40)),
+                    destination.replacingOccurrences(of: type, with: "com_apple_MobileAsset_Other"),
+                    destination.replacingOccurrences(of: "/System/", with: "/Library/"),
+                    destination + ".locked", root + type + "/nested/" + hash + ".asset",
+                    "/Users/test/Documents/file.asset"] {
+            XCTAssertFalse(routine(source, dst))
+        }
+        XCTAssertFalse(routine(root + "staging/nested/" + type + "." + hash, destination))
+        XCTAssertFalse(routine(source.replacingOccurrences(of: hash, with: "not-a-hash"), destination.replacingOccurrences(of: hash, with: "not-a-hash")))
+        XCTAssertFalse(routine("/Users/test/Documents/file", destination))
+    }
+
+    func testCloudDocsSessionDiaTransferRequiresBirdAndNumericProviderSlot() {
+        let source = "/Users/test/Library/Application Support/FileProvider/EC428E58-1A69-4DFA-A6EA-AF1072C33F5A/wharf/wharf/propagate/253802939"
+        let destination = "/Users/test/Library/Application Support/CloudDocs/session/i/f460d1b.dia"
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.bird") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: signer, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.apple.cloudd"))
+        XCTAssertFalse(routine(source, destination, signer: "com.apple.fileproviderd"))
+        for dst in [destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/"),
+                    destination.replacingOccurrences(of: "/session/i/", with: "/session/d/"),
+                    destination.replacingOccurrences(of: "/session/i/", with: "/session/i/nested/"),
+                    destination + ".locked", "/Users/test/Documents/file.dia"] {
+            XCTAssertFalse(routine(source, dst))
+        }
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "253802939", with: "not-a-slot"), destination))
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "EC428E58-1A69-4DFA-A6EA-AF1072C33F5A", with: "invalid"), destination))
+        XCTAssertFalse(routine("/Users/test/Documents/file", destination))
+    }
+
+    func testReportedWhatsAppFrameworkModelStagingRequiresValidatedTeam() {
+        let root = "/Users/test/Library/Caches/net.whatsapp.WhatsApp/org.sparkle-project.Sparkle/Installation/R4c2lLhnc/WhatsApp.app/Contents/Frameworks/SharedModules.framework/Versions/A/Resources/BizModel.momd/"
+        let source = root + ".BC.T_Kp4VWg"
+        let destination = root + "BizModel_2.22.19.mom"
+        func routine(_ src: String, _ dst: String, apple: Bool = true, team: String? = "57T9237FN3") -> Bool {
+            ScopedUpdaterRenamePolicy.matchesWhatsAppStagedResourceRename(
+                actorIsAppleDitto: apple, validatedBundleTeam: team, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, apple: false))
+        XCTAssertFalse(routine(source, destination, team: nil))
+        XCTAssertFalse(routine(source, destination, team: "OTHERTEAM"))
+        XCTAssertFalse(routine(source, destination + ".locked"))
+        XCTAssertFalse(routine(source, destination.replacingOccurrences(of: "R4c2lLhnc", with: "different-slot")))
+        XCTAssertFalse(routine(source.replacingOccurrences(of: ".BC.T_", with: "input-"), destination))
+        for marker in ["net.whatsapp.WhatsApp", "org.sparkle-project.Sparkle", "WhatsApp.app", "Resources", "BizModel.momd"] {
+            let src = source.replacingOccurrences(of: marker, with: "unrelated")
+            let dst = destination.replacingOccurrences(of: marker, with: "unrelated")
+            XCTAssertFalse(routine(src, dst), marker)
+        }
+        XCTAssertFalse(routine("/Users/test/Documents/.BC.T_input", "/Users/test/Documents/model.mom"))
+    }
+
 }

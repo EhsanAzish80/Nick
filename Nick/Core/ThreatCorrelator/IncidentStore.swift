@@ -328,17 +328,33 @@ enum IncidentIngestOutcome: Equatable {
 struct IncidentIngestResult {
     let visibleAlerts: [ThreatAlert]
     let newlyActionable: [ThreatAlert]
+    let notificationRefreshes: [ThreatAlert]
     let outcomes: [IncidentIngestOutcome]
 }
 
 @MainActor
 final class DurableIncidentNotificationQueue {
     private var alertsByGeneration: [UInt64: [ThreatAlert]] = [:]
+    private var refreshesByGeneration: [UInt64: [ThreatAlert]] = [:]
     var pendingGenerationCount: Int { alertsByGeneration.count }
 
     func stage(_ alerts: [ThreatAlert], for generation: UInt64) {
         guard generation > 0, !alerts.isEmpty else { return }
         alertsByGeneration[generation] = alerts
+    }
+
+    func stageRefreshes(_ alerts: [ThreatAlert], for generation: UInt64) {
+        guard generation > 0, !alerts.isEmpty else { return }
+        refreshesByGeneration[generation] = alerts
+    }
+
+    func confirmRefreshes(generation: UInt64) -> [ThreatAlert] {
+        var newest: [UUID: ThreatAlert] = [:]
+        for key in refreshesByGeneration.keys.filter({ $0 <= generation }).sorted() {
+            for alert in refreshesByGeneration[key] ?? [] { newest[alert.id] = alert }
+        }
+        refreshesByGeneration = refreshesByGeneration.filter { $0.key > generation }
+        return Array(newest.values)
     }
 
     func confirm(generation: UInt64) -> [ThreatAlert] {
@@ -551,6 +567,7 @@ final class IncidentStore {
         pruneExpiredCooldowns()
         pruneExpiredLearnedEntries()
         var newlyActionable: [ThreatAlert] = []
+        var notificationRefreshes: [ThreatAlert] = []
         var outcomes: [IncidentIngestOutcome] = []
         var forcePersistence = false
         var requiresImmediateCoalescedPersistence = false
@@ -712,6 +729,10 @@ final class IncidentStore {
                         // superseding write delivers the final count once.
                         newlyActionable.append(incidents[index].alert)
                         notificationIncidentIDs.insert(incidents[index].alert.id)
+                    } else if !reviewedAndUnchanged, prior.isVisible, prior.lastNotifiedAt != nil {
+                        // Update only a notification already earned and delivered.
+                        // This is not a new banner and does not reset its throttle.
+                        notificationRefreshes.append(incidents[index].alert)
                     }
                 } else if let learnedConfirmationCount,
                           prior.state == .allowed || prior.state == .reviewed {
@@ -789,6 +810,7 @@ final class IncidentStore {
         return IncidentIngestResult(
             visibleAlerts: visibleAlerts,
             newlyActionable: newlyActionable,
+            notificationRefreshes: notificationRefreshes,
             outcomes: outcomes
         )
     }

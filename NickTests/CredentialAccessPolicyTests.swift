@@ -2,6 +2,47 @@ import XCTest
 @testable import Nick
 
 final class CredentialAccessPolicyTests: XCTestCase {
+    func testWhatsAppOwnContainerCookiesRequireValidatedActorIdentity() {
+        let path = "/Users/test/Library/Containers/net.whatsapp.WhatsApp/Data/Library/Cookies/Cookies.binarycookies"
+        XCTAssertEqual(CredentialAccessPolicy.sensitiveStore(at: path), .browserCookies)
+        func identity(validated: Bool) -> CredentialAccessPolicy.ValidatedIdentity {
+            .init(bundleID: "net.whatsapp.WhatsApp", teamID: "57T9237FN3",
+                  signingValidated: validated, isApplePlatform: false)
+        }
+        let validated = identity(validated: true)
+        XCTAssertTrue(CredentialAccessPolicy.ownsStore(path: path, identity: validated))
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
+            path: path, responsibleIdentity: nil, actorIdentity: validated
+        ), "A validated main app must not depend on responsible-process attribution")
+        XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: path, identity: identity(validated: false)))
+        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+            path: path, responsibleIdentity: nil, actorIdentity: identity(validated: false)
+        ), "Bundle and team strings without validation do not establish ownership")
+    }
+
+    func testWhatsAppOwnershipDoesNotExemptOtherAppsOrNeighboringContainers() {
+        let path = "/Users/test/Library/Containers/net.whatsapp.WhatsApp/Data/Library/Cookies/Cookies.binarycookies"
+        let whatsapp = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "net.whatsapp.WhatsApp", teamID: "57T9237FN3",
+            signingValidated: true, isApplePlatform: false
+        )
+        let other = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.example.Other", teamID: "OTHERTEAM",
+            signingValidated: true, isApplePlatform: false
+        )
+        XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: path, identity: other))
+        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+            path: path, responsibleIdentity: whatsapp, actorIdentity: other
+        ), "An unrelated actor does not inherit a responsible app's store access")
+        for container in ["net.whatsapp.WhatsApp.other", "com.example.Other"] {
+            let otherPath = "/Users/test/Library/Containers/\(container)/Data/Library/Cookies/Cookies.binarycookies"
+            XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: otherPath, identity: whatsapp))
+            XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+                path: otherPath, responsibleIdentity: nil, actorIdentity: whatsapp
+            ))
+        }
+    }
+
     func testChromeAUTHOwnershipAndValidatedContainingHelper() {
         let chrome = CredentialAccessPolicy.ValidatedIdentity(bundleID: "com.google.Chrome", teamID: "EQHXZ8M8AV", signingValidated: true, isApplePlatform: false)
         let helper = CredentialAccessPolicy.ValidatedIdentity(bundleID: "com.google.Chrome.helper", teamID: "EQHXZ8M8AV", signingValidated: true, isApplePlatform: false)
@@ -675,4 +716,28 @@ final class CredentialAccessPolicyTests: XCTestCase {
             responsibleIdentity: unknown
         ))
     }
+    func testSigningKeyWorkflowKeepsAmbiguousAndUnsupportedReadsVisible() {
+        let key = "/Users/test/.ssh/id_ed25519_signing"
+        let sign = ["/usr/bin/ssh-keygen", "-Y", "sign", "-n", "git", "-f", key]
+        func signing(_ args: [String], apple: Bool = true, git: Bool = true, uid: UInt32 = 501) -> CredentialAccessPolicy.Finding? {
+            CredentialAccessPolicy.gitSSHSigningFinding(arguments: args, keyPath: key,
+                actorUID: uid, fileUID: 501, actorIsAppleKeygen: apple, parentIsAppleGit: git)
+        }
+        XCTAssertEqual(signing(sign)?.reason, "ssh_git_signing")
+        XCTAssertEqual(signing(sign + ["/tmp/synthetic-message"])?.tier, "observed")
+        XCTAssertNil(signing([]))
+        XCTAssertNil(signing(sign, apple: false))
+        XCTAssertNil(signing(sign, git: false))
+        XCTAssertNil(signing(sign, uid: 0))
+        XCTAssertNil(signing(sign, uid: 502))
+        XCTAssertNil(signing(sign + ["--unsupported"]))
+        XCTAssertNil(signing(sign.map { $0 == "git" ? "file" : $0 }))
+        XCTAssertNil(signing(["ssh-keygen", "-p", "-f", key]))
+        XCTAssertNil(CredentialAccessPolicy.sshAddFinding(arguments: [], keyPath: key,
+            actorUID: 501, fileUID: 501, actorIsAppleSSHAdd: true))
+        // Missing command evidence falls back to a visible metadata-only finding.
+        XCTAssertEqual(CredentialAccessPolicy.findingForOpen(path: key, responsibleIdentity: nil)?.reason,
+                       "credential_store_access")
+    }
+
 }

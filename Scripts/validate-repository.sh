@@ -3,7 +3,7 @@
 set -euo pipefail
 
 required_files=(
-  ARCHITECTURE.md
+  Documentation/ARCHITECTURE.md
   CHANGELOG.md
   CITATION.cff
   CODE_OF_CONDUCT.md
