@@ -765,6 +765,17 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
     }
 
     @MainActor
+    func testOrdinaryAllowedEventDoesNotScheduleSignatureInspection() async {
+        let event = ESEvent(eventType: .authOpen, processPath: "/tmp/ordinary-reader", pid: 45,
+            parentPid: 1, filePath: "/tmp/ordinary-document", decision: .allow)
+        let finding = await ExtensionFinding.resolve(event: event) { _ in
+            XCTFail("An event without denial or threat evidence must not inspect signatures")
+            return .unknown
+        }
+        XCTAssertNil(finding)
+    }
+
+    @MainActor
     func testFindingSignatureResolutionRunsOffMainAndPreservesEvidence() async throws {
         let event = ESEvent(eventType: .authExec, processPath: "/usr/bin/parent", pid: 42,
             parentPid: 1, filePath: "/usr/bin/target", decision: .allow,
