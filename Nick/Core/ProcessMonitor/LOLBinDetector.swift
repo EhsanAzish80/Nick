@@ -176,7 +176,7 @@ enum LOLBinDetector {
         case "crontab_modify":
             return arguments.contains("-e") || arguments.contains("-r") || arguments == ["-"]
         case "mktemp_execute":
-            return lower.contains("&&") || lower.contains(";") || lower.contains("$(")
+            return LOLBinExecutionPolicy.hasTemporaryPayloadExecution(arguments: arguments)
         default:
             return true
         }
