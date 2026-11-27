@@ -507,4 +507,29 @@ final class RansomwareAtomicRenameTests: XCTestCase {
             ))
         }
     }
+    func testFileProviderBackupDatabasePropagationRequiresExactNamesAndBoundaries() {
+        let source = "/Users/test/Library/Application Support/FileProvider/EC428E58-1A69-4DFA-A6EA-AF1072C33F5A/wharf/wharf/propagate/253740175"
+        let root = "/Users/test/Library/Mobile Documents/57T9237FN3~net~whatsapp~WhatsApp/Accounts/123456/backup/"
+        let destination = root + "BackedUpStorageDatabase.sqlite.enc"
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.fileproviderd") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: signer, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertTrue(routine(source, root + "ExtChatDatabase.sqlite.enc"))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.apple.bird"))
+        for dst in [destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/"),
+                    destination.replacingOccurrences(of: "57T9237FN3", with: "OTHERTEAM"),
+                    destination.replacingOccurrences(of: "123456", with: "not-an-account"),
+                    destination.replacingOccurrences(of: "/backup/", with: "/documents/"),
+                    root + "other.sqlite.enc", root + "nested/BackedUpStorageDatabase.sqlite.enc",
+                    destination + ".locked", "/Users/test/Documents/document.enc"] {
+            XCTAssertFalse(routine(source, dst))
+        }
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "253740175", with: "not-a-slot"), destination))
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "EC428E58-1A69-4DFA-A6EA-AF1072C33F5A", with: "invalid"), destination))
+        XCTAssertFalse(routine("/Users/test/Documents/document.txt", destination))
+    }
+
 }
