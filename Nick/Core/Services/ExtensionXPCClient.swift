@@ -1380,7 +1380,7 @@ public final class ExtensionXPCClient: NSObject {
         }
         guard threatEventIDsInFlight.insert(event.id).inserted else { return .failed }
         defer { threatEventIDsInFlight.remove(event.id) }
-        guard let finding = ExtensionFinding(event: event), let findingHandler else { return .failed }
+        guard let findingHandler, let finding = await ExtensionFinding.resolve(event: event) else { return .failed }
         let outcome = await findingHandler(finding)
         switch outcome {
         case .persisted(let requiredGeneration), .coalesced(let requiredGeneration):
@@ -1485,7 +1485,12 @@ public final class ExtensionXPCClient: NSObject {
     private func receive(_ event: ESEvent, deliverToEngine: Bool = true) {
         if !events.contains(where: { $0.id == event.id }) { events.insert(event, at: 0) }
         trim(&events)
-        if deliverToEngine, let finding = ExtensionFinding(event: event) { deliver(finding) }
+        if deliverToEngine {
+            Task { [weak self] in
+                guard let finding = await ExtensionFinding.resolve(event: event) else { return }
+                self?.deliver(finding)
+            }
+        }
     }
 
     private func receive(_ report: RemediationReport, deliverToEngine: Bool = true) {
@@ -1850,7 +1855,22 @@ struct ExtensionFinding: Sendable {
     let score: Double
     let recommendedAction: String
 
-    init?(event: ESEvent) {
+    private static let signingQueue = DispatchQueue(label: "com.ehsanazish.nick.finding-signatures", qos: .utility)
+
+    /// Presentation signature inspection can touch disk and Security services.
+    /// Keep it off MainActor; the existing ingest/durability path awaits it.
+    static func resolve(event: ESEvent,
+        signingResolver: @escaping @Sendable (String) -> SigningStatus = { SignatureValidator.shared.evaluate(binaryPath: $0) }
+    ) async -> ExtensionFinding? {
+        await withCheckedContinuation { continuation in
+            signingQueue.async {
+                continuation.resume(returning: ExtensionFinding(event: event, signingResolver: signingResolver))
+            }
+        }
+    }
+
+    init?(event: ESEvent,
+          signingResolver: (String) -> SigningStatus = { SignatureValidator.shared.evaluate(binaryPath: $0) }) {
         guard event.decision == .deny || event.threatName != nil else { return nil }
         let filePath = event.filePath ?? event.processPath
         let isTamper = event.threatFamily == "tamper"
@@ -1904,11 +1924,11 @@ struct ExtensionFinding: Sendable {
             // ES message identity describes the pre-exec actor. Resolve the
             // target independently so `gh -> security` is presented as
             // `security, via gh` with security's signer.
-            signingStatus = SignatureValidator.shared.evaluate(binaryPath: actorPath)
+            signingStatus = signingResolver(actorPath)
         } else if let teamID = event.teamID, !teamID.isEmpty {
             signingStatus = .signed(teamID: teamID, signingID: event.signingID)
         } else if !actorPath.isEmpty {
-            signingStatus = SignatureValidator.shared.evaluate(binaryPath: actorPath)
+            signingStatus = signingResolver(actorPath)
         } else {
             signingStatus = .unknown
         }
