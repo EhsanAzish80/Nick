@@ -201,7 +201,7 @@ final class RansomwareDetector {
         var canaryTouched = false
         var strongEvidence = false
 
-        if canaryManager.isCanary(path: source) {
+        if canaryManager.isProtectedRenameSource(path: source) {
             indicators.append("Canary file renamed: \(source)")
             confidence += 0.6
             canaryTouched = true
@@ -314,13 +314,19 @@ final class CanaryFileManager {
 
     private let homeDirectories: [URL]
     private let installationToken: String
-    private let protectedFolderNames = ["Desktop", "Documents", "Downloads", "Pictures"]
+    private static let protectedFolderNames = ["Desktop", "Documents", "Downloads", "Pictures"]
+    private let protectedDirectoryPaths: Set<String>
 
     init(
         homeDirectories: [URL] = UserHomeDirectoryResolver.humanHomeDirectories(),
         tokenURL: URL = URL(fileURLWithPath: "/Library/Application Support/com.ehsanazish.nick/state/canary-token")
     ) {
         self.homeDirectories = homeDirectories
+        self.protectedDirectoryPaths = CanaryRenamePolicy.directoryAliases(
+            for: homeDirectories.flatMap { home in
+                Self.protectedFolderNames.map { home.appendingPathComponent($0, isDirectory: true) }
+            }
+        )
         self.installationToken = Self.loadOrCreateInstallationToken(at: tokenURL)
     }
 
@@ -330,7 +336,7 @@ final class CanaryFileManager {
     /// Safe to call multiple times — skips directories where a canary already exists.
     func deployCanaries() {
         for homeDirectory in homeDirectories {
-            for folderName in protectedFolderNames {
+            for folderName in Self.protectedFolderNames {
                 let directory = homeDirectory.appendingPathComponent(folderName, isDirectory: true)
                 guard FileManager.default.fileExists(atPath: directory.path) else { continue }
 
@@ -374,6 +380,16 @@ final class CanaryFileManager {
             return true
         }
         return isManagedCanaryName((path as NSString).lastPathComponent)
+    }
+
+    /// Preserve live-source rename detection without mistaking a backup copy
+    /// for the deployed file. No actor, volume-name or backup-process exemption.
+    func isProtectedRenameSource(path: String) -> Bool {
+        CanaryRenamePolicy.isProtectedSource(
+            path: path, registeredPaths: canaryPaths,
+            protectedDirectories: protectedDirectoryPaths,
+            matchesManagedName: isManagedCanaryName
+        )
     }
 
     static let documentCanaryPrefix = "Nick Canary - do not modify "
