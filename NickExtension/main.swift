@@ -37,7 +37,10 @@ let extensionHealthSession = ExtensionHealthSession(
     previousHealth: previousExtensionHealth
 )
 
-let runtimeDiagnosticMonitor = RuntimeDiagnosticMonitor(previous: previousExtensionHealth)
+let runtimeDiagnosticMonitor = RuntimeDiagnosticMonitor(previous: previousExtensionHealth,
+    current: extensionHealthSession.fields.merging([
+        "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+    ]) { _, new in new })
 
 /// Publishes a deliberately short-lived proof that the Endpoint Security client
 /// is running. The container app treats this as stale after 30 seconds, so a

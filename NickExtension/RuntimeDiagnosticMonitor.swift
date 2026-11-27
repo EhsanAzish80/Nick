@@ -12,13 +12,16 @@ final class RuntimeDiagnosticMonitor: @unchecked Sendable {
     private var fields: [String: Any] = ["kernelDeadlineTerminationCount": NSNull(), "kernelDeadlineTerminationStatus": "not-yet-inspected"]
     private var reportCache: [String: (stamp: String, match: EndpointTerminationReport.Match?)] = [:]
     private let previous: [String: Any]?
+    private let current: [String: Any]
     private let currentBootSessionUUID = ProtectionBootIdentity.sessionUUID()
     private static let machNanosecondsPerTick: Double = {
         var base = mach_timebase_info_data_t(); mach_timebase_info(&base)
         return Double(base.numer) / Double(base.denom)
     }()
     private static let logger = Logger(subsystem: "com.ehsanazish.nick.NickExtension", category: "RuntimeDiagnostics")
-    init(previous: [String: Any]?) { self.previous = previous }
+    init(previous: [String: Any]?, current: [String: Any]) {
+        self.previous = previous; self.current = current
+    }
     func start() {
         // A diagnostic observer must not depend on availability of the GCD
         // pool whose starvation is being investigated. Enforcement watchdogs
@@ -86,7 +89,7 @@ final class RuntimeDiagnosticMonitor: @unchecked Sendable {
         result["mountStartupDiagnostics"] = USBMountDiagnostics.shared.snapshot()
         result["allocationLoggingEnvironmentPresent"] = getenv("MallocStackLogging") != nil
         result["allocationLoggingStatus"] = "environment observation only; not proof logging is active; never attaches or changes launch settings"
-        result["diagnosticBuildPurpose"] = "5112 mount startup tracing; remaining memory and deadline causes unproven"
+        result["diagnosticBuildPurpose"] = "bounded health diagnostics; historical termination causes remain unproven"
         return result
     }
     private func inspectReports() {
@@ -133,12 +136,17 @@ final class RuntimeDiagnosticMonitor: @unchecked Sendable {
             reportCache[name] = (stamp, match)
             if let match { matches[match.incidentID] = match }
         }
+        let counts = EndpointTerminationReport.counts(Array(matches.values), current: current, previous: previous)
         let previousMatch = previous.flatMap { session in matches.values.first { EndpointTerminationReport.matchesPrevious($0, session: session) } }
         lock.withLock {
             fields["kernelDeadlineTerminationCount"] = failed || capped ? NSNull() : matches.count
             fields["kernelDeadlineTerminationReportsObserved"] = matches.count
+            fields["kernelDeadlineTerminationHistoricalReportsObserved"] = counts.historical
+            fields["kernelDeadlineTerminationCurrentBuildReportsObserved"] = counts.currentBuild
+            fields["kernelDeadlineTerminationCurrentProcessReportsObserved"] = counts.currentProcess
+            fields["kernelDeadlineTerminationPreviousSessionReportsObserved"] = counts.previousSession
             fields["kernelDeadlineTerminationStatus"] = failed ? "partial-unreadable-reports" : capped ? "partial-bounded-inspection" : "inspected-available-reports"
-            fields["kernelDeadlineTerminationScope"] = "deduplicated matching IPS reports in bounded directory inspection; missing reports cannot prove zero kills"
+            fields["kernelDeadlineTerminationScope"] = "legacy Count is historical available reports, not current-process kills; scoped Observed fields match build/PID/start; bounded inspection and missing reports cannot prove zero kills"
             fields["terminationReportsInspectedAt"] = Date().timeIntervalSince1970
             fields["terminationReportBytesReadThisPass"] = totalBytes
             if let previousMatch {
