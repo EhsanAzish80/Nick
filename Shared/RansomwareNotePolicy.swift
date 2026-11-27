@@ -281,7 +281,8 @@ enum AppleSyncRenamePolicy {
         guard destination.hasPrefix(root) else { return false }
         let p = String(destination.dropFirst(root.count)).split(separator: "/").map(String.init)
         return p.count == 3 && !p[0].isEmpty && p[0].allSatisfy(\.isNumber)
-            && p[1] == "backup" && p[2] == "ExtChatDatabase.sqlite.enc"
+            && p[1] == "backup"
+            && ["ExtChatDatabase.sqlite.enc", "BackedUpStorageDatabase.sqlite.enc"].contains(p[2])
     }
 
     private static func isSimulatorMaintenance(_ source: String, _ destination: String, asset: Bool) -> Bool {
