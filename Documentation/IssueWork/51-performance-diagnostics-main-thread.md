@@ -1,44 +1,21 @@
-# Issue #51: Investigate Performance Diagnostics main-thread work
+# Issue #51: Main-thread signature inspection
 
-Related issue: [#51](https://github.com/EhsanAzish80/Nick/issues/51)
+Related: #51. Source fix validated locally; installed warning validation remains pending. The historical issue stays open.
 
-## Current status
+## Concrete blocking path found
 
-Draft work plan only. No runtime implementation, reproduction, fix or test pass is claimed by this commit. The original issue remains open. Base checkpoint: `171d1a8b3aea0c59628cae5817bc95d98c4b3951`.
+MainActor ExtensionXPCClient.receiveThreat constructs ExtensionFinding synchronously. For exec-target or missing-kernel-team evidence, its initializer calls SignatureValidator.evaluate, which performs file identity work and Security-framework inspection on a cache miss. The ordinary receive(event:) path constructs the same finding synchronously. This is concrete main-thread disk/Security work. The historical warning alone does not prove this was the source of every five-minute warning or all reported UI stalls.
 
-## Problem and scope
+The current edit routes both production event paths through a dedicated serial signature-work queue; the existing MainActor finding handler and durability boundary still await the resolved finding. Signature requirements, result classification and endpoint enforcement are unchanged. The synchronous constructor remains available for controlled tests.
 
-Move Performance Diagnostics work off the main thread
+## Pending validation
 
-Identify the exact API and caller producing the recorded main-thread runtime warning; move proven blocking work off-main with UI publication on MainActor.
+- [x] Xcode UI: all 31 ExtensionXPCClientIncidentTests passed (2026-11-27 14:50 local), including off-main resolver, MainActor responsiveness under blocked work and equivalent evidence fields.
+- [x] Existing ingest/persistence regressions in that class passed. A preceding full run passed 1,107 tests with one incomplete synthetic fixture failure; the corrected fixture passed in the class rerun. Final integrated full suite remains required.
+- [x] Both production event constructors use the asynchronous path.
+- [ ] Fresh CI passes on the tested commit.
+- [ ] Combined private build: bounded Diagnostics refresh and normal ingestion, checking warning output.
 
-## Initial code review targets
+Four tests in the focused run still emit the old warning while directly using the synchronous constructor. Do not claim those warnings or the historical root cause are resolved without evidence. No new soak, profiler attachment, settings change, main merge or public release.
 
-These are investigation entry points, not established causes:
-
-- `Nick/Core/PerformanceEngine/PerformanceMonitor.swift`
-- `Nick/Core/PerformanceEngine/PerformanceCoordinator.swift`
-- `Nick/App/Dashboard/PerformanceView.swift`
-
-## Scope boundaries
-
-Do not assume this explains #139. Keep diagnostics value/refresh semantics intact; no speculative changes based only on the warning text.
-
-This PR owns only issue #51. Keep implementation, tests and validation evidence in this branch. If shared code needs an earlier sibling change, document that dependency and rebase explicitly rather than bundling other issues into this PR.
-
-## Acceptance and validation
-
-The issue remains the source of the full report and acceptance criteria. Initial checklist:
-
-- [ ] Identify the API call and call path responsible for the fault.
-- [ ] Move the work off the main thread while keeping UI state updates on `MainActor` where required.
-- [ ] Add a regression test where practical.
-- [ ] Verify the warning is absent in focused bounded Diagnostics refresh/reopen validation; the original issue’s 30-minute window is historical and no new soak is scheduled by this draft.
-- [ ] Confirm Diagnostics values and refresh behavior remain correct after the change.
-
-- [ ] Record the confirmed cause and resulting implementation in this document.
-- [ ] Run relevant Xcode tests when implementation exists; do not label the planning commit as a tested fix.
-- [ ] Review protection and detection impact, including negative cases where applicable.
-- [ ] Keep this PR draft until the issue-specific evidence is complete.
-
-No merge, release or additional live workload is requested by this planning checkpoint. Existing evidence and dSYMs remain preserved. Use synthetic fixtures, bounded diagnostics and redacted public evidence; do not post credentials, personal paths or raw private reports.
+Full result and hashes: ignored `build/IssueValidation/51/`. No protection or trust-policy changes.

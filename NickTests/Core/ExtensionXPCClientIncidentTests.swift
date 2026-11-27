@@ -764,6 +764,49 @@ final class ExtensionXPCClientIncidentTests: XCTestCase {
         XCTAssertEqual(client.ackWithoutPersistenceCount, 0)
     }
 
+    @MainActor
+    func testFindingSignatureResolutionRunsOffMainAndPreservesEvidence() async throws {
+        let event = ESEvent(eventType: .authExec, processPath: "/usr/bin/parent", pid: 42,
+            parentPid: 1, filePath: "/usr/bin/target", decision: .allow,
+            threat: .init(threatName: "Synthetic command", threatFamily: "lolbin-behavior",
+                metadata: ["execTargetPath": "/usr/bin/target", "detectionKind": "lolbin-behavior", "rule": "synthetic", "ruleTier": "review"]))
+        let expected = ExtensionFinding(event: event, signingResolver: { _ in
+            .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.target")
+        })
+        let resolved = await ExtensionFinding.resolve(event: event) { path in
+            XCTAssertFalse(Thread.isMainThread)
+            XCTAssertEqual(path, "/usr/bin/target")
+            return .signed(teamID: "APPLE_PLATFORM", signingID: "com.apple.target")
+        }
+        let finding = try XCTUnwrap(resolved)
+        XCTAssertEqual(finding.signal.id, expected?.signal.id)
+        XCTAssertEqual(finding.signal.metadata, expected?.signal.metadata)
+        XCTAssertEqual(finding.signal.processInfo?.signingStatus, expected?.signal.processInfo?.signingStatus)
+        XCTAssertEqual(finding.score, expected?.score)
+    }
+
+    @MainActor
+    func testSlowFindingResolverDoesNotBlockMainActor() async throws {
+        let started = expectation(description: "resolver working")
+        let unblock = DispatchSemaphore(value: 0)
+        let event = ESEvent(eventType: .authOpen, processPath: "/tmp/synthetic-reader", pid: 44,
+            parentPid: 1, filePath: "/tmp/synthetic", decision: .deny,
+            threat: .init(threatName: "Synthetic denial", threatFamily: "credential-access", metadata: [:]))
+        let task = Task {
+            await ExtensionFinding.resolve(event: event) { _ in
+                XCTAssertFalse(Thread.isMainThread)
+                started.fulfill()
+                _ = unblock.wait(timeout: .now() + 2)
+                return .unknown
+            }
+        }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertTrue(Thread.isMainThread)
+        unblock.signal()
+        let finding = await task.value
+        XCTAssertNotNil(finding)
+    }
+
 }
 
 private final class LockedDataRecorder: @unchecked Sendable {
@@ -777,4 +820,5 @@ private final class LockedDataRecorder: @unchecked Sendable {
     func values() -> [Data] {
         lock.withLock { recorded }
     }
+
 }
