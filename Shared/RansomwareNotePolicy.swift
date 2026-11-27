@@ -225,7 +225,8 @@ enum AppleSyncRenamePolicy {
             let expected = suffix == "styl" ? "Resources" : (["iconconfigpack", "icondatapack"].contains(suffix) ? "RegionalResources" : "")
             return !expected.isEmpty && (destination as NSString).deletingLastPathComponent == root + expected
         case "com.apple.mobileassetd":
-            return isSimulatorMaintenance(source, destination, asset: true)
+            return isHostAssetFinalization(source, destination)
+                || isSimulatorMaintenance(source, destination, asset: true)
         case "com.apple.springboard":
             return isSimulatorMaintenance(source, destination, asset: false)
         case "com.apple.parsec-fbf":
@@ -268,6 +269,19 @@ enum AppleSyncRenamePolicy {
         let p = String(destination.dropFirst(root.count)).split(separator: "/").map(String.init)
         return p.count == 3 && !p[0].isEmpty && p[0].allSatisfy(\.isNumber)
             && p[1] == "backup" && p[2] == "ExtChatDatabase.sqlite.enc"
+    }
+
+    private static func isHostAssetFinalization(_ source: String, _ destination: String) -> Bool {
+        let root = "/System/Library/AssetsV2/"
+        guard (source as NSString).deletingLastPathComponent == root + "staging",
+              destination.hasPrefix(root) else { return false }
+        let parts = destination.dropFirst(root.count).split(separator: "/").map(String.init)
+        guard parts.count == 2, parts[0].hasPrefix("com_apple_MobileAsset_"),
+              parts[0].count > "com_apple_MobileAsset_".count,
+              (parts[1] as NSString).pathExtension == "asset" else { return false }
+        let hash = (parts[1] as NSString).deletingPathExtension
+        return hash.count == 40 && hash.allSatisfy(\.isHexDigit)
+            && (source as NSString).lastPathComponent == parts[0] + "." + hash
     }
 
     private static func isSimulatorMaintenance(_ source: String, _ destination: String, asset: Bool) -> Bool {

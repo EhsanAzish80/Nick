@@ -507,4 +507,29 @@ final class RansomwareAtomicRenameTests: XCTestCase {
             ))
         }
     }
+    func testHostMobileAssetFinalizationRequiresMatchingTypeAndHash() {
+        let root = "/System/Library/AssetsV2/"
+        let type = "com_apple_MobileAsset_VideoAppsMusicAssets3"
+        let hash = "5d84dd6e091d3a5f0a9f48d2267bbde2e47bf6dd"
+        let source = root + "staging/" + type + "." + hash
+        let destination = root + type + "/" + hash + ".asset"
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.mobileassetd") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: signer, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.example.mobileassetd"))
+        for dst in [destination.replacingOccurrences(of: hash, with: String(repeating: "0", count: 40)),
+                    destination.replacingOccurrences(of: type, with: "com_apple_MobileAsset_Other"),
+                    destination.replacingOccurrences(of: "/System/", with: "/Library/"),
+                    destination + ".locked", root + type + "/nested/" + hash + ".asset",
+                    "/Users/test/Documents/file.asset"] {
+            XCTAssertFalse(routine(source, dst))
+        }
+        XCTAssertFalse(routine(root + "staging/nested/" + type + "." + hash, destination))
+        XCTAssertFalse(routine(source.replacingOccurrences(of: hash, with: "not-a-hash"), destination.replacingOccurrences(of: hash, with: "not-a-hash")))
+        XCTAssertFalse(routine("/Users/test/Documents/file", destination))
+    }
+
 }
