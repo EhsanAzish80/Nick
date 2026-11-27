@@ -2,6 +2,47 @@ import XCTest
 @testable import Nick
 
 final class CredentialAccessPolicyTests: XCTestCase {
+    func testWhatsAppOwnContainerCookiesRequireValidatedActorIdentity() {
+        let path = "/Users/test/Library/Containers/net.whatsapp.WhatsApp/Data/Library/Cookies/Cookies.binarycookies"
+        XCTAssertEqual(CredentialAccessPolicy.sensitiveStore(at: path), .browserCookies)
+        func identity(validated: Bool) -> CredentialAccessPolicy.ValidatedIdentity {
+            .init(bundleID: "net.whatsapp.WhatsApp", teamID: "57T9237FN3",
+                  signingValidated: validated, isApplePlatform: false)
+        }
+        let validated = identity(validated: true)
+        XCTAssertTrue(CredentialAccessPolicy.ownsStore(path: path, identity: validated))
+        XCTAssertNil(CredentialAccessPolicy.findingForOpen(
+            path: path, responsibleIdentity: nil, actorIdentity: validated
+        ), "A validated main app must not depend on responsible-process attribution")
+        XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: path, identity: identity(validated: false)))
+        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+            path: path, responsibleIdentity: nil, actorIdentity: identity(validated: false)
+        ), "Bundle and team strings without validation do not establish ownership")
+    }
+
+    func testWhatsAppOwnershipDoesNotExemptOtherAppsOrNeighboringContainers() {
+        let path = "/Users/test/Library/Containers/net.whatsapp.WhatsApp/Data/Library/Cookies/Cookies.binarycookies"
+        let whatsapp = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "net.whatsapp.WhatsApp", teamID: "57T9237FN3",
+            signingValidated: true, isApplePlatform: false
+        )
+        let other = CredentialAccessPolicy.ValidatedIdentity(
+            bundleID: "com.example.Other", teamID: "OTHERTEAM",
+            signingValidated: true, isApplePlatform: false
+        )
+        XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: path, identity: other))
+        XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+            path: path, responsibleIdentity: whatsapp, actorIdentity: other
+        ), "An unrelated actor does not inherit a responsible app's store access")
+        for container in ["net.whatsapp.WhatsApp.other", "com.example.Other"] {
+            let otherPath = "/Users/test/Library/Containers/\(container)/Data/Library/Cookies/Cookies.binarycookies"
+            XCTAssertFalse(CredentialAccessPolicy.ownsStore(path: otherPath, identity: whatsapp))
+            XCTAssertNotNil(CredentialAccessPolicy.findingForOpen(
+                path: otherPath, responsibleIdentity: nil, actorIdentity: whatsapp
+            ))
+        }
+    }
+
     func testChromeAUTHOwnershipAndValidatedContainingHelper() {
         let chrome = CredentialAccessPolicy.ValidatedIdentity(bundleID: "com.google.Chrome", teamID: "EQHXZ8M8AV", signingValidated: true, isApplePlatform: false)
         let helper = CredentialAccessPolicy.ValidatedIdentity(bundleID: "com.google.Chrome.helper", teamID: "EQHXZ8M8AV", signingValidated: true, isApplePlatform: false)

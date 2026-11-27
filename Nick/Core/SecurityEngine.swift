@@ -901,6 +901,7 @@ final class SecurityEngine {
     /// Clears all collected data and alerts.
     func reset() async {
         alerts = []
+        userFacingAlerts = []
         auditResults = []
         firewallAllowlist = nil
         persistenceItems = []
