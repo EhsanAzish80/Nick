@@ -507,4 +507,27 @@ final class RansomwareAtomicRenameTests: XCTestCase {
             ))
         }
     }
+    func testReportedWhatsAppFrameworkModelStagingRequiresValidatedTeam() {
+        let root = "/Users/test/Library/Caches/net.whatsapp.WhatsApp/org.sparkle-project.Sparkle/Installation/R4c2lLhnc/WhatsApp.app/Contents/Frameworks/SharedModules.framework/Versions/A/Resources/BizModel.momd/"
+        let source = root + ".BC.T_Kp4VWg"
+        let destination = root + "BizModel_2.22.19.mom"
+        func routine(_ src: String, _ dst: String, apple: Bool = true, team: String? = "57T9237FN3") -> Bool {
+            ScopedUpdaterRenamePolicy.matchesWhatsAppStagedResourceRename(
+                actorIsAppleDitto: apple, validatedBundleTeam: team, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, apple: false))
+        XCTAssertFalse(routine(source, destination, team: nil))
+        XCTAssertFalse(routine(source, destination, team: "OTHERTEAM"))
+        XCTAssertFalse(routine(source, destination + ".locked"))
+        XCTAssertFalse(routine(source, destination.replacingOccurrences(of: "R4c2lLhnc", with: "different-slot")))
+        XCTAssertFalse(routine(source.replacingOccurrences(of: ".BC.T_", with: "input-"), destination))
+        for marker in ["net.whatsapp.WhatsApp", "org.sparkle-project.Sparkle", "WhatsApp.app", "Resources", "BizModel.momd"] {
+            let src = source.replacingOccurrences(of: marker, with: "unrelated")
+            let dst = destination.replacingOccurrences(of: marker, with: "unrelated")
+            XCTAssertFalse(routine(src, dst), marker)
+        }
+        XCTAssertFalse(routine("/Users/test/Documents/.BC.T_input", "/Users/test/Documents/model.mom"))
+    }
+
 }
