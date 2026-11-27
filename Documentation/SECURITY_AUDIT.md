@@ -5,7 +5,7 @@
 The signed/notarized candidate passed 995 Swift tests, 52 Python tests and six
 installed synthetic prevention cases. This is a patch-release review, not an
 independent malware-effectiveness certification; see
-[the final checklist](../5.1.1-CHECKLIST.md) for evidence boundaries.
+[the final checklist](Releases/5.1.1-CHECKLIST.md) for evidence boundaries.
 
 - Credential AUTH_OPEN protection is opt-in and requires a high-confidence rule
   authorized by valid signed intelligence. Validated own-store readers and

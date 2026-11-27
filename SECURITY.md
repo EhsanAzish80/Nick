@@ -61,7 +61,7 @@ coordinate disclosure timing for confirmed vulnerabilities.
 
 ## Security design and audit evidence
 
-- [Architecture and trust boundaries](ARCHITECTURE.md)
+- [Architecture and trust boundaries](Documentation/ARCHITECTURE.md)
 - [Detailed security audit record](Documentation/SECURITY_AUDIT.md)
 - [Release verification checklist](Documentation/RELEASE_CHECKLIST.md)
 
