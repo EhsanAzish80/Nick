@@ -31,3 +31,7 @@ Each issue keeps its own `fix/issue-*` branch and draft pull request. Add an iss
 Integrated: #141, #142, #143, #150, #151, #148 and #149, plus the independently CI-validated #145/#146/#147 heads via signed local merge commits. Shared test-file conflicts retained every sibling test. Xcode UI combined rename run: 29 passed, zero failures/skips/warnings (2026-11-27 15:06 local); full result and hashes in ignored `build/IssueValidation/rename-integration/`.
 
 #144 updater coverage, #153 main-thread scheduling, #154 notification refresh and #152 scoped termination reporting remain to collect after their gates. #129/#130/#137 historical fallthrough causes and #122 full-workload termination resolution remain explicitly open. A combined private build is authorized after final integrated validation; no main merge, public release, appcast or website change.
+
+## Private candidate checkpoint
+
+All 14 issue heads are collected locally, each in its own signed branch/PR history. Final Xcode UI suite on the integrated source: **1,120 passed, zero failed/skipped**, with 11 existing synchronous-constructor runtime warnings. Results/hashes: `build/IssueValidation/5.1.7-integrated/`. Private 5120 configuration and installed checklist: `Validation/private-build-5120/`. Current-head CI and packaging remain separate gates; public release and main merge are not authorized.

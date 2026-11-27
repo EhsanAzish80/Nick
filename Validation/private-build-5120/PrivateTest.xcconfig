@@ -1,0 +1,4 @@
+// Local private candidate only; never submitted to the appcast by this configuration.
+CURRENT_PROJECT_VERSION = 5120
+MARKETING_VERSION = 5.1.7
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) NICK_PRIVATE_DIAGNOSTICS
