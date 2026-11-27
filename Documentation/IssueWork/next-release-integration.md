@@ -35,3 +35,5 @@ Integrated: #141, #142, #143, #150, #151, #148 and #149, plus the independently 
 ## Private candidate checkpoint
 
 All 14 issue heads are collected locally, each in its own signed branch/PR history. Final Xcode UI suite on the integrated source: **1,120 passed, zero failed/skipped**, with 11 existing synchronous-constructor runtime warnings. Results/hashes: `build/IssueValidation/5.1.7-integrated/`. Private 5120 configuration and installed checklist: `Validation/private-build-5120/`. Current-head CI and packaging remain separate gates; public release and main merge are not authorized.
+
+Final review restored the non-finding pre-task admission guard in #153; all 32 focused Xcode tests passed after this last change. Private candidate source must include that safeguard; the earlier interrupted archive is not installable evidence.

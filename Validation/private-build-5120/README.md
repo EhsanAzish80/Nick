@@ -4,7 +4,7 @@ This is an installed-test candidate, not public release approval. Build with `Pr
 
 ## Source and local evidence
 
-The integrated source passed all 1,120 tests through Xcode on the Mac Studio on 2026-11-27. Zero failures/skips; 11 existing runtime warnings remain in direct synchronous-constructor tests. Full xcresult and SHA-256 manifest are preserved locally under ignored `build/IssueValidation/5.1.7-integrated/`.
+The integrated source passed all 1,120 tests through Xcode on the Mac Studio on 2026-11-27. A final finding-only scheduling safeguard then passed all 32 incident-ingestion tests, including its new non-finding admission regression; its current-head CI is a separate gate. Zero failures/skips; 11 existing runtime warnings remain in direct synchronous-constructor tests. Full xcresult and SHA-256 manifest are preserved locally under ignored `build/IssueValidation/5.1.7-integrated/`.
 
 The source includes independently scoped PRs for GUI activity/activation, canary-copy renames, simulator/XCTest resource finalization, FileProvider backup names, host MobileAsset and CloudDocs resources, shell execution evidence, off-main finding signature resolution, durable notification-count refresh, and scoped termination-report diagnostics. WhatsApp ownership/updater and SSH PRs also add conservative regression coverage; they do not establish the cause of their historical fallthroughs.
 
