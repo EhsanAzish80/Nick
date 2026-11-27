@@ -507,6 +507,29 @@ final class RansomwareAtomicRenameTests: XCTestCase {
             ))
         }
     }
+    func testXCTestSpringBoardFinalizationRequiresExactPairedScope() {
+        let root = "/Users/test/Library/Developer/XCTestDevices/E7F31F29-18A3-4CF6-841F-27ED91579EC5/data/"
+        let name = "Runner@@en_TR_cache.cpbitmap"
+        let source = root + "tmp/" + name + ".CBSxlg"
+        let destination = root + "Library/Caches/MappedImageCache/com.apple.springboard-ContentCache/" + name
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.springboard") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: signer, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.example.springboard"))
+        XCTAssertFalse(routine(source, destination, signer: "com.apple.mobileassetd"))
+        for dst in [destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/"),
+                    destination.replacingOccurrences(of: "E7F31F29-18A3-4CF6-841F-27ED91579EC5", with: UUID().uuidString),
+                    destination.replacingOccurrences(of: "com.apple.springboard-", with: "com.example."),
+                    destination + ".locked", "/Users/test/Documents/" + name] {
+            XCTAssertFalse(routine(source, dst))
+        }
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "E7F31F29-18A3-4CF6-841F-27ED91579EC5", with: "invalid"), destination))
+        XCTAssertFalse(routine(root + "tmp/unrelated.cpbitmap.tmp", destination))
+        XCTAssertFalse(routine(root + "Documents/" + name + ".tmp", destination))
+    }
 
     func testSimulatorGeoServicesRefreshUsesExactDeviceAndResourceKinds() {
         let root = "/Users/test/Library/Developer/CoreSimulator/Devices/4242F10B-F3B4-462E-81B4-24045B0DEC08/data/"

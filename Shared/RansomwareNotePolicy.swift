@@ -286,10 +286,17 @@ enum AppleSyncRenamePolicy {
 
     private static func isSimulatorMaintenance(_ source: String, _ destination: String, asset: Bool) -> Bool {
         let p = URL(fileURLWithPath: source).pathComponents
-        guard p.count > 8, p[1] == "Users",
-              p[3...6].elementsEqual(["Library", "Developer", "CoreSimulator", "Devices"]),
-              UUID(uuidString: p[7]) != nil, p[8] == "data" else { return false }
-        let root = "/" + p[1...8].joined(separator: "/") + "/"
+        guard p.count > 7, p[1] == "Users", p[3] == "Library", p[4] == "Developer" else { return false }
+        let dataIndex: Int
+        if p.count > 8, p[5...6].elementsEqual(["CoreSimulator", "Devices"]),
+           UUID(uuidString: p[7]) != nil, p[8] == "data" {
+            dataIndex = 8
+        } else if !asset, p[5] == "XCTestDevices", UUID(uuidString: p[6]) != nil, p[7] == "data" {
+            // XCTest creates its own device root; only SpringBoard cache
+            // finalization qualifies, never generic assets or device activity.
+            dataIndex = 7
+        } else { return false }
+        let root = "/" + p[1...dataIndex].joined(separator: "/") + "/"
         guard destination.hasPrefix(root) else { return false }
         if !asset {
             let name = (destination as NSString).lastPathComponent
