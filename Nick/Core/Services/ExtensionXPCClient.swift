@@ -1485,7 +1485,7 @@ public final class ExtensionXPCClient: NSObject {
     private func receive(_ event: ESEvent, deliverToEngine: Bool = true) {
         if !events.contains(where: { $0.id == event.id }) { events.insert(event, at: 0) }
         trim(&events)
-        if deliverToEngine {
+        if deliverToEngine, event.decision == .deny || event.threatName != nil {
             Task { [weak self] in
                 guard let finding = await ExtensionFinding.resolve(event: event) else { return }
                 self?.deliver(finding)
@@ -1862,7 +1862,8 @@ struct ExtensionFinding: Sendable {
     static func resolve(event: ESEvent,
         signingResolver: @escaping @Sendable (String) -> SigningStatus = { SignatureValidator.shared.evaluate(binaryPath: $0) }
     ) async -> ExtensionFinding? {
-        await withCheckedContinuation { continuation in
+        guard event.decision == .deny || event.threatName != nil else { return nil }
+        return await withCheckedContinuation { continuation in
             signingQueue.async {
                 continuation.resume(returning: ExtensionFinding(event: event, signingResolver: signingResolver))
             }

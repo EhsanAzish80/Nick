@@ -19,3 +19,7 @@ The current edit routes both production event paths through a dedicated serial s
 Four tests in the focused run still emit the old warning while directly using the synchronous constructor. Do not claim those warnings or the historical root cause are resolved without evidence. No new soak, profiler attachment, settings change, main merge or public release.
 
 Full result and hashes: ignored `build/IssueValidation/51/`. No protection or trust-policy changes.
+
+## Final admission review
+
+Before private packaging, review found the ordinary receive path could create a task for a non-finding. Restore its pre-task denial/threat guard and reject non-findings before entering the signature queue. Xcode UI: all 32 incident-ingestion tests passed on 2026-11-27 at 15:14 local, including a non-finding resolver-must-not-run regression; four direct-constructor runtime warnings remain. Evidence: `build/IssueValidation/51-final-admission/`. The initial unshipped archive attempt was stopped and is not the final candidate.
