@@ -286,4 +286,31 @@ final class LOLBinExecutionPolicyTests: XCTestCase {
             parentHasNetworkSocket: true
         ))
     }
+    func testTemporaryOutputsAndWorkspaceDiffDoNotClaimExecution() {
+        for command in [
+            "tmp=$(mktemp)",
+            #"tmp=$(mktemp); git diff > "$tmp"; cat "$tmp"; rm "$tmp""#,
+            "out=$(mktemp); err=$(mktemp); GIT_INDEX_FILE=$out git diff --no-ext-diff >$out 2>$err; cat $out",
+            "tmp=$(mktemp); printf 'example; sh $tmp'",
+            "tmp=$(mktemp); # sh $tmp\ncat $tmp",
+            "tmp=$(mktemp); echo sh $tmp",
+            "tmp=$(mktemp); tmp=/usr/bin/true; $tmp"
+        ] {
+            XCTAssertNil(LOLBinExecutionPolicy.finding(executablePath: "/bin/bash", arguments: ["bash", "-c", command]), command)
+        }
+    }
+
+    func testConcreteTemporaryPayloadInvocationRemainsDetected() {
+        for command in [
+            #"tmp=$(mktemp); chmod +x "$tmp"; "$tmp""#,
+            #"tmp=$(/usr/bin/mktemp -t payload); /bin/sh "${tmp}""#,
+            "tmp=`mktemp`; source $tmp",
+            "export tmp=$(mktemp) && exec python3 $tmp",
+            #"tmp=$(mktemp); . "$tmp""#,
+            #"sh "$(mktemp)""#
+        ] {
+            XCTAssertEqual(LOLBinExecutionPolicy.finding(executablePath: "/bin/bash", arguments: ["bash", "-c", command])?.reason, "mktemp_execute", command)
+        }
+    }
+
 }
