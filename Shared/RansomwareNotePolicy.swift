@@ -495,3 +495,32 @@ enum RansomwareRenamePolicy {
         "zip", "gz", "tar", "dmg", "pkg", "app", "bak", "old", "orig", "backup",
     ]
 }
+
+/// A filename copied into a backup is not a deployed canary. This policy is
+/// intentionally limited to rename sources; existing write checks are unchanged.
+enum CanaryRenamePolicy {
+    /// Resolve aliases once during canary setup, never on the ES callback.
+    static func directoryAliases(for directories: [URL]) -> Set<String> {
+        Set(directories.flatMap { directory in
+            [ESCallbackPath.normalize(directory.path),
+             ESCallbackPath.normalize(directory.resolvingSymlinksInPath().path)]
+        })
+    }
+
+    static func isProtectedSource(
+        path: String,
+        registeredPaths: Set<String>,
+        protectedDirectories: Set<String>,
+        matchesManagedName: (String) -> Bool
+    ) -> Bool {
+        guard path.hasPrefix("/") else { return false }
+        let normalized = ESCallbackPath.normalize(path)
+        if registeredPaths.contains(path) || registeredPaths.contains(normalized) { return true }
+        // Preserve detection before deployment has adopted an earlier session's
+        // canaries, but only in the actual protected home directories.
+        guard protectedDirectories.contains((normalized as NSString).deletingLastPathComponent) else {
+            return false
+        }
+        return matchesManagedName(ESCallbackPath.basename(normalized))
+    }
+}
