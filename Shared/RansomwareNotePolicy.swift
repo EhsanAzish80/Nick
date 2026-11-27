@@ -218,6 +218,7 @@ enum AppleSyncRenamePolicy {
                 source, destination, directory: "Library/Application Support/FileProvider"
             )
         case "com.apple.geod":
+            if isSimulatorGeoServicesRefresh(source, destination, suffix: suffix) { return true }
             let src = URL(fileURLWithPath: source).pathComponents
             guard src.count == 9, src[1] == "Users", src[3...7].elementsEqual(["Library", "Containers", "com.apple.geod", "Data", "tmp"]),
                   UUID(uuidString: src[8]) != nil else { return false }
@@ -235,6 +236,19 @@ enum AppleSyncRenamePolicy {
         default:
             return false
         }
+    }
+
+    private static func isSimulatorGeoServicesRefresh(_ source: String, _ destination: String, suffix: String) -> Bool {
+        let p = ["/"] + source.split(separator: "/").map(String.init)
+        guard p.count == 11, p[1] == "Users", !p[2].isEmpty,
+              p[3...6].elementsEqual(["Library", "Developer", "CoreSimulator", "Devices"]),
+              UUID(uuidString: p[7]) != nil, p[8] == "data", p[9] == "tmp",
+              UUID(uuidString: p[10]) != nil else { return false }
+        let folder = suffix == "styl" ? "Resources"
+            : (["iconconfigpack", "icondatapack"].contains(suffix) ? "RegionalResources" : "")
+        guard !folder.isEmpty else { return false }
+        let root = "/" + p[1...8].joined(separator: "/") + "/Library/Caches/GeoServices/"
+        return (destination as NSString).deletingLastPathComponent == root + folder
     }
 
     private static func isSystemIconInstallation(_ source: String, _ destination: String) -> Bool {
@@ -494,4 +508,33 @@ enum RansomwareRenamePolicy {
         "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
         "zip", "gz", "tar", "dmg", "pkg", "app", "bak", "old", "orig", "backup",
     ]
+}
+
+/// A filename copied into a backup is not a deployed canary. This policy is
+/// intentionally limited to rename sources; existing write checks are unchanged.
+enum CanaryRenamePolicy {
+    /// Resolve aliases once during canary setup, never on the ES callback.
+    static func directoryAliases(for directories: [URL]) -> Set<String> {
+        Set(directories.flatMap { directory in
+            [ESCallbackPath.normalize(directory.path),
+             ESCallbackPath.normalize(directory.resolvingSymlinksInPath().path)]
+        })
+    }
+
+    static func isProtectedSource(
+        path: String,
+        registeredPaths: Set<String>,
+        protectedDirectories: Set<String>,
+        matchesManagedName: (String) -> Bool
+    ) -> Bool {
+        guard path.hasPrefix("/") else { return false }
+        let normalized = ESCallbackPath.normalize(path)
+        if registeredPaths.contains(path) || registeredPaths.contains(normalized) { return true }
+        // Preserve detection before deployment has adopted an earlier session's
+        // canaries, but only in the actual protected home directories.
+        guard protectedDirectories.contains((normalized as NSString).deletingLastPathComponent) else {
+            return false
+        }
+        return matchesManagedName(ESCallbackPath.basename(normalized))
+    }
 }
