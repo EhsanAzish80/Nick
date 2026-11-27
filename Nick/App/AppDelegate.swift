@@ -790,6 +790,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Notification activation shares the menu-bar/Dock window path, including
+    /// deminiaturization and SwiftUI scene recreation, before navigation is posted.
+    func openAlert(_ alertID: UUID?, notificationCenter: NotificationCenter = .default) {
+        openMainWindow()
+        let userInfo: [AnyHashable: Any]? = alertID.map { ["alertID": $0] }
+        notificationCenter.post(name: .nickNavigateToAlert, object: nil, userInfo: userInfo)
+    }
+
     /// Opens the SwiftUI Settings scene via the `openSettings` environment action injected
     /// by `MainWindowView.onAppear`.
     @objc private func openSettings() {

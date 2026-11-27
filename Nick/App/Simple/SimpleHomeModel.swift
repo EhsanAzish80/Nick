@@ -517,6 +517,24 @@ struct HomeActivityLine: Identifiable, Equatable {
         builder: UserFacingAlertBuilder = .shared,
         limit: Int = 5
     ) -> [HomeActivityLine] {
+        recent(
+            presentedAlerts: alerts.map { builder.build(from: $0) },
+            quarantine: quarantine, activity: activity, checkedFileDates: checkedFileDates,
+            now: now, calendar: calendar, limit: limit
+        )
+    }
+
+    /// Uses the engine's already-built presentation snapshot. Rendering Home
+    /// must not rerun alert pattern matching for every layout/animation update.
+    static func recent(
+        presentedAlerts: [UserFacingAlert],
+        quarantine: [QuarantineRecord],
+        activity: [ActivityEvent],
+        checkedFileDates: [Date],
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        limit: Int = 5
+    ) -> [HomeActivityLine] {
         var lines: [HomeActivityLine] = []
 
         for record in quarantine {
@@ -528,8 +546,8 @@ struct HomeActivityLine: Identifiable, Equatable {
             ))
         }
 
-        for alert in alerts {
-            let user = builder.build(from: alert)
+        for user in presentedAlerts {
+            let alert = user.technicalDetail
             switch user.severity {
             case .safe:
                 continue
