@@ -1,41 +1,20 @@
-# Issue #49: Refresh delivered notification counts after persistence
+# Issue #49: Refresh delivered counts after persistence
 
-Related issue: [#49](https://github.com/EhsanAzish80/Nick/issues/49)
+Related: #49. Installed Notification Center validation remains pending on the combined private build.
 
-## Current status
+## Confirmed gap and change
 
-Draft work plan only. No runtime implementation, reproduction, fix or test pass is claimed by this commit. The original issue remains open. Base checkpoint: `171d1a8b3aea0c59628cae5817bc95d98c4b3951`.
+The incident store correctly coalesces protected occurrences inside the 600-second banner throttle, but only newly actionable alerts were staged for post-persistence delivery. Add a separate refresh list and generation queue. Confirmation releases the newest whole-incident snapshot; a new banner for the same ID takes priority. Silent refreshes do not reset lastNotifiedAt or invoke other alert outputs.
 
-## Problem and scope
+NotificationManager queries already-delivered entries and only replaces an existing canonical ID. Removed notifications are not intentionally recreated. The replacement has no sound, passive interruption level and an explicit foreground suppression marker. It preserves the canonical ID and updates the occurrence count. A serial refresh loop coalesces newer pending counts, rejects stale/equal delivered counts and bounds pending incident IDs to 100. Normal urgent notification behavior and the 10-minute reminder remain unchanged.
 
-Notification Center count stays stale during protected-incident throttle window
+## Validation
 
-Update existing Notification Center content after durable coalesced occurrence persistence while retaining the canonical incident identifier and silent throttle behavior.
+- [x] Xcode UI: 30 IncidentStorePersistenceTests passed; zero failures/skips/warnings (2026-11-27 14:53 local).
+- [x] Reproduce 4 to 6 occurrences within throttle: no newly actionable banner, stable incident ID, unchanged notification timestamp; release only after generation confirmation and only once.
+- [x] Request has updated count, same ID, no sound, passive priority and empty foreground presentation options; equal counts and unrelated IDs rejected.
+- [x] Reminder after the throttle still becomes newly actionable.
+- [ ] Fresh CI passes.
+- [ ] Combined private-build Notification Center check confirms macOS list replacement and absence of a new banner/sound.
 
-## Initial code review targets
-
-These are investigation entry points, not established causes:
-
-- `Nick/Core/Notifications/NotificationManager.swift`
-- `Nick/Core/ThreatCorrelator/IncidentStore.swift`
-
-## Scope boundaries
-
-Preserve the banner/sound throttle, urgent enforcement and durable-write ordering. No additional banner or duplicate canonical incident.
-
-This PR owns only issue #49. Keep implementation, tests and validation evidence in this branch. If shared code needs an earlier sibling change, document that dependency and rebase explicitly rather than bundling other issues into this PR.
-
-## Acceptance and validation
-
-The issue remains the source of the full report and acceptance criteria. Initial checklist:
-
-- [ ] Confirm the current-build behavior with sanitized, issue-specific evidence.
-- [ ] Add focused regression coverage for the demonstrated cause.
-- [ ] Record positive and negative validation before marking this PR ready.
-
-- [ ] Record the confirmed cause and resulting implementation in this document.
-- [ ] Run relevant Xcode tests when implementation exists; do not label the planning commit as a tested fix.
-- [ ] Review protection and detection impact, including negative cases where applicable.
-- [ ] Keep this PR draft until the issue-specific evidence is complete.
-
-No merge, release or additional live workload is requested by this planning checkpoint. Existing evidence and dSYMs remain preserved. Use synthetic fixtures, bounded diagnostics and redacted public evidence; do not post credentials, personal paths or raw private reports.
+No real system notification was sent by the regressions. Full xcresult and hashes: ignored `build/IssueValidation/49/`. No protection policy change, main merge or public release.

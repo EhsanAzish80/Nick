@@ -615,8 +615,12 @@ final class SecurityEngine {
     func confirmIncidentStorePersistence(generation: UInt64) {
         incidentStore.confirmDurablePersistence(generation: generation)
         let confirmedAlerts = durableIncidentNotifications.confirm(generation: generation)
-        guard !confirmedAlerts.isEmpty else { return }
+        let bannerIDs = Set(confirmedAlerts.map(\.id))
+        let refreshes = durableIncidentNotifications.confirmRefreshes(generation: generation)
+            .filter { !bannerIDs.contains($0.id) }
+        guard !confirmedAlerts.isEmpty || !refreshes.isEmpty else { return }
         Task { @MainActor in
+            for alert in refreshes { await NotificationManager.shared.refreshDelivered(for: alert) }
             let (formatter, outputs) = buildPipeline()
             var deliveredAlertIDs: [UUID] = []
             for alert in confirmedAlerts {
@@ -974,6 +978,7 @@ final class SecurityEngine {
             // Keep historical evidence and review state while skipping startup banners.
             guard notify else { break }
             durableIncidentNotifications.stage(result.newlyActionable, for: generation)
+            durableIncidentNotifications.stageRefreshes(result.notificationRefreshes, for: generation)
             if result.newlyActionable.isEmpty {
                 networkIngestLogger.info(
                     "notification skipped id=\(signal.id.uuidString, privacy: .public) reason=no-actionable-candidate generation=\(generation, privacy: .public)"

@@ -1,4 +1,5 @@
 import XCTest
+import UserNotifications
 @testable import Nick
 
 final class IncidentStorePersistenceTests: XCTestCase {
@@ -697,6 +698,72 @@ final class IncidentStorePersistenceTests: XCTestCase {
         XCTAssertEqual(store.incidents.first {
             $0.alert.contributingSignals.first?.metadata["tamperOperation"] == TamperProtectedOperation.openWrite.rawValue
         }?.alert.occurrenceCount, 2)
+    }
+
+
+    @MainActor
+    func testThrottledCountsRefreshOnlyAfterDurabilityWithoutAnotherBanner() throws {
+        var clock = Date(timeIntervalSince1970: 40_000)
+        let store = try privilegedStore(now: { clock })
+        let first = store.ingest([try tamperAlert(operation: .unlink)])
+        let id = try XCTUnwrap(first.newlyActionable.first?.id)
+        var initial = first
+        for _ in 0..<3 { initial = store.ingest([try tamperAlert(operation: .unlink)]) }
+        store.confirmDurablePersistence(generation: try XCTUnwrap(initial.outcomes.first?.generation))
+        let notifiedAt = clock
+        if let generation = store.markNotificationDelivered(alertID: id, at: clock) {
+            store.confirmDurablePersistence(generation: generation)
+        }
+        XCTAssertEqual(store.incidents.first?.alert.occurrenceCount, 4)
+        var lastGeneration: UInt64 = 0
+        let queue = DurableIncidentNotificationQueue()
+        for _ in 0..<2 {
+            clock.addTimeInterval(1)
+            let update = store.ingest([try tamperAlert(operation: .unlink)])
+            XCTAssertTrue(update.newlyActionable.isEmpty)
+            XCTAssertEqual(update.notificationRefreshes.map(\.id), [id])
+            lastGeneration = try XCTUnwrap(update.outcomes.first?.generation)
+            queue.stageRefreshes(update.notificationRefreshes, for: lastGeneration)
+        }
+        XCTAssertTrue(queue.confirmRefreshes(generation: 0).isEmpty)
+        let latest = try XCTUnwrap(store.incidents.first?.alert)
+        // The queue releases the newest whole incident only at the confirmed generation.
+        let all = queue.confirmRefreshes(generation: lastGeneration)
+        XCTAssertEqual(all.count, 1)
+        XCTAssertEqual(all.first?.id, id)
+        XCTAssertEqual(all.first?.occurrenceCount, 6)
+        XCTAssertEqual(latest.occurrenceCount, 6)
+        XCTAssertEqual(store.incidents.first?.lastNotifiedAt, notifiedAt)
+        XCTAssertTrue(queue.confirmRefreshes(generation: lastGeneration).isEmpty)
+        clock.addTimeInterval(600)
+        let reminder = store.ingest([try tamperAlert(operation: .unlink)])
+        XCTAssertEqual(reminder.newlyActionable.map(\.id), [id])
+        XCTAssertTrue(reminder.notificationRefreshes.isEmpty)
+    }
+
+    @MainActor
+    func testSilentNotificationReplacementPreservesIDAndSuppressesForegroundDelivery() throws {
+        let original = try tamperAlert(operation: .unlink)
+        let alert = ThreatAlert(id: original.id, score: original.score,
+            content: AlertContent(title: original.title, description: original.description,
+                severity: original.severity, recommendedAction: original.recommendedAction),
+            contributingSignals: original.contributingSignals,
+            timestamp: original.timestamp, occurrenceCount: 6)
+        let content = UNMutableNotificationContent()
+        content.title = "Nick"
+        content.body = "Old count"
+        content.sound = .default
+        content.userInfo = ["alertID": alert.id.uuidString, "nickOccurrenceCount": 4]
+        let existing = UNNotificationRequest(identifier: alert.id.uuidString, content: content, trigger: nil)
+        let replacement = try XCTUnwrap(NotificationManager.silentReplacement(for: alert, existing: existing))
+        XCTAssertEqual(replacement.identifier, existing.identifier)
+        XCTAssertTrue(replacement.content.body.contains("6 times"))
+        XCTAssertNil(replacement.content.sound)
+        XCTAssertEqual(replacement.content.interruptionLevel, .passive)
+        XCTAssertTrue(NotificationManager.foregroundOptions(for: replacement.content).isEmpty)
+        XCTAssertNil(NotificationManager.silentReplacement(for: alert, existing: replacement))
+        XCTAssertNil(NotificationManager.silentReplacement(for: alert,
+            existing: UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)))
     }
 
     @MainActor
