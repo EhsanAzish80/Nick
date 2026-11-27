@@ -362,20 +362,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         if response.actionIdentifier == "VIEW_ALERT" ||
            response.actionIdentifier == UNNotificationDefaultActionIdentifier {
             Task { @MainActor in
-                NSApp.setActivationPolicy(.regular)
-                if let window = NSApp.nickMainWindow {
-                    window.makeKeyAndOrderFront(nil)
-                }
-                NSApp.activate()
-                var notificationUserInfo: [AnyHashable: Any] = [:]
-                if let id = alertID {
-                    notificationUserInfo["alertID"] = id
-                }
-                NotificationCenter.default.post(
-                    name: .nickNavigateToAlert,
-                    object: nil,
-                    userInfo: notificationUserInfo.isEmpty ? nil : notificationUserInfo
-                )
+                (NSApp.delegate as? AppDelegate)?.openAlert(alertID)
             }
         }
         completionHandler()

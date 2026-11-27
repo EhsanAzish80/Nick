@@ -33,14 +33,14 @@ The issue remains the source of the full report and acceptance criteria. Initial
 - [ ] Reproduce menu-bar and Dock activation from hidden, closed and existing-window states, including before scene-action registration.
 - [ ] Check under bounded synthetic incident ingestion without real private evidence or protection changes.
 - [ ] Distinguish click delivery, activation, window creation/ordering, first render and data readiness with bounded diagnostics.
-- [ ] Identify concrete blocking work or a lifecycle race before implementing a fix.
+- [x] Identify concrete expensive main-thread work before implementing a fix (matched Home CPU reports).
 - [ ] Show responsive initial content/loading state and consistent activation from both routes.
 - [ ] Add focused Xcode regressions for the proven cause and verify installed behavior.
-- [ ] Do not suppress findings or weaken protection as a UI workaround.
+- [x] Do not suppress findings or weaken protection as a UI workaround.
 
-- [ ] Record the confirmed cause and resulting implementation in this document.
-- [ ] Run relevant Xcode tests when implementation exists; do not label the planning commit as a tested fix.
-- [ ] Review protection and detection impact, including negative cases where applicable.
+- [x] Record the measured hotspot, confirmed activation mismatch and scoped implementation here; broader stall attribution remains open.
+- [x] Run relevant Xcode tests when implementation exists; do not label the planning commit as a tested fix.
+- [x] Review protection and detection impact: only GUI presentation/activation changed.
 - [ ] Keep this PR draft until the issue-specific evidence is complete.
 
 No merge, release or additional live workload is requested by this planning checkpoint. Existing evidence and dSYMs remain preserved. Use synthetic fixtures, bounded diagnostics and redacted public evidence; do not post credentials, personal paths or raw private reports.
@@ -66,3 +66,11 @@ The activity feed recomputed `HomeActivityLine.recent` for its empty state, rows
 The Xcode UI full run `Test-Nick-2026.11.27_12-04-34-+0300.xcresult` completed with 1,093 passed, zero failed and zero skipped. This includes the two new prepared-presentation tests. It reports 13 main-thread runtime warnings; these are not treated as resolved (#51 remains separate). The final focused Xcode run `Test-Nick-2026.11.27_12-12-13-+0300.xcresult` passed all 17 Home model tests, zero failed/skipped and zero runtime warnings, including populated-state reset. The preceding focused attempt caught an invalid empty-evidence test fixture; the corrected fixture uses a synthetic evidence-backed finding. No real command or credential access was executed by that fixture.
 
 No installed build comparison has been performed. The current installed 5119 UI was accessible when inspected, which does not reproduce the historical stall. The full activation/loading acceptance checklist remains open, and this PR must not close #139 on the strength of model tests alone.
+
+## Notification activation mismatch and AppKit regression checks
+
+Notification clicks previously used a second window-opening implementation: set activation policy, call `makeKeyAndOrderFront` on an existing window, and activate. It omitted the shared route's deminiaturization and SwiftUI `openWindow` callback. `NotificationManager` now routes through `AppDelegate.openAlert`, which uses the same `openMainWindow` method as menu-bar and Dock activation before posting the existing alert navigation event. Alert IDs and notification delivery/completion behavior are preserved.
+
+The final Xcode UI full run `Test-Nick-2026.11.27_12-21-36-+0300.xcresult` passed all 1,097 tests, zero failures/skips. It includes AppKit tests using an isolated XCTest-host window for hidden menu-bar entry, hidden Dock reopen, and minimized notification activation with preserved alert ID and scene-open callback. The installed app/extensions were not replaced or profiled. The run still records 13 existing main-thread warnings; #51 is not resolved here.
+
+These are real-window tests of the common app activation methods, not simulated Notification Center clicks, proof of fully recreated SwiftUI first-render behavior, or proof that every historical minutes-long stall is eliminated. Keep #139 open for installed candidate validation. CI must be checked on the final implementation commit before integrating this scoped fix.
