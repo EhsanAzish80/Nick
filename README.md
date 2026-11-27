@@ -263,7 +263,7 @@ protection. Smart Scan and setup show a green state only after the relevant
 component reports current health.
 
 For implementation details and trust boundaries, see
-[ARCHITECTURE.md](ARCHITECTURE.md).
+[Architecture guide](Documentation/ARCHITECTURE.md).
 
 ## Requirements
 
@@ -379,7 +379,7 @@ state and does not mean the extension remains installed.
 - [Engineering case study: Building a Local macOS Endpoint Security Monitor in Swift](https://3nsofts.com/insights/building-local-macos-endpoint-security-monitor-swift)
 - [Documentation index](Documentation/README.md)
 - [Changelog](CHANGELOG.md)
-- [Architecture and security boundaries](ARCHITECTURE.md)
+- [Architecture and security boundaries](Documentation/ARCHITECTURE.md)
 - [User and operator guide](Documentation/USER_GUIDE.md)
 - [Development and CI guide](Documentation/DEVELOPMENT.md)
 - [Release checklist](Documentation/RELEASE_CHECKLIST.md)
