@@ -55,6 +55,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private var pendingDigests: [String: PendingDigest] = [:]
+    private var pendingRefreshes: [UUID: ThreatAlert] = [:]
+    private var refreshingDelivered = false
 
     var notificationsDeliveredPerActiveHour: Double {
         Double(deliveredCount) / max(Date().timeIntervalSince(deliveryStartedAt) / 3600, 1.0 / 3600)
@@ -211,7 +213,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         content.sound = presentation.deliveryLevel == .interrupt ? .default : nil
         content.interruptionLevel = presentation.deliveryLevel == .interrupt ? .timeSensitive : .passive
         content.categoryIdentifier = presentation.categoryIdentifier
-        content.userInfo = ["alertID": alert.id.uuidString]
+        content.userInfo = ["alertID": alert.id.uuidString, "nickOccurrenceCount": alert.occurrenceCount]
         content.threadIdentifier = presentation.threadIdentifier
 
         let request = UNNotificationRequest(
@@ -237,6 +239,48 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
             Self.log.error("Failed to deliver notification: \(error.localizedDescription)")
             return false
         }
+    }
+
+    /// A throttled occurrence may refresh an existing list entry only after
+    /// persistence. Never recreate a notification the user already removed.
+    func refreshDelivered(for alert: ThreatAlert) async {
+        if let prior = pendingRefreshes[alert.id], prior.occurrenceCount > alert.occurrenceCount { return }
+        guard pendingRefreshes[alert.id] != nil || pendingRefreshes.count < 100 else { return }
+        pendingRefreshes[alert.id] = alert
+        guard !refreshingDelivered else { return }
+        refreshingDelivered = true
+        defer { refreshingDelivered = false }
+        let center = UNUserNotificationCenter.current()
+        while let id = pendingRefreshes.keys.first, let next = pendingRefreshes.removeValue(forKey: id) {
+            let delivered = await center.deliveredNotifications()
+            // A newer durable count arrived while querying the notification list.
+            if let newer = pendingRefreshes[id], newer.occurrenceCount >= next.occurrenceCount { continue }
+            guard let existing = delivered.first(where: { $0.request.identifier == id.uuidString }),
+                  let replacement = Self.silentReplacement(for: next, existing: existing.request) else { continue }
+            do { try await center.add(replacement) }
+            catch { Self.log.error("Silent notification refresh failed: \(error.localizedDescription)") }
+        }
+    }
+
+    static func silentReplacement(for alert: ThreatAlert, existing: UNNotificationRequest) -> UNNotificationRequest? {
+        let presentation = Self.presentation(for: alert)
+        guard existing.identifier == alert.id.uuidString, presentation.deliveryLevel == .interrupt,
+              alert.occurrenceCount > (existing.content.userInfo["nickOccurrenceCount"] as? Int ?? 0),
+              let content = existing.content.mutableCopy() as? UNMutableNotificationContent else { return nil }
+        content.title = presentation.title ?? existing.content.title
+        if let tamper = alert.contributingSignals.first(where: { $0.metadata["reason"] == "endpoint_tamper_observed" }) {
+            content.body = Self.tamperNotificationBody(alert: alert, signal: tamper)
+        } else { content.body = presentation.body ?? alert.title }
+        content.sound = nil
+        content.interruptionLevel = .passive
+        content.userInfo["alertID"] = alert.id.uuidString
+        content.userInfo["nickOccurrenceCount"] = alert.occurrenceCount
+        content.userInfo["nickSilentRefresh"] = true
+        return UNNotificationRequest(identifier: existing.identifier, content: content, trigger: nil)
+    }
+
+    nonisolated static func foregroundOptions(for content: UNNotificationContent) -> UNNotificationPresentationOptions {
+        content.userInfo["nickSilentRefresh"] as? Bool == true ? [] : [.banner, .sound, .badge]
     }
 
     struct Presentation: Equatable {
@@ -376,7 +420,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let log = Logger(subsystem: "com.ehsanazish.nick", category: "NotificationManager")
         log.info("willPresent called — forcing banner for '\(notification.request.content.body, privacy: .public)'")
         // Show banner, play sound, and update badge even when Nick is the frontmost app.
-        completionHandler([.banner, .sound, .badge])
+        completionHandler(Self.foregroundOptions(for: notification.request.content))
     }
 }
 
