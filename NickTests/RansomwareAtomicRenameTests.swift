@@ -507,4 +507,26 @@ final class RansomwareAtomicRenameTests: XCTestCase {
             ))
         }
     }
+    func testCloudDocsSessionDiaTransferRequiresBirdAndNumericProviderSlot() {
+        let source = "/Users/test/Library/Application Support/FileProvider/EC428E58-1A69-4DFA-A6EA-AF1072C33F5A/wharf/wharf/propagate/253802939"
+        let destination = "/Users/test/Library/Application Support/CloudDocs/session/i/f460d1b.dia"
+        func routine(_ src: String, _ dst: String, platform: Bool = true, signer: String = "com.apple.bird") -> Bool {
+            AppleSyncRenamePolicy.isRoutineMaintenanceRename(isPlatformBinary: platform,
+                signingID: signer, source: src, destination: dst)
+        }
+        XCTAssertTrue(routine(source, destination))
+        XCTAssertFalse(routine(source, destination, platform: false))
+        XCTAssertFalse(routine(source, destination, signer: "com.apple.cloudd"))
+        XCTAssertFalse(routine(source, destination, signer: "com.apple.fileproviderd"))
+        for dst in [destination.replacingOccurrences(of: "/Users/test/", with: "/Users/other/"),
+                    destination.replacingOccurrences(of: "/session/i/", with: "/session/d/"),
+                    destination.replacingOccurrences(of: "/session/i/", with: "/session/i/nested/"),
+                    destination + ".locked", "/Users/test/Documents/file.dia"] {
+            XCTAssertFalse(routine(source, dst))
+        }
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "253802939", with: "not-a-slot"), destination))
+        XCTAssertFalse(routine(source.replacingOccurrences(of: "EC428E58-1A69-4DFA-A6EA-AF1072C33F5A", with: "invalid"), destination))
+        XCTAssertFalse(routine("/Users/test/Documents/file", destination))
+    }
+
 }

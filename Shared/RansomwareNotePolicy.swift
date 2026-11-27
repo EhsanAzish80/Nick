@@ -324,7 +324,7 @@ enum AppleSyncRenamePolicy {
                relative[1...3].elementsEqual(["wharf", "wharf", "propagate"]),
                !relative[4].isEmpty, relative[4].allSatisfy(\.isNumber),
                (destination as NSString).deletingLastPathComponent == cloud + "i",
-               ["pcm", "flat", "meta"].contains((destination as NSString).pathExtension) { return true }
+               ["pcm", "flat", "meta", "dia"].contains((destination as NSString).pathExtension) { return true }
         }
         // A downloaded item moves from CloudDocs' private staging slot to
         // the same user's iCloud provider DownloadStage, preserving its name.
