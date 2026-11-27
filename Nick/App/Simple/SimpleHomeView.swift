@@ -103,7 +103,7 @@ struct SimpleHomeView: View {
 
     private var activity: [HomeActivityLine] {
         HomeActivityLine.recent(
-            alerts: engine.alerts,
+            presentedAlerts: engine.userFacingAlerts,
             quarantine: xpcClient.quarantineRecords,
             activity: engine.activityLog.events,
             checkedFileDates: xpcClient.events
@@ -269,7 +269,9 @@ struct SimpleHomeView: View {
     }
 
     private var activityFeed: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // A single snapshot for empty state, rows and animation identity.
+        let lines = activity
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 Text("What Nick did lately")
                     .font(.system(size: 13, weight: .semibold))
@@ -282,14 +284,14 @@ struct SimpleHomeView: View {
             }
             .padding(.bottom, 8)
 
-            if activity.isEmpty {
+            if lines.isEmpty {
                 Text("Nothing to report yet. Nick is watching in the background.")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.nickSecondaryText)
                     .padding(.vertical, 12)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(activity) { line in
+                    ForEach(lines) { line in
                         VStack(alignment: .leading, spacing: 0) {
                             Divider().opacity(0.5)
                             ActivityLineView(line: line)
@@ -297,7 +299,7 @@ struct SimpleHomeView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
-                .animation(feedAnimation, value: activity.map(\.id))
+                .animation(feedAnimation, value: lines.map(\.id))
                 .clipped()
             }
         }
