@@ -1,45 +1,19 @@
-# Issue #140: Scope XCTest SpringBoard cache finalization
+# Issue #140: XCTest SpringBoard cache finalization
 
-Related issue: [#140](https://github.com/EhsanAzish80/Nick/issues/140)
+Related: #140. Installed verification remains pending on the combined private build.
 
-## Current status
+## Confirmed gap
 
-Draft work plan only. No runtime implementation, reproduction, fix or test pass is claimed by this commit. The original issue remains open. Base checkpoint: `171d1a8b3aea0c59628cae5817bc95d98c4b3951`.
+The paired SpringBoard temp-to-MappedImageCache matcher accepted CoreSimulator device roots only. XCTest uses `Library/Developer/XCTestDevices/<UUID>/data`. Recognize this alternate root for SpringBoard only, preserving the same-user/device boundary, matching temporary basename, `cpbitmap` destination and exact cache prefix. The kernel Apple-platform requirement and exact signing ID remain unchanged. MobileAsset does not inherit the XCTest alternative.
 
-## Problem and scope
+No general simulator, Apple process or extension exemption. Cross-device/user destinations, spoofed identities, unrelated temporary files, Documents and `.locked` destinations remain outside the exception. UI-stall causality is tracked separately in #139. The repeated JSON exports had identical IDs and do not establish duplicate incidents.
 
-[False positive]: XCTestDevices SpringBoard cpbitmap cache finalization triggers ransomware alert
+## Validation
 
-Cover the reported XCTestDevices temp-to-MappedImageCache operation while preserving the existing CoreSimulator SpringBoard constraints.
+- [x] Xcode UI: 24 RansomwareAtomicRenameTests passed, zero failures/skips/warnings (2026-11-27 14:09 local).
+- [x] New paired-scope regression includes identity, device, name and destination negatives.
+- [x] Existing CoreSimulator and ransomware burst tests passed.
+- [ ] Fresh PR CI passes.
+- [ ] Combined private build: XCTest launch/cache operations and unrelated protection checks.
 
-## Initial code review targets
-
-These are investigation entry points, not established causes:
-
-- `Shared/RansomwareNotePolicy.swift`
-- `NickTests/RansomwareAtomicRenameTests.swift`
-
-## Scope boundaries
-
-Reject cross-user/device and unrelated paths. Repeated identical exports do not establish two distinct incidents. Keep UI causality in #139.
-
-This PR owns only issue #140. Keep implementation, tests and validation evidence in this branch. If shared code needs an earlier sibling change, document that dependency and rebase explicitly rather than bundling other issues into this PR.
-
-## Acceptance and validation
-
-The issue remains the source of the full report and acceptance criteria. Initial checklist:
-
-- [ ] Add harmless synthetic XCTestDevices fixtures matching the reported operation shape.
-- [ ] Cover validated platform SpringBoard, exact same-user/same-device root, temp-to-cache basename relationship and destination scope.
-- [ ] Preserve existing CoreSimulator behavior and reject cross-user/device paths, malformed UUIDs, unrelated destinations, spoofed/unvalidated actors and unsupported operations.
-- [ ] No blanket SpringBoard, XCTestDevices, simulator or .cpbitmap exemption.
-- [ ] Preserve independent canary/strong ransomware evidence and unrelated malicious rename/write detection.
-- [ ] Positive/negative Xcode regressions and targeted installed validation demonstrate the eventual fix.
-- [ ] Investigate duplicate presentation only with distinct row/evidence records; do not infer it from the repeated pasted JSON.
-
-- [ ] Record the confirmed cause and resulting implementation in this document.
-- [ ] Run relevant Xcode tests when implementation exists; do not label the planning commit as a tested fix.
-- [ ] Review protection and detection impact, including negative cases where applicable.
-- [ ] Keep this PR draft until the issue-specific evidence is complete.
-
-No merge, release or additional live workload is requested by this planning checkpoint. Existing evidence and dSYMs remain preserved. Use synthetic fixtures, bounded diagnostics and redacted public evidence; do not post credentials, personal paths or raw private reports.
+Full local xcresult and hashes: ignored `build/IssueValidation/140/`. No real simulator data changed, no main merge or public release.
