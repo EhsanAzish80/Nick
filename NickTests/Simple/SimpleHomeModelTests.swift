@@ -235,6 +235,78 @@ final class SimpleHomeModelTests: XCTestCase {
         XCTAssertFalse(lines.contains { $0.text.contains("audit") })
     }
 
+    func test_activityUsesPreparedPresentationWithoutReclassifyingTechnicalEvidence() {
+        let technical = ThreatAlert(
+            score: 0.9,
+            content: AlertContent(title: "Technical title", description: "Evidence",
+                                  severity: .high, recommendedAction: "Review"),
+            contributingSignals: [], timestamp: now
+        )
+        let prepared = UserFacingAlert(
+            id: technical.id, headline: "Prepared headline", explanation: "Prepared explanation",
+            assessment: "Needs review", recommendedAction: "Review", severity: .warning,
+            actions: [], technicalDetail: technical, timestamp: now
+        )
+        let lines = HomeActivityLine.recent(
+            presentedAlerts: [prepared], quarantine: [], activity: [], checkedFileDates: []
+        )
+        XCTAssertEqual(lines, [HomeActivityLine(
+            id: "a-\(technical.id.uuidString)", text: "Warned you: Prepared headline",
+            date: now, tone: .warning, icon: "exclamationmark.triangle"
+        )])
+    }
+
+    func test_preparedActivityPreservesOrderingFilteringAndLimitAcrossUpdates() {
+        let presentations = (0..<100).map { index in
+            let date = now.addingTimeInterval(Double(index))
+            let technical = ThreatAlert(
+                score: 0.9,
+                content: AlertContent(title: "Finding \(index)", description: "Evidence",
+                                      severity: .high, recommendedAction: "Review"),
+                contributingSignals: [], timestamp: date, occurrenceCount: index + 1
+            )
+            return UserFacingAlert(
+                id: technical.id, headline: "Finding \(index)", explanation: "Evidence",
+                assessment: "Review", recommendedAction: "Review",
+                severity: index.isMultiple(of: 3) ? .safe : .critical,
+                actions: [], technicalDetail: technical, timestamp: date
+            )
+        }
+        let lines = HomeActivityLine.recent(
+            presentedAlerts: presentations, quarantine: [], activity: [], checkedFileDates: [], limit: 5
+        )
+        XCTAssertEqual(lines.map(\.text), [98, 97, 95, 94, 92].map { "Detected: Finding \($0)" })
+        XCTAssertTrue(lines.allSatisfy { $0.tone == .danger })
+        XCTAssertEqual(Set(lines.map(\.id)).count, 5)
+        XCTAssertTrue(HomeActivityLine.recent(
+            presentedAlerts: [], quarantine: [], activity: [], checkedFileDates: []
+        ).isEmpty)
+    }
+
+    @MainActor
+    func test_resetClearsBothTechnicalAndPreparedHomeAlerts() async {
+        let engine = SecurityEngine()
+        let signal = ThreatSignal(
+            source: .endpointSecurity, severity: .critical,
+            title: "Download-to-shell command detected", description: "Synthetic test evidence",
+            context: ThreatSignalContext(metadata: [
+                "class": "behavior", "detectionKind": "lolbin-behavior", "rule": "curl_pipe_shell"
+            ])
+        )
+        let alert = ThreatAlert(
+            score: 0.9,
+            content: AlertContent(title: signal.title, description: signal.description,
+                                  severity: .critical, recommendedAction: "Review"),
+            contributingSignals: [signal], timestamp: now
+        )
+        engine.mergeAlerts([alert])
+        XCTAssertFalse(engine.userFacingAlerts.isEmpty)
+        XCTAssertEqual(engine.userFacingAlerts.map(\.id), engine.alerts.map(\.id))
+        await engine.reset()
+        XCTAssertTrue(engine.alerts.isEmpty)
+        XCTAssertTrue(engine.userFacingAlerts.isEmpty)
+    }
+
     func test_dayFormatting() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
