@@ -120,4 +120,23 @@ final class RuntimeDiagnosticsTests: XCTestCase {
         XCTAssertNil(EndpointTerminationReport.parse(Data("not JSON".utf8)))
         XCTAssertNil(EndpointTerminationReport.parse(Data(repeating: 0, count: 8 * 1024 * 1024 + 1)))
     }
+    func testTerminationCountsSeparateHistoryBuildAndExactProcess() throws {
+        let old = try XCTUnwrap(EndpointTerminationReport.parse(try report()))
+        let current: [String: Any] = ["version": "5120", "processID": 42,
+            "processStartedAt": old.launch.timeIntervalSince1970 + 86_400]
+        let previous: [String: Any] = ["version": old.build, "processID": old.pid,
+            "processStartedAt": old.launch.timeIntervalSince1970,
+            "updatedAt": old.captured.timeIntervalSince1970 - 25]
+        let counts = EndpointTerminationReport.counts([old, old], current: current, previous: previous)
+        XCTAssertEqual(counts, .init(historical: 1, currentBuild: 0, currentProcess: 0, previousSession: 1))
+        let sameBuildOtherPID = EndpointTerminationReport.Match(incidentID: UUID().uuidString,
+            pid: 99, launch: old.launch, captured: old.captured, build: "5120")
+        let second = EndpointTerminationReport.counts([old, sameBuildOtherPID], current: current, previous: nil)
+        XCTAssertEqual(second, .init(historical: 2, currentBuild: 1, currentProcess: 0, previousSession: 0))
+        var matching = previous
+        XCTAssertTrue(EndpointTerminationReport.matchesProcess(old, session: matching))
+        matching["processStartedAt"] = old.launch.timeIntervalSince1970 + 1_000
+        XCTAssertFalse(EndpointTerminationReport.matchesProcess(old, session: matching), "PID reuse is not a match")
+    }
+
 }

@@ -313,6 +313,29 @@ enum EndpointTerminationReport {
         }
         return nil
     }
+    struct Counts: Equatable {
+        let historical: Int
+        let currentBuild: Int
+        let currentProcess: Int
+        let previousSession: Int
+    }
+
+    static func counts(_ reports: [Match], current: [String: Any], previous: [String: Any]?) -> Counts {
+        let unique = Dictionary(reports.map { ($0.incidentID, $0) }, uniquingKeysWith: { first, _ in first }).values
+        return Counts(historical: unique.count,
+            currentBuild: unique.filter { $0.build == current["version"] as? String }.count,
+            currentProcess: unique.filter { matchesProcess($0, session: current) }.count,
+            previousSession: previous.map { prior in unique.filter { matchesPrevious($0, session: prior) }.count } ?? 0)
+    }
+
+    static func matchesProcess(_ report: Match, session: [String: Any]) -> Bool {
+        guard let pid = session["processID"] as? NSNumber, pid.int32Value == report.pid,
+              let start = session["processStartedAt"] as? NSNumber,
+              let build = session["version"] as? String, build == report.build else { return false }
+        return abs(report.launch.timeIntervalSince1970 - start.doubleValue) <= 120
+            && report.captured.timeIntervalSince1970 >= start.doubleValue
+    }
+
     static func matchesPrevious(_ report: Match, session: [String: Any]) -> Bool {
         guard let pid = session["processID"] as? NSNumber, pid.int32Value == report.pid,
               let start = session["processStartedAt"] as? NSNumber,

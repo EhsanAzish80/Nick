@@ -1,43 +1,19 @@
-# Issue #122: Investigate remaining backup-load termination uncertainty
+# Issue #122: Scoped termination-report diagnostics
 
-Related issue: [#122](https://github.com/EhsanAzish80/Nick/issues/122)
+Related: #122. The original full Backblaze workload and historical spontaneous deadline terminations remain unresolved. This PR does not claim a new enforcement fix or full-workload resolution.
 
-## Current status
+## Confirmed reporting gap
 
-Draft work plan only. No runtime implementation, reproduction, fix or test pass is claimed by this commit. The original issue remains open. Base checkpoint: `171d1a8b3aea0c59628cae5817bc95d98c4b3951`.
+The legacy `kernelDeadlineTerminationCount` counts available historical reports, including old builds. Diagnostics displayed an unscoped unknown label. Preserve the legacy field for existing collectors, explicitly describe its historical meaning, and add deduplicated counts for history, current build across sessions, current process (PID/build/start) and previous-session correlation. Expose those distinct labels and inspection status in the app.
 
-## Problem and scope
+Current-process matching requires PID, build, launch proximity and capture after startup. Previous-session cause still uses the existing additional heartbeat/boot checks. Missing, unreadable or capped reports cannot establish zero kills. Report I/O remains on the existing utility queue; no authorization decision, watchdog, scan, exclusion or launch policy changes. Remove the obsolete 5112-purpose label.
 
-NickExtension SIGKILLed on ES deadline under bursty file-open load; per-event lstat appears to run on the callback path
+## Validation
 
-Audit remaining evidence after the shipped 5.1.6 fixes. Establish current-build termination attribution and representative workload evidence before proposing further runtime changes.
+- [x] Xcode UI: 12 RuntimeDiagnosticsTests passed, zero failures/skips/warnings (2026-11-27 15:02 local).
+- [x] Historical 5110 report does not count against a newer build/process; duplicate incident IDs deduplicate; same-build other PID remains separate; PID reuse/start mismatch rejected; previous-session correlation preserved.
+- [x] Existing pending-AUTH ownership, bounded diagnostics and IPS rejection tests passed.
+- [ ] Fresh CI passes, including shipping extension compilation.
+- [ ] Combined private-build diagnostic labels and bounded workload checks.
 
-## Initial code review targets
-
-These are investigation entry points, not established causes:
-
-- `NickExtension/EndpointSecurityClient.swift`
-- `NickExtension/EventHandler.swift`
-- `Nick/Core/Metrics/RuntimeDiagnostics.swift`
-- `Documentation/ISSUE-122-VALIDATION-CLOSEOUT-5118.md`
-
-## Scope boundaries
-
-Historical stack locations are not proof of root cause. Do not reframe the shipped fixes as full-workload resolution, add backup-app exclusions, attach profilers to live ES, or start another broad test cycle automatically.
-
-This PR owns only issue #122. Keep implementation, tests and validation evidence in this branch. If shared code needs an earlier sibling change, document that dependency and rebase explicitly rather than bundling other issues into this PR.
-
-## Acceptance and validation
-
-The issue remains the source of the full report and acceptance criteria. Initial checklist:
-
-- [ ] Confirm the current-build behavior with sanitized, issue-specific evidence.
-- [ ] Add focused regression coverage for the demonstrated cause.
-- [ ] Record positive and negative validation before marking this PR ready.
-
-- [ ] Record the confirmed cause and resulting implementation in this document.
-- [ ] Run relevant Xcode tests when implementation exists; do not label the planning commit as a tested fix.
-- [ ] Review protection and detection impact, including negative cases where applicable.
-- [ ] Keep this PR draft until the issue-specific evidence is complete.
-
-No merge, release or additional live workload is requested by this planning checkpoint. Existing evidence and dSYMs remain preserved. Use synthetic fixtures, bounded diagnostics and redacted public evidence; do not post credentials, personal paths or raw private reports.
+No new broad soak or reporter request. No profiler attachment, main merge or public release. Evidence: ignored `build/IssueValidation/122/` contains full result and hashes. Preserve the earlier #122 validation closeout and dSYMs; historical stack locations alone do not prove cause.
