@@ -8,6 +8,8 @@ documentation.
 - [User Guide](USER_GUIDE.md)
 - [Nick 4.1 Release Readiness](archive/NICK_4_1_RELEASE_READINESS.md)
 - [Release Checklist](RELEASE_CHECKLIST.md)
+- [5.1.1 Release Record](Releases/5.1.1-CHECKLIST.md)
+- [5.1.2 Release Record](Releases/5.1.2-CHECKLIST.md)
 - [5.0 Validation Plan](archive/5_0_VALIDATION_PLAN.md)
 - [5.0 Beta Plan](archive/5_0_BETA_PLAN.md)
 
@@ -25,10 +27,15 @@ documentation.
 ## Security
 
 - [Public Security Policy](../SECURITY.md)
-- [Architecture and Trust Boundaries](../ARCHITECTURE.md)
+- [Architecture and Trust Boundaries](ARCHITECTURE.md)
 - [Security Audit Record](SECURITY_AUDIT.md)
 - [External Security Review Scope](EXTERNAL_SECURITY_REVIEW_SCOPE.md)
 - [Version 4 Network Prevention Handoff](archive/V4_NETWORK_PREVENTION_HANDOFF.md)
 
 Historical documents describe the version and date stated in the document.
 They should not be interpreted as current certification or runtime proof.
+
+## Diagnostic build records
+
+Private-build investigation notes are in [Diagnostics](Diagnostics/README.md).
+They preserve build-specific evidence and limitations, not current release approval.

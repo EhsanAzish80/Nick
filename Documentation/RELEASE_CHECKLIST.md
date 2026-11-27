@@ -7,7 +7,7 @@
       Diagnostics shows matching app and active-extension builds, and the gate
       record includes the complete `systemextensionsctl list` output.
 - [ ] Release notes describe user-visible changes accurately.
-- [ ] `ARCHITECTURE.md`, `README.md`, `ROADMAP.md`, and the current-status table
+- [ ] `Documentation/ARCHITECTURE.md`, `README.md`, `ROADMAP.md`, and the current-status table
       in `SECURITY_AUDIT.md` have been reviewed against the live code paths for
       this release; inactive or planned code is not described as shipped.
 - [ ] No active alert classifies Nick's signed app or temporary Xcode build

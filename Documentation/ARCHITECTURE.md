@@ -290,7 +290,7 @@ The repository contains code that is not part of the current live product path:
   production key/feed, staged rollout, rollback, or last-known-good recovery is
   published.
 
-See [the roadmap](Documentation/ROADMAP.md) for planned work. Code presence is
+See [the roadmap](ROADMAP.md) for planned work. Code presence is
 not treated as an implemented product capability.
 
 Nick 5.0's exact-hash intelligence is an offline, signed-bundle
@@ -318,4 +318,4 @@ extension bundles and is readable in Settings → Acknowledgements.
   guarantees of this userspace application.
 
 Security vulnerabilities should not be opened as public issues. Follow
-[SECURITY.md](SECURITY.md) for private reporting.
+[SECURITY.md](../SECURITY.md) for private reporting.
